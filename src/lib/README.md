@@ -32,7 +32,9 @@ Works when the GraphQL root field name matches the type name and returns an arra
 // PokeAPI example
 resolve("pokemon_v2_pokemon", { limit: 10 }, (pokemonList, { query }) => (
   <div>
-    {pokemonList.map((p) => <div key={p.id.value}>{p.name.value}</div>)}
+    {pokemonList.map((p) => (
+      <div key={p.id.value}>{p.name.value}</div>
+    ))}
   </div>
 ));
 ```
@@ -47,10 +49,11 @@ resolve(
     rootField: "products",
     typeName: "ProductInterface",
     args: { search: "shirt", pageSize: 10 },
-    selectionPath: "items",                     // wraps selection: products { items { ... } }
+    selectionPath: "items", // wraps selection: products { items { ... } }
     extractItems: (data) => data.products.items, // how to get the items array from the response
   },
-  (products) => products.map((p) => <ProductCard key={p.sku.value} product={p} />),
+  (products) =>
+    products.map((p) => <ProductCard key={p.sku.value} product={p} />),
 );
 ```
 
@@ -59,10 +62,10 @@ resolve(
 Every property access on a proxy returns another proxy. `.value` is the explicit unwrap point that returns the actual data (or a mock during discovery).
 
 ```tsx
-pokemon.name          // → Proxy (not yet unwrapped)
-pokemon.name.value    // → "bulbasaur" (actual string)
-pokemon.id.value      // → 1
-pokemon.pokemon_v2_pokemonsprites.map((s) => s.sprites.value) // → array of sprite URLs
+pokemon.name; // → Proxy (not yet unwrapped)
+pokemon.name.value; // → "bulbasaur" (actual string)
+pokemon.id.value; // → 1
+pokemon.pokemon_v2_pokemonsprites.map((s) => s.sprites.value); // → array of sprite URLs
 ```
 
 ### Schema-Aware `.value`
@@ -71,7 +74,7 @@ When a GraphQL type has a field literally named `value` (e.g., Magento's `Money.
 
 ```tsx
 // Magento Money type has { value: Float, currency: String }
-product.price_range.minimum_price.regular_price.value.value
+product.price_range.minimum_price.regular_price.value.value;
 //      ^-- traverses to Money.value (Float scalar)
 //                                                ^-- unwraps the scalar
 ```
@@ -170,12 +173,20 @@ export { compileQuery, compileSelectionSet, raw } from "./query-compiler";
 export { renderForDiscovery } from "./discovery";
 
 // Primary resolve API
-export { createResolver, type ResolveMeta, type ResolveConfig } from "./resolve";
+export {
+  createResolver,
+  type ResolveMeta,
+  type ResolveConfig,
+} from "./resolve";
 
 // Section architecture
 export { Section, SectionList } from "./section";
 export { useSectionRefetch, SectionRefetchButton } from "./section-client";
 
 // Lower-level orchestrator (for custom use cases)
-export { orchestrate, createLazyProxy, clearPatternCache } from "./orchestrator";
+export {
+  orchestrate,
+  createLazyProxy,
+  clearPatternCache,
+} from "./orchestrator";
 ```

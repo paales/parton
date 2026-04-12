@@ -21,9 +21,13 @@ vi.mock("../query-compiler.ts", () => ({
 	raw: (s: string) => s,
 }));
 
-// Mock client component — useRef needs a full React renderer.
+// Mock client components — useRef/class components need a full React renderer.
 vi.mock("../section-client.tsx", () => ({
 	SectionListClient: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+vi.mock("../section-error-boundary.tsx", () => ({
+	SectionErrorBoundary: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 import { SectionList } from "../section.tsx";
@@ -42,8 +46,14 @@ function Species() {
 const fakeGetSchema = async () => ({ getQueryTypeName: () => "query_root" }) as any;
 const fakeExecute = async () => ({}) as any;
 
-function fakeRequest() {
-	return new Request("http://localhost/test");
+function fakeRequest(params?: Record<string, string>) {
+	const url = new URL("http://localhost/test");
+	if (params) {
+		for (const [k, v] of Object.entries(params)) {
+			url.searchParams.set(k, v);
+		}
+	}
+	return new Request(url);
 }
 
 async function renderToJSON(element: React.ReactNode): Promise<any> {
@@ -82,9 +92,9 @@ describe("Section architecture", () => {
 	});
 
 	it("filters to requested sections", async () => {
-		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+		const { result } = await runWithRequestAsync(fakeRequest({ sections: "hero,stats" }), async () =>
 			renderToJSON(
-				<SectionList getSchema={fakeGetSchema} execute={fakeExecute} sections="hero,stats">
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
 					<Hero key="hero" />
 					<Stats key="stats" />
 					<Species key="species" />
@@ -96,9 +106,9 @@ describe("Section architecture", () => {
 	});
 
 	it("filters to single section", async () => {
-		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+		const { result } = await runWithRequestAsync(fakeRequest({ sections: "stats" }), async () =>
 			renderToJSON(
-				<SectionList getSchema={fakeGetSchema} execute={fakeExecute} sections="stats">
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
 					<Hero key="hero" />
 					<Stats key="stats" />
 					<Species key="species" />
@@ -161,9 +171,9 @@ describe("Section architecture", () => {
 	});
 
 	it("renders nothing when filter matches no sections", async () => {
-		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+		const { result } = await runWithRequestAsync(fakeRequest({ sections: "nonexistent" }), async () =>
 			renderToJSON(
-				<SectionList getSchema={fakeGetSchema} execute={fakeExecute} sections="nonexistent">
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
 					<Hero key="hero" />
 					<Stats key="stats" />
 				</SectionList>,
@@ -177,9 +187,9 @@ describe("Section architecture", () => {
 		function Cart() {
 			return <span>cart-content</span>;
 		}
-		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+		const { result } = await runWithRequestAsync(fakeRequest({ sections: "cart" }), async () =>
 			renderToJSON(
-				<SectionList getSchema={fakeGetSchema} execute={fakeExecute} sections="cart">
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
 					<div key="header">
 						Timestamp
 						<Cart key="cart" />
@@ -198,9 +208,9 @@ describe("Section architecture", () => {
 		function Cart() {
 			return <span>cart-content</span>;
 		}
-		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+		const { result } = await runWithRequestAsync(fakeRequest({ sections: "header" }), async () =>
 			renderToJSON(
-				<SectionList getSchema={fakeGetSchema} execute={fakeExecute} sections="header">
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
 					<div key="header">
 						Timestamp
 						<Cart key="cart" />
@@ -230,5 +240,98 @@ describe("Section architecture", () => {
 		expect(rendered).toHaveLength(1);
 		// Should render the component directly, no wrapper div
 		expect(rendered[0].type).toBe("h1");
+	});
+
+	it("discovers sections inside keyless wrappers", async () => {
+		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
+					<Hero key="hero" />
+					<main>
+						<Stats key="stats" />
+					</main>
+					<footer>
+						<Species key="species" />
+					</footer>
+				</SectionList>,
+			),
+		);
+		// All three sections should render even though stats and species
+		// are inside keyless wrappers (main, footer)
+		const str = JSON.stringify(result);
+		expect(str).toContain("Hero");
+		expect(str).toContain("Stats");
+		expect(str).toContain("Species");
+	});
+
+	it("skips cached section when fingerprint matches", async () => {
+		// Render once to get the fingerprint
+		let fingerprints: Record<string, string> = {};
+		vi.mocked(await import("../section-client.tsx")).SectionListClient = (({
+			children,
+			fingerprints: fp,
+		}: any) => {
+			fingerprints = fp;
+			return children;
+		}) as any;
+
+		// Re-import to pick up the updated mock
+		const { SectionList: SL } = await import("../section.tsx");
+
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<SL getSchema={fakeGetSchema} execute={fakeExecute}>
+					<Hero key="hero" />
+					<Stats key="stats" />
+				</SL>,
+			),
+		);
+		expect(fingerprints.hero).toBeDefined();
+		expect(fingerprints.stats).toBeDefined();
+
+		// Now render with cached=hero:<correct fingerprint> — hero should be skipped
+		const { result } = await runWithRequestAsync(fakeRequest({ cached: `hero:${fingerprints.hero}` }), async () =>
+			renderToJSON(
+				<SL getSchema={fakeGetSchema} execute={fakeExecute}>
+					<Hero key="hero" />
+					<Stats key="stats" />
+				</SL>,
+			),
+		);
+		const str = JSON.stringify(result);
+		// Stats should render, hero should be skipped (fingerprint matched)
+		expect(str).toContain("Stats");
+		expect(str).not.toContain("Hero");
+	});
+
+	it("re-renders cached section when fingerprint mismatches", async () => {
+		const { result } = await runWithRequestAsync(fakeRequest({ cached: "hero:stale_fingerprint" }), async () =>
+			renderToJSON(
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
+					<Hero key="hero" />
+					<Stats key="stats" />
+				</SectionList>,
+			),
+		);
+		const str = JSON.stringify(result);
+		// Both should render — hero's fingerprint doesn't match "stale_fingerprint"
+		expect(str).toContain("Hero");
+		expect(str).toContain("Stats");
+	});
+
+	it("filters nested section inside keyless wrapper", async () => {
+		const { result } = await runWithRequestAsync(fakeRequest({ sections: "stats" }), async () =>
+			renderToJSON(
+				<SectionList getSchema={fakeGetSchema} execute={fakeExecute}>
+					<Hero key="hero" />
+					<main>
+						<Stats key="stats" />
+					</main>
+				</SectionList>,
+			),
+		);
+		const str = JSON.stringify(result);
+		expect(str).toContain("Stats");
+		expect(str).not.toContain("Hero");
 	});
 });

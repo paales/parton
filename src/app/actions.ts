@@ -10,13 +10,13 @@
  */
 
 export async function refreshHero() {
-	return { invalidate: ["hero"] };
+  return { invalidate: ["hero"] };
 }
 
 export async function refreshStats() {
-	return { invalidate: ["stats"] };
+  return { invalidate: ["stats"] };
 }
 
 export async function refreshAll() {
-	return { invalidate: ["hero", "stats", "species"] };
+  return { invalidate: ["hero", "stats", "species"] };
 }

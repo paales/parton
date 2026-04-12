@@ -2,26 +2,29 @@ import { SectionList } from "../../../lib/section.tsx";
 import { getSchema, execute } from "../../magento-data.ts";
 import {
   getCookie,
+  getRequest,
   getQueryRoot,
   getQueryMeta,
 } from "../../../framework/context.ts";
 import { AddToCartButton } from "./add-to-cart-button.tsx";
 import { CartBadge } from "./cart-badge.tsx";
 
-interface Props {
-  search?: string;
-  sections?: string | null;
-}
+export function MagentoPage() {
+  const url = new URL(getRequest().url);
+  const search = url.searchParams.get("q") ?? "";
 
-export function MagentoPage({ search = "", sections }: Props) {
   return (
-    <SectionList getSchema={getSchema} execute={execute} sections={sections}>
-      <div key="header">
+    <SectionList getSchema={getSchema} execute={execute}>
+      <header key="header">
         {new Date().toLocaleString()}
         <CartSection key="cart" />
-      </div>
-      <ProductGrid key="products" search={search} />
-      <QueryDebug key="debug" />
+      </header>
+      <main>
+        <ProductGrid key="products" search={search} />
+      </main>
+      <footer>
+        <QueryDebug key="debug" />
+      </footer>
     </SectionList>
   );
 }

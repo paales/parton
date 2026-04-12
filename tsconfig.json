@@ -1,17 +1,17 @@
 {
-	"compilerOptions": {
-		"erasableSyntaxOnly": true,
-		"allowImportingTsExtensions": true,
-		"skipLibCheck": true,
-		"verbatimModuleSyntax": true,
-		"noEmit": true,
-		"moduleResolution": "Bundler",
-		"module": "ESNext",
-		"target": "ESNext",
-		"lib": ["ESNext", "DOM"],
-		"types": ["vite/client", "@vitejs/plugin-rsc/types"],
-		"jsx": "react-jsx",
-		"strict": true
-	},
-	"include": ["src"]
+  "compilerOptions": {
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "moduleResolution": "Bundler",
+    "module": "ESNext",
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    "types": ["vite/client", "@vitejs/plugin-rsc/types", "node"],
+    "jsx": "react-jsx",
+    "strict": true
+  },
+  "include": ["src"]
 }

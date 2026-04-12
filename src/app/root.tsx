@@ -1,14 +1,11 @@
-import { PokemonListPage } from "./pages/pokemon-list.tsx";
-import { PokemonDetailPage } from "./pages/pokemon-detail.tsx";
+import { PokemonPage } from "./pages/pokemon.tsx";
 import { MagentoPage } from "./pages/magento/product-list.tsx";
+import { getRequest } from "../framework/context.ts";
 
-export function Root(props: { url: URL }) {
-  const pathname = props.url.pathname;
-  const pokemonMatch = pathname.match(/^\/pokemon\/(\d+)$/);
+export function Root() {
+  const url = new URL(getRequest().url);
   const magentoMatch =
-    pathname === "/magento" || pathname.startsWith("/magento");
-  const sections = props.url.searchParams.get("sections");
-  const search = props.url.searchParams.get("q") ?? "";
+    url.pathname === "/magento" || url.pathname.startsWith("/magento");
 
   return (
     <html lang="en">
@@ -44,6 +41,9 @@ export function Root(props: { url: URL }) {
 		.section-controls { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
 		.section-controls button { background: #2d3748; color: #ededed; border: 1px solid #4a5568; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; }
 		.section-controls button:hover { background: #4a5568; }
+		@keyframes spin { to { transform: rotate(360deg); } }
+		dialog::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+		dialog { outline: none; }
 		`}</style>
       </head>
       <body>
@@ -52,16 +52,7 @@ export function Root(props: { url: URL }) {
           {" · "}
           <a href="/magento">Magento Store</a>
         </nav>
-        {magentoMatch ? (
-          <MagentoPage search={search} sections={sections} />
-        ) : pokemonMatch ? (
-          <PokemonDetailPage
-            pokemonId={Number(pokemonMatch[1])}
-            sections={sections}
-          />
-        ) : (
-          <PokemonListPage sections={sections} />
-        )}
+        {magentoMatch ? <MagentoPage /> : <PokemonPage />}
       </body>
     </html>
   );

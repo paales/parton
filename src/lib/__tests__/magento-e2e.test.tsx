@@ -149,12 +149,11 @@ describe("Magento E2E: store page", { timeout: 30000 }, () => {
 
 		// Only request the cart section — products should NOT be in the query
 		await runWithRequestAsync(
-			new Request("http://localhost/test"),
+			new Request("http://localhost/test?sections=cart"),
 			async () =>
 				SectionList({
 					getSchema,
 					execute: spyExecute,
-					sections: "cart",
 					children: [
 						<CartSection key="cart" />,
 						<ProductGrid key="products" />,
