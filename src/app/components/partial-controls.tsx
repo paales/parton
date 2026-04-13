@@ -3,30 +3,29 @@
 import { usePartial } from "../../lib/partial-client.tsx";
 
 /**
- * Client component demonstrating partial-level re-fetching via usePartial.
+ * Client component demonstrating partial-level re-fetching.
  *
- * Each button calls refetch() — no server action needed. The framework
- * re-renders just that partial with fresh data. isPending tracks
- * whether the server is still rendering.
+ * Each usePartial binds to one partial — like useActionState binds to one action.
+ * Multiple dispatches in the same tick are batched into one RSC request.
  */
 export function PartialControls() {
-  const hero = usePartial("hero");
-  const stats = usePartial("stats");
-  const species = usePartial("species");
+  const [refreshHero, heroPending] = usePartial("hero");
+  const [refreshStats, statsPending] = usePartial("stats");
+  const [refreshSpecies, speciesPending] = usePartial("species");
 
   return (
     <div className="partial-controls">
       <span style={{ color: "#888", fontSize: "0.8rem", alignSelf: "center" }}>
-        usePartial.refetch():
+        dispatch():
       </span>
-      <button type="button" onClick={() => hero.refetch()} disabled={hero.isPending}>
-        {hero.isPending ? "Refreshing..." : "Refresh Hero"}
+      <button type="button" onClick={() => refreshHero()} disabled={heroPending}>
+        {heroPending ? "Refreshing..." : "Refresh Hero"}
       </button>
-      <button type="button" onClick={() => stats.refetch()} disabled={stats.isPending}>
-        {stats.isPending ? "Refreshing..." : "Refresh Stats"}
+      <button type="button" onClick={() => refreshStats()} disabled={statsPending}>
+        {statsPending ? "Refreshing..." : "Refresh Stats"}
       </button>
-      <button type="button" onClick={() => species.refetch()} disabled={species.isPending}>
-        {species.isPending ? "Refreshing..." : "Refresh Species"}
+      <button type="button" onClick={() => refreshSpecies()} disabled={speciesPending}>
+        {speciesPending ? "Refreshing..." : "Refresh Species"}
       </button>
     </div>
   );

@@ -29,12 +29,12 @@ import React, {
   type ReactNode,
 } from "react";
 
-type RefetchFn = (
-  partialId: string,
-  props?: Record<string, unknown>,
+/** Dispatch a single target — batched via microtask in PartialsClient */
+type DispatchFn = (
+  target: { id: string; props?: Record<string, unknown> },
 ) => Promise<void>;
 
-const PartialRefetchContext = createContext<RefetchFn>(async () => {
+const PartialRefetchContext = createContext<DispatchFn>(async () => {
   throw new Error("usePartial must be used inside a Partials");
 });
 
@@ -157,31 +157,45 @@ export function getCachedPartialIds(): string[] {
 }
 
 /**
- * Hook to interact with a partial from any client component.
+ * Hook to interact with a partial — like useActionState for sections.
  *
- * Returns `refetch(props?)`:
- *   - With props: re-render the partial with overridden props (query-like)
- *   - Without props: re-render with current/default props (invalidation)
+ * Binds to one partial by ID. Returns [dispatch, isPending]:
  *
- * `isPending` is true while the server is rendering the partial.
+ *   const [dispatch, isPending] = usePartial("search");
+ *   dispatch({ query: "bulba" });
+ *
+ *   // Simple invalidation (no props)
+ *   const [refresh, isPending] = usePartial("hero");
+ *   refresh();
+ *
+ * Multiple dispatches in the same tick are batched into one RSC request:
+ *
+ *   const [refreshProducts] = usePartial("products");
+ *   const [refreshSidebar] = usePartial("sidebar");
+ *   refreshProducts({ filter: "shoes" });
+ *   refreshSidebar();  // → single request with both
  */
-export function usePartial(partialId: string) {
-  const refetchFn = useContext(PartialRefetchContext);
+export function usePartial(
+  partialId: string,
+): [(props?: Record<string, unknown>) => Promise<void>, boolean] {
+  const dispatchFn = useContext(PartialRefetchContext);
   const namespace = useContext(PartialNamespaceContext);
   const [isPending, setIsPending] = useState(false);
 
-  // Apply namespace prefix — the server expects namespaced IDs in URL params
   const namespacedId = `${namespace}/${partialId}`;
 
-  const refetch = useCallback(
-    (props?: Record<string, unknown>) => {
+  const dispatch = useCallback(
+    (props?: Record<string, unknown>): Promise<void> => {
       setIsPending(true);
-      refetchFn(namespacedId, props).finally(() => setIsPending(false));
+      const p = dispatchFn({ id: namespacedId, props }).finally(() =>
+        setIsPending(false),
+      );
+      return p;
     },
-    [namespacedId, refetchFn],
+    [namespacedId, dispatchFn],
   );
 
-  return { refetch, isPending };
+  return [dispatch, isPending];
 }
 
 export function PartialsClient({
@@ -200,37 +214,42 @@ export function PartialsClient({
   // Namespace prefix for cache tokens exposed to the browser entry
   const prefix = `${namespace}/`;
 
-  // Refetch handler: builds a URL with ?partials=id and optional __inputs,
-  // then triggers a fetch through the browser entry's RSC pipeline.
-  //
-  // On the first refetch after a streaming render, the cache is empty.
-  // We detect this and request ALL partial IDs to populate the cache.
-  // Subsequent refetches use the populated cache normally.
-  const refetchPartial: RefetchFn = useCallback(
-    async (partialId, props) => {
+  // ── Microtask-batched dispatch ────────────────────────────────────
+  // Each usePartial("id") dispatches a single target. Multiple dispatches
+  // in the same tick (e.g., refreshProducts(); refreshSidebar();) accumulate
+  // here and flush as one RSC request via queueMicrotask.
+  const batchRef = useRef<Array<{ id: string; props?: Record<string, unknown> }>>([]);
+  const flushRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+
+  const flush = useCallback(
+    async (targets: Array<{ id: string; props?: Record<string, unknown> }>) => {
       const url = new URL(window.location.href);
-      if (props) {
-        url.searchParams.set(
-          "__inputs",
-          JSON.stringify({ [partialId]: props }),
-        );
+
+      // Build __inputs for targets with props
+      const inputs: Record<string, Record<string, unknown>> = {};
+      for (const t of targets) {
+        if (t.props) inputs[t.id] = t.props;
       }
+      if (Object.keys(inputs).length > 0) {
+        url.searchParams.set("__inputs", JSON.stringify(inputs));
+      }
+
+      const targetIds = targets.map((t) => t.id);
 
       if (cacheRef.current.size === 0) {
         // First refetch after streaming render: cache is empty.
         // Request ALL partials for this namespace to populate the cache.
-        // getCachedPartialIds() is also empty (streaming mode cleared
-        // _tokensByNamespace), so fetchRscPayload won't add ?cached=.
         const allIds = [...fpRef.current.keys()].map(
           (id) => `${prefix}${id}`,
         );
         url.searchParams.set("partials", allIds.join(","));
       } else {
-        // Normal refetch: request only the target partial.
-        // Excludes the target from ?cached= so the server re-renders it.
-        url.searchParams.set("partials", partialId);
+        // Normal refetch: request only the target partials.
+        // Exclude targets from ?cached= so the server re-renders them.
+        url.searchParams.set("partials", targetIds.join(","));
+        const targetPrefixes = targetIds.map((id) => `${id}:`);
         const cached = getCachedPartialIds().filter(
-          (t) => !t.startsWith(`${partialId}:`),
+          (t) => !targetPrefixes.some((p) => t.startsWith(p)),
         );
         if (cached.length > 0) {
           url.searchParams.set("cached", cached.join(","));
@@ -243,6 +262,29 @@ export function PartialsClient({
       if (handler) await handler(url.toString());
     },
     [prefix],
+  );
+
+  const dispatchFn: DispatchFn = useCallback(
+    (target) => {
+      batchRef.current.push(target);
+
+      if (!flushRef.current) {
+        let resolve: () => void;
+        const promise = new Promise<void>((r) => { resolve = r; });
+        flushRef.current = { promise, resolve: resolve! };
+
+        queueMicrotask(() => {
+          const targets = batchRef.current;
+          const { resolve: done } = flushRef.current!;
+          batchRef.current = [];
+          flushRef.current = null;
+          flush(targets).then(done);
+        });
+      }
+
+      return flushRef.current.promise;
+    },
+    [flush],
   );
 
   // ── Streaming mode ──────────────────────────────────────────────────
@@ -266,7 +308,7 @@ export function PartialsClient({
     _tokensByNamespace.delete(namespace);
 
     return (
-      <PartialRefetchContext value={refetchPartial}>
+      <PartialRefetchContext value={dispatchFn}>
         <PartialNamespaceContext value={namespace}>
           {children}
           <PartialDebugPanel entries={debug} fetchMs={fetchMs} />
@@ -314,7 +356,7 @@ export function PartialsClient({
 
   // Fill the structural template with cached partials
   return (
-    <PartialRefetchContext value={refetchPartial}>
+    <PartialRefetchContext value={dispatchFn}>
       <PartialNamespaceContext value={namespace}>
         {renderTemplate(template, cacheRef.current)}
         <PartialDebugPanel entries={debugRef.current} fetchMs={fetchMs} />

@@ -1,8 +1,8 @@
 "use client";
 
 import {
-  useRef,
   useEffect,
+  useRef,
   useState,
   useTransition,
   type ReactNode,
@@ -16,13 +16,7 @@ import { usePartial } from "../../lib/partial-client.tsx";
  * - "Search (URL)": opens overlay via ?search=url, search term goes in ?q= (bookmarkable)
  * - "Search (Partial)": opens overlay via ?search=partial, term uses usePartial (ephemeral)
  */
-export function SearchToggle({
-  isOpen,
-  mode,
-}: {
-  isOpen: boolean;
-  mode?: "url" | "partial";
-}) {
+export function SearchToggle({ isOpen }: { isOpen: boolean }) {
   const [isPending, startTransition] = useTransition();
 
   function open(searchMode: "url" | "partial") {
@@ -174,11 +168,17 @@ export function SearchDialog({
 }
 
 /**
- * Search input — usePartial variant (ephemeral, no URL change).
+ * Search input with live partial refetch.
  *
- * Uses usePartial("search").refetch({ query }) to re-render the search
- * partial with new props. The search term lives in client state only —
- * not in the URL. On page refresh the search resets.
+ * Both modes use usePartial("search") with serial dispatch.
+ *
+ * Dispatches immediately on first change, then waits for the response
+ * before sending the next. If the user typed more while waiting, the
+ * latest value is dispatched on completion — no parallel requests,
+ * no arbitrary debounce timer.
+ *
+ * URL mode additionally updates ?q= silently for bookmarkability
+ * (same pattern as PageSentinel in load-more.tsx).
  */
 export function SearchInput({
   query,
@@ -188,42 +188,57 @@ export function SearchInput({
   mode: "partial" | "url";
 }) {
   const [value, setValue] = useState(query);
-  const search = usePartial("search");
-  const [urlPending, startTransition] = useTransition();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dispatch] = usePartial("search");
 
-  const isPending = mode === "partial" ? search.isPending : urlPending;
+  // Imperative serial queue — refs for synchronous flow control.
+  // No useEffect, no reliance on React state timing.
+  const latestRef = useRef(query);
+  const dispatchedRef = useRef(query);
+  const inFlightRef = useRef(false);
 
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const next = e.target.value;
-    setValue(next);
+  async function sendLatest() {
+    if (inFlightRef.current) return;
+    const q = latestRef.current;
+    if (q === dispatchedRef.current) return;
 
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      if (mode === "partial") {
-        // Ephemeral: refetch partial with new props, no URL change
-        search.refetch({ query: next });
+    inFlightRef.current = true;
+    dispatchedRef.current = q;
+
+    if (mode === "url") {
+      const url = new URL(window.location.href);
+      if (q) {
+        url.searchParams.set("q", q);
       } else {
-        // URL-based: update ?q= so the search is bookmarkable
-        startTransition(() => {
-          const url = new URL(window.location.href);
-          if (next) {
-            url.searchParams.set("q", next);
-          } else {
-            url.searchParams.delete("q");
-          }
-          history.replaceState(null, "", url.toString());
-        });
+        url.searchParams.delete("q");
       }
-    }, 200);
+      History.prototype.replaceState.call(
+        history,
+        history.state,
+        "",
+        url.toString(),
+      );
+    }
+
+    await dispatch({ query: q });
+    inFlightRef.current = false;
+    // Re-check: user may have typed more while request was in flight
+    sendLatest();
   }
+
+  function handleChange(next: string) {
+    setValue(next);
+    latestRef.current = next;
+    sendLatest();
+  }
+
+  const isStale = value !== dispatchedRef.current || inFlightRef.current;
 
   return (
     <div style={{ position: "relative" }}>
       <input
         type="text"
         value={value}
-        onChange={handleChange}
+        onChange={(e) => handleChange(e.target.value)}
         placeholder="Search pokemon by name..."
         autoFocus
         style={{
@@ -238,7 +253,7 @@ export function SearchInput({
           outline: "none",
         }}
       />
-      {isPending && (
+      {isStale && (
         <span
           style={{
             position: "absolute",

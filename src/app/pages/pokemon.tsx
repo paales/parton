@@ -44,7 +44,7 @@ export function PokemonPage() {
           <span style={{ color: "#888", fontSize: "0.85rem" }}>
             {new Date().toLocaleString()}
           </span>
-          <SearchToggle isOpen={searchOpen} mode={searchMode ?? undefined} />
+          <SearchToggle isOpen={searchOpen} />
         </div>
         {pokemonId != null && <PartialControls />}
       </header>
