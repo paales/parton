@@ -4,16 +4,16 @@ Backend-agnostic GraphQL data layer for React Server Components. Instead of writ
 
 ## Core API
 
-### `createResolver(getSchema, execute)`
+### `resolve(getSchema, execute, renderFn)`
 
-Returns a `resolve` function bound to a schema source and query executor. This is the primary entry point for the library.
+The primary entry point. Pass a schema source, a query executor, and a render function that receives a query root proxy.
 
-```ts
-import { createResolver, fetchSchema } from "./lib";
+```tsx
+import { resolve, fetchSchema } from "./lib";
 
-const getSchema = () => fetchSchema("https://api.example.com/graphql");
+const getSchema = () => fetchSchema("https://beta.pokeapi.co/graphql/v1beta");
 const execute = async (query: string) => {
-  const res = await fetch("https://api.example.com/graphql", {
+  const res = await fetch("https://beta.pokeapi.co/graphql/v1beta", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
@@ -21,40 +21,44 @@ const execute = async (query: string) => {
   return (await res.json()).data;
 };
 
-const resolve = createResolver(getSchema, execute);
+// Single query — just access fields on the query root
+resolve(getSchema, execute, (q) => {
+  const pokemon = q.pokemon_v2_pokemon({ limit: 12, order_by: raw("{id: asc}") });
+  return pokemon.map(p => <Card name={p.name.value} />);
+});
+
+// Multi-query — access multiple root fields
+resolve(getSchema, execute, (q) => {
+  const products = q.products({ filter: {}, pageSize: 12 }).items;
+  const cart = q.cart({ cart_id: id });
+  return <>
+    <ProductGrid products={products} />
+    <CartDrawer cart={cart} />
+  </>;
+});
 ```
 
-### `resolve(typeName, args, render)` — Simple API
+### `resolveData(getSchema, execute, accessFn)`
 
-Works when the GraphQL root field name matches the type name and returns an array directly (Hasura-style).
+Data-only mode — returns `{ data, query }` without rendering. Touch fields in the access function to define the query shape.
+
+Returns `{ data, query }` instead of the bare proxy because proxies are thenable — `await proxy` would unwrap it.
 
 ```tsx
-// PokeAPI example
-resolve("pokemon_v2_pokemon", { limit: 10 }, (pokemonList, { query }) => (
-  <div>
-    {pokemonList.map((p) => (
-      <div key={p.id.value}>{p.name.value}</div>
-    ))}
-  </div>
-));
+const { data, query } = await resolveData(getSchema, execute, (q) => {
+  q.products({ filter: {} }).items.map(p => { p.name.value; p.sku.value; });
+});
 ```
 
-### `resolve(config, render)` — Advanced API
+### `getQueryRoot()`
 
-For backends where the query structure differs (e.g., Magento's `products { items { ... } }`).
+Access the current query root proxy from anywhere in the component tree (via AsyncLocalStorage). Works during both discovery and data passes.
 
 ```tsx
-resolve(
-  {
-    rootField: "products",
-    typeName: "ProductInterface",
-    args: { search: "shirt", pageSize: 10 },
-    selectionPath: "items", // wraps selection: products { items { ... } }
-    extractItems: (data) => data.products.items, // how to get the items array from the response
-  },
-  (products) =>
-    products.map((p) => <ProductCard key={p.sku.value} product={p} />),
-);
+function CartPartial() {
+  const q = getQueryRoot();
+  return <span>{q.cart({ cart_id }).total_quantity.value}</span>;
+}
 ```
 
 ## The `.value` Accessor
@@ -62,10 +66,9 @@ resolve(
 Every property access on a proxy returns another proxy. `.value` is the explicit unwrap point that returns the actual data (or a mock during discovery).
 
 ```tsx
-pokemon.name; // → Proxy (not yet unwrapped)
+pokemon.name;       // → Proxy (not yet unwrapped)
 pokemon.name.value; // → "bulbasaur" (actual string)
-pokemon.id.value; // → 1
-pokemon.pokemon_v2_pokemonsprites.map((s) => s.sprites.value); // → array of sprite URLs
+pokemon.id.value;   // → 1
 ```
 
 ### Schema-Aware `.value`
@@ -75,39 +78,58 @@ When a GraphQL type has a field literally named `value` (e.g., Magento's `Money.
 ```tsx
 // Magento Money type has { value: Float, currency: String }
 product.price_range.minimum_price.regular_price.value.value;
-//      ^-- traverses to Money.value (Float scalar)
-//                                                ^-- unwraps the scalar
+//      ^-- traverses to Money.value ------^      ^-- unwraps the scalar
 ```
+
+### Thenable Proxies
+
+Every proxy is thenable — `use(proxy)` works with React's `use()` hook for Suspense integration.
 
 ## Partial Architecture
 
 Pages are flat lists of independently re-renderable partials. Inspired by Shopify's section rendering model.
 
+### Namespace (required)
+
+Every `<Partials>` must have a `namespace` prop. The namespace prefixes partial IDs to avoid collisions between nested instances.
+
 ```tsx
 import { Partials } from "./lib";
 
-function ProductPage() {
-  return (
-    <Partials getSchema={getSchema} execute={execute}>
-      <HeroPartial key="hero" pokemonId={1} />
-      <StatsPartial key="stats" pokemonId={1} />
-      <ReviewsPartial key="reviews" pokemonId={1} />
-    </Partials>
-  );
-}
+<Partials namespace="pokemon">
+  <HeroPartial key="hero" pokemonId={1} />
+  <StatsPartial key="stats" pokemonId={1} />
+</Partials>
 ```
+
+The `key` of each child is its partial ID. Keyless elements like `<main>` and `<footer>` are structural wrappers — preserved in layout but transparent to the partial system.
 
 ### Partial Filtering
 
 `Partials` reads `?partials=` from the request URL and filters children:
 
 - Full page render: all partials render
-- `?partials=hero,stats`: only `hero` and `stats` render
-- `?partials=reviews`: only `reviews` renders
+- `?partials=pokemon/hero`: only `hero` renders in the `pokemon` namespace
+- Unmatched namespace: pass-through (renders enough for inner instances to execute)
 
-This enables partial page re-fetch without re-rendering the entire route.
+### Tags and Cache
 
-### Triggering Partial Re-fetch (Client)
+Partials can declare tags and cache TTL via reserved props:
+
+```tsx
+<CartBadge key="cart" tags={["cart"]} cache={60} />
+```
+
+- `tags` — group partials for bulk invalidation
+- `cache` — server-side data cache TTL in seconds (keyed by compiled GraphQL query)
+
+Use the `PartialProps<T>` type to allow these on your component:
+
+```tsx
+function CartBadge(props: PartialProps<{ quantity: number }>) { ... }
+```
+
+### `usePartial(id)` — Client-Side Refetch
 
 ```tsx
 "use client";
@@ -124,87 +146,76 @@ function RefreshButton() {
 }
 ```
 
-`usePartial(id)` returns `{ refetch, isPending }`:
+Returns `{ refetch, isPending }`:
 - `refetch()` — invalidation: re-render with current props
-- `refetch({ query: "bulbasaur" })` — query-like: re-render with overridden props
+- `refetch({ query: "bulbasaur" })` — re-render with overridden props (via `__inputs`)
 
-### Server Actions for Mutations
+The hook reads the namespace from context — component authors never write the namespace prefix.
+
+### Server Action Invalidation
+
+Server actions return invalidation instructions. Prefer tags over IDs — tags are namespace-agnostic:
 
 ```ts
 "use server";
 
-export async function addToCart(cartId: string, sku: string) {
-  await executeQuery(`mutation { addProductsToCart(...) { ... } }`);
-  return { invalidate: ["cart-drawer", "header-cart-count"] };
+export async function addToCart(sku: string, quantity: number) {
+  await executeMutation(`mutation { addProductsToCart(...) { ... } }`);
+  // By tag (preferred — namespace-agnostic)
+  return { invalidate: { tags: ["cart"] } };
 }
 ```
 
-After the mutation, the framework reads `invalidate` from the return value and renders only those partials.
+Other invalidation forms:
+```ts
+// By ID (must include namespace prefix)
+return { invalidate: ["magento/cart"] };
+// Mixed
+return { invalidate: { ids: ["layout/nav"], tags: ["cart"] } };
+```
 
-### Namespace
+### Nesting Partials
 
-When nesting multiple `Partials` instances that may share key names, use the `namespace` prop:
+Partials instances can be nested. The outer instance wraps the page shell, the inner wraps page-specific content:
 
 ```tsx
-<Partials>
-  <Partials namespace="pokemon" getSchema={pokeSchema} execute={pokeExecute}>
-    <Header key="header" />
-  </Partials>
-  <Partials namespace="magento" getSchema={magentoSchema} execute={magentoExecute}>
-    <Header key="header" />
-  </Partials>
+<Partials namespace="layout">
+  <head key="head">...</head>
+  <nav key="nav">...</nav>
+  <PokemonPage key="page" />  {/* contains inner <Partials namespace="pokemon"> */}
 </Partials>
 ```
 
-IDs are prefixed with `namespace/` in URL params (`?partials=pokemon/header`).
+When `?partials=pokemon/hero` is requested, the outer instance passes through (no matching IDs) while the inner instance filters to just `hero`.
 
-## How It Works (Discovery Phase)
+## How It Works
 
-1. **Phantom render.** The library creates a proxy object with mock values and runs the component tree. Property accesses are recorded.
-2. **Access tree.** The recorder builds a tree of all accessed paths (`pokemon.name`, `pokemon.types[].type.name`, etc.)
-3. **Query compilation.** The access tree compiles into a GraphQL query.
-4. **Fetch.** The query runs against the backend.
-5. **Real render.** The component tree runs again with data-backed proxies. Same components, same code — different mode.
+1. **Discovery.** Creates a phantom proxy with mock values, runs the render function. Property accesses are recorded.
+2. **Compile.** The access tree compiles into a GraphQL query.
+3. **Fetch.** The query runs against the backend.
+4. **Render.** The render function runs again with data-backed proxies. Same code, real values.
 
-The phantom render is effectively a cost-free double-render (no I/O, pure function evaluation).
-
-## Backend Agnosticism
-
-The library works with any GraphQL schema. Tested against:
-
-- **PokeAPI (Hasura)** — `pokemon_v2_pokemon(limit: 10) { ... }` style
-- **GraphCommerce Magento 2** — `products(search: "shirt") { items { ... } }` style with `selectionPath: "items"`
-
-The proxy uses the schema introspection to know which fields are objects, lists, or scalars, and generates mock values accordingly.
-
-## API Reference
-
-### Exports from `./lib`
+## Exports
 
 ```ts
 // Core proxy + schema
 export { SchemaGraph, fetchSchema } from "./schema";
-export { createProxy } from "./proxy-node";
 export { AccessRecorder } from "./access-recorder";
 export { compileQuery, compileSelectionSet, raw } from "./query-compiler";
+export { createProxy } from "./proxy-node";
 export { renderForDiscovery } from "./discovery";
 
 // Primary resolve API
-export {
-  createResolver,
-  type ResolveMeta,
-  type ResolveConfig,
-} from "./resolve";
+export { resolve, resolveData, getQueryRoot, type ResolveMeta } from "./resolve";
 
 // Partial architecture
-export { Partials } from "./partial";
-export { PartialsClient, usePartial, getCachedPartialIds } from "./partial-client";
+export { Partials, type PartialProps } from "./partial";
+export { PartialsClient, getCachedPartialIds, usePartial, type PartialDebugEntry } from "./partial-client";
 export { PartialErrorBoundary } from "./partial-error-boundary";
 
-// Lower-level orchestrator (for custom use cases)
-export {
-  orchestrate,
-  createLazyProxy,
-  clearPatternCache,
-} from "./orchestrator";
+// Caching
+export { invalidateByTags, clearCache, getCacheStats } from "./partial-cache";
+
+// Lower-level orchestrator
+export { orchestrate, createLazyProxy, clearPatternCache, getPatternCache, type QueryConfig } from "./orchestrator";
 ```

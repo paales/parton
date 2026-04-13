@@ -25,14 +25,7 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
-/** Hash a query string into a cache key. */
-function hashQuery(query: string): string {
-  let hash = 5381;
-  for (let i = 0; i < query.length; i++) {
-    hash = ((hash << 5) + hash + query.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(36);
-}
+import { djb2 as hashQuery } from "./hash.ts";
 
 /**
  * Look up cached response data for a query.
@@ -87,17 +80,6 @@ export function invalidateByTags(tags: string[]): number {
     }
   }
   return purged;
-}
-
-/**
- * Invalidate a specific cache entry by partial ID.
- * Less common — prefer tag-based invalidation.
- */
-export function invalidateById(partialId: string): void {
-  // Entries don't store partialId, but we can iterate
-  // In practice, tag-based invalidation covers most cases.
-  // For ID-based, re-rendering the partial naturally skips cache
-  // because the partial is in the active set.
 }
 
 /** Clear the entire cache. Useful for testing. */

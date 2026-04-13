@@ -1,3 +1,5 @@
+import { djb2 as hashStr } from "./hash.ts";
+
 /**
  * Records property access paths during a render pass.
  *
@@ -137,10 +139,3 @@ function stableArgsKey(args: Record<string, unknown>): string {
     .join("&");
 }
 
-function hashStr(s: string): string {
-  let hash = 5381;
-  for (let i = 0; i < s.length; i++) {
-    hash = ((hash << 5) + hash + s.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(36);
-}

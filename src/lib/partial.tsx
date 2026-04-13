@@ -123,15 +123,7 @@ function fingerprintElement(node: React.ReactNode): string {
   return parts.join("|");
 }
 
-/** Hash a fingerprint string into a short hex digest. */
-function hashFingerprint(fp: string): string {
-  // djb2 — fast, non-crypto, sufficient for change detection
-  let hash = 5381;
-  for (let i = 0; i < fp.length; i++) {
-    hash = ((hash << 5) + hash + fp.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(36);
-}
+import { djb2 as hashFingerprint } from "./hash.ts";
 
 /**
  * Walk the children tree to collect all keyed elements at any depth.
