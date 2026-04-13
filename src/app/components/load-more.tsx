@@ -3,7 +3,7 @@
 import { useEffect, useRef, useTransition } from "react";
 
 /**
- * Tracks which page sections are currently visible.
+ * Tracks which page partials are currently visible.
  * When scrolling up and a page leaves the viewport,
  * silently updates ?pages= to the highest visible page.
  */
@@ -30,7 +30,7 @@ function silentlyUpdatePages() {
 }
 
 /**
- * Invisible sentinel placed at the top of each page section.
+ * Invisible sentinel placed at the top of each page partial.
  * Tracks visibility so ?pages= stays in sync with scroll position.
  */
 export function PageSentinel({ page }: { page: number }) {
@@ -63,7 +63,7 @@ export function PageSentinel({ page }: { page: number }) {
  * Sentinel element that triggers loading the next page of results
  * when it enters the viewport via IntersectionObserver.
  *
- * Uses startTransition + replaceState so the section caching system
+ * Uses startTransition + replaceState so the partial caching system
  * fetches only the new page — all previous pages stay cached.
  */
 export function LoadMore({ nextPage }: { nextPage: number }) {

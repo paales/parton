@@ -7,61 +7,108 @@ import {
   useTransition,
   type ReactNode,
 } from "react";
+import { usePartial } from "../../lib/partial-client.tsx";
 
 /**
- * Search toggle button for the header.
- * Pushes ?search=open to trigger the overlay section.
+ * Search toggle buttons for the header.
+ *
+ * Two variants to demonstrate the difference:
+ * - "Search (URL)": opens overlay via ?search=url, search term goes in ?q= (bookmarkable)
+ * - "Search (Partial)": opens overlay via ?search=partial, term uses usePartial (ephemeral)
  */
-export function SearchToggle({ isOpen }: { isOpen: boolean }) {
+export function SearchToggle({
+  isOpen,
+  mode,
+}: {
+  isOpen: boolean;
+  mode?: "url" | "partial";
+}) {
   const [isPending, startTransition] = useTransition();
 
-  function toggle() {
+  function open(searchMode: "url" | "partial") {
     startTransition(() => {
       const url = new URL(window.location.href);
-      if (isOpen) {
-        url.searchParams.delete("search");
-        url.searchParams.delete("q");
-      } else {
-        url.searchParams.set("search", "open");
-      }
+      url.searchParams.set("search", searchMode);
       history.pushState(null, "", url.toString());
     });
   }
 
-  return (
-    <button
-      type="button"
-      onClick={toggle}
+  function close() {
+    startTransition(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("search");
+      url.searchParams.delete("q");
+      history.pushState(null, "", url.toString());
+    });
+  }
+
+  const buttonStyle = (active: boolean) => ({
+    background: active ? "#4a5568" : "#2d3748",
+    color: "#ededed",
+    border: "1px solid #4a5568",
+    padding: "0.4rem 0.8rem",
+    borderRadius: 6,
+    cursor: "pointer" as const,
+    fontSize: "0.85rem",
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: "0.4rem",
+  });
+
+  const spinner = (
+    <span
       style={{
-        background: isOpen ? "#4a5568" : "#2d3748",
-        color: "#ededed",
-        border: "1px solid #4a5568",
-        padding: "0.4rem 0.8rem",
-        borderRadius: 6,
-        cursor: "pointer",
-        fontSize: "0.85rem",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "0.4rem",
+        display: "inline-block",
+        width: 14,
+        height: 14,
+        border: "2px solid #888",
+        borderTopColor: "#ededed",
+        borderRadius: "50%",
+        animation: "spin 0.6s linear infinite",
       }}
-    >
-      {isPending ? (
-        <span
-          style={{
-            display: "inline-block",
-            width: 14,
-            height: 14,
-            border: "2px solid #888",
-            borderTopColor: "#ededed",
-            borderRadius: "50%",
-            animation: "spin 0.6s linear infinite",
-          }}
-        />
-      ) : (
-        <span style={{ fontSize: "1rem" }}>&#x1F50D;</span>
-      )}
-      {isOpen ? "Close" : "Search"}
-    </button>
+    />
+  );
+
+  if (isOpen) {
+    return (
+      <button type="button" onClick={close} style={buttonStyle(true)}>
+        {isPending ? (
+          spinner
+        ) : (
+          <span style={{ fontSize: "1rem" }}>&#x2715;</span>
+        )}
+        Close
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", gap: "0.5rem" }}>
+      <button
+        type="button"
+        onClick={() => open("url")}
+        style={buttonStyle(false)}
+      >
+        {isPending ? (
+          spinner
+        ) : (
+          <span style={{ fontSize: "1rem" }}>&#x1F50D;</span>
+        )}
+        Search (URL)
+      </button>
+      <button
+        type="button"
+        onClick={() => open("partial")}
+        style={buttonStyle(false)}
+      >
+        {isPending ? (
+          spinner
+        ) : (
+          <span style={{ fontSize: "1rem" }}>&#x1F50D;</span>
+        )}
+        Search (Partial)
+      </button>
+    </div>
   );
 }
 
@@ -108,42 +155,44 @@ export function SearchDialog({
         if (e.target === dialogRef.current) handleClose();
       }}
       style={{
-        background: "transparent",
-        border: "none",
-        padding: 0,
+        background: "#111118",
+        border: "1px solid #2d3748",
+        padding: "1.25rem",
+        borderRadius: 12,
         maxWidth: 720,
-        width: "calc(100% - 2rem)",
+        width: "calc(100vw - 2em)",
         maxHeight: "80vh",
-        overflow: "visible",
-        marginTop: "10vh",
-        placeItems: "center",
+        overflow: "auto",
+        display: "grid",
+        top: "10vh",
+        justifySelf: "center",
       }}
     >
-      <div
-        style={{
-          background: "#111118",
-          border: "1px solid #2d3748",
-          borderRadius: 12,
-          padding: "1.25rem",
-          maxHeight: "80vh",
-          overflow: "auto",
-        }}
-      >
-        {children}
-      </div>
+      {children}
     </dialog>
   );
 }
 
 /**
- * Search input inside the overlay.
- * Navigates with ?q=... via startTransition so the old results
- * stay visible while the server fetches new ones.
+ * Search input — usePartial variant (ephemeral, no URL change).
+ *
+ * Uses usePartial("search").refetch({ query }) to re-render the search
+ * partial with new props. The search term lives in client state only —
+ * not in the URL. On page refresh the search resets.
  */
-export function SearchInput({ query }: { query: string }) {
+export function SearchInput({
+  query,
+  mode,
+}: {
+  query: string;
+  mode: "partial" | "url";
+}) {
   const [value, setValue] = useState(query);
-  const [isPending, startTransition] = useTransition();
+  const search = usePartial("search");
+  const [urlPending, startTransition] = useTransition();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isPending = mode === "partial" ? search.isPending : urlPending;
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const next = e.target.value;
@@ -151,20 +200,21 @@ export function SearchInput({ query }: { query: string }) {
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      startTransition(() => {
-        const url = new URL(window.location.href);
-        if (next) {
-          url.searchParams.set("q", next);
-        } else {
-          url.searchParams.delete("q");
-        }
-        // replaceState so typing doesn't create back-history per keystroke.
-        // The section caching system handles partial updates — the client
-        // sends ?cached= with all cached section IDs, so only the search
-        // section (whose fingerprint changed due to the new query prop)
-        // gets re-rendered by the server.
-        history.replaceState(null, "", url.toString());
-      });
+      if (mode === "partial") {
+        // Ephemeral: refetch partial with new props, no URL change
+        search.refetch({ query: next });
+      } else {
+        // URL-based: update ?q= so the search is bookmarkable
+        startTransition(() => {
+          const url = new URL(window.location.href);
+          if (next) {
+            url.searchParams.set("q", next);
+          } else {
+            url.searchParams.delete("q");
+          }
+          history.replaceState(null, "", url.toString());
+        });
+      }
     }, 200);
   }
 
@@ -205,6 +255,17 @@ export function SearchInput({ query }: { query: string }) {
           }}
         />
       )}
+      <span
+        style={{
+          position: "absolute",
+          right: 12,
+          bottom: -20,
+          fontSize: "0.65rem",
+          color: "#555",
+        }}
+      >
+        {mode === "partial" ? "usePartial (ephemeral)" : "URL (bookmarkable)"}
+      </span>
     </div>
   );
 }

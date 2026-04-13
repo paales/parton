@@ -140,10 +140,10 @@ describe("Edge cases — raw() expressions", () => {
 	});
 });
 
-describe("Edge cases — section merging", () => {
+describe("Edge cases — partial merging", () => {
 	const schema = createTestSchema();
 
-	it("merges patterns from multiple sections", () => {
+	it("merges patterns from multiple partials", () => {
 		const recorder = new AccessRecorder();
 		const phantom = createProxy(schema, "Pokemon", recorder) as any;
 		phantom.name.value;

@@ -11,7 +11,7 @@ import { rscStream } from "rsc-html-stream/client";
 import type { RscPayload } from "./entry.rsc";
 import { GlobalErrorBoundary } from "./error-boundary";
 import { createRscRenderRequest } from "./request";
-import { getCachedSectionIds } from "../lib/section-client";
+import { getCachedPartialIds } from "../lib/partial-client";
 
 async function main() {
   let setPayload: (v: RscPayload) => void;
@@ -32,21 +32,38 @@ async function main() {
     return payload.root;
   }
 
-  async function fetchRscPayload() {
-    // Tell the server which sections are already cached so it can skip them
-    const url = new URL(window.location.href);
-    const cachedIds = getCachedSectionIds();
-    if (cachedIds.length > 0) {
-      url.searchParams.set("cached", cachedIds.join(","));
+  async function fetchRscPayload(overrideUrl?: string) {
+    // Tell the server which partials are already cached so it can skip them.
+    // If the caller already set ?cached= (e.g., usePartial excluding the
+    // target partial), respect that instead of overwriting with the full list.
+    const url = new URL(overrideUrl ?? window.location.href);
+    if (!url.searchParams.has("cached")) {
+      const cachedIds = getCachedPartialIds();
+      if (cachedIds.length > 0) {
+        url.searchParams.set("cached", cachedIds.join(","));
+      }
     }
     const renderRequest = createRscRenderRequest(url.toString());
     const payload = await createFromFetch<RscPayload>(fetch(renderRequest));
     setPayload(payload);
   }
 
+  // Allow usePartial() to trigger partial-specific refetches.
+  // Uses window directly to avoid module instance duplication between
+  // the browser entry bundle and "use client" component bundles.
+  (window as any).__rsc_partial_refetch = (url: string) =>
+    fetchRscPayload(url);
+
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet();
-    const renderRequest = createRscRenderRequest(window.location.href, {
+    // Include cached partial fingerprints so the server can skip
+    // unchanged partials after a server action (same as navigation).
+    const actionUrl = new URL(window.location.href);
+    const cachedIds = getCachedPartialIds();
+    if (cachedIds.length > 0) {
+      actionUrl.searchParams.set("cached", cachedIds.join(","));
+    }
+    const renderRequest = createRscRenderRequest(actionUrl.toString(), {
       id,
       body: await encodeReply(args, { temporaryReferences }),
     });

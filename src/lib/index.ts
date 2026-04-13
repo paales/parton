@@ -16,6 +16,7 @@ export {
   getQueryRoot,
   type ResolveMeta,
 } from "./resolve.ts";
-export { SectionList } from "./section.tsx";
-export { SectionListClient, getCachedSectionIds } from "./section-client.tsx";
-export { SectionErrorBoundary } from "./section-error-boundary.tsx";
+export { Partials } from "./partial.tsx";
+export { PartialsClient, getCachedPartialIds, usePartial, type PartialDebugEntry } from "./partial-client.tsx";
+export { PartialErrorBoundary } from "./partial-error-boundary.tsx";
+export { invalidateByTags, clearCache, getCacheStats } from "./partial-cache.ts";

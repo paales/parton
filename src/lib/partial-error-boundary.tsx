@@ -3,7 +3,7 @@
 import React from "react";
 
 interface Props {
-  sectionId: string;
+  partialId: string;
   children: React.ReactNode;
 }
 
@@ -12,13 +12,13 @@ interface State {
 }
 
 /**
- * Per-section error boundary.
+ * Per-partial error boundary.
  *
- * Wraps each section so a render failure in one section doesn't
+ * Wraps each partial so a render failure in one partial doesn't
  * crash the entire page. Shows an inline error card with a retry
  * button that triggers a navigation to re-fetch from the server.
  */
-export class SectionErrorBoundary extends React.Component<Props, State> {
+export class PartialErrorBoundary extends React.Component<Props, State> {
   state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
@@ -46,7 +46,7 @@ export class SectionErrorBoundary extends React.Component<Props, State> {
           }}
         >
           <div style={{ color: "#f56565", fontWeight: 600, marginBottom: "0.5rem" }}>
-            Section "{this.props.sectionId}" failed to render
+            Partial "{this.props.partialId}" failed to render
           </div>
           {import.meta.env.DEV && (
             <pre

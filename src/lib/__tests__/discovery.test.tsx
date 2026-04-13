@@ -74,7 +74,7 @@ describe("renderForDiscovery", () => {
 		expect(query).toContain("type {");
 	});
 
-	it("discovers across sibling sections", () => {
+	it("discovers across sibling partials", () => {
 		function Hero({ pokemon }: { pokemon: any }) { return <h1>{pokemon.name.value}</h1>; }
 		function Sprite({ pokemon }: { pokemon: any }) { return <img src={pokemon.sprites.front_default.value} />; }
 		function Species({ pokemon }: { pokemon: any }) { return <p>{pokemon.species.generation.name.value}</p>; }

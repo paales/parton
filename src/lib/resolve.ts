@@ -10,7 +10,7 @@
  *
  * Deep components access the query root via getQueryRoot():
  *
- *   function CartSection() {
+ *   function CartPartial() {
  *     const q = getQueryRoot();
  *     return <span>{q.cart({ cart_id }).total_quantity.value}</span>;
  *   }
@@ -56,8 +56,8 @@ export function getQueryRoot(): any {
 
 /**
  * Returns true during the discovery (phantom) pass.
- * Used by SectionList to skip filtering during discovery so all
- * field accesses are recorded regardless of section filter.
+ * Used by Partials to skip filtering during discovery so all
+ * field accesses are recorded regardless of partial filter.
  */
 export function isDiscoveryPass(): boolean {
   return queryRootStorage.getStore()?.isDiscovery ?? false;

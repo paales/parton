@@ -79,54 +79,54 @@ product.price_range.minimum_price.regular_price.value.value;
 //                                                ^-- unwraps the scalar
 ```
 
-## Section Architecture
+## Partial Architecture
 
-Pages are flat lists of independently re-renderable sections. Inspired by Shopify's section model.
+Pages are flat lists of independently re-renderable partials. Inspired by Shopify's section rendering model.
 
 ```tsx
-import { SectionList, Section } from "./lib";
+import { Partials } from "./lib";
 
-function ProductPage({ product, sections }) {
+function ProductPage() {
   return (
-    <SectionList sections={sections}>
-      <Section id="hero" component={HeroSection} props={{ product }} />
-      <Section id="stats" component={StatsSection} props={{ product }} />
-      <Section id="reviews" component={ReviewsSection} props={{ product }} />
-    </SectionList>
+    <Partials getSchema={getSchema} execute={execute}>
+      <HeroPartial key="hero" pokemonId={1} />
+      <StatsPartial key="stats" pokemonId={1} />
+      <ReviewsPartial key="reviews" pokemonId={1} />
+    </Partials>
   );
 }
 ```
 
-### Section Filtering
+### Partial Filtering
 
-`SectionList` reads a comma-separated list of section IDs and filters children:
+`Partials` reads `?partials=` from the request URL and filters children:
 
-- Full page render: all sections render
-- `?sections=hero,stats`: only `hero` and `stats` render
-- `?sections=reviews`: only `reviews` renders
+- Full page render: all partials render
+- `?partials=hero,stats`: only `hero` and `stats` render
+- `?partials=reviews`: only `reviews` renders
 
 This enables partial page re-fetch without re-rendering the entire route.
 
-### Triggering Section Re-fetch (Client)
+### Triggering Partial Re-fetch (Client)
 
 ```tsx
 "use client";
-import { useTransition } from "react";
-import { refreshStats } from "./actions";
+import { usePartial } from "./lib";
 
 function RefreshButton() {
-  const [isPending, startTransition] = useTransition();
+  const stats = usePartial("stats");
 
-  async function handleClick() {
-    const result = await refreshStats(); // server action
-    const url = new URL(window.location.href);
-    url.searchParams.set("sections", result.invalidate.join(","));
-    startTransition(() => history.replaceState(null, "", url.toString()));
-  }
-
-  return <button onClick={handleClick}>Refresh Stats</button>;
+  return (
+    <button onClick={() => stats.refetch()} disabled={stats.isPending}>
+      {stats.isPending ? "Refreshing..." : "Refresh Stats"}
+    </button>
+  );
 }
 ```
+
+`usePartial(id)` returns `{ refetch, isPending }`:
+- `refetch()` — invalidation: re-render with current props
+- `refetch({ query: "bulbasaur" })` — query-like: re-render with overridden props
 
 ### Server Actions for Mutations
 
@@ -139,7 +139,24 @@ export async function addToCart(cartId: string, sku: string) {
 }
 ```
 
-After the mutation, the client refetches only the invalidated sections.
+After the mutation, the framework reads `invalidate` from the return value and renders only those partials.
+
+### Namespace
+
+When nesting multiple `Partials` instances that may share key names, use the `namespace` prop:
+
+```tsx
+<Partials>
+  <Partials namespace="pokemon" getSchema={pokeSchema} execute={pokeExecute}>
+    <Header key="header" />
+  </Partials>
+  <Partials namespace="magento" getSchema={magentoSchema} execute={magentoExecute}>
+    <Header key="header" />
+  </Partials>
+</Partials>
+```
+
+IDs are prefixed with `namespace/` in URL params (`?partials=pokemon/header`).
 
 ## How It Works (Discovery Phase)
 
@@ -179,9 +196,10 @@ export {
   type ResolveConfig,
 } from "./resolve";
 
-// Section architecture
-export { Section, SectionList } from "./section";
-export { useSectionRefetch, SectionRefetchButton } from "./section-client";
+// Partial architecture
+export { Partials } from "./partial";
+export { PartialsClient, usePartial, getCachedPartialIds } from "./partial-client";
+export { PartialErrorBoundary } from "./partial-error-boundary";
 
 // Lower-level orchestrator (for custom use cases)
 export {

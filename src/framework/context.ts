@@ -11,7 +11,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 interface RequestStore {
   request: Request;
   cookies: string[];
-  /** Query root proxy set by SectionList, read by section components via getQueryRoot() */
+  /** Query root proxy set by Partials, read by partial components via getQueryRoot() */
   queryRoot?: unknown;
   /** Resolve metadata (compiled query string) */
   queryMeta?: { query: string };
@@ -82,7 +82,7 @@ export function getQueryRoot(): any {
   const store = getStore();
   if (!store.queryRoot) {
     throw new Error(
-      "getQueryRoot() must be called inside a SectionList render",
+      "getQueryRoot() must be called inside a Partials render",
     );
   }
   return store.queryRoot;
@@ -92,7 +92,7 @@ export function getQueryMeta(): { query: string } {
   const store = getStore();
   if (!store.queryMeta) {
     throw new Error(
-      "getQueryMeta() must be called inside a SectionList render",
+      "getQueryMeta() must be called inside a Partials render",
     );
   }
   return store.queryMeta;

@@ -73,20 +73,51 @@ async function handleRequest(
     }
   }
 
-  // If the action returned invalidated sections, filter the re-render
-  // so the server only renders those sections (minimal GraphQL queries).
-  // The client SectionListClient merges fresh sections with its cache.
+  // If the action returned invalidated partials, filter the re-render
+  // so the server only renders those partials (minimal GraphQL queries).
+  // The client PartialsClient merges fresh partials with its cache.
+  //
+  // Supports two formats:
+  //   { invalidate: ["cart", "header"] }           — by partial ID
+  //   { invalidate: { tags: ["cart"] } }           — by tag (resolved by Partials)
+  //   { invalidate: { ids: ["header"], tags: ["cart"] } } — mixed
   if (
     returnValue?.ok &&
     returnValue.data &&
     typeof returnValue.data === "object" &&
-    Array.isArray((returnValue.data as any).invalidate)
+    (returnValue.data as any).invalidate
   ) {
-    const invalidate = (returnValue.data as any).invalidate as string[];
-    if (invalidate.length > 0) {
-      renderRequest.url.searchParams.set("sections", invalidate.join(","));
-      // Update the ALS request so getRequest() reflects the new sections param
-      setRequest(new Request(renderRequest.url, renderRequest.request));
+    const inv = (returnValue.data as any).invalidate;
+    let needsUpdate = false;
+
+    if (Array.isArray(inv)) {
+      // Legacy format: string array of partial IDs
+      if (inv.length > 0) {
+        renderRequest.url.searchParams.set("partials", inv.join(","));
+        needsUpdate = true;
+      }
+    } else if (typeof inv === "object") {
+      // New format: { tags?: string[], ids?: string[] }
+      const { tags, ids } = inv as { tags?: string[]; ids?: string[] };
+      if (tags?.length) {
+        // Purge data cache entries matching these tags
+        const { invalidateByTags } = await import("../lib/partial-cache.ts");
+        invalidateByTags(tags);
+        renderRequest.url.searchParams.set("tags", tags.join(","));
+        needsUpdate = true;
+      }
+      if (ids?.length) {
+        const existing = renderRequest.url.searchParams.get("partials");
+        const merged = existing ? `${existing},${ids.join(",")}` : ids.join(",");
+        renderRequest.url.searchParams.set("partials", merged);
+        needsUpdate = true;
+      }
+    }
+
+    if (needsUpdate) {
+      // Update the ALS request so getRequest() reflects the new params.
+      // Only copy headers — the body was already consumed by the action handler.
+      setRequest(new Request(renderRequest.url, { headers: renderRequest.request.headers }));
     }
   }
 

@@ -53,7 +53,7 @@ describe("Magento mutations (cart flow)", { timeout: 30000 }, () => {
 		expect(addResult.addProductsToCart.cart).toBeDefined();
 		expect(Array.isArray(addResult.addProductsToCart.cart.items)).toBe(true);
 
-		// Step 3: Query the cart (simulate section re-fetch after mutation)
+		// Step 3: Query the cart (simulate partial re-fetch after mutation)
 		const cartQuery = await executeMutation<{
 			cart: { prices: { grand_total: { value: number; currency: string } } };
 		}>(`

@@ -2,12 +2,12 @@ import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { resolve, resolveData } from "../resolve.ts";
 import { fetchSchema, type SchemaGraph } from "../schema.ts";
-import { SectionList } from "../section.tsx";
+import { Partials } from "../partial.tsx";
 import { runWithRequestAsync, getQueryRoot } from "../../framework/context.ts";
 
 // Mock client component to avoid useRef warnings in tests
-vi.mock("../section-client.tsx", () => ({
-	SectionListClient: ({ children }: { children: React.ReactNode }) => children,
+vi.mock("../partial-client.tsx", () => ({
+	PartialsClient: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 const MAGENTO_ENDPOINT = "https://graphcommerce.vercel.app/api/graphql";
@@ -59,7 +59,8 @@ describe("Magento E2E: store page", { timeout: 30000 }, () => {
 		await runWithRequestAsync(
 			new Request("http://localhost/test"),
 			async () =>
-				SectionList({
+				Partials({
+					namespace: "magento",
 					getSchema,
 					execute: spyExecute,
 					children: <ProductGrid key="products" />,
@@ -75,10 +76,10 @@ describe("Magento E2E: store page", { timeout: 30000 }, () => {
 		expect(capturedQuery).not.toContain("cart(");
 	});
 
-	it("discovery: products + cart page compiles both root fields", async () => {
-		let capturedQuery = "";
+	it("discovery: products + cart page compiles per-partial queries", async () => {
+		const capturedQueries: string[] = [];
 		const spyExecute = async <T,>(query: string): Promise<T> => {
-			capturedQuery = query;
+			capturedQueries.push(query);
 			// Don't hit the real API — fake cart ID would fail. We only check the query.
 			return {} as T;
 		};
@@ -95,7 +96,7 @@ describe("Magento E2E: store page", { timeout: 30000 }, () => {
 			);
 		}
 
-		function CartSection() {
+		function CartPartial() {
 			const q = getQueryRoot();
 			const totalQuantity = q.cart({ cart_id: "fake-cart-id" }).total_quantity.value;
 			return <span>{totalQuantity}</span>;
@@ -104,25 +105,28 @@ describe("Magento E2E: store page", { timeout: 30000 }, () => {
 		await runWithRequestAsync(
 			new Request("http://localhost/test"),
 			async () =>
-				SectionList({
+				Partials({
+					namespace: "magento",
 					getSchema,
 					execute: spyExecute,
 					children: [
-						<CartSection key="cart" />,
+						<CartPartial key="cart" />,
 						<ProductGrid key="products" />,
 					],
 				}),
 		);
 
-		// Both root fields should be present
-		expect(capturedQuery).toContain("products(");
-		expect(capturedQuery).toContain("cart(");
-		expect(capturedQuery).toContain("total_quantity");
-		expect(capturedQuery).toContain("name");
-		expect(capturedQuery).toContain("sku");
+		// Each partial gets its own query — two separate fetches
+		expect(capturedQueries).toHaveLength(2);
+		const allQueries = capturedQueries.join("\n");
+		expect(allQueries).toContain("products(");
+		expect(allQueries).toContain("cart(");
+		expect(allQueries).toContain("total_quantity");
+		expect(allQueries).toContain("name");
+		expect(allQueries).toContain("sku");
 	});
 
-	it("discovery: section filter produces minimal query", async () => {
+	it("discovery: partial filter produces minimal query", async () => {
 		let capturedQuery = "";
 		const spyExecute = async <T,>(query: string): Promise<T> => {
 			capturedQuery = query;
@@ -141,21 +145,22 @@ describe("Magento E2E: store page", { timeout: 30000 }, () => {
 			);
 		}
 
-		function CartSection() {
+		function CartPartial() {
 			const q = getQueryRoot();
 			const totalQuantity = q.cart({ cart_id: "fake-cart-id" }).total_quantity.value;
 			return <span>{totalQuantity}</span>;
 		}
 
-		// Only request the cart section — products should NOT be in the query
+		// Only request the cart partial — products should NOT be in the query
 		await runWithRequestAsync(
-			new Request("http://localhost/test?sections=cart"),
+			new Request("http://localhost/test?partials=magento/cart"),
 			async () =>
-				SectionList({
+				Partials({
+					namespace: "magento",
 					getSchema,
 					execute: spyExecute,
 					children: [
-						<CartSection key="cart" />,
+						<CartPartial key="cart" />,
 						<ProductGrid key="products" />,
 					],
 				}),

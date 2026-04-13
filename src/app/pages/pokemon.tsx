@@ -1,6 +1,6 @@
 import { raw } from "../../lib/query-compiler.ts";
-import { SectionList } from "../../lib/section.tsx";
-import { SectionControls } from "../components/section-controls.tsx";
+import { Partials } from "../../lib/partial.tsx";
+import { PartialControls } from "../components/partial-controls.tsx";
 import {
   SearchToggle,
   SearchInput,
@@ -8,11 +8,7 @@ import {
 } from "../components/search.tsx";
 import { LoadMore, PageSentinel } from "../components/load-more.tsx";
 import { getSchema, execute } from "../data.ts";
-import {
-  getQueryRoot,
-  getQueryMeta,
-  getRequest,
-} from "../../framework/context.ts";
+import { getQueryRoot, getRequest } from "../../framework/context.ts";
 
 const PAGE_SIZE = 12;
 
@@ -20,11 +16,12 @@ export function PokemonPage() {
   const url = new URL(getRequest().url);
   const pokemonMatch = url.pathname.match(/^\/pokemon\/(\d+)$/);
   const pokemonId = pokemonMatch ? Number(pokemonMatch[1]) : undefined;
-  const searchOpen = url.searchParams.has("search");
+  const searchMode = url.searchParams.get("search") as "url" | "partial" | null;
+  const searchOpen = searchMode != null;
   const searchQuery = url.searchParams.get("q") ?? "";
   const pages = Math.max(1, Number(url.searchParams.get("pages")) || 1);
-  // Generate page sections for the list view
-  const pageSections =
+  // Generate page partials for the list view
+  const pagePartials =
     pokemonId == null
       ? Array.from({ length: pages }, (_, i) => (
           <PokemonListPage
@@ -36,7 +33,7 @@ export function PokemonPage() {
       : [];
 
   return (
-    <SectionList getSchema={getSchema} execute={execute}>
+    <Partials namespace="pokemon" getSchema={getSchema} execute={execute}>
       <header key="header">
         <div
           style={{
@@ -48,24 +45,31 @@ export function PokemonPage() {
           <span style={{ color: "#888", fontSize: "0.85rem" }}>
             {new Date().toLocaleString()}
           </span>
-          <SearchToggle isOpen={searchOpen} />
+          <SearchToggle isOpen={searchOpen} mode={searchMode ?? undefined} />
         </div>
-        {pokemonId != null && <SectionControls />}
+        {pokemonId != null && <PartialControls />}
       </header>
-      {searchOpen && <SearchOverlay key="search" query={searchQuery} />}
+      {searchOpen && (
+        <SearchOverlay key="search" query={searchQuery} mode={searchMode!} />
+      )}
       {pokemonId != null
         ? [
-            <HeroSection key="hero" pokemonId={pokemonId} />,
-            <StatsSection key="stats" pokemonId={pokemonId} />,
-            <SpeciesSection key="species" pokemonId={pokemonId} />,
+            <HeroPartial key="hero" pokemonId={pokemonId} />,
+            <StatsPartial key="stats" pokemonId={pokemonId} />,
+            <SpeciesPartial key="species" pokemonId={pokemonId} />,
           ]
-        : [...pageSections, <LoadMore key="load-more" nextPage={pages + 1} />]}
-      <QueryDebug key="debug" />
-    </SectionList>
+        : [...pagePartials, <LoadMore key="load-more" nextPage={pages + 1} />]}
+    </Partials>
   );
 }
 
-function SearchOverlay({ query }: { query: string }) {
+function SearchOverlay({
+  query,
+  mode,
+}: {
+  query: string;
+  mode: "url" | "partial";
+}) {
   const q = getQueryRoot();
 
   const pokemonList = query
@@ -94,7 +98,7 @@ function SearchOverlay({ query }: { query: string }) {
 
   return (
     <SearchDialog open>
-      <SearchInput query={query} />
+      <SearchInput query={query} mode={mode} />
       {query ? (
         results.length > 0 ? (
           <div className="grid" style={{ marginTop: "1rem" }}>
@@ -171,7 +175,8 @@ function PokemonListPage({
       <PageSentinel page={page} />
       {isFirst && (
         <>
-          <h1>Pokedex — Proxy Data Layer PoC</h1>
+          <h1>Pokedex</h1>
+          <title>Pokedex</title>
           <p style={{ color: "#888", marginBottom: "1.5rem" }}>
             Each card below was rendered by a component that just accesses{" "}
             <code
@@ -234,7 +239,7 @@ function PokemonCard({ pokemon }: { pokemon: any }) {
   );
 }
 
-function HeroSection({ pokemonId }: { pokemonId: number }) {
+function HeroPartial({ pokemonId }: { pokemonId: number }) {
   const q = getQueryRoot();
   const pokemon = q.pokemon_v2_pokemon({
     where: raw(`{id: {_eq: ${pokemonId}}}`),
@@ -283,7 +288,7 @@ function HeroSection({ pokemonId }: { pokemonId: number }) {
   );
 }
 
-function StatsSection({ pokemonId }: { pokemonId: number }) {
+function StatsPartial({ pokemonId }: { pokemonId: number }) {
   const q = getQueryRoot();
   const pokemon = q.pokemon_v2_pokemon({
     where: raw(`{id: {_eq: ${pokemonId}}}`),
@@ -359,7 +364,7 @@ function StatsSection({ pokemonId }: { pokemonId: number }) {
   );
 }
 
-function SpeciesSection({ pokemonId }: { pokemonId: number }) {
+function SpeciesPartial({ pokemonId }: { pokemonId: number }) {
   const q = getQueryRoot();
   const pokemon = q.pokemon_v2_pokemon({
     where: raw(`{id: {_eq: ${pokemonId}}}`),
@@ -396,19 +401,5 @@ function SpeciesSection({ pokemonId }: { pokemonId: number }) {
         <code>{happiness}</code> · Capture Rate: <code>{captureRate}</code>
       </div>
     </div>
-  );
-}
-
-function QueryDebug() {
-  const meta = getQueryMeta();
-  return (
-    <details className="query-debug">
-      <summary
-        style={{ cursor: "pointer", color: "#888", fontSize: "0.85rem" }}
-      >
-        Generated GraphQL Query (auto-compiled from proxy access patterns)
-      </summary>
-      <pre>{meta.query}</pre>
-    </details>
   );
 }

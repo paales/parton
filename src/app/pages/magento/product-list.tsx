@@ -1,10 +1,9 @@
-import { SectionList } from "../../../lib/section.tsx";
+import { Partials } from "../../../lib/partial.tsx";
 import { getSchema, execute } from "../../magento-data.ts";
 import {
   getCookie,
   getRequest,
   getQueryRoot,
-  getQueryMeta,
 } from "../../../framework/context.ts";
 import { AddToCartButton } from "./add-to-cart-button.tsx";
 import { CartBadge } from "./cart-badge.tsx";
@@ -14,22 +13,20 @@ export function MagentoPage() {
   const search = url.searchParams.get("q") ?? "";
 
   return (
-    <SectionList getSchema={getSchema} execute={execute}>
+    <Partials namespace="magento" getSchema={getSchema} execute={execute}>
       <header key="header">
         {new Date().toLocaleString()}
-        <CartSection key="cart" />
+        <CartPartial key="cart" />
       </header>
       <main>
         <ProductGrid key="products" search={search} />
       </main>
-      <footer>
-        <QueryDebug key="debug" />
-      </footer>
-    </SectionList>
+      <footer />
+    </Partials>
   );
 }
 
-function CartSection() {
+function CartPartial() {
   const q = getQueryRoot();
   const cartId = getCookie("cart_id");
   if (!cartId) return <CartBadge quantity={0} />;
@@ -101,19 +98,5 @@ function ProductCard({ product }: { product: any }) {
         <AddToCartButton sku={sku} />
       </div>
     </div>
-  );
-}
-
-function QueryDebug() {
-  const meta = getQueryMeta();
-  return (
-    <details className="query-debug">
-      <summary
-        style={{ cursor: "pointer", color: "#888", fontSize: "0.85rem" }}
-      >
-        Generated GraphQL Query (Magento)
-      </summary>
-      <pre>{meta.query}</pre>
-    </details>
   );
 }
