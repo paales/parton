@@ -71,49 +71,63 @@ interface PartialsClientProps {
 }
 
 /**
- * Clone an element tree, replacing any keyed child whose cache entry
- * differs from the current child. Recurses into replacements to handle
- * deeply nested partials (e.g., header > nav > cart).
- */
-function patchNested(
-  node: ReactNode,
-  cache: Map<string, ReactNode>,
-  visited = new Set<string>(),
-): ReactNode {
-  if (!isValidElement(node) || !(node.props as any).children) return node;
-
-  let changed = false;
-  const patched: ReactNode[] = [];
-
-  Children.forEach((node.props as any).children, (child) => {
-    if (isValidElement(child) && child.key != null) {
-      const key = String(child.key);
-      const cached = cache.get(key);
-      if (cached && cached !== child && !visited.has(key)) {
-        // Replace with cached version, then recurse to patch ITS nested partials.
-        // Track the key to prevent infinite recursion when error boundary
-        // wrappers share the same key as their inner partial child.
-        visited.add(key);
-        patched.push(patchNested(cached, cache, visited));
-        changed = true;
-        return;
-      }
-    }
-    const p = patchNested(child, cache, visited);
-    if (p !== child) changed = true;
-    patched.push(p);
-  });
-
-  return changed ? cloneElement(node, {}, ...patched) : node;
-}
-
-/**
  * Walk the structural template, filling partial placeholders from cache.
  * Keyless wrappers (main, footer) are preserved; keyed placeholders
  * are replaced with cached partial content.
+ *
+ * IMPORTANT: cached partials are pushed as-is with NO traversal of their
+ * own children. The Suspense boundaries inside cached partials have lazy
+ * refs (from the RSC Flight stream) as `props.children`; any `React.Children.*`
+ * helper on those thenables causes React to resolve them during reconcile
+ * instead of showing a fallback on remount, which breaks progressive
+ * streaming on refetch. See STREAMING_DEBUG_NOTES.md §7-8.
  */
 function isPlaceholder(child: React.ReactElement): boolean {
   return child.type === "i" && (child.props as any)["data-partial"] === true;
+}
+
+/**
+ * Walk the streaming children tree and cache each partial's outer wrapper
+ * (the Suspense or PartialErrorBoundary from transformForStreaming) by
+ * bare partial id. This populates the cache after a streaming render so
+ * subsequent partial refetches (cache mode) can fill template placeholders
+ * for partials that aren't in the refetch response.
+ *
+ * Uses manual iteration instead of React.Children.* to avoid touching
+ * RSC lazy-ref thenables inside Suspense boundaries, which triggers
+ * eager resolution and breaks progressive streaming. See
+ * STREAMING_DEBUG_NOTES.md §7-8. We stop at partial boundaries, so the
+ * lazy refs inside never get walked.
+ */
+function cacheFromStreamingChildren(
+  node: ReactNode,
+  cache: Map<string, ReactNode>,
+  freshIds: Set<string>,
+): void {
+  if (node == null || typeof node === "boolean") return;
+  if (typeof node === "string" || typeof node === "number") return;
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      cacheFromStreamingChildren(node[i], cache, freshIds);
+    }
+    return;
+  }
+  if (!isValidElement(node)) return;
+
+  const keyStr = node.key != null ? String(node.key) : null;
+  if (keyStr) {
+    const hashIdx = keyStr.indexOf("#");
+    const partialId = hashIdx >= 0 ? keyStr.slice(0, hashIdx) : keyStr;
+    if (freshIds.has(partialId)) {
+      cache.set(partialId, node);
+      return;
+    }
+  }
+
+  const inner = (node.props as any)?.children;
+  if (inner != null) {
+    cacheFromStreamingChildren(inner, cache, freshIds);
+  }
 }
 
 function renderTemplate(
@@ -123,14 +137,16 @@ function renderTemplate(
   const result: ReactNode[] = [];
 
   Children.forEach(template, (child) => {
-    if (isValidElement(child) && child.key != null && isPlaceholder(child)) {
-      // Partial placeholder — fill from cache, then patch nested partials
+    if (!isValidElement(child)) {
+      result.push(child);
+      return;
+    }
+    if (child.key != null && isPlaceholder(child)) {
       const cached = cache.get(String(child.key));
-      if (cached) {
-        result.push(patchNested(cached, cache));
-      }
-    } else if (isValidElement(child) && (child.props as any).children) {
-      // Structural wrapper (html, body, main, footer) — recurse into it
+      if (cached) result.push(cached);
+      return;
+    }
+    if ((child.props as any).children != null) {
       const inner = renderTemplate((child.props as any).children, cache);
       result.push(cloneElement(child, {}, ...inner));
     } else {
@@ -142,18 +158,45 @@ function renderTemplate(
 }
 
 /**
+ * Module-level per-namespace state.
+ *
+ * Lives outside the React tree so it survives the two-phase void→payload
+ * remount in entry.browser.tsx. Without this, each refetch would wipe the
+ * cache and force every partial to re-render.
+ *
+ *   cache       — partial id → rendered ReactNode (used by renderTemplate)
+ *   fingerprints — partial id → latest server fingerprint
+ *   debug        — accumulated debug entries across renders
+ */
+type NamespaceState = {
+  cache: Map<string, ReactNode>;
+  fingerprints: Map<string, string>;
+  debug: PartialDebugEntry[];
+};
+const _nsState = new Map<string, NamespaceState>();
+function getNamespaceState(namespace: string): NamespaceState {
+  let s = _nsState.get(namespace);
+  if (!s) {
+    s = { cache: new Map(), fingerprints: new Map(), debug: [] };
+    _nsState.set(namespace, s);
+  }
+  return s;
+}
+
+/**
  * Module-level accessor for cached partial tokens.
  * Returns "id:fingerprint" pairs so the server can detect shape changes.
  * Used by the browser entry to send ?cached= during navigation.
  */
-/**
- * Module-level registry of cached partial tokens across ALL PartialsClient
- * instances. Each instance registers its tokens keyed by namespace.
- * getCachedPartialIds() merges them into a single list for ?cached=.
- */
-const _tokensByNamespace = new Map<string, string[]>();
 export function getCachedPartialIds(): string[] {
-  return [..._tokensByNamespace.values()].flat();
+  const out: string[] = [];
+  for (const [namespace, state] of _nsState) {
+    for (const id of state.cache.keys()) {
+      const fp = state.fingerprints.get(id);
+      out.push(fp ? `${namespace}/${id}:${fp}` : `${namespace}/${id}`);
+    }
+  }
+  return out;
 }
 
 /**
@@ -202,14 +245,18 @@ export function PartialsClient({
   mode = "cache",
   template,
   namespace,
+  freshIds,
   fingerprints,
   debug,
   fetchMs,
   children,
 }: PartialsClientProps) {
-  const cacheRef = useRef(new Map<string, ReactNode>());
-  const fpRef = useRef(new Map<string, string>());
-  const debugRef = useRef<PartialDebugEntry[]>([]);
+  // Cache/fingerprints/debug live at module scope so they survive the
+  // void→payload remount in entry.browser.tsx (two-phase flush that forces
+  // Suspense boundaries to re-mount for progressive reveal).
+  const nsState = getNamespaceState(namespace);
+  const cache = nsState.cache;
+  const fps = nsState.fingerprints;
 
   // Namespace prefix for cache tokens exposed to the browser entry
   const prefix = `${namespace}/`;
@@ -236,12 +283,10 @@ export function PartialsClient({
 
       const targetIds = targets.map((t) => t.id);
 
-      if (cacheRef.current.size === 0) {
+      if (cache.size === 0) {
         // First refetch after streaming render: cache is empty.
         // Request ALL partials for this namespace to populate the cache.
-        const allIds = [...fpRef.current.keys()].map(
-          (id) => `${prefix}${id}`,
-        );
+        const allIds = [...fps.keys()].map((id) => `${prefix}${id}`);
         url.searchParams.set("partials", allIds.join(","));
       } else {
         // Normal refetch: request only the target partials.
@@ -290,22 +335,19 @@ export function PartialsClient({
   // ── Streaming mode ──────────────────────────────────────────────────
   // Passthrough: children are rendered directly in the tree so Suspense
   // boundaries stay in the server component tree and can stream.
-  // We update fingerprints (for the refetch handler) but do NOT register
-  // tokens in _tokensByNamespace — the cache isn't populated yet, so
-  // getCachedPartialIds() returns nothing until the first cache-mode
-  // render populates it via __populateCache.
-  //
-  // NOTE: RSC-serialized children contain lazy references that cannot be
-  // cached and reused in renderTemplate. The __populateCache mechanism
-  // in entry.rsc.tsx handles the transition by rendering ALL partials in
-  // cache mode on the first action after streaming.
+  // We also populate the cache by walking the streaming children tree
+  // and caching each partial's outer Suspense/PartialErrorBoundary
+  // wrapper by bare partial id. Subsequent partial refetches (cache mode)
+  // need a populated cache so template placeholders for not-refetched
+  // partials can be filled from cache.
   if (mode === "streaming") {
     for (const [id, fp] of Object.entries(fingerprints)) {
-      fpRef.current.set(id, fp);
+      fps.set(id, fp);
     }
-
-    // Clear any stale tokens from a previous cache-mode render
-    _tokensByNamespace.delete(namespace);
+    // Replace the cache with wrappers derived from this streaming render
+    cache.clear();
+    cacheFromStreamingChildren(children, cache, new Set(freshIds));
+    nsState.debug = [];
 
     return (
       <PartialRefetchContext value={dispatchFn}>
@@ -322,44 +364,44 @@ export function PartialsClient({
   // is filled from cache. Used on partial re-fetches.
 
   // Index fresh partials by key (direct children only — nested partials
-  // arrive as their own independent entries, not buried inside parents)
+  // arrive as their own independent entries, not buried inside parents).
+  //
+  // The server stamps a per-request version onto each fresh Suspense key
+  // (e.g., `stage-1#V2`) to force React to treat it as a new mount so the
+  // fallback shows and content streams in progressively. The cache keys
+  // by the bare partial ID (before the `#`) so template placeholders
+  // — which only know the partial ID — still resolve.
   Children.forEach(children, (child) => {
     if (isValidElement(child) && child.key != null) {
-      cacheRef.current.set(String(child.key), child);
+      const rawKey = String(child.key);
+      const hashIdx = rawKey.indexOf("#");
+      const partialId = hashIdx >= 0 ? rawKey.slice(0, hashIdx) : rawKey;
+      cache.set(partialId, child);
     }
   });
 
   // Update fingerprints — always take the server's latest fingerprints
   for (const [id, fp] of Object.entries(fingerprints)) {
-    fpRef.current.set(id, fp);
+    fps.set(id, fp);
   }
 
   // Merge debug info: fresh entries replace, cached entries persist
   const freshDebugIds = new Set(debug.map((d) => d.id));
-  debugRef.current = [
+  nsState.debug = [
     // Keep previous entries for partials not in this render
-    ...debugRef.current.filter(
-      (d) => !freshDebugIds.has(d.id) && cacheRef.current.has(d.id),
+    ...nsState.debug.filter(
+      (d) => !freshDebugIds.has(d.id) && cache.has(d.id),
     ),
     // Add/update entries from this render
     ...debug,
   ];
 
-  // Register this instance's cached tokens by namespace
-  _tokensByNamespace.set(
-    namespace,
-    [...cacheRef.current.keys()].map((id) => {
-      const fp = fpRef.current.get(id);
-      return fp ? `${prefix}${id}:${fp}` : `${prefix}${id}`;
-    }),
-  );
-
-  // Fill the structural template with cached partials
+  const rendered = renderTemplate(template, cache);
   return (
     <PartialRefetchContext value={dispatchFn}>
       <PartialNamespaceContext value={namespace}>
-        {renderTemplate(template, cacheRef.current)}
-        <PartialDebugPanel entries={debugRef.current} fetchMs={fetchMs} />
+        {rendered}
+        <PartialDebugPanel entries={nsState.debug} fetchMs={fetchMs} />
       </PartialNamespaceContext>
     </PartialRefetchContext>
   );

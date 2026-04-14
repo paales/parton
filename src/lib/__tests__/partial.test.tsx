@@ -1086,11 +1086,16 @@ describe("Streaming mode", () => {
 		expect(children.length).toBe(1);
 	});
 
-	it("__populateCache forces cache mode and renders all partials", async () => {
+	it("__populateCache renders all partials via streaming mode", async () => {
 		// After a streaming render, the client cache is empty. When a server
 		// action has invalidation, entry.rsc.tsx sets __populateCache.
-		// This forces Partials to use cache mode and render ALL partials
-		// (not just the invalidated ones), so PartialsClient can populate.
+		// All partials are rendered so the client cache can be populated.
+		//
+		// When every partial is fresh we take the streaming path so Suspense
+		// boundaries reveal progressively — the template+cache merge breaks
+		// lazy-ref streaming (indexing through a Map + cloneElement makes
+		// React treat the commit as an update that holds until everything
+		// resolves).
 		let capturedMode: string | undefined;
 		let capturedFreshIds: string[] = [];
 		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
@@ -1120,8 +1125,8 @@ describe("Streaming mode", () => {
 				),
 		);
 
-		// Should use cache mode
-		expect(capturedMode).toBe("cache");
+		// All-fresh → streaming mode (Suspense boundaries reveal progressively)
+		expect(capturedMode).toBe("streaming");
 		// __populateCache renders ALL partials, not just tagged ones
 		expect(capturedFreshIds).toContain("cart");
 		expect(capturedFreshIds).toContain("products");

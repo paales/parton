@@ -1,5 +1,5 @@
 import { gql } from "graphql-request";
-import { Partials } from "../../lib/partial.tsx";
+import { Partials, type PartialProps } from "../../lib/partial.tsx";
 import { PartialControls } from "../components/partial-controls.tsx";
 import {
   SearchToggle,
@@ -49,7 +49,40 @@ export function PokemonPage() {
         {pokemonId != null && <PartialControls />}
       </header>
       {searchOpen && (
-        <SearchOverlay key="search" query={searchQuery} mode={searchMode!} />
+        <SearchDialog open>
+          <SearchStage1
+            key="stage-1"
+            query={searchQuery}
+            mode={searchMode!}
+            fallback={
+              <div data-testid="stage-1-fallback" style={{ color: "#666", padding: "0.5rem" }}>
+                Loading stage 1...
+              </div>
+            }
+          />
+          {searchQuery && (
+            <SearchStage2
+              key="stage-2"
+              query={searchQuery}
+              fallback={
+                <div data-testid="stage-2-fallback" style={{ color: "#666", padding: "0.5rem" }}>
+                  Loading stage 2...
+                </div>
+              }
+            />
+          )}
+          {searchQuery && (
+            <SearchStage3
+              key="stage-3"
+              query={searchQuery}
+              fallback={
+                <div data-testid="stage-3-fallback" style={{ color: "#666", padding: "0.5rem" }}>
+                  Loading stage 3...
+                </div>
+              }
+            />
+          )}
+        </SearchDialog>
       )}
       {pokemonId != null
         ? [
@@ -77,24 +110,26 @@ const POKEMON_LIST_FRAGMENT = gql`
   }
 `;
 
-async function SearchOverlay({
-  query: searchQuery,
-  mode,
-}: {
-  query: string;
-  mode: "url" | "partial";
-}) {
-  if (!searchQuery) {
-    return (
-      <SearchDialog open>
-        <SearchInput query="" mode={mode} />
-        <p style={{ color: "#666", marginTop: "1rem", fontSize: "0.85rem" }}>
-          Start typing to search...
-        </p>
-      </SearchDialog>
-    );
-  }
+/**
+ * Three search stages that resolve with staggered delays (0ms, 1s, 2s).
+ * Each queries a different slice of results. This tests whether RSC
+ * streaming delivers partials progressively on AJAX refetch.
+ */
 
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type SearchResult = {
+  id: number;
+  name: string;
+  spriteUrl: string | null;
+  types: string[];
+};
+
+async function fetchSearchResults(
+  query: string,
+  offset: number,
+  limit: number,
+): Promise<SearchResult[]> {
   const data = await client.request<{
     pokemon_v2_pokemon: Array<{
       id: number;
@@ -106,10 +141,11 @@ async function SearchOverlay({
     }>;
   }>(
     gql`
-      query SearchPokemon($pattern: String!) {
+      query SearchPokemon($pattern: String!, $offset: Int!, $limit: Int!) {
         pokemon_v2_pokemon(
           where: { name: { _ilike: $pattern } }
-          limit: 20
+          limit: $limit
+          offset: $offset
           order_by: { id: asc }
         ) {
           ...PokemonListFields
@@ -117,10 +153,10 @@ async function SearchOverlay({
       }
       ${POKEMON_LIST_FRAGMENT}
     `,
-    { pattern: `%${searchQuery}%` },
+    { pattern: `%${query}%`, offset, limit },
   );
 
-  const results = data.pokemon_v2_pokemon.map((pokemon) => {
+  return data.pokemon_v2_pokemon.map((pokemon) => {
     const spriteUrl =
       pokemon.pokemon_v2_pokemonsprites[0]?.sprites?.other?.[
         "official-artwork"
@@ -132,58 +168,123 @@ async function SearchOverlay({
     );
     return { id: pokemon.id, name: pokemon.name, spriteUrl, types };
   });
+}
+
+function SearchResultGrid({
+  results,
+  testId,
+}: {
+  results: SearchResult[];
+  testId: string;
+}) {
+  if (results.length === 0) return null;
+  return (
+    <div data-testid={testId}>
+      <div className="grid">
+        {results.map((r) => (
+          <a
+            key={r.id}
+            href={`/pokemon/${r.id}`}
+            className="card"
+            style={{ display: "block" }}
+          >
+            {r.spriteUrl && (
+              <img
+                src={r.spriteUrl}
+                alt={r.name}
+                loading="lazy"
+                style={{
+                  width: 64,
+                  height: 64,
+                  imageRendering: "auto" as const,
+                }}
+              />
+            )}
+            <h2
+              style={{
+                textTransform: "capitalize" as const,
+                fontSize: "1rem",
+              }}
+            >
+              #{r.id} {r.name}
+            </h2>
+            <div style={{ marginTop: "0.25rem" }}>
+              {r.types.map((t) => (
+                <span
+                  key={t}
+                  className={`badge badge-${t || "default"}`}
+                  style={{ fontSize: "0.7rem" }}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Stage 1: search input + first 6 results, no delay */
+async function SearchStage1({
+  query: searchQuery,
+  mode,
+}: PartialProps<{
+  query: string;
+  mode: "url" | "partial";
+}>) {
+  if (!searchQuery) {
+    return (
+      <>
+        <SearchInput query="" mode={mode} />
+        <p style={{ color: "#666", marginTop: "1rem", fontSize: "0.85rem" }}>
+          Start typing to search...
+        </p>
+      </>
+    );
+  }
+
+  const results = await fetchSearchResults(searchQuery, 0, 6);
 
   return (
-    <SearchDialog open>
+    <>
       <SearchInput query={searchQuery} mode={mode} />
-      {results.length > 0 ? (
-        <div className="grid" style={{ marginTop: "1rem" }}>
-          {results.map((r) => (
-            <a
-              key={r.id}
-              href={`/pokemon/${r.id}`}
-              className="card"
-              style={{ display: "block" }}
-            >
-              {r.spriteUrl && (
-                <img
-                  src={r.spriteUrl}
-                  alt={r.name}
-                  style={{
-                    width: 64,
-                    height: 64,
-                    imageRendering: "auto" as const,
-                  }}
-                />
-              )}
-              <h2
-                style={{
-                  textTransform: "capitalize" as const,
-                  fontSize: "1rem",
-                }}
-              >
-                #{r.id} {r.name}
-              </h2>
-              <div style={{ marginTop: "0.25rem" }}>
-                {r.types.map((t) => (
-                  <span
-                    key={t}
-                    className={`badge badge-${t || "default"}`}
-                    style={{ fontSize: "0.7rem" }}
-                  >
-                    {t}
-                  </span>
-                ))}
-              </div>
-            </a>
-          ))}
-        </div>
-      ) : (
-        <p style={{ color: "#888", marginTop: "1rem" }}>
-          No pokemon found matching "{searchQuery}"
-        </p>
-      )}
-    </SearchDialog>
+      <h3 style={{ color: "#888", marginTop: "1rem", fontSize: "0.8rem" }}>
+        Stage 1 — instant
+      </h3>
+      <SearchResultGrid results={results} testId="stage-1-content" />
+    </>
+  );
+}
+
+/** Stage 2: next 6 results, 1 second delay */
+async function SearchStage2({ query }: PartialProps<{ query: string }>) {
+  await delay(1000);
+  const results = await fetchSearchResults(query, 6, 6);
+
+  return (
+    <div>
+      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>
+        Stage 2 — 1s delay
+      </h3>
+      <SearchResultGrid results={results} testId="stage-2-content" />
+    </div>
+  );
+}
+
+/** Stage 3: next 8 results, 2 second delay */
+async function SearchStage3({ query }: PartialProps<{ query: string }>) {
+  await delay(2000);
+  const results = await fetchSearchResults(query, 12, 8);
+
+  return (
+    <div>
+      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>
+        Stage 3 — 2s delay
+      </h3>
+      <SearchResultGrid results={results} testId="stage-3-content" />
+    </div>
   );
 }
 
@@ -265,6 +366,7 @@ function PokemonCard({
         <img
           src={spriteUrl}
           alt={name}
+          loading="lazy"
           style={{ width: 96, height: 96, imageRendering: "auto" as const }}
         />
       )}
@@ -336,7 +438,7 @@ async function HeroPartial({ pokemonId }: { pokemonId: number }) {
       style={{ display: "flex", gap: "2rem", alignItems: "center" }}
     >
       {spriteUrl && (
-        <img src={spriteUrl} alt={name} style={{ width: 200, height: 200 }} />
+        <img src={spriteUrl} alt={name} loading="lazy" style={{ width: 200, height: 200 }} />
       )}
       <div>
         <h1

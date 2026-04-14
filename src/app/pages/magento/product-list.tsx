@@ -143,6 +143,7 @@ function ProductCard({
         <img
           src={imageUrl}
           alt={imageLabel || name}
+          loading="lazy"
           style={{ width: 120, height: 120, objectFit: "contain" }}
         />
       )}

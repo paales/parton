@@ -7,6 +7,7 @@ import {
 } from "@vitejs/plugin-rsc/browser";
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import { rscStream } from "rsc-html-stream/client";
 import type { RscPayload } from "./entry.rsc";
 import { GlobalErrorBoundary } from "./error-boundary";
@@ -15,6 +16,7 @@ import { getCachedPartialIds } from "../lib/partial-client";
 
 async function main() {
   let setPayload: (v: RscPayload) => void;
+  let setPayloadRaw: (v: RscPayload) => void;
 
   const initialPayload = await createFromReadableStream<RscPayload>(rscStream);
 
@@ -23,6 +25,7 @@ async function main() {
 
     React.useEffect(() => {
       setPayload = (v) => React.startTransition(() => setPayload_(v));
+      setPayloadRaw = setPayload_;
     }, [setPayload_]);
 
     React.useEffect(() => {
@@ -44,8 +47,25 @@ async function main() {
       }
     }
     const renderRequest = createRscRenderRequest(url.toString());
-    const payload = await createFromFetch<RscPayload>(fetch(renderRequest));
-    setPayload(payload);
+
+    // Streaming RSC consumption: createFromReadableStream resolves when the
+    // root chunk arrives, with lazy refs for pending suspended subtrees.
+    //
+    // The server version-stamps each Suspense `key` per request (see
+    // partial.tsx → streamVersion). When we commit the new payload, React
+    // sees the version-stamped Suspense keys as NEW elements (different key
+    // from the previous render), unmounts the old ones, and mounts fresh
+    // boundaries — those display their fallbacks immediately and reveal
+    // content as each lazy ref resolves. The surrounding tree (html/head/
+    // body/nav) keeps stable keys and reconciles in place, so the page
+    // shell stays mounted (no flash).
+    //
+    // flushSync with setPayloadRaw (not startTransition) is required:
+    // transitions would hold back showing fallbacks for the still-pending
+    // lazy refs.
+    const response = await fetch(renderRequest);
+    const payload = await createFromReadableStream<RscPayload>(response.body!);
+    flushSync(() => setPayloadRaw(payload));
   }
 
   // Allow usePartial() to trigger partial-specific refetches.

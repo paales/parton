@@ -261,7 +261,12 @@ function stripNested(
  *   On full render, the whole tree renders, so extraction isn't needed.
  * - Keyless wrappers (main, footer) are preserved structurally
  */
-function transformForStreaming(children: ReactNode, counter = { v: 0 }): ReactNode[] {
+function transformForStreaming(
+  children: ReactNode,
+  counter = { v: 0 },
+  overrides: Record<string, Record<string, unknown>> = {},
+  version: string = "0",
+): ReactNode[] {
   const result: ReactNode[] = [];
   React.Children.forEach(children, (child) => {
     if (!React.isValidElement(child)) {
@@ -271,17 +276,28 @@ function transformForStreaming(children: ReactNode, counter = { v: 0 }): ReactNo
     if (child.key != null) {
       const props = child.props as Record<string, unknown>;
       const fallback = props.fallback as ReactNode | undefined;
-      let stripped = stripReservedProps(child);
+      // Apply __inputs override (from usePartial().refetch({...})) before
+      // stripping reserved props so the overridden props flow into the component.
+      const override = overrides[String(child.key)];
+      const withOverrides = override
+        ? React.cloneElement(child, override)
+        : child;
+      let stripped = stripReservedProps(withOverrides);
       // Recurse into children to handle nested keyed elements
       if ((stripped.props as any).children) {
-        const inner = transformForStreaming((stripped.props as any).children, counter);
+        const inner = transformForStreaming(
+          (stripped.props as any).children,
+          counter,
+          overrides,
+          version,
+        );
         stripped = React.cloneElement(stripped, {}, ...inner);
       }
       const id = String(child.key);
       if (fallback != null) {
         result.push(
           <Suspense
-            key={child.key}
+            key={`${child.key}#${version}`}
             fallback={
               <PartialErrorBoundary partialId={id}>
                 {fallback}
@@ -304,7 +320,12 @@ function transformForStreaming(children: ReactNode, counter = { v: 0 }): ReactNo
       // Keyless wrapper — recurse, assign counter key matching buildTemplate's scheme
       // so React preserves the subtree when switching from streaming to cache mode.
       const wrapKey = `_${counter.v++}`;
-      const inner = transformForStreaming((child.props as any).children, counter);
+      const inner = transformForStreaming(
+        (child.props as any).children,
+        counter,
+        overrides,
+        version,
+      );
       result.push(
         React.cloneElement(child, { key: wrapKey }, ...inner),
       );
@@ -469,6 +490,18 @@ export async function Partials({ children, namespace }: PartialsProps) {
   const populateCache = requestUrl.searchParams.has("__populateCache");
   const isPartialRefetch = hasGlobalFilter || populateCache;
 
+  // Per-request version stamp used in Suspense keys. Bumping this on every
+  // render forces React to treat the Suspense boundaries for fresh partials
+  // as brand-new mounts — they show their fallback immediately and reveal
+  // content as each lazy ref resolves. Without this, React would treat the
+  // new payload as an update and hold back the commit until ALL lazy refs
+  // resolve (batched to the slowest chunk — no progressive reveal).
+  //
+  // Only the Suspense keys for fresh partials change across renders; the
+  // surrounding tree (html/head/body/nav) keeps stable types + keys and
+  // reconciles in place, so the page shell stays mounted (no flash).
+  const streamVersion = `${requestUrl.searchParams.get("n") ?? ""}-${Date.now()}`;
+
   // When populateCache is set, override filters to render all partials.
   const effectiveRequestedIds = populateCache ? null : requestedIds;
 
@@ -514,11 +547,18 @@ export async function Partials({ children, namespace }: PartialsProps) {
 
   const fpObject = Object.fromEntries(fingerprints);
 
-  // ── Streaming mode (full render) ───────────────────────────────────
+  // ── Streaming mode (full render) ──────────────────────────────────
   // Render the filled tree directly in the server component tree.
   // Suspense boundaries wrap partials with fallbacks → they stream.
   // PartialsClient in "streaming" mode passes children through.
-  if (!isPartialRefetch) {
+  //
+  // Streaming applies on full renders AND __populateCache (a framework-set
+  // flag that forces all partials to render so the client cache can be
+  // populated — typically the first server action after streaming). For
+  // partial refetches with a filter (regular usePartial, or passthrough
+  // targeting a different namespace), cache mode is used instead so we
+  // don't re-render the whole tree unnecessarily.
+  if (!isPartialRefetch || populateCache) {
     return (
       <PartialsClient
         mode="streaming"
@@ -529,7 +569,7 @@ export async function Partials({ children, namespace }: PartialsProps) {
         debug={debug}
         fetchMs={0}
       >
-        {transformForStreaming(children)}
+        {transformForStreaming(children, { v: 0 }, resolvedInputs, streamVersion)}
       </PartialsClient>
     );
   }
@@ -539,9 +579,35 @@ export async function Partials({ children, namespace }: PartialsProps) {
   // PartialsClient fills placeholders from its cache + fresh children.
   const template = buildTemplate(children);
 
+  // Build a fallback map from all partials (including non-active ones)
+  const fallbackMap = new Map<string, ReactNode>();
+  for (const entry of allPartials) {
+    if (entry.fallback != null) {
+      fallbackMap.set(entry.id, entry.fallback);
+    }
+  }
+
+  // Wrap each fresh partial to match streaming-mode wrapping exactly so
+  // that the client reconciles in place across mode switches.
+  // - With fallback: <Suspense key="id#version"> — version bumps per request
+  //   so React treats as a fresh mount, showing the fallback and streaming
+  //   content in progressively (not batched to the slowest chunk).
+  // - Without fallback: <PartialErrorBoundary key="id"> — bare key so React
+  //   reconciles in place across refetches. Using a versioned Suspense here
+  //   would be a different element type than streaming mode's output, which
+  //   would unmount the whole subtree (e.g., the outer `page` partial) and
+  //   render `null` until the stream resolves — a visible blank flash.
   const wrappedChildren = activeChildren.map((child) => {
     if (child.key == null) return child;
     const id = String(child.key);
+    const fallback = fallbackMap.get(id);
+    if (fallback != null) {
+      return (
+        <Suspense key={`${child.key}#${streamVersion}`} fallback={fallback}>
+          {child}
+        </Suspense>
+      );
+    }
     return (
       <PartialErrorBoundary key={child.key} partialId={id}>
         {child}

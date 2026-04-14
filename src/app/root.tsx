@@ -1,5 +1,6 @@
 import { PokemonPage } from "./pages/pokemon.tsx";
 import { MagentoPage } from "./pages/magento/product-list.tsx";
+import { BarePage } from "./pages/bare-stream.tsx";
 import { Partials } from "../lib/partial.tsx";
 import { getRequest } from "../framework/context.ts";
 
@@ -7,6 +8,11 @@ export function Root() {
   const url = new URL(getRequest().url);
   const magentoMatch =
     url.pathname === "/magento" || url.pathname.startsWith("/magento");
+
+  // Bare streaming test: zero Partials infrastructure, plain Suspense.
+  if (url.pathname === "/bare") {
+    return <BarePage />;
+  }
 
   return (
     <Partials namespace="layout">

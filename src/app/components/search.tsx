@@ -188,7 +188,9 @@ export function SearchInput({
   mode: "partial" | "url";
 }) {
   const [value, setValue] = useState(query);
-  const [dispatch] = usePartial("search");
+  const [dispatchStage1] = usePartial("stage-1");
+  const [dispatchStage2] = usePartial("stage-2");
+  const [dispatchStage3] = usePartial("stage-3");
 
   // Imperative serial queue — refs for synchronous flow control.
   // No useEffect, no reliance on React state timing.
@@ -219,7 +221,10 @@ export function SearchInput({
       );
     }
 
-    await dispatch({ query: q });
+    // Dispatch all three stages in the same tick — they batch into one request
+    dispatchStage1({ query: q });
+    dispatchStage2({ query: q });
+    await dispatchStage3({ query: q });
     inFlightRef.current = false;
     // Re-check: user may have typed more while request was in flight
     sendLatest();
