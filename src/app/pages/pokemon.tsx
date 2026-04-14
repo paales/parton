@@ -1,4 +1,3 @@
-import { gql } from "graphql-request";
 import { Partials, type PartialProps } from "../../lib/partial.tsx";
 import { PartialControls } from "../components/partial-controls.tsx";
 import {
@@ -8,9 +7,125 @@ import {
 } from "../components/search.tsx";
 import { LoadMore, PageSentinel } from "../components/load-more.tsx";
 import { client } from "../data.ts";
+import {
+  graphql,
+  readFragment,
+  type FragmentOf,
+} from "../pokeapi-graphql.ts";
 import { getRequest } from "../../framework/context.ts";
 
 const PAGE_SIZE = 12;
+
+const PokemonListFields = graphql(`
+  fragment PokemonListFields on pokemon_v2_pokemon {
+    id
+    name
+    pokemon_v2_pokemonsprites {
+      sprites
+    }
+    pokemon_v2_pokemontypes {
+      pokemon_v2_type {
+        name
+      }
+    }
+  }
+`);
+
+const SearchPokemonQuery = graphql(
+  `
+    query SearchPokemon($pattern: String!, $offset: Int!, $limit: Int!) {
+      pokemon_v2_pokemon(
+        where: { name: { _ilike: $pattern } }
+        limit: $limit
+        offset: $offset
+        order_by: { id: asc }
+      ) {
+        ...PokemonListFields
+      }
+    }
+  `,
+  [PokemonListFields],
+);
+
+const PokemonListQuery = graphql(
+  `
+    query PokemonList($limit: Int!, $offset: Int!) {
+      pokemon_v2_pokemon(limit: $limit, offset: $offset, order_by: { id: asc }) {
+        ...PokemonListFields
+      }
+    }
+  `,
+  [PokemonListFields],
+);
+
+const PokemonHeroQuery = graphql(`
+  query PokemonHero($id: Int!) {
+    pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
+      id
+      name
+      height
+      weight
+      pokemon_v2_pokemonsprites {
+        sprites
+      }
+      pokemon_v2_pokemontypes {
+        slot
+        pokemon_v2_type {
+          name
+        }
+      }
+    }
+  }
+`);
+
+const PokemonStatsQuery = graphql(`
+  query PokemonStats($id: Int!) {
+    pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
+      pokemon_v2_pokemonstats {
+        base_stat
+        pokemon_v2_stat {
+          name
+        }
+      }
+    }
+  }
+`);
+
+const PokemonSpeciesQuery = graphql(`
+  query PokemonSpecies($id: Int!) {
+    pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
+      pokemon_v2_pokemonspecy {
+        name
+        base_happiness
+        capture_rate
+        pokemon_v2_generation {
+          name
+        }
+        pokemon_v2_pokemonspeciesflavortexts(
+          where: { pokemon_v2_language: { name: { _eq: "en" } } }
+          limit: 1
+        ) {
+          flavor_text
+          pokemon_v2_language {
+            name
+          }
+        }
+      }
+    }
+  }
+`);
+
+type SpriteJson = {
+  front_default?: string | null;
+  other?: { "official-artwork"?: { front_default?: string | null } | null } | null;
+} | null;
+
+function extractSprite(sprites: unknown): string | null {
+  const s = sprites as SpriteJson;
+  return (
+    s?.other?.["official-artwork"]?.front_default ?? s?.front_default ?? null
+  );
+}
 
 export function PokemonPage() {
   const url = new URL(getRequest().url);
@@ -95,21 +210,6 @@ export function PokemonPage() {
   );
 }
 
-const POKEMON_LIST_FRAGMENT = gql`
-  fragment PokemonListFields on pokemon_v2_pokemon {
-    id
-    name
-    pokemon_v2_pokemonsprites {
-      sprites
-    }
-    pokemon_v2_pokemontypes {
-      pokemon_v2_type {
-        name
-      }
-    }
-  }
-`;
-
 /**
  * Three search stages that resolve with staggered delays (0ms, 1s, 2s).
  * Each queries a different slice of results. This tests whether RSC
@@ -130,44 +230,24 @@ async function fetchSearchResults(
   offset: number,
   limit: number,
 ): Promise<SearchResult[]> {
-  const data = await client.request<{
-    pokemon_v2_pokemon: Array<{
-      id: number;
-      name: string;
-      pokemon_v2_pokemonsprites: Array<{ sprites: any }>;
-      pokemon_v2_pokemontypes: Array<{
-        pokemon_v2_type: { name: string };
-      }>;
-    }>;
-  }>(
-    gql`
-      query SearchPokemon($pattern: String!, $offset: Int!, $limit: Int!) {
-        pokemon_v2_pokemon(
-          where: { name: { _ilike: $pattern } }
-          limit: $limit
-          offset: $offset
-          order_by: { id: asc }
-        ) {
-          ...PokemonListFields
-        }
-      }
-      ${POKEMON_LIST_FRAGMENT}
-    `,
-    { pattern: `%${query}%`, offset, limit },
-  );
-
-  return data.pokemon_v2_pokemon.map((pokemon) => {
-    const spriteUrl =
-      pokemon.pokemon_v2_pokemonsprites[0]?.sprites?.other?.[
-        "official-artwork"
-      ]?.front_default ??
-      pokemon.pokemon_v2_pokemonsprites[0]?.sprites?.front_default ??
-      null;
-    const types = pokemon.pokemon_v2_pokemontypes.map(
-      (t) => t.pokemon_v2_type.name,
-    );
-    return { id: pokemon.id, name: pokemon.name, spriteUrl, types };
+  const data = await client.request(SearchPokemonQuery, {
+    pattern: `%${query}%`,
+    offset,
+    limit,
   });
+
+  return data.pokemon_v2_pokemon.map(toSearchResult);
+}
+
+function toSearchResult(
+  raw: FragmentOf<typeof PokemonListFields>,
+): SearchResult {
+  const pokemon = readFragment(PokemonListFields, raw);
+  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites);
+  const types = pokemon.pokemon_v2_pokemontypes.map(
+    (t) => t.pokemon_v2_type?.name ?? "",
+  );
+  return { id: pokemon.id, name: pokemon.name, spriteUrl, types };
 }
 
 function SearchResultGrid({
@@ -289,26 +369,10 @@ async function PokemonListPage({
 }) {
   const page = offset / PAGE_SIZE + 1;
 
-  const data = await client.request<{
-    pokemon_v2_pokemon: Array<{
-      id: number;
-      name: string;
-      pokemon_v2_pokemonsprites: Array<{ sprites: any }>;
-      pokemon_v2_pokemontypes: Array<{
-        pokemon_v2_type: { name: string };
-      }>;
-    }>;
-  }>(
-    gql`
-      query PokemonList($limit: Int!, $offset: Int!) {
-        pokemon_v2_pokemon(limit: $limit, offset: $offset, order_by: { id: asc }) {
-          ...PokemonListFields
-        }
-      }
-      ${POKEMON_LIST_FRAGMENT}
-    `,
-    { limit: PAGE_SIZE, offset },
-  );
+  const data = await client.request(PokemonListQuery, {
+    limit: PAGE_SIZE,
+    offset,
+  });
 
   return (
     <div>
@@ -323,34 +387,22 @@ async function PokemonListPage({
         </>
       )}
       <div className="grid">
-        {data.pokemon_v2_pokemon.map((pokemon) => (
-          <PokemonCard key={pokemon.id} pokemon={pokemon} />
-        ))}
+        {data.pokemon_v2_pokemon.map((raw) => {
+          const pokemon = readFragment(PokemonListFields, raw);
+          return <PokemonCard key={pokemon.id} raw={raw} />;
+        })}
       </div>
     </div>
   );
 }
 
-function PokemonCard({
-  pokemon,
-}: {
-  pokemon: {
-    id: number;
-    name: string;
-    pokemon_v2_pokemonsprites: Array<{ sprites: any }>;
-    pokemon_v2_pokemontypes: Array<{ pokemon_v2_type: { name: string } }>;
-  };
-}) {
+function PokemonCard({ raw }: { raw: FragmentOf<typeof PokemonListFields> }) {
+  const pokemon = readFragment(PokemonListFields, raw);
   const { id, name } = pokemon;
   const types = pokemon.pokemon_v2_pokemontypes.map(
-    (t) => t.pokemon_v2_type.name,
+    (t) => t.pokemon_v2_type?.name ?? "",
   );
-  const spriteUrl =
-    pokemon.pokemon_v2_pokemonsprites[0]?.sprites?.other?.[
-      "official-artwork"
-    ]?.front_default ??
-    pokemon.pokemon_v2_pokemonsprites[0]?.sprites?.front_default ??
-    null;
+  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites);
 
   return (
     <a href={`/pokemon/${id}`} className="card" style={{ display: "block" }}>
@@ -377,52 +429,16 @@ function PokemonCard({
 }
 
 async function HeroPartial({ pokemonId }: { pokemonId: number }) {
-  const data = await client.request<{
-    pokemon_v2_pokemon: Array<{
-      id: number;
-      name: string;
-      height: number;
-      weight: number;
-      pokemon_v2_pokemonsprites: Array<{ sprites: any }>;
-      pokemon_v2_pokemontypes: Array<{
-        slot: number;
-        pokemon_v2_type: { name: string };
-      }>;
-    }>;
-  }>(
-    gql`
-      query PokemonHero($id: Int!) {
-        pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
-          id
-          name
-          height
-          weight
-          pokemon_v2_pokemonsprites {
-            sprites
-          }
-          pokemon_v2_pokemontypes {
-            slot
-            pokemon_v2_type {
-              name
-            }
-          }
-        }
-      }
-    `,
-    { id: pokemonId },
-  );
+  const data = await client.request(PokemonHeroQuery, { id: pokemonId });
 
   const pokemon = data.pokemon_v2_pokemon[0];
+  if (!pokemon) return null;
   const { id, name, height, weight } = pokemon;
   const types = pokemon.pokemon_v2_pokemontypes.map((t) => ({
     slot: t.slot,
-    name: t.pokemon_v2_type.name,
+    name: t.pokemon_v2_type?.name ?? "",
   }));
-  const spriteUrl =
-    pokemon.pokemon_v2_pokemonsprites[0]?.sprites?.other?.[
-      "official-artwork"
-    ]?.front_default ??
-    pokemon.pokemon_v2_pokemonsprites[0]?.sprites?.front_default;
+  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites);
 
   return (
     <div
@@ -449,7 +465,7 @@ async function HeroPartial({ pokemonId }: { pokemonId: number }) {
           ))}
         </div>
         <div className="meta" style={{ marginTop: "1rem" }}>
-          Height: {height / 10}m · Weight: {weight / 10}kg
+          Height: {(height ?? 0) / 10}m · Weight: {(weight ?? 0) / 10}kg
         </div>
       </div>
     </div>
@@ -457,35 +473,14 @@ async function HeroPartial({ pokemonId }: { pokemonId: number }) {
 }
 
 async function StatsPartial({ pokemonId }: { pokemonId: number }) {
-  const data = await client.request<{
-    pokemon_v2_pokemon: Array<{
-      pokemon_v2_pokemonstats: Array<{
-        base_stat: number;
-        pokemon_v2_stat: { name: string };
-      }>;
-    }>;
-  }>(
-    gql`
-      query PokemonStats($id: Int!) {
-        pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
-          pokemon_v2_pokemonstats {
-            base_stat
-            pokemon_v2_stat {
-              name
-            }
-          }
-        }
-      }
-    `,
-    { id: pokemonId },
-  );
+  const data = await client.request(PokemonStatsQuery, { id: pokemonId });
 
-  const stats = data.pokemon_v2_pokemon[0].pokemon_v2_pokemonstats.map(
-    (s) => ({
-      name: s.pokemon_v2_stat.name,
-      value: s.base_stat,
-    }),
-  );
+  const pokemon = data.pokemon_v2_pokemon[0];
+  if (!pokemon) return null;
+  const stats = pokemon.pokemon_v2_pokemonstats.map((s) => ({
+    name: s.pokemon_v2_stat?.name ?? "",
+    value: s.base_stat,
+  }));
   const maxStat = 255;
 
   return (
@@ -552,47 +547,10 @@ async function StatsPartial({ pokemonId }: { pokemonId: number }) {
 }
 
 async function SpeciesPartial({ pokemonId }: { pokemonId: number }) {
-  const data = await client.request<{
-    pokemon_v2_pokemon: Array<{
-      pokemon_v2_pokemonspecy: {
-        name: string;
-        base_happiness: number;
-        capture_rate: number;
-        pokemon_v2_generation: { name: string };
-        pokemon_v2_pokemonspeciesflavortexts: Array<{
-          flavor_text: string;
-          pokemon_v2_language: { name: string };
-        }>;
-      };
-    }>;
-  }>(
-    gql`
-      query PokemonSpecies($id: Int!) {
-        pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
-          pokemon_v2_pokemonspecy {
-            name
-            base_happiness
-            capture_rate
-            pokemon_v2_generation {
-              name
-            }
-            pokemon_v2_pokemonspeciesflavortexts(
-              where: { pokemon_v2_language: { name: { _eq: "en" } } }
-              limit: 1
-            ) {
-              flavor_text
-              pokemon_v2_language {
-                name
-              }
-            }
-          }
-        }
-      }
-    `,
-    { id: pokemonId },
-  );
+  const data = await client.request(PokemonSpeciesQuery, { id: pokemonId });
 
-  const species = data.pokemon_v2_pokemon[0].pokemon_v2_pokemonspecy;
+  const species = data.pokemon_v2_pokemon[0]?.pokemon_v2_pokemonspecy;
+  if (!species) return null;
   const englishEntry = species.pokemon_v2_pokemonspeciesflavortexts[0];
 
   return (
@@ -606,7 +564,7 @@ async function SpeciesPartial({ pokemonId }: { pokemonId: number }) {
         </p>
       )}
       <div className="meta" style={{ marginTop: "1rem" }}>
-        Generation: <code>{species.pokemon_v2_generation.name}</code> · Base
+        Generation: <code>{species.pokemon_v2_generation?.name}</code> · Base
         Happiness: <code>{species.base_happiness}</code> · Capture Rate:{" "}
         <code>{species.capture_rate}</code>
       </div>

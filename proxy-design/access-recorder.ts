@@ -1,4 +1,4 @@
-import { djb2 as hashStr } from "./hash.ts";
+import { djb2 as hashStr } from "../src/lib/hash.ts";
 
 /**
  * Records property access paths during a render pass.

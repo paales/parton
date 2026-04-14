@@ -32,8 +32,22 @@ import React, {
 
 /** Dispatch a single target — batched via microtask in PartialsClient */
 type DispatchFn = (
-  target: { id: string; props?: Record<string, unknown> },
+  target: {
+    id: string;
+    props?: Record<string, unknown>;
+    revalidate?: boolean;
+  },
 ) => Promise<void>;
+
+/** Options for `usePartial().refetch(props, options)` */
+export interface PartialRefetchOptions {
+  /**
+   * Revalidate mode: preserve the current Suspense content while fresh
+   * content loads (no fallback flash). Default: false (fresh mount — fallback
+   * shows immediately). Overrides the action-level default.
+   */
+  revalidate?: boolean;
+}
 
 const PartialRefetchContext = createContext<DispatchFn>(async () => {
   throw new Error("usePartial must be used inside a Partials");
@@ -156,6 +170,35 @@ function substituteNested(
  * STREAMING_DEBUG_NOTES.md §7-8. We stop at partial boundaries, so the
  * lazy refs inside never get walked.
  */
+const LAZY_SYMBOL_STR = "Symbol(react.lazy)";
+
+/**
+ * Unwrap a raw lazy reference at the tree level.
+ *
+ * RSC Flight sometimes emits raw lazy objects (not wrapped in React
+ * elements) when resolving back-references between payload paths.
+ * These look like `{ $$typeof: Symbol(react.lazy), _payload, _init }`.
+ *
+ * If the lazy is already resolved (_payload._status === 1), return the
+ * resolved value. Otherwise return null — callers should treat pending
+ * lazies as opaque (don't descend, don't cache).
+ */
+function unwrapLazy(node: unknown): unknown {
+  if (node == null || typeof node !== "object") return node;
+  const n = node as any;
+  if (typeof n.$$typeof !== "symbol") return node;
+  if (n.$$typeof.toString() !== LAZY_SYMBOL_STR) return node;
+  const payload = n._payload;
+  if (payload && payload._status === 1) return payload._result;
+  try {
+    const init = n._init;
+    if (typeof init === "function") return init(payload);
+  } catch {
+    // Pending/errored — treat as opaque
+  }
+  return null;
+}
+
 function cacheFromStreamingChildren(
   node: ReactNode,
   cache: Map<string, ReactNode>,
@@ -165,8 +208,17 @@ function cacheFromStreamingChildren(
   if (typeof node === "string" || typeof node === "number") return;
   if (Array.isArray(node)) {
     for (let i = 0; i < node.length; i++) {
-      cacheFromStreamingChildren(node[i], cache, freshIds);
+      cacheFromStreamingChildren(node[i] as ReactNode, cache, freshIds);
     }
+    return;
+  }
+  // RSC Flight can emit raw lazy refs (not React elements) at the tree
+  // level to resolve back-references between payload paths. Unwrap them
+  // so we can continue walking. Pending lazies unwrap to null and are
+  // dropped — treating them as opaque leaves.
+  const unwrapped = unwrapLazy(node);
+  if (unwrapped !== node) {
+    cacheFromStreamingChildren(unwrapped as ReactNode, cache, freshIds);
     return;
   }
   if (!isValidElement(node)) return;
@@ -327,7 +379,13 @@ export function usePartialParams(): (
 
 export function usePartial(
   partialId: string,
-): [(props?: Record<string, unknown>) => Promise<void>, boolean] {
+): [
+  (
+    props?: Record<string, unknown>,
+    options?: PartialRefetchOptions,
+  ) => Promise<void>,
+  boolean,
+] {
   const dispatchFn = useContext(PartialRefetchContext);
   const namespace = useContext(PartialNamespaceContext);
   const [isPending, setIsPending] = useState(false);
@@ -335,11 +393,16 @@ export function usePartial(
   const namespacedId = `${namespace}/${partialId}`;
 
   const dispatch = useCallback(
-    (props?: Record<string, unknown>): Promise<void> => {
+    (
+      props?: Record<string, unknown>,
+      options?: PartialRefetchOptions,
+    ): Promise<void> => {
       setIsPending(true);
-      const p = dispatchFn({ id: namespacedId, props }).finally(() =>
-        setIsPending(false),
-      );
+      const p = dispatchFn({
+        id: namespacedId,
+        props,
+        revalidate: options?.revalidate,
+      }).finally(() => setIsPending(false));
       return p;
     },
     [namespacedId, dispatchFn],
@@ -372,12 +435,31 @@ export function PartialsClient({
   // Each usePartial("id") dispatches a single target. Multiple dispatches
   // in the same tick (e.g., refreshProducts(); refreshSidebar();) accumulate
   // here and flush as one RSC request via queueMicrotask.
-  const batchRef = useRef<Array<{ id: string; props?: Record<string, unknown> }>>([]);
+  const batchRef = useRef<
+    Array<{
+      id: string;
+      props?: Record<string, unknown>;
+      revalidate?: boolean;
+    }>
+  >([]);
   const flushRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
 
   const flush = useCallback(
-    async (targets: Array<{ id: string; props?: Record<string, unknown> }>) => {
+    async (
+      targets: Array<{
+        id: string;
+        props?: Record<string, unknown>;
+        revalidate?: boolean;
+      }>,
+    ) => {
       const url = new URL(window.location.href);
+
+      // If any target opted into revalidate, flag the whole batch. The
+      // server uses this to emit bare Suspense keys so the client reconciles
+      // in place (preserving old content during the transition).
+      if (targets.some((t) => t.revalidate)) {
+        url.searchParams.set("revalidate", "1");
+      }
 
       // Apply (and clear) any transient search-params set via usePartialParams.
       // These are request-scoped overrides that never mutate window.location.
@@ -451,26 +533,49 @@ export function PartialsClient({
   );
 
   // ── Streaming mode ──────────────────────────────────────────────────
-  // Passthrough: children are rendered directly in the tree so Suspense
-  // boundaries stay in the server component tree and can stream.
-  // We also populate the cache by walking the streaming children tree
-  // and caching each partial's outer Suspense/PartialErrorBoundary
-  // wrapper by bare partial id. Subsequent partial refetches (cache mode)
-  // need a populated cache so template placeholders for not-refetched
-  // partials can be filled from cache.
+  // Populate the cache by walking the streaming children tree and caching
+  // each partial's outer Suspense/PartialErrorBoundary wrapper by bare
+  // partial id. Then render via renderTemplate(template, cache) — the SAME
+  // output shape as cache mode. This way the React tree structure doesn't
+  // change between streaming and the first cache-mode refetch, so React
+  // reconciles in place (no fallback flash on first user interaction).
+  //
+  // The cached wrappers still contain the RSC lazy refs from the stream as
+  // their descendants, so Suspense boundaries continue to stream progressively.
+  //
+  // Revalidate: when the server emits bare Suspense keys (action response
+  // without explicit invalidate), adopt the previously cached stamped key so
+  // React reconciles in place — no fallback flash.
   if (mode === "streaming") {
     for (const [id, fp] of Object.entries(fingerprints)) {
       fps.set(id, fp);
     }
-    // Replace the cache with wrappers derived from this streaming render
+    // Capture prev cache before clearing so bare-keyed fresh wrappers can
+    // adopt the prior stamped keys.
+    const prevCache = new Map(cache);
     cache.clear();
     cacheFromStreamingChildren(children, cache, new Set(freshIds));
+    for (const [id, node] of cache) {
+      if (!isValidElement(node) || node.key == null) continue;
+      const rawKey = String(node.key);
+      if (rawKey.indexOf("#") >= 0) continue; // already stamped, keep
+      const prev = prevCache.get(id);
+      if (
+        prev &&
+        isValidElement(prev) &&
+        prev.key != null &&
+        prev.key !== node.key
+      ) {
+        cache.set(id, cloneElement(node, { key: prev.key }));
+      }
+    }
     nsState.debug = [];
 
+    const rendered = renderTemplate(template, cache);
     return (
       <PartialRefetchContext value={dispatchFn}>
         <PartialNamespaceContext value={namespace}>
-          {children}
+          {rendered}
           <PartialDebugPanel entries={debug} fetchMs={fetchMs} />
         </PartialNamespaceContext>
       </PartialRefetchContext>
@@ -484,17 +589,35 @@ export function PartialsClient({
   // Index fresh partials by key (direct children only — nested partials
   // arrive as their own independent entries, not buried inside parents).
   //
-  // The server stamps a per-request version onto each fresh Suspense key
-  // (e.g., `stage-1#V2`) to force React to treat it as a new mount so the
-  // fallback shows and content streams in progressively. The cache keys
-  // by the bare partial ID (before the `#`) so template placeholders
-  // — which only know the partial ID — still resolve.
+  // Invalidate: server stamps a per-request version onto each fresh Suspense
+  // key (e.g., `cart#V2`). React treats it as a new mount — fallback shows,
+  // content streams in progressively.
+  //
+  // Revalidate: server sends a bare key (`cart`). We clone the fresh child
+  // with the prior cached element's key so React reconciles in place. Under
+  // the client's startTransition, old content stays visible until the fresh
+  // content resolves (no fallback flash).
+  //
+  // Cache keys are always the bare partial ID (before any `#`).
   Children.forEach(children, (child) => {
     if (isValidElement(child) && child.key != null) {
       const rawKey = String(child.key);
       const hashIdx = rawKey.indexOf("#");
       const partialId = hashIdx >= 0 ? rawKey.slice(0, hashIdx) : rawKey;
-      cache.set(partialId, child);
+
+      let toCache = child;
+      if (hashIdx < 0) {
+        const prev = cache.get(partialId);
+        if (
+          prev &&
+          isValidElement(prev) &&
+          prev.key != null &&
+          prev.key !== child.key
+        ) {
+          toCache = cloneElement(child, { key: prev.key });
+        }
+      }
+      cache.set(partialId, toCache);
     }
   });
 

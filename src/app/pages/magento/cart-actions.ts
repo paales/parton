@@ -1,7 +1,31 @@
 "use server";
 
 import { client } from "../../magento-data.ts";
+import { graphql } from "../../magento-graphql.ts";
 import { getCookie, setCookie } from "../../../framework/context.ts";
+
+const CreateEmptyCart = graphql(`
+  mutation CreateEmptyCart {
+    createEmptyCart
+  }
+`);
+
+const AddToCart = graphql(`
+  mutation AddToCart($cartId: String!, $sku: String!, $quantity: Float!) {
+    addProductsToCart(
+      cartId: $cartId
+      cartItems: [{ sku: $sku, quantity: $quantity }]
+    ) {
+      cart {
+        total_quantity
+      }
+      user_errors {
+        code
+        message
+      }
+    }
+  }
+`);
 
 /**
  * Server action: get or create a cart.
@@ -12,10 +36,9 @@ export async function getOrCreateCart(): Promise<string> {
   const existing = getCookie("cart_id");
   if (existing) return existing;
 
-  const data = await client.request<{ createEmptyCart: string }>(
-    `mutation { createEmptyCart }`,
-  );
+  const data = await client.request(CreateEmptyCart);
   const cartId = data.createEmptyCart;
+  if (!cartId) throw new Error("createEmptyCart returned null");
   setCookie("cart_id", cartId);
   return cartId;
 }
@@ -27,38 +50,19 @@ export async function getOrCreateCart(): Promise<string> {
 export async function addToCart(
   sku: string,
   quantity: number,
-): Promise<{ invalidate: { tags: string[] } }> {
+): Promise<{ revalidate: { tags: string[] } }> {
   const cartId = await getOrCreateCart();
 
-  const data = await client.request<{
-    addProductsToCart: {
-      cart: { total_quantity: number };
-      user_errors: Array<{ code: string; message: string }>;
-    };
-  }>(
-    `mutation AddToCart($cartId: String!, $sku: String!, $quantity: Float!) {
-      addProductsToCart(
-        cartId: $cartId
-        cartItems: [{ sku: $sku, quantity: $quantity }]
-      ) {
-        cart {
-          total_quantity
-        }
-        user_errors {
-          code
-          message
-        }
-      }
-    }`,
-    { cartId, sku, quantity },
-  );
+  const data = await client.request(AddToCart, { cartId, sku, quantity });
 
-  const errors = data.addProductsToCart.user_errors;
+  const result = data.addProductsToCart;
+  if (!result) throw new Error("addProductsToCart returned null");
+  const errors = result.user_errors.filter((e) => e != null);
   if (errors.length > 0) {
     throw new Error(errors.map((e) => e.message).join("; "));
   }
 
-  return { invalidate: { tags: ["cart"] } };
+  return { revalidate: { tags: ["cart"] } };
 }
 
 /**

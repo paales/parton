@@ -18,12 +18,12 @@
         "schemas": [
           {
             "name": "pokeapi",
-            "schema": "./src/app/pokeapi.schema.graphql",
+            "schema": "https://beta.pokeapi.co/graphql/v1beta",
             "tadaOutputLocation": "./src/app/pokeapi-env.d.ts"
           },
           {
             "name": "magento",
-            "schema": "./src/app/magento.schema.graphql",
+            "schema": "https://graphcommerce.vercel.app/api/graphql",
             "tadaOutputLocation": "./src/app/magento-env.d.ts"
           }
         ]

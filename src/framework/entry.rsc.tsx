@@ -82,19 +82,38 @@ async function handleRequest(
   // would render only the invalidated partial and lose the rest of the page.
   // A full render populates the cache; subsequent actions use it.
   //
-  // Supports two formats:
+  // Two directives, same shape:
+  //   invalidate — fresh mount: Suspense keys are version-stamped, so the
+  //                fallback shows while fresh content loads.
+  //   revalidate — update in place: Suspense keys are bare, so React
+  //                reconciles in place and (under startTransition) holds old
+  //                content visible until the new content resolves.
+  //
+  // Supported formats (both directives):
   //   { invalidate: ["cart", "header"] }           — by partial ID
   //   { invalidate: { tags: ["cart"] } }           — by tag (resolved by Partials)
   //   { invalidate: { ids: ["header"], tags: ["cart"] } } — mixed
   const clientHasCache = renderRequest.url.searchParams.has("cached");
-  if (
-    returnValue?.ok &&
-    returnValue.data &&
-    typeof returnValue.data === "object" &&
-    (returnValue.data as any).invalidate
-  ) {
-    const inv = (returnValue.data as any).invalidate;
-    let needsUpdate = false;
+  const resultData = returnValue?.ok ? (returnValue.data as any) : null;
+  const directive = resultData?.revalidate ?? resultData?.invalidate;
+  const isExplicitInvalidate = resultData?.invalidate != null;
+  const isExplicitRevalidate = resultData?.revalidate != null;
+  // Default action behavior: revalidate semantics (bare Suspense keys,
+  // reconcile in place) unless the action explicitly asks for invalidate.
+  // This prevents fallback flashes on action responses that have no directive
+  // (e.g., action errors, or actions that just return data) — the server
+  // still renders a fresh tree, but React reconciles Suspense in place under
+  // the client's startTransition, so old content stays visible.
+  //
+  // Navigation renders (no action) keep version-stamped keys so each partial
+  // shows its fallback and streams in progressively.
+  const isRevalidate =
+    isExplicitRevalidate || (renderRequest.isAction && !isExplicitInvalidate);
+
+  let needsUpdate = false;
+
+  if (directive) {
+    const inv = directive;
 
     // Validate and set partial IDs on the render URL
     const setPartialIds = (ids: string[]) => {
@@ -143,12 +162,21 @@ async function handleRequest(
       renderRequest.url.searchParams.set("__populateCache", "1");
       needsUpdate = true;
     }
+  }
 
-    if (needsUpdate) {
-      // Update the ALS request so getRequest() reflects the new params.
-      // Only copy headers — the body was already consumed by the action handler.
-      setRequest(new Request(renderRequest.url, { headers: renderRequest.request.headers }));
-    }
+  // revalidate: tell partial.tsx to use bare Suspense keys so the client
+  // reconciles in place (instead of remounting and flashing the fallback).
+  // Applies on explicit revalidate directives AND any action without an
+  // invalidate directive (see isRevalidate above).
+  if (isRevalidate) {
+    renderRequest.url.searchParams.set("revalidate", "1");
+    needsUpdate = true;
+  }
+
+  if (needsUpdate) {
+    // Update the ALS request so getRequest() reflects the new params.
+    // Only copy headers — the body was already consumed by the action handler.
+    setRequest(new Request(renderRequest.url, { headers: renderRequest.request.headers }));
   }
 
   const rscPayload: RscPayload = {

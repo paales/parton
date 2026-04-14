@@ -8,17 +8,18 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"gql:generate": "gql.tada generate-output"
 	},
 	"dependencies": {
 		"@types/node": "^25.6.0",
 		"graphql": "^16.13.2",
+		"graphql-config": "^5.1.6",
 		"graphql-request": "^7.4.0",
 		"react": "^19.2.5",
 		"react-dom": "^19.2.5"
 	},
 	"devDependencies": {
-		"@0no-co/graphqlsp": "^1.15.3",
 		"@biomejs/biome": "2.4.4",
 		"@playwright/test": "^1.59.1",
 		"@types/react": "^19.2.14",

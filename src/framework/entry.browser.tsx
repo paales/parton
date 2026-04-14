@@ -46,6 +46,10 @@ async function main() {
         url.searchParams.set("cached", cachedIds.join(","));
       }
     }
+    // Revalidate path: commit inside a transition so React holds the
+    // current Suspense content visible while fresh content resolves,
+    // instead of showing the fallback (which flushSync would do).
+    const isRevalidate = url.searchParams.has("revalidate");
     const renderRequest = createRscRenderRequest(url.toString());
 
     // Streaming RSC consumption: createFromReadableStream resolves when the
@@ -65,7 +69,11 @@ async function main() {
     // lazy refs.
     const response = await fetch(renderRequest);
     const payload = await createFromReadableStream<RscPayload>(response.body!);
-    flushSync(() => setPayloadRaw(payload));
+    if (isRevalidate) {
+      setPayload(payload);
+    } else {
+      flushSync(() => setPayloadRaw(payload));
+    }
   }
 
   // Allow usePartial() to trigger partial-specific refetches.

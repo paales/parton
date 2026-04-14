@@ -387,3 +387,61 @@ Anywhere a partial's JSX is conditional on request state (URL, cookie, header), 
 - 160/160 unit tests pass.
 - 8/8 playwright e2e tests pass — URL mode and Partial mode traces are nearly identical: fallback@~20ms → stage1@~340ms → stage2@~1130ms → stage3@~2130ms, header stays mounted, body children count constant.
 - New e2e assertion: `window.location.search` must not contain `q=` after typing in Partial mode. Passes.
+
+---
+
+## §15 Attempt: RSC lazy-ref unwrapping in `cacheFromStreamingChildren` (did not resolve the underlying issue)
+
+### What I was trying to fix
+Post-"Option 2" (streaming mode also renders via `renderTemplate(template, cache)` to match cache-mode output shape, eliminating a fallback flash on add-to-cart): bare-stream initial SSR was timing out because `stage-3-content` never appeared. `cacheFromStreamingChildren` wasn't populating the cache with the stage wrappers, so `renderTemplate` had nothing to fill the placeholders with.
+
+### The observation
+On the bare-stream page, the `<div style={{marginTop: "1.5rem"}}>` that wraps the three stage partials came through the walker as a **raw lazy reference object** — not a React element. Shape:
+```js
+{ $$typeof: Symbol(react.lazy), _payload: { _status, _result }, _init: Function }
+```
+`isValidElement(node)` returns false for these, so the walker bailed before descending into the div and never saw stage-1/2/3.
+
+The hypothesis: RSC Flight emits raw lazy refs at the tree level to resolve back-references between payload paths (e.g., a repeated style object deduped across the payload).
+
+### What I tried
+
+1. **Added `unwrapLazy(node)` helper** — detects `$$typeof === Symbol(react.lazy)`, returns `_payload._result` if `_status === 1` (resolved), else calls `_init(_payload)` inside a try/catch, else returns `null`. Applied to `cacheFromStreamingChildren` before the `isValidElement` check so raw lazy refs get resolved and walking continues into their resolved children.
+
+2. **Added `isLazyRef(type)` helper** — detects lazy-typed React elements (client-component boundaries like `<SearchDialog>`) and skipped them during the walk, under the assumption that accessing `.props.children` on a lazy-typed element could trigger resolution (per §8's observations about `Children.forEach`).
+
+3. **Tried extending both helpers to `substituteNested` and `renderTemplate`** — reverted immediately; broke Magento and Pokemon tests (buttons not found, content missing). Kept the changes confined to `cacheFromStreamingChildren`.
+
+### Why it appeared to work — and didn't
+With `unwrapLazy` + `isLazyRef` together:
+- Bare-stream test passed (unwrapping reached the wrapping div).
+- Magento add-to-cart passed.
+- **Search-streaming / debug-refetch / timing-test / trace-partials failed** — the walker stopped at `<SearchDialog>` (a lazy client component) and never cached stage-1/2/3 that live inside it. On refetch, cache-mode's `renderTemplate` filled their placeholders with nothing → stages never visible.
+
+Removed the `isLazyRef` check. All 9 e2e tests + 160 unit tests passed locally. On the surface this looked like a fix.
+
+### Why the user reports it doesn't actually work
+User feedback: "this doesn't work and doesn't do anything." The passing test suite is misleading here — the tests exercise specific timing patterns (stage-1 at ~320ms, stage-2 at ~1100ms, stage-3 at ~2100ms) but don't cover the interaction pattern that's actually broken.
+
+Unverified root-cause candidates to investigate next session:
+- `unwrapLazy` calls `_init(_payload)` on pending lazies to try to resolve them eagerly. This mutates the lazy's internal state. §7-8 established that *any* touch of an RSC lazy ref during the render walk can flip its "consumed" flag and break Suspense reveal. The try/catch silently swallows thrown promises — but the side effect on the payload persists.
+- Even resolved lazy refs (`_status === 1`) return `_result` which is the resolved tree. Walking *that* tree may surface further lazy refs or Suspense boundaries whose children must not be iterated.
+- `renderTemplate` and `substituteNested` were left untouched because adding unwrapLazy there broke other tests. That asymmetry suggests the mechanism is more subtle than "raw lazy refs at the tree level" — there's a live interaction between the walker's traversal and React's reconciliation of RSC boundaries that isn't fully understood.
+
+### Current state of `src/lib/partial-client.tsx`
+- `unwrapLazy` helper present and called from `cacheFromStreamingChildren`.
+- `isLazyRef` removed.
+- `substituteNested` and `renderTemplate` unchanged from pre-attempt.
+
+### What to try next
+1. Revert `unwrapLazy` and confirm the bare-stream timeout reproduces reliably.
+2. Instead of eagerly unwrapping raw lazy refs, **emit the placeholder children directly from the server into the template** so the client walker never has to see them. `buildTemplate` already runs server-side and has access to the original (non-Flight) React tree — it could embed a marker for the wrapping div so renderTemplate doesn't need the runtime walk to discover it.
+3. Alternatively: keep streaming mode rendering `{children}` directly (old behavior) and revisit the add-to-cart fallback-flash issue via a different mechanism (e.g., detect "this is a revalidate-shape response" on the client without switching the render path).
+
+### Files touched in this attempt
+- `src/lib/partial-client.tsx` — added `unwrapLazy`, modified `cacheFromStreamingChildren` to call it. Briefly added `isLazyRef`; removed.
+
+### Tests
+- `yarn playwright test` — 9/9 pass locally.
+- `yarn vitest run` — 160/160 unit tests pass. (8 test-file collection errors are a pre-existing vitest-picking-up-e2e-specs config issue, unrelated.)
+- User reports real-world behavior is unchanged / broken. Tests are not catching the failure mode.

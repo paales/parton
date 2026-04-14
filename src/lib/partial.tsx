@@ -295,9 +295,14 @@ function transformForStreaming(
       }
       const id = String(child.key);
       if (fallback != null) {
+        // Empty version ⇒ bare key (revalidate mode): client adopts the
+        // previously cached stamped key so React reconciles in place.
+        const suspenseKey = version
+          ? `${child.key}#${version}`
+          : String(child.key);
         result.push(
           <Suspense
-            key={`${child.key}#${version}`}
+            key={suspenseKey}
             fallback={
               <PartialErrorBoundary partialId={id}>
                 {fallback}
@@ -489,6 +494,11 @@ export async function Partials({ children, namespace }: PartialsProps) {
   // to populate the client cache.
   const populateCache = requestUrl.searchParams.has("__populateCache");
   const isPartialRefetch = hasGlobalFilter || populateCache;
+  // Revalidate mode: use bare Suspense keys so the client reconciles in
+  // place (instead of remounting). Combined with a transition on the
+  // client, this preserves old content while fresh content loads — no
+  // fallback flash on the cart badge, etc.
+  const isRevalidate = requestUrl.searchParams.has("revalidate");
 
   // Per-request version stamp used in Suspense keys. Bumping this on every
   // render forces React to treat the Suspense boundaries for fresh partials
@@ -500,7 +510,13 @@ export async function Partials({ children, namespace }: PartialsProps) {
   // Only the Suspense keys for fresh partials change across renders; the
   // surrounding tree (html/head/body/nav) keeps stable types + keys and
   // reconciles in place, so the page shell stays mounted (no flash).
-  const streamVersion = `${requestUrl.searchParams.get("n") ?? ""}-${Date.now()}`;
+  //
+  // Revalidate: empty version ⇒ bare Suspense keys. The client adopts the
+  // previously cached stamped keys so React reconciles in place (no fallback
+  // flash). Applies to both streaming and cache modes.
+  const streamVersion = isRevalidate
+    ? ""
+    : `${requestUrl.searchParams.get("n") ?? ""}-${Date.now()}`;
 
   // When populateCache is set, override filters to render all partials.
   const effectiveRequestedIds = populateCache ? null : requestedIds;
@@ -547,10 +563,20 @@ export async function Partials({ children, namespace }: PartialsProps) {
 
   const fpObject = Object.fromEntries(fingerprints);
 
+  // Structural template shared across both modes: preserves keyless wrappers,
+  // partials become placeholders. PartialsClient fills placeholders from its
+  // cache in both streaming and cache modes so the rendered tree shape is
+  // identical across the streaming→cache transition (no fallback flash on
+  // the first user interaction after a streaming render).
+  const template = buildTemplate(children);
+
   // ── Streaming mode (full render) ──────────────────────────────────
-  // Render the filled tree directly in the server component tree.
-  // Suspense boundaries wrap partials with fallbacks → they stream.
-  // PartialsClient in "streaming" mode passes children through.
+  // Server produces the filled tree via transformForStreaming. Suspense
+  // boundaries wrap partials with fallbacks → they stream. PartialsClient
+  // in "streaming" mode populates its cache from these wrappers, then
+  // renders via `renderTemplate(template, cache)` — the SAME output shape
+  // as cache mode, so subsequent refetches reconcile in place without a
+  // structural tree change.
   //
   // Streaming applies on full renders AND __populateCache (a framework-set
   // flag that forces all partials to render so the client cache can be
@@ -562,7 +588,7 @@ export async function Partials({ children, namespace }: PartialsProps) {
     return (
       <PartialsClient
         mode="streaming"
-        template={null}
+        template={template}
         namespace={namespace}
         freshIds={freshIds}
         fingerprints={fpObject}
@@ -575,9 +601,6 @@ export async function Partials({ children, namespace }: PartialsProps) {
   }
 
   // ── Cache mode (partial refetch) ───────────────────────────────────
-  // Structural template: preserves keyless wrappers, partials become placeholders.
-  // PartialsClient fills placeholders from its cache + fresh children.
-  const template = buildTemplate(children);
 
   // Build a fallback map from all partials (including non-active ones)
   const fallbackMap = new Map<string, ReactNode>();
@@ -602,9 +625,24 @@ export async function Partials({ children, namespace }: PartialsProps) {
     const id = String(child.key);
     const fallback = fallbackMap.get(id);
     if (fallback != null) {
+      // Revalidate: bare key → client clones with the previously cached
+      // element's key so React reconciles in place (see partial-client).
+      // Wrapping must match transformForStreaming exactly (Suspense →
+      // PartialErrorBoundary → child) so mode switches reconcile without
+      // reshuffling the subtree.
+      const suspenseKey = isRevalidate
+        ? String(child.key)
+        : `${child.key}#${streamVersion}`;
       return (
-        <Suspense key={`${child.key}#${streamVersion}`} fallback={fallback}>
-          {child}
+        <Suspense
+          key={suspenseKey}
+          fallback={
+            <PartialErrorBoundary partialId={id}>
+              {fallback}
+            </PartialErrorBoundary>
+          }
+        >
+          <PartialErrorBoundary partialId={id}>{child}</PartialErrorBoundary>
         </Suspense>
       );
     }

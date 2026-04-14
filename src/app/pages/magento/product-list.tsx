@@ -1,9 +1,47 @@
-import { gql } from "graphql-request";
 import { Partials, type PartialProps } from "../../../lib/partial.tsx";
 import { client } from "../../magento-data.ts";
+import { graphql, type ResultOf } from "../../magento-graphql.ts";
 import { getCookie, getRequest } from "../../../framework/context.ts";
 import { AddToCartButton } from "./add-to-cart-button.tsx";
 import { CartBadge } from "./cart-badge.tsx";
+
+const CartQuery = graphql(`
+  query Cart($cartId: String!) {
+    cart(cart_id: $cartId) {
+      total_quantity
+    }
+  }
+`);
+
+const ProductsQuery = graphql(`
+  query Products($pageSize: Int!) {
+    products(filter: {}, pageSize: $pageSize) {
+      items {
+        id
+        name
+        sku
+        small_image {
+          url
+          label
+        }
+        price_range {
+          minimum_price {
+            regular_price {
+              value
+              currency
+            }
+          }
+        }
+      }
+    }
+  }
+`);
+
+type ProductItem = NonNullable<
+  NonNullable<
+    NonNullable<ResultOf<typeof ProductsQuery>["products"]>["items"]
+  >[number]
+>;
 
 export function MagentoPage() {
   const url = new URL(getRequest().url);
@@ -34,60 +72,15 @@ async function CartPartial(_props: PartialProps) {
   const cartId = getCookie("cart_id");
   if (!cartId) return <CartBadge quantity={0} />;
 
-  const data = await client.request<{ cart: { total_quantity: number } }>(
-    gql`
-      query Cart($cartId: String!) {
-        cart(cart_id: $cartId) {
-          total_quantity
-        }
-      }
-    `,
-    { cartId },
-  );
+  const data = await client.request(CartQuery, { cartId });
 
-  return <CartBadge quantity={data.cart.total_quantity} />;
+  return <CartBadge quantity={data.cart?.total_quantity ?? 0} />;
 }
 
 async function ProductGrid({ search }: { search?: string }) {
-  const data = await client.request<{
-    products: {
-      items: Array<{
-        id: number;
-        name: string;
-        sku: string;
-        small_image: { url: string; label: string };
-        price_range: {
-          minimum_price: {
-            regular_price: { value: number; currency: string };
-          };
-        };
-      }>;
-    };
-  }>(
-    gql`
-      query Products($pageSize: Int!) {
-        products(filter: {}, pageSize: $pageSize) {
-          items {
-            id
-            name
-            sku
-            small_image {
-              url
-              label
-            }
-            price_range {
-              minimum_price {
-                regular_price {
-                  value
-                  currency
-                }
-              }
-            }
-          }
-        }
-      }
-    `,
-    { pageSize: 12 },
+  const data = await client.request(ProductsQuery, { pageSize: 12 });
+  const items = (data.products?.items ?? []).filter(
+    (item): item is ProductItem => item != null,
   );
 
   return (
@@ -108,32 +101,18 @@ async function ProductGrid({ search }: { search?: string }) {
         Products loaded from GraphCommerce Magento 2 API.
       </p>
       <div className="grid">
-        {data.products.items.map((product) => (
-          <ProductCard key={product.sku} product={product} />
+        {items.map((product) => (
+          <ProductCard key={product.sku ?? product.id} product={product} />
         ))}
       </div>
     </div>
   );
 }
 
-function ProductCard({
-  product,
-}: {
-  product: {
-    id: number;
-    name: string;
-    sku: string;
-    small_image: { url: string; label: string };
-    price_range: {
-      minimum_price: {
-        regular_price: { value: number; currency: string };
-      };
-    };
-  };
-}) {
+function ProductCard({ product }: { product: ProductItem }) {
   const { name, sku, id } = product;
-  const imageUrl = product.small_image.url;
-  const imageLabel = product.small_image.label;
+  const imageUrl = product.small_image?.url;
+  const imageLabel = product.small_image?.label;
   const price = product.price_range.minimum_price.regular_price.value;
   const currency = product.price_range.minimum_price.regular_price.currency;
 
@@ -142,7 +121,7 @@ function ProductCard({
       {imageUrl && (
         <img
           src={imageUrl}
-          alt={imageLabel || name}
+          alt={imageLabel || name || ""}
           loading="lazy"
           style={{ width: 120, height: 120, objectFit: "contain" }}
         />
@@ -157,7 +136,7 @@ function ProductCard({
         {currency} {typeof price === "number" ? price.toFixed(2) : price}
       </div>
       <div style={{ marginTop: "0.75rem" }}>
-        <AddToCartButton sku={sku} />
+        {sku && <AddToCartButton sku={sku} />}
       </div>
     </div>
   );
