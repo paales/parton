@@ -30,7 +30,12 @@ export async function addToCart(
 ): Promise<{ invalidate: { tags: string[] } }> {
   const cartId = await getOrCreateCart();
 
-  await client.request(
+  const data = await client.request<{
+    addProductsToCart: {
+      cart: { total_quantity: number };
+      user_errors: Array<{ code: string; message: string }>;
+    };
+  }>(
     `mutation AddToCart($cartId: String!, $sku: String!, $quantity: Float!) {
       addProductsToCart(
         cartId: $cartId
@@ -39,10 +44,20 @@ export async function addToCart(
         cart {
           total_quantity
         }
+        user_errors {
+          code
+          message
+        }
       }
     }`,
     { cartId, sku, quantity },
   );
+
+  const errors = data.addProductsToCart.user_errors;
+  if (errors.length > 0) {
+    throw new Error(errors.map((e) => e.message).join("; "));
+  }
+
   return { invalidate: { tags: ["cart"] } };
 }
 

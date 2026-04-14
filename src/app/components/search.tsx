@@ -7,7 +7,7 @@ import {
   useTransition,
   type ReactNode,
 } from "react";
-import { usePartial } from "../../lib/partial-client.tsx";
+import { usePartial, usePartialParams } from "../../lib/partial-client.tsx";
 
 /**
  * Search toggle buttons for the header.
@@ -191,6 +191,7 @@ export function SearchInput({
   const [dispatchStage1] = usePartial("stage-1");
   const [dispatchStage2] = usePartial("stage-2");
   const [dispatchStage3] = usePartial("stage-3");
+  const setTransientParams = usePartialParams();
 
   // Imperative serial queue — refs for synchronous flow control.
   // No useEffect, no reliance on React state timing.
@@ -219,6 +220,12 @@ export function SearchInput({
         "",
         url.toString(),
       );
+    } else {
+      // Partial mode: send ?q= only on the refetch URL, never in history.
+      // The server reads searchQuery from url.searchParams.get("q") just
+      // like URL mode, so the JSX gate for stages 2/3 works without the
+      // query becoming bookmarkable.
+      setTransientParams({ q: q || null });
     }
 
     // Dispatch all three stages in the same tick — they batch into one request

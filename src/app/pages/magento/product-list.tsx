@@ -29,7 +29,7 @@ export function MagentoPage() {
 
 async function CartPartial(_props: PartialProps) {
   // Simulate slow cart API
-  await new Promise((r) => setTimeout(r, 2000));
+  await new Promise((r) => setTimeout(r, 100));
 
   const cartId = getCookie("cart_id");
   if (!cartId) return <CartBadge quantity={0} />;

@@ -18,12 +18,14 @@
 		"react-dom": "^19.2.5"
 	},
 	"devDependencies": {
+		"@0no-co/graphqlsp": "^1.15.3",
 		"@biomejs/biome": "2.4.4",
 		"@playwright/test": "^1.59.1",
 		"@types/react": "^19.2.14",
 		"@types/react-dom": "^19.2.3",
 		"@vitejs/plugin-react": "latest",
 		"@vitejs/plugin-rsc": "latest",
+		"gql.tada": "^1.9.2",
 		"jsdom": "^29.0.2",
 		"rsc-html-stream": "^0.0.7",
 		"typescript": "^5.8.3",

@@ -5,6 +5,31 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
+"@0no-co/graphql.web@npm:^1.0.5":
+  version: 1.2.0
+  resolution: "@0no-co/graphql.web@npm:1.2.0"
+  peerDependencies:
+    graphql: ^14.0.0 || ^15.0.0 || ^16.0.0
+  peerDependenciesMeta:
+    graphql:
+      optional: true
+  checksum: 10c0/4eed600962bfab42afb49cddcfb31a47b00502f59707609cf160559920ce0f5cf8874791e4cafc465ede30ae291992f3f892bc757b2a989e80e50e358f71c518
+  languageName: node
+  linkType: hard
+
+"@0no-co/graphqlsp@npm:^1.12.13, @0no-co/graphqlsp@npm:^1.15.3":
+  version: 1.15.3
+  resolution: "@0no-co/graphqlsp@npm:1.15.3"
+  dependencies:
+    "@gql.tada/internal": "npm:^1.0.0"
+    graphql: "npm:^15.5.0 || ^16.0.0 || ^17.0.0"
+  peerDependencies:
+    graphql: ^15.5.0 || ^16.0.0 || ^17.0.0
+    typescript: ^5.0.0 || ^6.0.0
+  checksum: 10c0/35962955d76ee707c34656f0d87c06070058cc80d125928a75989b5eb05c0798b0c62b2e78bba0c556429bf7255c2f5d07aa1d0875bdbff2fb012a1f19affb31
+  languageName: node
+  linkType: hard
+
 "@asamuzakjp/css-color@npm:^5.1.5":
   version: 5.1.10
   resolution: "@asamuzakjp/css-color@npm:5.1.10"
@@ -422,6 +447,40 @@ __metadata:
   version: 1.0.3
   resolution: "@gar/promise-retry@npm:1.0.3"
   checksum: 10c0/885b02c8b0d75b2d215da25f3b639158c4fbe8fefe0d79163304534b9a6d0710db4b7699f7cd3cc1a730792bff04cbe19f4850a62d3e105a663eaeec88f38332
+  languageName: node
+  linkType: hard
+
+"@gql.tada/cli-utils@npm:1.7.3":
+  version: 1.7.3
+  resolution: "@gql.tada/cli-utils@npm:1.7.3"
+  dependencies:
+    "@0no-co/graphqlsp": "npm:^1.12.13"
+    "@gql.tada/internal": "npm:1.0.9"
+    graphql: "npm:^15.5.0 || ^16.0.0 || ^17.0.0"
+  peerDependencies:
+    "@0no-co/graphqlsp": ^1.12.13
+    "@gql.tada/svelte-support": 1.0.2
+    "@gql.tada/vue-support": 1.0.2
+    graphql: ^15.5.0 || ^16.0.0 || ^17.0.0
+    typescript: ^5.0.0 || ^6.0.0
+  peerDependenciesMeta:
+    "@gql.tada/svelte-support":
+      optional: true
+    "@gql.tada/vue-support":
+      optional: true
+  checksum: 10c0/55405687375cbda9a9e963fc627939a55c64e81816c8d6433add3564f2fc2c0600ec60c98e01de77fa21511713daf9e84b644362d9ce571f0ea5c43851c68b6f
+  languageName: node
+  linkType: hard
+
+"@gql.tada/internal@npm:1.0.9, @gql.tada/internal@npm:^1.0.0":
+  version: 1.0.9
+  resolution: "@gql.tada/internal@npm:1.0.9"
+  dependencies:
+    "@0no-co/graphql.web": "npm:^1.0.5"
+  peerDependencies:
+    graphql: ^15.5.0 || ^16.0.0 || ^17.0.0
+    typescript: ^5.0.0 || ^6.0.0
+  checksum: 10c0/5599ab58bc5859bf9d38f13e4ca0aae564cf7e94fbfa9afdb9932d4719fb945cb19da917fe23ed0cf115550ce07d31bcac89c229385fe7077754b54c2bed16e9
   languageName: node
   linkType: hard
 
@@ -1367,6 +1426,23 @@ __metadata:
   languageName: node
   linkType: hard
 
+"gql.tada@npm:^1.9.2":
+  version: 1.9.2
+  resolution: "gql.tada@npm:1.9.2"
+  dependencies:
+    "@0no-co/graphql.web": "npm:^1.0.5"
+    "@0no-co/graphqlsp": "npm:^1.12.13"
+    "@gql.tada/cli-utils": "npm:1.7.3"
+    "@gql.tada/internal": "npm:1.0.9"
+  peerDependencies:
+    typescript: ^5.0.0 || ^6.0.0
+  bin:
+    gql-tada: bin/cli.js
+    gql.tada: bin/cli.js
+  checksum: 10c0/e6995d5ddd41a0049f7e2494758d605567027c57b270e59c48355d7fbd0ca95db77db2385c14d2add1198ef59b91c1b5a7f9b70d9eac8668c2be534e55a56517
+  languageName: node
+  linkType: hard
+
 "graceful-fs@npm:^4.2.6":
   version: 4.2.11
   resolution: "graceful-fs@npm:4.2.11"
@@ -1385,7 +1461,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"graphql@npm:^16.13.2":
+"graphql@npm:^15.5.0 || ^16.0.0 || ^17.0.0, graphql@npm:^16.13.2":
   version: 16.13.2
   resolution: "graphql@npm:16.13.2"
   checksum: 10c0/64e822a0a0e4398781e4bc9765b88d370c08261498b517add4b878038ef7be2005b6b394a79a5102b9379d57052f60bc7f23fec8f39808d101984a74772ebd9d
@@ -1922,6 +1998,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "react-cms@workspace:."
   dependencies:
+    "@0no-co/graphqlsp": "npm:^1.15.3"
     "@biomejs/biome": "npm:2.4.4"
     "@playwright/test": "npm:^1.59.1"
     "@types/node": "npm:^25.6.0"
@@ -1929,6 +2006,7 @@ __metadata:
     "@types/react-dom": "npm:^19.2.3"
     "@vitejs/plugin-react": "npm:latest"
     "@vitejs/plugin-rsc": "npm:latest"
+    gql.tada: "npm:^1.9.2"
     graphql: "npm:^16.13.2"
     graphql-request: "npm:^7.4.0"
     jsdom: "npm:^29.0.2"

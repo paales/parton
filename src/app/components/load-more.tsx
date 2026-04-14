@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useTransition } from "react";
+import { useEffect, useRef } from "react";
+import { usePartial } from "../../lib/partial-client.tsx";
 
 /**
  * Tracks which page partials are currently visible.
@@ -63,13 +64,18 @@ export function PageSentinel({ page }: { page: number }) {
  * Sentinel element that triggers loading the next page of results
  * when it enters the viewport via IntersectionObserver.
  *
- * Uses startTransition + replaceState so the partial caching system
- * fetches only the new page — all previous pages stay cached.
+ * Updates the URL silently (native replaceState, bypassing the patched
+ * one in entry.browser so no full navigation fires), then dispatches a
+ * partial refetch for the new page partial and the load-more sentinel
+ * itself. Previously rendered page partials stay in the client cache —
+ * and so does any other unrelated partial (e.g. an open search overlay).
  */
 export function LoadMore({ nextPage }: { nextPage: number }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [isPending, startTransition] = useTransition();
   const triggered = useRef(false);
+  const [dispatchPage, isPendingPage] = usePartial(`page-${nextPage}`);
+  const [dispatchLoadMore, isPendingLoadMore] = usePartial("load-more");
+  const isPending = isPendingPage || isPendingLoadMore;
 
   useEffect(() => {
     triggered.current = false;
@@ -83,11 +89,21 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
       ([entry]) => {
         if (entry.isIntersecting && !triggered.current) {
           triggered.current = true;
-          startTransition(() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set("pages", String(nextPage));
-            history.replaceState(null, "", url.toString());
-          });
+          // Silent URL update for bookmarkability — bypasses the patched
+          // replaceState so the navigation listener in entry.browser.tsx
+          // doesn't fire a full-page refetch.
+          const url = new URL(window.location.href);
+          url.searchParams.set("pages", String(nextPage));
+          History.prototype.replaceState.call(
+            history,
+            history.state,
+            "",
+            url.toString(),
+          );
+          // Partial refetch: only the new page and the load-more sentinel
+          // are fresh. Everything else is served from the client cache.
+          dispatchPage();
+          dispatchLoadMore();
         }
       },
       { rootMargin: "200px" },
@@ -95,7 +111,7 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [nextPage]);
+  }, [nextPage, dispatchPage, dispatchLoadMore]);
 
   return (
     <div ref={ref} style={{ padding: "2rem", textAlign: "center" }}>

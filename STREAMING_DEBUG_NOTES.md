@@ -318,3 +318,72 @@ await page.waitForTimeout(100);
 Verified across 4 standalone runs and 1 full-suite run (all 8 e2e tests passing). Not a fix in app code — it's a test-harness guard for a real race that humans don't hit in practice (they can't type within ~100ms of initial load).
 
 If the race does reproduce in production, the real fix is on the client: block URL updates + dispatch until after hydration completes (e.g., `useEffect` flag), or make the server tolerate `searchQuery=""` on what should have been a keystroke refetch. Out of scope for the current pass.
+
+---
+
+## §14 Fixing Partial mode — transient request-scoped search params
+
+### The shape of the fix
+Partial mode now behaves identically to URL mode on the server side — `url.searchParams.get("q")` returns the typed query, the JSX gate passes, stages 2/3 are in the tree, `collectPartials` finds them, they stream progressively. The browser URL stays clean.
+
+The enabling primitive: a per-refetch transient search-params store that lives in `partial-client.tsx` module state. A new hook `usePartialParams()` returns a setter that writes into it; the next `flush` consumes the entries, merges them into the fetch URL, and clears the store.
+
+```ts
+// partial-client.tsx
+const _transientParams = new Map<string, Record<string, string | null>>();
+
+export function usePartialParams(): (p: Record<string, string | null>) => void {
+  const namespace = useContext(PartialNamespaceContext);
+  return useCallback((p) => {
+    const current = _transientParams.get(namespace) ?? {};
+    _transientParams.set(namespace, { ...current, ...p });
+  }, [namespace]);
+}
+
+// inside flush(), before building ?partials= and __inputs:
+const transient = _transientParams.get(namespace);
+if (transient) {
+  for (const [k, v] of Object.entries(transient)) {
+    if (v == null) url.searchParams.delete(k);
+    else url.searchParams.set(k, v);
+  }
+  _transientParams.delete(namespace);
+}
+```
+
+In `SearchInput` Partial mode:
+
+```ts
+const setTransientParams = usePartialParams();
+// ...
+if (mode === "url") {
+  History.prototype.replaceState.call(history, history.state, "", url.toString());
+} else {
+  setTransientParams({ q: q || null });  // URL bar unchanged
+}
+dispatchStage1({ query: q });
+dispatchStage2({ query: q });
+await dispatchStage3({ query: q });
+```
+
+### Why this is the right shape
+- **JSX gate keeps working unchanged.** The page component reads `searchQuery` from `getRequest().url` — the request URL. That URL is whatever `flush` constructs and passes to `__rsc_partial_refetch`; it does not need to match `window.location`. So as long as the fetch URL carries `?q=`, the page sees the query.
+- **`__inputs` is the wrong lever for this.** `__inputs` overrides props on partials `collectPartials` already found. If the JSX gate hid stages 2/3, there's nothing for `__inputs` to override — the partials don't exist. `usePartialParams` works one step earlier, influencing what the page renders before collection runs.
+- **Per-namespace store.** Matches the rest of the module state (`cache`, `fingerprints`, `debug`). Nested Partials with their own queries don't collide.
+- **Null deletes, string sets.** Mirrors `URLSearchParams` semantics. Empty string `""` would set an empty-value param, which is not what callers want when clearing.
+
+### Separate cosmetic fix in the same pass
+Hoisted `<SearchInput>` out of `SearchStage1` and up into `<SearchDialog>`. The input now lives above the stage-1 Suspense boundary, so it stays mounted during refetch — no longer flickers with the stage-1 fallback. Stage 1 is now a pure result-only component.
+
+### What this unlocks beyond search
+Anywhere a partial's JSX is conditional on request state (URL, cookie, header), the caller can set that state transiently for a single refetch without committing it to the URL bar. Examples: locale preview, "view as" user switching, ephemeral filter state for a drawer UI. The rule: anything the server reads from the request is fair game; `usePartialParams` just lets you provide it per-refetch.
+
+### Trade-offs / known limits
+- **Transient params don't persist across a real navigation.** They're one-shot per refetch. If the user navigates away and comes back, the query is gone. That's the point — but it means "refresh button" behavior in Partial mode will revert to the empty state (no `?q=`). Expected and desirable here.
+- **Last-writer-wins inside a batch.** Multiple calls to `setTransientParams({ q: "..." })` in the same tick collapse via the spread merge. Not a concern for the current search flow (single input → single value).
+- **No cleanup on unmount.** The setter keeps writing into module state; if the component unmounts before the next `flush` fires, the pending params sit there until the next refetch consumes them. Acceptable because the next `flush` consumes-and-clears unconditionally, and there is no "stale param leaks into unrelated refetch" failure mode with a single-key setup.
+
+### Verification
+- 160/160 unit tests pass.
+- 8/8 playwright e2e tests pass — URL mode and Partial mode traces are nearly identical: fallback@~20ms → stage1@~340ms → stage2@~1130ms → stage3@~2130ms, header stays mounted, body children count constant.
+- New e2e assertion: `window.location.search` must not contain `q=` after typing in Partial mode. Passes.

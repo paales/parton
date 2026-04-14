@@ -50,10 +50,10 @@ export function PokemonPage() {
       </header>
       {searchOpen && (
         <SearchDialog open>
+          <SearchInput query={searchQuery} mode={searchMode!} />
           <SearchStage1
             key="stage-1"
             query={searchQuery}
-            mode={searchMode!}
             fallback={
               <div data-testid="stage-1-fallback" style={{ color: "#666", padding: "0.5rem" }}>
                 Loading stage 1...
@@ -226,22 +226,15 @@ function SearchResultGrid({
   );
 }
 
-/** Stage 1: search input + first 6 results, no delay */
+/** Stage 1: first 6 results, no delay */
 async function SearchStage1({
   query: searchQuery,
-  mode,
-}: PartialProps<{
-  query: string;
-  mode: "url" | "partial";
-}>) {
+}: PartialProps<{ query: string }>) {
   if (!searchQuery) {
     return (
-      <>
-        <SearchInput query="" mode={mode} />
-        <p style={{ color: "#666", marginTop: "1rem", fontSize: "0.85rem" }}>
-          Start typing to search...
-        </p>
-      </>
+      <p style={{ color: "#666", marginTop: "1rem", fontSize: "0.85rem" }}>
+        Start typing to search...
+      </p>
     );
   }
 
@@ -249,7 +242,6 @@ async function SearchStage1({
 
   return (
     <>
-      <SearchInput query={searchQuery} mode={mode} />
       <h3 style={{ color: "#888", marginTop: "1rem", fontSize: "0.8rem" }}>
         Stage 1 — instant
       </h3>

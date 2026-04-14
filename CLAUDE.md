@@ -1,75 +1,60 @@
-# React CMS — Proxy Data Layer
+# React CMS — Partials + GraphQL
 
-Research project: a React data layer where accessing data IS the query, inspired by Shopify Liquid.
+Research project: a React CMS data layer inspired by Shopify Liquid. Pages are composed of independently re-renderable server-rendered partials; data is fetched with hand-written GraphQL queries via `graphql-request`, typed end-to-end with [gql.tada](https://gql-tada.0no.co/).
 
-## Architecture
-
-**Thesis:** Data resolution strategy should be a property of the data, not the component.
-
-**How it works:** Schema-aware JavaScript Proxies record property accesses during a phantom render, compile them into GraphQL queries, fetch data, and re-render with real values. Components never write queries.
-
-```
-Discovery (phantom proxy) → Compile (access tree → GraphQL) → Fetch → Render (data proxies)
-```
+> **Historical note:** an earlier iteration used a proxy-based data layer where field access _was_ the query. That design is preserved in `PROXY_DESIGN.md` and the implementation still lives in `src/lib/` but is no longer used by the app. Do not reach for it.
 
 ## Project Structure
 
-- `src/lib/` — Backend-agnostic library (proxy, schema, compiler, partials)
+- `src/lib/` — Partials library (`partial.tsx`, `partial-client.tsx`, `partial-cache.ts`, `orchestrator.ts`, `multipart.ts`, `hash.ts`, `partial-error-boundary.tsx`). Also contains the legacy proxy data layer (see `PROXY_DESIGN.md`).
 - `src/app/` — Example application (PokeAPI + Magento backends)
 - `src/framework/` — RSC plumbing (vite-plugin-rsc, Vite 8, React 19)
 
-## Key API: `resolve()`
+## Data Layer
 
-The render function receives a **query root proxy**. Accessing fields on it — including with arguments — defines the GraphQL query automatically. No config objects, no rootField, no selectionPath.
+Data fetching uses `graphql-request` with a per-backend `GraphQLClient` instance. Queries and mutations are written as GraphQL strings and tagged with `gql.tada`'s typed `graphql()` function for end-to-end type inference.
 
-```tsx
-// Single query
-resolve((q) => {
-  const pokemon = q.pokemon_v2_pokemon({ limit: 12, order_by: raw("{id: asc}") });
-  return pokemon.map(p => <Card name={p.name.value} />);
-});
+```ts
+// src/app/magento-data.ts
+import { GraphQLClient } from "graphql-request";
+export const client = new GraphQLClient("https://graphcommerce.vercel.app/api/graphql");
 
-// Multi-query — just access multiple root fields
-resolve((q) => {
-  const products = q.products({ filter: {}, pageSize: 12 }).items;
-  const cart = q.cart({ cart_id: id });
-  return <>
-    <ProductGrid products={products} />
-    <CartDrawer cart={cart} />
-  </>;
-});
-
-// Data-only mode (returns { data, query })
-const { data } = await resolve.data((q) => {
-  q.products({ filter: {} }).items.map(p => { p.name.value; p.sku.value; });
-});
+// src/app/magento-graphql.ts
+import { initGraphQLTada } from "gql.tada";
+import type { introspection } from "./magento-env.d.ts";
+export const graphql = initGraphQLTada<{ introspection: introspection; scalars: { ... } }>();
 ```
 
-`resolve.data` returns `{ data, query }` (not the bare proxy) because proxies are thenable — `await proxy` would unwrap it.
+```tsx
+// Usage in a component
+import { graphql } from "../../magento-graphql.ts";
+import { client } from "../../magento-data.ts";
 
-## Key Conventions
+const CartQuery = graphql(`
+  query Cart($cartId: String!) {
+    cart(cart_id: $cartId) { total_quantity }
+  }
+`);
 
-### `.value` accessor
-Every proxy field returns another proxy. `.value` unwraps to the actual value.
-- `.value` is **schema-aware**: if the type has a real field called `value` (e.g., Magento `Money.value`), it traverses. Otherwise it unwraps.
-- `.$value` — escape hatch to force unwrap when type has a `value` field.
-- Every proxy is thenable — `use(proxy)` works with React's `use()` hook.
+const data = await client.request(CartQuery, { cartId });
+// data.cart.total_quantity is fully typed — no manual <T> generic needed
+```
 
-### `__typename` injection
-The query compiler automatically injects `__typename` into every object selection. The proxy uses `__typename` from response data to resolve concrete types at runtime (e.g., `ConfigurableProduct` from `ProductInterface`).
+**Conventions:**
+- One `graphql()` helper per backend (schema). Don't mix schemas in one document.
+- Define fragments with `graphql()` and pass them in the fragments array to queries that use them.
+- Prefer `const MyQuery = graphql(\`...\`)` at module scope — makes reuse and fragment composition cleaner than inlining.
+- Never pass manual type generics to `client.request`; the typed document provides result + variable types.
 
-### Partials MUST be server components
-All partials and their rendering components are server components. Client components are only for interactivity (buttons, forms) nested inside partials.
-
-### Backend-agnostic
-The library works with any GraphQL schema. The schema introspection discovers the query root type name automatically (e.g., `query_root` for Hasura, `Query` for standard GraphQL).
-
-## Partial Architecture
+## Partials Architecture
 
 Pages are flat lists of independently re-renderable partials (inspired by Shopify's section rendering). Every `Partials` instance requires a `namespace` prop to disambiguate IDs across nested instances. Filter with `?partials=namespace/id`.
 
+### Partials must be server components
+All partials and their rendering components are server components. Client components are only for interactivity (buttons, forms) nested inside partials.
+
 ### Namespace is required
-Every `<Partials>` MUST have a `namespace` prop. A namespace is just a prefix for the partial ID — it's not a fundamentally different concept, it's just a way to avoid collisions between nested Partials instances. The namespace is transparent to component authors — `usePartial("cart")` automatically resolves to `"magento/cart"` based on the enclosing Partials context.
+Every `<Partials>` MUST have a `namespace` prop. A namespace is just a prefix for the partial ID to avoid collisions between nested Partials instances. The namespace is transparent to component authors — `usePartial("cart")` automatically resolves to `"magento/cart"` based on the enclosing Partials context.
 
 ### Nesting Partials
 Partials instances can be nested. The outer instance (e.g., `namespace="layout"`) wraps the page shell (head, nav, body). The inner instance (e.g., `namespace="magento"`) wraps the page-specific content (header, cart, products).
@@ -113,7 +98,7 @@ Partials can declare tags and cache TTL via reserved props:
 <CartBadge key="cart" tags={["cart"]} cache={60} />
 ```
 - `tags` — group partials for bulk invalidation: `{ invalidate: { tags: ["cart"] } }`
-- `cache` — server-side data cache TTL in seconds (keyed by compiled GraphQL query)
+- `cache` — server-side data cache TTL in seconds (keyed by the GraphQL query string)
 - Reserved props are stripped before rendering the component (via `stripReservedProps`)
 
 ### Server action invalidation
