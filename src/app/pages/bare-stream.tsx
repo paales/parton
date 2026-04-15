@@ -1,82 +1,102 @@
 /**
- * Bare streaming test: three Suspense boundaries with staggered async
- * children, rendered through PartialRoot.
+ * Infinite-scroll demo for the `<Partial renderOn>`-via-singleton-slot
+ * pattern.
  *
- * Goal: isolate whether RSC streaming + client setState can produce a
- * progressive Suspense reveal on AJAX refetch, separate from all the
- * cache/template/wrapper machinery.
+ * URL state: `?end=N` is the last page index in the active range
+ * (default 1). The server renders pages 1..N each as `<Partial id="page-i">`,
+ * then a singleton `<Partial id="next">` whose content is the
+ * NextObserver client component. When that observer enters the viewport
+ * it bumps `?end=` and refetches `page-{N+1}` + `next`. The new `next`
+ * mounts with `currentEnd={N+1}` and re-arms.
+ *
+ * Reload / browser back-nav lands on `/bare?end=N` and the server
+ * renders the full range up-front; ScrollRestore puts the user where
+ * they were.
  */
 
-import { BareRefetchButton } from "../components/bare-refetch-button.tsx";
 import { PartialRoot, Partial } from "../../lib/partial.tsx";
+import { NextObserver } from "../components/next-observer.tsx";
+import { ScrollRestore } from "../components/scroll-restore.tsx";
+import { getRequest } from "../../framework/context.ts";
 
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const ITEMS_PER_PAGE = 10;
+const ITEM_HEIGHT = 80;
 
-async function BareStage({ id, ms }: { id: number; ms: number }) {
-  await delay(ms);
+function PageBlock({ page }: { page: number }) {
+  const offset = (page - 1) * ITEMS_PER_PAGE;
   return (
-    <div
-      data-testid={`stage-${id}-content`}
-      style={{
-        padding: "1rem",
-        background: "#1a1a2e",
-        borderRadius: 8,
-        marginBottom: "0.5rem",
-      }}
+    <section
+      data-testid={`page-${page}`}
+      data-page={page}
+      style={{ marginBottom: "1rem" }}
     >
-      Stage {id} — resolved after {ms}ms (server time {new Date().toISOString()}
-      )
-    </div>
+      <h2 style={{ color: "#888", fontSize: "0.9rem", padding: "0.5rem 0" }}>
+        Page {page}
+      </h2>
+      {Array.from({ length: ITEMS_PER_PAGE }, (_, i) => {
+        const itemId = offset + i + 1;
+        return (
+          <div
+            key={itemId}
+            data-testid={`item-${itemId}`}
+            style={{
+              height: ITEM_HEIGHT,
+              padding: "1rem",
+              marginBottom: "0.5rem",
+              background: "#1a1a2e",
+              borderRadius: 8,
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            Item #{itemId}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 
 export function BarePage() {
+  const url = new URL(getRequest().url);
+  const end = Math.max(1, Number(url.searchParams.get("end")) || 1);
+
+  const pages = Array.from({ length: end }, (_, i) => {
+    const page = i + 1;
+    return (
+      <Partial key={`page-${page}`} id={`page-${page}`}>
+        <PageBlock page={page} />
+      </Partial>
+    );
+  });
+
   return (
     <PartialRoot>
-      <Partial id="html">
-        <html lang="en">
+      <html lang="en">
+        <Partial id="head">
           <head>
             <meta charSet="UTF-8" />
-            <title>Bare Streaming Test</title>
+            <title>Infinite Scroll Test</title>
             <style>{`
               body { font-family: system-ui, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem; max-width: 800px; margin: 0 auto; }
-              button { background: #2d3748; color: #ededed; border: 1px solid #4a5568; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; }
-              button:hover { background: #4a5568; }
+              a { color: #58a6ff; }
             `}</style>
           </head>
-
-          <body>
-            <h1>Bare Streaming Test (now via Partials)</h1>
-            <BareRefetchButton />
-            <div style={{ marginTop: "1.5rem" }}>
-              <Partial
-                id="stage-1"
-                fallback={
-                  <div data-testid="stage-1-fallback">Loading stage 1...</div>
-                }
-              >
-                <BareStage id={1} ms={0} />
-              </Partial>
-              <Partial
-                id="stage-2"
-                fallback={
-                  <div data-testid="stage-2-fallback">Loading stage 2...</div>
-                }
-              >
-                <BareStage id={2} ms={1000} />
-              </Partial>
-              <Partial
-                id="stage-3"
-                fallback={
-                  <div data-testid="stage-3-fallback">Loading stage 3...</div>
-                }
-              >
-                <BareStage id={3} ms={2000} />
-              </Partial>
-            </div>
-          </body>
-        </html>
-      </Partial>
+        </Partial>
+        <body>
+          <ScrollRestore />
+          <h1>Infinite Scroll (renderOn-style singleton slot)</h1>
+          <p style={{ color: "#888", marginBottom: "1rem" }}>
+            <a href="/" data-testid="link-home">← Home</a>
+            {" · "}
+            <span data-testid="end-readout">end={end}</span>
+          </p>
+          {pages}
+          <Partial id="next">
+            <NextObserver currentEnd={end} />
+          </Partial>
+        </body>
+      </html>
     </PartialRoot>
   );
 }

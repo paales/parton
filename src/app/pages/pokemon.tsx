@@ -6,6 +6,7 @@ import {
   SearchDialog,
 } from "../components/search.tsx";
 import { LoadMore, PageSentinel } from "../components/load-more.tsx";
+import { VisibleTrigger } from "../components/visible-trigger.tsx";
 import { client } from "../data.ts";
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts";
 import { getRequest } from "../../framework/context.ts";
@@ -227,7 +228,7 @@ export function PokemonPage() {
           <div style={{ height: "80vh" }} data-testid="lazy-spacer" />
           <Partial
             id="trivia"
-            renderOn={{ on: "visible", rootMargin: "0px" }}
+            defer
             fallback={
               <div
                 className="card"
@@ -235,6 +236,7 @@ export function PokemonPage() {
                 style={{ color: "#888", fontStyle: "italic" }}
               >
                 Loading trivia…
+                <VisibleTrigger partialId="trivia" />
               </div>
             }
           >

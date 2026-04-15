@@ -2,9 +2,7 @@ export {
   PartialRoot,
   Partial,
   type PartialProps,
-  type RenderOn,
 } from "./partial.tsx";
-export { DeferredPartial } from "./deferred-partial.tsx";
 export {
   PartialsClient,
   getCachedPartialIds,

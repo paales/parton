@@ -334,7 +334,19 @@ The global-scope concern the user raised (mutable module state that a parent par
 
 ---
 
-## 7. Trigger palette (future — not part of this refactor)
+## 7. Trigger palette — REJECTED (see §11)
+
+> **Status update (2026-04-15):** this entire direction is rejected.
+> See §11 "Lessons learned" for the reasoning and §12 for the
+> narrower replacement (dormant partials).
+>
+> The original table is kept below as historical record — it shows
+> what we *thought* we'd build before the renderOn experiment
+> proved the DSL direction wrong.
+
+---
+
+### (historical) Trigger palette sketch
 
 HTMX, Phoenix LiveView, and Magento Section API all converged on the same trigger vocabulary. When we add this, the DSL lives on `<Partial trigger={...}>`. Reference table:
 
@@ -418,3 +430,182 @@ Decisions made before implementation starts. Recorded here so a future reader un
 - Changing the streaming / cache / revalidate mode logic — preserved verbatim
 - Changing the GraphQL data layer — orthogonal
 - Changing the proxy data layer (legacy, see `PROXY_DESIGN.md`) — untouched
+
+---
+
+## 11. Lessons learned (2026-04-15)
+
+The refactor shipped: `<PartialRoot>`, `<Partial id>`, `usePartial`,
+`usePartialParams` all landed and all pull their weight. Infinite
+scroll on `/bare` composes on them without touching any framework
+internals. The walker-discovery claims in §4 were validated with a
+six-test vitest suite (`src/lib/__tests__/partial.test.tsx` →
+"Walker discovery limits").
+
+What did **not** earn its weight: `renderOn` and the trigger-palette
+direction in §7. This section records why, so a future reader
+doesn't re-litigate it.
+
+### 11.1 What we tried
+
+We shipped `renderOn="visible"` as the first (and only) trigger:
+the framework substitutes an internal `DeferredPartial` client
+component when the partial is not in the explicit filter. The
+DeferredPartial renders the `fallback`, observes itself with
+`IntersectionObserver`, and dispatches `usePartial(id).refetch()`
+when visible.
+
+For one specific case — the trivia card on `/pokemon/:id`, a
+singleton known-id below-the-fold partial — it works.
+
+### 11.2 What killed the DSL direction
+
+The next real case (infinite scroll) needed triggers that a DSL
+cannot express:
+
+- **Mutate URL state** before firing — `silentReplace` bumps
+  `?end=N+1` so the URL is bookmarkable and reload-safe.
+- **Refetch a *different* partial** — the "next" trigger activates
+  `page-{N+1}`, not itself.
+- **Coordinate multiple dispatches** — `setParams`, `dispatchPage`,
+  `dispatchNext` batched in one microtask.
+
+None of that is expressible as `{on:"visible", debounce, throttle,
+rootMargin, threshold}`. It is app logic. `src/app/components/next-observer.tsx`
+is ~50 lines of plain `"use client"` code using `usePartial` +
+`usePartialParams`. It reads fine. It composes.
+
+### 11.3 Why HTMX's DSL is the right primitive for HTMX and the wrong one for us
+
+HTMX has no programming model — no JS, no state, no callbacks.
+Its trigger DSL exists because HTML attributes were the only
+expressive surface available. It had to invent `hx-trigger` to
+express anything at all.
+
+We have React, hooks, and `"use client"` components. Our natural
+primitive is already `useEffect` + `IntersectionObserver` +
+`usePartial`. A `{on, debounce, throttle, rootMargin}` DSL would
+be a second, worse way to express what hooks express — and would
+cap out well before the infinite-scroll case.
+
+HTMX triggers are beautiful **because** HTMX has no alternative.
+Ours would be gratuitous.
+
+### 11.4 Revised position on §7
+
+The full trigger palette is **rejected as framework API**. Debounce,
+throttle, delay, interval, mediaQuery, event — all of it is app
+concerns, written in app code, with full access to the surrounding
+request/state/transition context.
+
+The one use case `renderOn` still earns — self-activating singleton
+partials where the trigger *is* the entire behavior — is handled
+by the narrower primitive proposed in §12.
+
+---
+
+## 12. Dormant partials (replaces `renderOn`)
+
+### 12.1 Shape
+
+Replace `renderOn` with a single boolean prop: `defer`.
+
+```tsx
+<Partial id="trivia" defer fallback={<TriviaSkeleton/>}>
+  <TriviaContent pokemonId={id}/>
+</Partial>
+```
+
+Semantics:
+
+- A deferred partial renders its `fallback` on initial load and on
+  any refetch that does not explicitly target it.
+- It renders its `children` only when its id appears in `?partials=`
+  or `__inputs` — i.e. a client explicitly activated it.
+- The framework provides no trigger machinery. Activation is
+  whatever the app wires: `usePartial(id).refetch()` called from a
+  button click, `IntersectionObserver`, hover, timer, SSE message,
+  `requestIdleCallback`, media-query match — whatever.
+
+### 12.2 The trivia card under this model
+
+Current code (with `renderOn`):
+
+```tsx
+<Partial id="trivia" renderOn="visible" fallback={<Spinner/>}>
+  <TriviaContent pokemonId={id}/>
+</Partial>
+```
+
+Proposed code (with `defer`):
+
+```tsx
+<Partial id="trivia" defer fallback={
+  <TriviaSkeleton>
+    <VisibleTrigger partialId="trivia"/>
+  </TriviaSkeleton>
+}>
+  <TriviaContent pokemonId={id}/>
+</Partial>
+```
+
+`VisibleTrigger` is an app-provided `"use client"` utility — same
+shape as `NextObserver` but simpler (no URL mutation, just an
+IntersectionObserver that calls `usePartial(partialId).refetch()`).
+Because the trigger lives *inside* the fallback, it unmounts as
+soon as activation happens; no manual teardown.
+
+### 12.3 Other triggers, for free
+
+The `defer` primitive makes every trigger shape possible without a
+framework change:
+
+- **Hover prefetch:** `onMouseEnter={() => dispatch()}` on a link.
+- **Click:** a button whose `onClick` activates a partial.
+- **Idle:** a client component using `requestIdleCallback`.
+- **Timer / interval:** `setInterval` in a client effect.
+- **SSE / push:** listen to an EventSource in a client provider,
+  dispatch on message.
+- **Conditional on media query:** `matchMedia` listener.
+
+None of these need framework support. They are all ~15 lines of
+client code with `usePartial` at the core.
+
+### 12.4 Why this is better than `renderOn`
+
+- **Decoupled.** `<Partial>`'s API stops caring about when content
+  activates. `defer` is a single bit: "dormant or not."
+- **Extensible.** The DSL in §7 would cap out; composition does not.
+- **Combinable.** Two triggers can coexist — a `<VisibleTrigger>`
+  *and* a `<Button>` that both activate the same partial.
+- **Honest.** It exposes the two-step nature (declare dormant,
+  then activate from the client) that `renderOn` hid behind an
+  injected `DeferredPartial`.
+
+### 12.5 Migration
+
+- Delete the `renderOn` prop, the `RenderOn` type, and the
+  `normalizeRenderOn` / DeferredPartial-substitution branches in
+  `partial.tsx`.
+- Keep `DeferredPartial` as an app-level component (rename to
+  `VisibleTrigger`, maybe) — not framework API.
+- Migrate the trivia example in `pokemon.tsx` to the `defer +
+  VisibleTrigger` pattern.
+- The walker-discovery tests stay as-is; they don't exercise
+  `renderOn`. The three existing `renderOn` vitest tests get
+  replaced with `defer` equivalents.
+- `e2e/render-on-visible.spec.ts` is renamed and rewritten to test
+  the `defer + VisibleTrigger` composition — asserting the same
+  behaviors (fallback on initial render, single RSC refetch on
+  scroll, real content replaces fallback).
+
+### 12.6 Open questions
+
+- Do we still emit a `<span data-partial-deferred>` marker around
+  the fallback? With `defer` the app owns rendering; probably no
+  framework-injected wrapper is needed. To be decided when we
+  implement.
+- Does `defer` interact with `cache`? A partial with `defer
+  cache={60}` would still honor the cache on activation — no
+  special case. Worth a test.
+

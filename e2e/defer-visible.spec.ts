@@ -1,18 +1,19 @@
 import { test, expect } from "@playwright/test";
 
 /**
- * <Partial renderOn="visible"> — the trivia card on /pokemon/:id is
- * placed below an 80vh spacer and should NOT render its real content
- * until the user scrolls it into view.
+ * <Partial defer> + <VisibleTrigger> — the trivia card on
+ * /pokemon/:id is placed below an 80vh spacer and should stay at
+ * its fallback until the user scrolls it into view. The trigger
+ * (an app-level component) is rendered inside the fallback and
+ * calls `usePartial("trivia").refetch()` on intersection.
  *
  * Assertions:
- *  1. On initial load the fallback is visible and the real content is NOT
- *     in the DOM (nor has its data been fetched — can't assert network
- *     traffic here, but the data-testid check is enough for shape).
- *  2. Scrolling the trivia partial into view triggers exactly ONE RSC
- *     refetch, and the real content appears.
+ *  1. On initial load the fallback is visible and the real content
+ *     is NOT in the DOM.
+ *  2. Scrolling the trivia partial into view triggers exactly ONE
+ *     RSC refetch, and the real content appears.
  */
-test("renderOn='visible' defers content until the partial enters the viewport", async ({
+test("defer + VisibleTrigger activates the block when it enters the viewport", async ({
   page,
 }) => {
   const rscCalls: Array<{ url: string; partials: string | null }> = [];

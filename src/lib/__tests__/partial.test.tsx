@@ -11,19 +11,7 @@ vi.mock("../partial-error-boundary.tsx", () => ({
 	PartialErrorBoundary: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-// Keep the DeferredPartial identity stable so tests can assert on it —
-// but don't pull in the real client module (useEffect + IntersectionObserver).
-vi.mock("../deferred-partial.tsx", () => ({
-	DeferredPartial: function DeferredPartial(props: {
-		id: string;
-		fallback?: React.ReactNode;
-	}) {
-		return props.fallback ?? null;
-	},
-}));
-
 import { PartialRoot, Partial } from "../partial.tsx";
-import { DeferredPartial } from "../deferred-partial.tsx";
 import { runWithRequestAsync } from "../../framework/context.ts";
 
 function Hero() {
@@ -526,15 +514,15 @@ describe("PartialRoot architecture", () => {
 	});
 });
 
-describe("Deferred render (renderOn)", () => {
+describe("Dormant partials (defer)", () => {
 	function Bio() { return <article>deferred-bio-content</article>; }
 
-	it("substitutes DeferredPartial for children on full nav", async () => {
+	it("renders fallback and withholds children on full nav", async () => {
 		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
 			renderToJSON(
 				<PartialRoot>
 					<Partial id="hero"><Hero /></Partial>
-					<Partial id="bio" renderOn="visible" fallback={<span>loading-bio...</span>}>
+					<Partial id="bio" defer fallback={<span>loading-bio...</span>}>
 						<Bio />
 					</Partial>
 				</PartialRoot>,
@@ -543,7 +531,6 @@ describe("Deferred render (renderOn)", () => {
 		const str = JSON.stringify(result);
 		expect(str).toContain("Hero");
 		expect(str).not.toContain("deferred-bio-content");
-		// Mocked DeferredPartial renders the fallback.
 		expect(str).toContain("loading-bio...");
 	});
 
@@ -554,35 +541,14 @@ describe("Deferred render (renderOn)", () => {
 				renderToJSON(
 					<PartialRoot>
 						<Partial id="hero"><Hero /></Partial>
-						<Partial id="bio" renderOn="visible" fallback={<span>bio-loading</span>}>
+						<Partial id="bio" defer fallback={<span>bio-loading</span>}>
 							<Bio />
 						</Partial>
 					</PartialRoot>,
 				),
 		);
-		// Fallback-prop partials wrap in Suspense, which keeps `fallback` in the
-		// tree as a sibling prop — so asserting only the real content is present.
 		const str = JSON.stringify(result);
 		expect(str).toContain("deferred-bio-content");
-	});
-
-	it("accepts the object form with rootMargin and threshold", async () => {
-		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial
-						id="bio"
-						renderOn={{ on: "visible", rootMargin: "200px", threshold: 0.1 }}
-						fallback={<span>bio-fallback</span>}
-					>
-						<Bio />
-					</Partial>
-				</PartialRoot>,
-			),
-		);
-		const str = JSON.stringify(result);
-		expect(str).not.toContain("deferred-bio-content");
-		expect(str).toContain("bio-fallback");
 	});
 
 	it("renders real content when an __inputs override targets it", async () => {
@@ -592,7 +558,7 @@ describe("Deferred render (renderOn)", () => {
 			async () =>
 				renderToJSON(
 					<PartialRoot>
-						<Partial id="bio" renderOn="visible" fallback={<span>bio-fallback</span>}>
+						<Partial id="bio" defer fallback={<span>bio-fallback</span>}>
 							<Bio />
 						</Partial>
 					</PartialRoot>,
@@ -602,7 +568,7 @@ describe("Deferred render (renderOn)", () => {
 		expect(str).toContain("deferred-bio-content");
 	});
 
-	it("does not render deferred content during initial full render (no call to Bio)", async () => {
+	it("does not invoke children during dormant render", async () => {
 		const calls: number[] = [];
 		function TrackedBio() {
 			calls.push(1);
@@ -611,13 +577,222 @@ describe("Deferred render (renderOn)", () => {
 		await runWithRequestAsync(fakeRequest(), async () =>
 			renderToJSON(
 				<PartialRoot>
-					<Partial id="bio" renderOn="visible" fallback={<span>bio-fallback</span>}>
+					<Partial id="bio" defer fallback={<span>bio-fallback</span>}>
 						<TrackedBio />
 					</Partial>
 				</PartialRoot>,
 			),
 		);
 		expect(calls).toHaveLength(0);
+	});
+
+	it("triggers placed inside fallback are rendered on the server", async () => {
+		// An app-level VisibleTrigger (or any client component) placed
+		// inside the fallback is part of the fallback tree — it should
+		// appear in the dormant output so hydration can attach it.
+		function FakeTrigger() { return <span data-testid="trigger-marker">T</span>; }
+		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<PartialRoot>
+					<Partial id="bio" defer fallback={
+						<div>loading…<FakeTrigger /></div>
+					}>
+						<Bio />
+					</Partial>
+				</PartialRoot>,
+			),
+		);
+		const str = JSON.stringify(result);
+		expect(str).toContain("trigger-marker");
+	});
+});
+
+describe("Walker discovery limits", () => {
+	function Inner() { return <span>inner-real-content</span>; }
+
+	it("discovers a Partial passed as children through a wrapping component", async () => {
+		function Wrapper({ children }: { children: React.ReactNode }) {
+			return <section className="wrap">{children}</section>;
+		}
+
+		let freshIds: string[] = [];
+		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
+			freshIds: fids,
+			children,
+		}: any) => {
+			freshIds = fids;
+			return children;
+		}) as any;
+		const { PartialRoot: P } = await import("../partial.tsx");
+
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<P>
+					<Wrapper>
+						<Partial id="forwarded"><Inner /></Partial>
+					</Wrapper>
+				</P>,
+			),
+		);
+		expect(freshIds).toContain("forwarded");
+	});
+
+	it("does NOT discover a Partial created inside a child component's return value", async () => {
+		function ProductCard() {
+			return <Partial id="inside-card"><Inner /></Partial>;
+		}
+
+		let freshIds: string[] = [];
+		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
+			freshIds: fids,
+			children,
+		}: any) => {
+			freshIds = fids;
+			return children;
+		}) as any;
+		const { PartialRoot: P } = await import("../partial.tsx");
+
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<P>
+					<div>
+						<ProductCard />
+					</div>
+				</P>,
+			),
+		);
+		expect(freshIds).not.toContain("inside-card");
+		expect(freshIds).toHaveLength(0);
+	});
+
+	it("does NOT discover a nested Partial created inside a child component even when its parent Partial is discovered", async () => {
+		function Body() {
+			return (
+				<>
+					<div>cards</div>
+					<Partial id="nested-inside-body"><Inner /></Partial>
+				</>
+			);
+		}
+
+		let freshIds: string[] = [];
+		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
+			freshIds: fids,
+			children,
+		}: any) => {
+			freshIds = fids;
+			return children;
+		}) as any;
+		const { PartialRoot: P } = await import("../partial.tsx");
+
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<P>
+					<Partial id="page">
+						<Body />
+					</Partial>
+				</P>,
+			),
+		);
+		expect(freshIds).toContain("page");
+		expect(freshIds).not.toContain("nested-inside-body");
+	});
+
+	it("discovers Partials that DIFFER between two requests (cross-navigation dynamism)", async () => {
+		let freshIds: string[] = [];
+		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
+			freshIds: fids,
+			children,
+		}: any) => {
+			freshIds = fids;
+			return children;
+		}) as any;
+		const { PartialRoot: P } = await import("../partial.tsx");
+
+		// Request A: pokemon list page — "list" partial
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<P>
+					<Partial id="list"><Inner /></Partial>
+				</P>,
+			),
+		);
+		expect(freshIds).toEqual(["list"]);
+
+		// Request B: pokemon detail page — "hero" and "stats" partials
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<P>
+					<Partial id="hero"><Inner /></Partial>
+					<Partial id="stats"><Inner /></Partial>
+				</P>,
+			),
+		);
+		expect(freshIds).toEqual(["hero", "stats"]);
+	});
+
+	it("discovers Partials produced by calling a page function inline (today's Root pattern)", async () => {
+		// Mirrors src/app/root.tsx — pickRoute calls PokemonPage() directly,
+		// inlining its returned JSX under <PartialRoot>.
+		function PokemonPage() {
+			return (
+				<>
+					<Partial id="hero"><Inner /></Partial>
+					<Partial id="stats"><Inner /></Partial>
+				</>
+			);
+		}
+
+		let freshIds: string[] = [];
+		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
+			freshIds: fids,
+			children,
+		}: any) => {
+			freshIds = fids;
+			return children;
+		}) as any;
+		const { PartialRoot: P } = await import("../partial.tsx");
+
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<P>
+					{PokemonPage()}
+				</P>,
+			),
+		);
+		expect(freshIds).toContain("hero");
+		expect(freshIds).toContain("stats");
+	});
+
+	it("does NOT discover Partials when a page is rendered as <PokemonPage/> (component element, not called)", async () => {
+		function PokemonPage() {
+			return (
+				<>
+					<Partial id="hero-cmp"><Inner /></Partial>
+					<Partial id="stats-cmp"><Inner /></Partial>
+				</>
+			);
+		}
+
+		let freshIds: string[] = [];
+		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
+			freshIds: fids,
+			children,
+		}: any) => {
+			freshIds = fids;
+			return children;
+		}) as any;
+		const { PartialRoot: P } = await import("../partial.tsx");
+
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<P>
+					<PokemonPage />
+				</P>,
+			),
+		);
+		expect(freshIds).not.toContain("hero-cmp");
+		expect(freshIds).not.toContain("stats-cmp");
 	});
 });
 

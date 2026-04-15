@@ -1,28 +1,26 @@
 import type { ReactNode } from "react";
 
-/**
- * Deferred-render trigger for a `<Partial>`.
- *
- * When set, the partial's children are NOT rendered on the initial page
- * render. Instead a small client-side observer is placed at the partial's
- * position; when the trigger condition fires, the observer calls
- * `usePartial(id).refetch()` and the server renders the real content.
- *
- * Currently supported:
- *   - "visible" — IntersectionObserver. Fires once when the placeholder
- *     enters the viewport (optional `rootMargin` / `threshold`).
- */
-export type RenderOn =
-  | "visible"
-  | { on: "visible"; rootMargin?: string; threshold?: number };
-
 export interface PartialProps {
   id: string;
   children: ReactNode;
   tags?: string[];
   cache?: number;
   fallback?: ReactNode;
-  renderOn?: RenderOn;
+  /**
+   * Dormant partial. When true, the children are not rendered on
+   * initial load (or on any refetch that does not explicitly target
+   * this id). The `fallback` is rendered in their place. The block
+   * becomes "alive" only when a client component activates it via
+   * `usePartial(id).refetch()`.
+   *
+   * The framework provides no trigger machinery — activation is any
+   * `"use client"` code that calls `usePartial`. Common patterns:
+   * an IntersectionObserver placed inside the fallback, a button,
+   * a hover handler, a timer, an SSE listener. See the trivia
+   * example in `src/app/pages/pokemon.tsx` for a visible-trigger
+   * component placed inside the fallback.
+   */
+  defer?: boolean;
 }
 
 /**
