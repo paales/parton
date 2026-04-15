@@ -1,4 +1,5 @@
 import { Partial } from "../../lib/partial.tsx";
+import { WhenVisible } from "../../lib/when-visible.tsx";
 import { PartialControls } from "../components/partial-controls.tsx";
 import {
   SearchToggle,
@@ -6,7 +7,6 @@ import {
   SearchDialog,
 } from "../components/search.tsx";
 import { LoadMore, PageSentinel } from "../components/load-more.tsx";
-import { VisibleTrigger } from "../components/visible-trigger.tsx";
 import { client } from "../data.ts";
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts";
 import { getRequest } from "../../framework/context.ts";
@@ -228,19 +228,30 @@ export function PokemonPage() {
           <div style={{ height: "80vh" }} data-testid="lazy-spacer" />
           <Partial
             id="trivia"
-            defer
             fallback={
               <div
                 className="card"
-                data-testid="trivia-fallback"
+                data-testid="trivia-loading"
                 style={{ color: "#888", fontStyle: "italic" }}
               >
                 Loading trivia…
-                <VisibleTrigger partialId="trivia" />
               </div>
             }
           >
-            <TriviaPartial pokemonId={pokemonId} />
+            <WhenVisible
+              partialId="trivia"
+              fallback={
+                <div
+                  className="card"
+                  data-testid="trivia-fallback"
+                  style={{ color: "#888", fontStyle: "italic" }}
+                >
+                  Loading trivia…
+                </div>
+              }
+            >
+              <TriviaPartial pokemonId={pokemonId} />
+            </WhenVisible>
           </Partial>
         </>
       ) : (

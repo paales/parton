@@ -5,6 +5,11 @@ import React from "react";
 interface Props {
   partialId: string;
   children: React.ReactNode;
+  /**
+   * Optional error fallback. Rendered when a descendant throws.
+   * If omitted, the built-in red card with a retry button is used.
+   */
+  fallback?: React.ReactNode;
 }
 
 interface State {
@@ -15,8 +20,9 @@ interface State {
  * Per-partial error boundary.
  *
  * Wraps each partial so a render failure in one partial doesn't
- * crash the entire page. Shows an inline error card with a retry
- * button that triggers a navigation to re-fetch from the server.
+ * crash the entire page. When a descendant throws:
+ *   - If `fallback` is provided, renders it verbatim.
+ *   - Otherwise, shows the default inline error card + retry button.
  */
 export class PartialErrorBoundary extends React.Component<Props, State> {
   state: State = { error: null };
@@ -35,6 +41,9 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
 
   render() {
     if (this.state.error) {
+      if (this.props.fallback !== undefined) {
+        return this.props.fallback;
+      }
       return (
         <div
           style={{

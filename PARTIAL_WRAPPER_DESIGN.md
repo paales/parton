@@ -504,108 +504,300 @@ by the narrower primitive proposed in §12.
 
 ---
 
-## 12. Dormant partials (replaces `renderOn`)
+## 12. Activator components (what we actually shipped)
 
-### 12.1 Shape
+> **Status update:** §12 went through three iterations before
+> landing on the shape below. The final version — `<WhenVisible>`
+> and friends — has none of the deferral prop machinery the earlier
+> revisions proposed. The iterations are kept in §12.7 for history.
 
-Replace `renderOn` with a single boolean prop: `defer`.
+### 12.1 What's in the framework
 
 ```tsx
-<Partial id="trivia" defer fallback={<TriviaSkeleton/>}>
-  <TriviaContent pokemonId={id}/>
+<Partial
+  id="trivia"
+  fallback={<Loading/>}      // Suspense loading fallback
+  errorWith={<ErrorCard/>}   // Error boundary fallback (optional)
+>
+  <WhenVisible
+    partialId="trivia"
+    fallback={<Skeleton/>}
+  >
+    <TriviaContent pokemonId={id}/>
+  </WhenVisible>
 </Partial>
 ```
 
-Semantics:
+`<Partial>` carries identity and the `fallback` / `errorWith`
+concerns. It does NOT know anything about activation or deferral.
 
-- A deferred partial renders its `fallback` on initial load and on
-  any refetch that does not explicitly target it.
-- It renders its `children` only when its id appears in `?partials=`
-  or `__inputs` — i.e. a client explicitly activated it.
-- The framework provides no trigger machinery. Activation is
-  whatever the app wires: `usePartial(id).refetch()` called from a
-  button click, `IntersectionObserver`, hover, timer, SSE message,
-  `requestIdleCallback`, media-query match — whatever.
+Activation lives in **app-level server components** that wrap the
+real content and pick what to render based on request state. The
+framework ships one: `<WhenVisible>` (+ its `"use client"` half,
+`<WhenVisibleClient>`, which wires the `IntersectionObserver`).
 
-### 12.2 The trivia card under this model
+### 12.2 What `<WhenVisible>` does
 
-Current code (with `renderOn`):
+Server component. Three props: `partialId`, `fallback`, `children`
+(+ optional `targetId`, `rootMargin`, `threshold`).
+
+- Reads `getRequest()` to determine whether its `partialId` is in
+  `?partials=` or `__inputs` on this request.
+- If yes (explicit activation): renders `children` directly. Full
+  happy path.
+- If no (full-page render, or a refetch that targets a sibling):
+  renders `<WhenVisibleClient>` which shows the `fallback` and
+  attaches an `IntersectionObserver` that fires
+  `usePartial(targetId ?? partialId).refetch()` on first entry.
+
+### 12.3 Why there's no ambient partial context
+
+We tried: a `React.createContext` set by `<PartialRoot>` around
+each active partial, consumed by `<WhenVisible>` via `use()`.
+`createContext` isn't allowed in server components, and
+`Provider` resolves to `undefined` on the server when the context
+lives in a `"use client"` module. Dead end.
+
+We also considered AsyncLocalStorage. React renders server
+components concurrently; `run(ctx, () => children)` scope
+expires before descendants execute; `enterWith` leaks across
+sibling renders. Also dead end.
+
+Conclusion: explicit `partialId` on the activator component.
+The small cost (duplicated id string) buys a simple mental model
+with no hidden state.
+
+### 12.4 Why activator components are better than a `defer` prop
+
+The `defer` + `deferWith` boundary-prop design we prototyped
+worked, but it forced the framework to know:
+- *When* to treat a partial as dormant.
+- *What* to render when dormant.
+- *How* the client activates it (indirectly, via injected
+  `DeferredPartial`).
+
+All three are app concerns. Moving them into a userland wrapper
+(`<WhenVisible>`) shrinks the framework API to the essentials
+(`id`, `fallback`, `errorWith`) and lets the app compose:
 
 ```tsx
-<Partial id="trivia" renderOn="visible" fallback={<Spinner/>}>
-  <TriviaContent pokemonId={id}/>
+<Partial id="analytics">
+  <WhenConsented consentKey="analytics" fallback={<ConsentPrompt/>}>
+    <ThirdPartyDataComponent/>
+  </WhenConsented>
+</Partial>
+
+<Partial id="feed-widget">
+  <WhenIdle partialId="feed-widget" fallback={<EmptyFeed/>}>
+    <FeedContent/>
+  </WhenIdle>
+</Partial>
+
+<Partial id="chart">
+  <WhenMediaQuery query="(min-width: 900px)" fallback={<MobileStub/>}>
+    <WideChart/>
+  </WhenMediaQuery>
 </Partial>
 ```
 
-Proposed code (with `defer`):
+`<WhenConsented>`, `<WhenIdle>`, `<WhenMediaQuery>` are all app-
+owned. They share exactly one pattern: "read request/session
+state, render children or a fallback-with-trigger." Each is ~30
+lines. The framework doesn't need any of them.
+
+### 12.5 What this replaces
+
+- `defer` boolean prop on `<Partial>` → **removed**.
+- `deferWith` prop on `<Partial>` → **removed**.
+- `renderOn` / trigger DSL (§7) → stays rejected.
+- `DeferredPartial` framework-internal component → **removed**.
+- App-level `VisibleTrigger` helper → replaced by
+  `<WhenVisible>` / `<WhenVisibleClient>`.
+
+`<Partial>` now has only these props: `id`, `tags`, `cache`,
+`fallback`, `errorWith`, `children`.
+
+### 12.6 Caveats / known sharp edges
+
+- **`<WhenVisible>` must repeat the partial id.** No ambient
+  context; you write `<Partial id="x"><WhenVisible partialId="x">`.
+  In dev we could add a lint rule that checks the enclosing
+  Partial's id matches, but nothing today.
+- **The activator pattern requires an enclosing Partial.** If you
+  use `<WhenVisible>` outside a `<Partial>`, the refetch fires
+  but no server response knows what to render. Documented, not
+  enforced.
+- **Single-fire guard is module-level** in `WhenVisibleClient`
+  (a `Set<string>` of activated ids). A Suspense boundary
+  re-showing its fallback during a new refetch would otherwise
+  remount the trigger and re-fire. If we ever want re-activation
+  on tag invalidation, this guard needs a reset hook.
+
+### 12.7 Why `fallback` is still a framework prop (and not moved to user-land Suspense)
+
+On its face, `<Partial fallback={x}>` auto-wrapping in `<Suspense>`
+looks like a convenience we could move to user-land:
 
 ```tsx
-<Partial id="trivia" defer fallback={
-  <TriviaSkeleton>
-    <VisibleTrigger partialId="trivia"/>
-  </TriviaSkeleton>
-}>
-  <TriviaContent pokemonId={id}/>
+// Current
+<Partial id="list" fallback={<Skel/>}>
+  <ProductList/>
+</Partial>
+
+// "Just write Suspense yourself"
+<Partial id="list">
+  <Suspense fallback={<Skel/>}>
+    <ProductList/>
+  </Suspense>
 </Partial>
 ```
 
-`VisibleTrigger` is an app-provided `"use client"` utility — same
-shape as `NextObserver` but simpler (no URL mutation, just an
-IntersectionObserver that calls `usePartial(partialId).refetch()`).
-Because the trigger lives *inside* the fallback, it unmounts as
-soon as activation happens; no manual teardown.
+The API shrinks. The role split is cleaner (Suspense is Suspense,
+Partial is identity + caching). But this would delete something
+load-bearing: **progressive streaming on refetch**.
 
-### 12.3 Other triggers, for free
+**The problem.** When a partial is refetched and its children
+contain multiple independently-async sub-parts — e.g. a product
+list with N rows each doing its own `await fetchRow()` — we want
+those rows to stream in **one-by-one** as their Flight chunks
+arrive from the server, not wait for the whole list to finish.
 
-The `defer` primitive makes every trigger shape possible without a
-framework change:
+React's current concurrent-rendering model only gives us this
+behavior when the Suspense boundary is treated as a **fresh mount**.
+Reconcile-in-place semantics lose per-inner-boundary streaming:
 
-- **Hover prefetch:** `onMouseEnter={() => dispatch()}` on a link.
-- **Click:** a button whose `onClick` activates a partial.
-- **Idle:** a client component using `requestIdleCallback`.
-- **Timer / interval:** `setInterval` in a client effect.
-- **SSE / push:** listen to an EventSource in a client provider,
-  dispatch on message.
-- **Conditional on media query:** `matchMedia` listener.
+- **With `flushSync`**: React commits synchronously; inner
+  Suspense boundaries render with their fallbacks, then replace
+  as their data arrives. Progressive streaming works *if* the
+  outer boundary is new-keyed. If the outer key is stable, the
+  behavior is less predictable (old inner content can stick
+  around; some experiments have shown inner streaming still works,
+  others have shown it stall. Hard to rely on).
+- **With `startTransition`**: React holds the old tree visible
+  until the *entire* new subtree is ready, then swaps. You lose
+  per-inner-boundary streaming entirely — it's all-or-nothing.
 
-None of these need framework support. They are all ~15 lines of
-client code with `usePartial` at the core.
+So a stable Suspense key (or moving Suspense out of the
+framework's control) breaks progressive streaming on refetch.
+That's the real reason `fallback` is on `<Partial>`: it lets the
+framework key-stamp the Suspense boundary per request so the
+refetch pipeline streams properly.
 
-### 12.4 Why this is better than `renderOn`
+**The key-stamp mechanism.** On refetch, `PartialRoot` wraps the
+partial's content in `<Suspense key={`${id}#${streamVersion}`}>`
+where `streamVersion` is a per-request timestamp. The new key
+makes React remount the boundary, which gives fresh fallback +
+progressive inner streaming.
 
-- **Decoupled.** `<Partial>`'s API stops caring about when content
-  activates. `defer` is a single bit: "dormant or not."
-- **Extensible.** The DSL in §7 would cap out; composition does not.
-- **Combinable.** Two triggers can coexist — a `<VisibleTrigger>`
-  *and* a `<Button>` that both activate the same partial.
-- **Honest.** It exposes the two-step nature (declare dormant,
-  then activate from the client) that `renderOn` hid behind an
-  injected `DeferredPartial`.
+**The revalidate escape hatch.** When you *don't* want progressive
+streaming (e.g. the cart-badge refresh — you want the old value
+visible while new loads, paired with an `isPending` spinner on
+the trigger), pass `?revalidate=1` on the refetch URL. The
+framework then uses a bare `key={id}`, reconciling in place. No
+flash, no progressive streaming. Appropriate when the async work
+is a single fetch, not N parallel ones.
 
-### 12.5 Migration
+**"Each streamable unit = its own Partial" — the cleaner pattern.**
+If you have a product list where each row should stream
+independently *without* any outer boundary flash, don't try to do
+it inside one Partial. Make each row its own `<Partial id="row-N">`.
+Then "refresh the list" = "refetch N partials". Each reconciles
+into its own cached slot; untargeted rows stay cached; the cache
+merge is per-slot and atomic per row. No outer Suspense to flash,
+and each row streams in as its server chunk arrives. This is the
+ergonomic choice whenever the N-pieces you want to stream
+independently are known statically.
 
-- Delete the `renderOn` prop, the `RenderOn` type, and the
-  `normalizeRenderOn` / DeferredPartial-substitution branches in
-  `partial.tsx`.
-- Keep `DeferredPartial` as an app-level component (rename to
-  `VisibleTrigger`, maybe) — not framework API.
-- Migrate the trivia example in `pokemon.tsx` to the `defer +
-  VisibleTrigger` pattern.
-- The walker-discovery tests stay as-is; they don't exercise
-  `renderOn`. The three existing `renderOn` vitest tests get
-  replaced with `defer` equivalents.
-- `e2e/render-on-visible.spec.ts` is renamed and rewritten to test
-  the `defer + VisibleTrigger` composition — asserting the same
-  behaviors (fallback on initial render, single RSC refetch on
-  scroll, real content replaces fallback).
+**Possible future unwind.** If we ever want to move Suspense
+authorship to user-land while preserving streaming, we'd expose
+`streamVersion` as a server-component hook (e.g.
+`useRequestVersion()`) so the user can key their own Suspense:
 
-### 12.6 Open questions
+```tsx
+<Partial id="list">
+  <Suspense key={useRequestVersion()} fallback={<Skel/>}>
+    <ProductList/>
+  </Suspense>
+</Partial>
+```
 
-- Do we still emit a `<span data-partial-deferred>` marker around
-  the fallback? With `defer` the app owns rendering; probably no
-  framework-injected wrapper is needed. To be decided when we
-  implement.
-- Does `defer` interact with `cache`? A partial with `defer
-  cache={60}` would still honor the cache on activation — no
-  special case. Worth a test.
+The mechanism stays, the wrapping location moves. Not urgent —
+the current auto-wrap is fine for the cases we've hit.
 
+### 12.8 Iteration history (for the curious)
+
+We didn't arrive at activator components first. The path:
+
+1. **`renderOn="visible"` with framework-owned trigger DSL** —
+   §7. Rejected after infinite scroll showed the DSL couldn't
+   express app logic (URL mutation, cross-partial refetches).
+2. **`defer` boolean + `fallback` contains the trigger** — shipped
+   briefly. Problem: `fallback` wears two hats (loading vs
+   dormant) and the trigger placement inside the fallback was a
+   subtle contract.
+3. **`defer` + separate `deferWith` / `errorWith` props** —
+   cleaner role split, but `defer` was still boundary-level
+   declaration and the separation felt like over-engineering for
+   one use case.
+4. **`suspendUntilActivated()` hook + NotActivatedError + ALS** —
+   planned as §13. Died on the ALS-vs-RSC scoping problem.
+5. **`<WhenVisible>` activator as a server component wrapper
+   inside `<Partial>`** — the shape that stuck.
+
+The through-line: each step moved the activation decision
+further from the framework and closer to userland. The final
+version is the endpoint of that trajectory: the framework owns
+identity, caching, and rendering flow; userland owns the entire
+question of *when content becomes real*.
+
+---
+
+## (historical) 13. Future direction: suspendUntilActivated (hook-based defer)
+
+> **Status update:** superseded by §12.5. The activator-component
+> pattern is simpler than the hook-based defer this section
+> proposed, and doesn't need the ALS plumbing that was this
+> section's main unsolved problem. Kept as context.
+
+### 13.1 What was proposed
+
+A hook `suspendUntilActivated()` that throws a `NotActivatedError`
+when called inside a non-explicit request. An AsyncLocalStorage-
+backed `{id, isExplicit}` context set by `<PartialRoot>`. The
+`<Partial>`'s error boundary would catch `NotActivatedError` and
+render `deferWith` specifically for it.
+
+### 13.2 Why it didn't happen
+
+- **ALS scope vs JSX rendering.** `partialContext.run(ctx, () =>
+  children)` returns the JSX element tree from within the run
+  scope, but React renders descendants *outside* the scope. The
+  callback ends before the actual work happens, so the hook reads
+  the wrong context.
+- **React.createContext isn't allowed in server components.**
+  Moving the context into a `"use client"` file makes server
+  components able to consume (via `use()`) but server
+  components can't render a `Provider` at all — `Provider`
+  resolves to `undefined` on the server build.
+- **The `enterWith` escape hatch is a leak.** It sets ALS for
+  the rest of the async flow without scope, which means sibling
+  partials rendered concurrently would interleave contexts.
+
+Given all three, hook-based defer isn't workable without
+framework-level hooks React doesn't currently expose. The
+activator-component pattern in §12 sidesteps the problem
+entirely: the activator reads `getRequest()` (already ALS-
+propagated per-request, not per-partial) and is handed the
+partial id explicitly.
+
+### 13.3 What we kept from this direction
+
+- The intuition that activation is fundamentally an Error state,
+  not a Suspense state (never-resolving promises hang the RSC
+  stream). Even though we don't throw a `NotActivatedError`, the
+  activator component short-circuits with the same effect: no
+  pending Suspense, final content flushed immediately.
+- The symmetry framing: *loading* (Suspense + `fallback`),
+  *activation* (activator component), *error* (error boundary +
+  `errorWith`) — three separable concerns, each with its own
+  surface. §12.1 ships exactly this split.

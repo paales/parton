@@ -514,96 +514,70 @@ describe("PartialRoot architecture", () => {
 	});
 });
 
-describe("Dormant partials (defer)", () => {
-	function Bio() { return <article>deferred-bio-content</article>; }
+describe("WhenVisible activator", () => {
+	// Mock the client half so vitest renders without needing React.useRef
+	// or IntersectionObserver.
+	vi.doMock("../when-visible-client.tsx", () => ({
+		WhenVisibleClient: ({ partialId, children }: { partialId: string; children: React.ReactNode }) => (
+			<span data-activator={partialId}>{children}</span>
+		),
+	}));
 
-	it("renders fallback and withholds children on full nav", async () => {
+	it("renders fallback on full render", async () => {
+		const { WhenVisible } = await import("../when-visible.tsx");
 		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
 			renderToJSON(
 				<PartialRoot>
-					<Partial id="hero"><Hero /></Partial>
-					<Partial id="bio" defer fallback={<span>loading-bio...</span>}>
-						<Bio />
+					<Partial id="bio">
+						<WhenVisible partialId="bio" fallback={<span>fb-bio</span>}>
+							<article>real-bio</article>
+						</WhenVisible>
 					</Partial>
 				</PartialRoot>,
 			),
 		);
 		const str = JSON.stringify(result);
-		expect(str).toContain("Hero");
-		expect(str).not.toContain("deferred-bio-content");
-		expect(str).toContain("loading-bio...");
+		expect(str).toContain("fb-bio");
+		expect(str).not.toContain("real-bio");
 	});
 
-	it("renders real content when the partial is explicitly requested", async () => {
+	it("renders children when partial is in ?partials=", async () => {
+		const { WhenVisible } = await import("../when-visible.tsx");
 		const { result } = await runWithRequestAsync(
 			fakeRequest({ partials: "bio" }),
 			async () =>
 				renderToJSON(
 					<PartialRoot>
-						<Partial id="hero"><Hero /></Partial>
-						<Partial id="bio" defer fallback={<span>bio-loading</span>}>
-							<Bio />
+						<Partial id="bio">
+							<WhenVisible partialId="bio" fallback={<span>fb-bio</span>}>
+								<article>real-bio</article>
+							</WhenVisible>
 						</Partial>
 					</PartialRoot>,
 				),
 		);
 		const str = JSON.stringify(result);
-		expect(str).toContain("deferred-bio-content");
+		expect(str).toContain("real-bio");
+		expect(str).not.toContain("fb-bio");
 	});
 
-	it("renders real content when an __inputs override targets it", async () => {
+	it("renders children when __inputs overrides target it", async () => {
+		const { WhenVisible } = await import("../when-visible.tsx");
 		const inputs = JSON.stringify({ bio: {} });
 		const { result } = await runWithRequestAsync(
 			fakeRequest({ partials: "bio", __inputs: inputs }),
 			async () =>
 				renderToJSON(
 					<PartialRoot>
-						<Partial id="bio" defer fallback={<span>bio-fallback</span>}>
-							<Bio />
+						<Partial id="bio">
+							<WhenVisible partialId="bio" fallback={<span>fb-bio</span>}>
+								<article>real-bio</article>
+							</WhenVisible>
 						</Partial>
 					</PartialRoot>,
 				),
 		);
-		const str = JSON.stringify(result);
-		expect(str).toContain("deferred-bio-content");
-	});
-
-	it("does not invoke children during dormant render", async () => {
-		const calls: number[] = [];
-		function TrackedBio() {
-			calls.push(1);
-			return <article>tracked-bio</article>;
-		}
-		await runWithRequestAsync(fakeRequest(), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="bio" defer fallback={<span>bio-fallback</span>}>
-						<TrackedBio />
-					</Partial>
-				</PartialRoot>,
-			),
-		);
-		expect(calls).toHaveLength(0);
-	});
-
-	it("triggers placed inside fallback are rendered on the server", async () => {
-		// An app-level VisibleTrigger (or any client component) placed
-		// inside the fallback is part of the fallback tree — it should
-		// appear in the dormant output so hydration can attach it.
-		function FakeTrigger() { return <span data-testid="trigger-marker">T</span>; }
-		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="bio" defer fallback={
-						<div>loading…<FakeTrigger /></div>
-					}>
-						<Bio />
-					</Partial>
-				</PartialRoot>,
-			),
-		);
-		const str = JSON.stringify(result);
-		expect(str).toContain("trigger-marker");
+		expect(JSON.stringify(result)).toContain("real-bio");
 	});
 });
 

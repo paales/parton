@@ -63,10 +63,10 @@ interface PartialEntry {
   tags: string[];
   /** Data cache TTL in seconds (0 = no cache, default) */
   cacheTtl: number;
-  /** Suspense fallback for streaming */
+  /** Suspense fallback (for loading states). */
   fallback: ReactNode;
-  /** Dormant partial: render fallback until explicitly activated. */
-  defer: boolean;
+  /** Error boundary fallback. `undefined` means use the default card. */
+  errorWith: ReactNode | undefined;
 }
 
 function isPartialElement(
@@ -149,7 +149,7 @@ function collectPartials(
         tags: props.tags ?? [],
         cacheTtl: props.cache ?? 0,
         fallback: props.fallback ?? null,
-        defer: props.defer ?? false,
+        errorWith: props.errorWith,
       });
       // Recurse into the content to find nested Partials
       entries.push(...collectPartials(props.children, seen, depth + 1));
@@ -288,24 +288,10 @@ function transformForStreaming(
       return;
     }
     if (isPartialElement(child)) {
-      const { id, fallback, defer } = child.props;
+      const { id, fallback, errorWith } = child.props;
       const override = overrides[id];
       const isExplicit =
         (explicitIds != null && explicitIds.has(id)) || override != null;
-
-      // Dormant (`defer`): render the fallback as the partial's entire
-      // output. No Suspense wrapping — the fallback is the actual
-      // content until the client activates the block via
-      // `usePartial(id).refetch()`, which comes in as `isExplicit` on
-      // a later request and takes the real-children branch below.
-      if (defer && !isExplicit) {
-        result.push(
-          <PartialErrorBoundary key={id} partialId={id}>
-            {fallback}
-          </PartialErrorBoundary>,
-        );
-        return;
-      }
 
       // Apply __inputs override (from usePartial().refetch({...})) to the
       // Partial's content (which is a single child element in the common case).
@@ -333,19 +319,19 @@ function transformForStreaming(
           <Suspense
             key={suspenseKey}
             fallback={
-              <PartialErrorBoundary partialId={id}>
+              <PartialErrorBoundary partialId={id} fallback={errorWith}>
                 {fallback}
               </PartialErrorBoundary>
             }
           >
-            <PartialErrorBoundary partialId={id}>
+            <PartialErrorBoundary partialId={id} fallback={errorWith}>
               {inner}
             </PartialErrorBoundary>
           </Suspense>,
         );
       } else {
         result.push(
-          <PartialErrorBoundary key={id} partialId={id}>
+          <PartialErrorBoundary key={id} partialId={id} fallback={errorWith}>
             {inner}
           </PartialErrorBoundary>,
         );
@@ -494,13 +480,43 @@ export async function PartialRoot({ children }: PartialRootProps) {
   const populateCache = requestUrl.searchParams.has("__populateCache");
   const isPartialRefetch = hasGlobalFilter || populateCache;
 
-  // Revalidate mode: use bare Suspense keys so the client reconciles in
-  // place (instead of remounting). Combined with a transition on the
-  // client, this preserves old content while fresh content loads — no
-  // fallback flash on the cart badge, etc.
+  // ── Suspense key-stamping: what the `fallback` prop on <Partial> is really for ──
+  //
+  // When a <Partial fallback={…}> is refetched, the framework wraps its
+  // content in <Suspense key={`${id}#${streamVersion}`}>. The version
+  // changes per request, so React treats the new boundary as a fresh
+  // element, unmounts the old one, and mounts the new one. Mounting a
+  // fresh Suspense means: its fallback shows immediately, each inner
+  // Suspense boundary starts pending, and as Flight chunks arrive from
+  // the server each inner boundary commits its content independently.
+  //
+  // This is the ONLY way we've found to get **progressive streaming on
+  // refetch** through React's current concurrent-rendering model. Without
+  // a key change:
+  //   - In flushSync mode: inner fallbacks still flash, but the outer
+  //     subtree reconciles in place — might work, but less predictable.
+  //   - In startTransition mode: React waits for the whole new subtree
+  //     to be ready before committing. You lose per-inner-boundary
+  //     streaming entirely — it's all-or-nothing.
+  //
+  // So the key stamp is not about "UX: flash a spinner on refetch" —
+  // it's about preserving streaming semantics through the refetch
+  // pipeline. A product list with N async rows streams in row-by-row
+  // as server chunks arrive, instead of waiting for the whole list.
+  //
+  // The **revalidate mode** bare key (id without version stamp) gives
+  // the opposite behavior: reconcile in place, no progressive streaming,
+  // no fallback flash. Appropriate for cases like the cart badge where
+  // you want the old value visible while the new one loads (paired with
+  // a client-side transition to show an isPending spinner on the
+  // trigger button). Opt in via `?revalidate=1` on the refetch URL.
+  //
+  // If we ever want users to control this per-partial (e.g. write their
+  // own <Suspense> inside without the framework wrap), we'd expose the
+  // stream version as a hook so they can key their own Suspense — the
+  // stamping mechanism stays, the wrapping location moves.
   const isRevalidate = requestUrl.searchParams.has("revalidate");
 
-  // Per-request version stamp used in Suspense keys. See streamVersion doc.
   const streamVersion = isRevalidate
     ? ""
     : `${requestUrl.searchParams.get("n") ?? ""}-${Date.now()}`;
@@ -524,18 +540,17 @@ export async function PartialRoot({ children }: PartialRootProps) {
   if (requestedIds) for (const id of requestedIds) explicitIds.add(id);
   for (const id of Object.keys(partialInputs)) explicitIds.add(id);
 
-  // Apply partial input overrides, strip nested partials from content,
-  // and emit the fallback for dormant (`defer`) partials that weren't
-  // explicitly requested. `dormant: true` on the wrapped child signals
-  // that no Suspense wrap is needed — the fallback IS the output.
+  // Apply partial input overrides and strip nested partials from content.
   const activeChildren = activeEntries.map((e) => {
-    if (e.defer && !explicitIds.has(e.id)) {
-      return { id: e.id, content: e.fallback, fallback: null, dormant: true };
-    }
     const overrides = partialInputs[e.id];
     const content = overrides ? applyInputs(e.content, overrides) : e.content;
     const stripped = nestedIds.has(e.id) ? content : stripNested(content, nestedIds);
-    return { id: e.id, content: stripped, fallback: e.fallback, dormant: false };
+    return {
+      id: e.id,
+      content: stripped,
+      fallback: e.fallback,
+      errorWith: e.errorWith,
+    };
   });
 
   // Debug entries
@@ -576,32 +591,28 @@ export async function PartialRoot({ children }: PartialRootProps) {
 
   // Wrap each fresh partial to match streaming-mode wrapping exactly so
   // that the client reconciles in place across mode switches.
-  const wrappedChildren = activeChildren.map(({ id, content, fallback, dormant }) => {
-    if (dormant) {
-      return (
-        <PartialErrorBoundary key={id} partialId={id}>
-          {content}
-        </PartialErrorBoundary>
-      );
-    }
+  const wrappedChildren = activeChildren.map(({ id, content, fallback, errorWith }) => {
+    const inner = content;
     if (fallback != null) {
       const suspenseKey = isRevalidate ? id : `${id}#${streamVersion}`;
       return (
         <Suspense
           key={suspenseKey}
           fallback={
-            <PartialErrorBoundary partialId={id}>
+            <PartialErrorBoundary partialId={id} fallback={errorWith}>
               {fallback}
             </PartialErrorBoundary>
           }
         >
-          <PartialErrorBoundary partialId={id}>{content}</PartialErrorBoundary>
+          <PartialErrorBoundary partialId={id} fallback={errorWith}>
+            {inner}
+          </PartialErrorBoundary>
         </Suspense>
       );
     }
     return (
-      <PartialErrorBoundary key={id} partialId={id}>
-        {content}
+      <PartialErrorBoundary key={id} partialId={id} fallback={errorWith}>
+        {inner}
       </PartialErrorBoundary>
     );
   });

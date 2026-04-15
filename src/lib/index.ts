@@ -3,6 +3,7 @@ export {
   Partial,
   type PartialProps,
 } from "./partial.tsx";
+export { WhenVisible } from "./when-visible.tsx";
 export {
   PartialsClient,
   getCachedPartialIds,
