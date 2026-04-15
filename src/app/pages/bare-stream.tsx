@@ -24,7 +24,8 @@ async function BareStage({ id, ms }: { id: number; ms: number }) {
         marginBottom: "0.5rem",
       }}
     >
-      Stage {id} — resolved after {ms}ms (server time {new Date().toISOString()})
+      Stage {id} — resolved after {ms}ms (server time {new Date().toISOString()}
+      )
     </div>
   );
 }
@@ -32,8 +33,8 @@ async function BareStage({ id, ms }: { id: number; ms: number }) {
 export function BarePage() {
   return (
     <PartialRoot>
-      <html lang="en">
-        <Partial id="head">
+      <Partial id="html">
+        <html lang="en">
           <head>
             <meta charSet="UTF-8" />
             <title>Bare Streaming Test</title>
@@ -43,32 +44,39 @@ export function BarePage() {
               button:hover { background: #4a5568; }
             `}</style>
           </head>
-        </Partial>
-        <body>
-          <h1>Bare Streaming Test (now via Partials)</h1>
-          <BareRefetchButton />
-          <div style={{ marginTop: "1.5rem" }}>
-            <Partial
-              id="stage-1"
-              fallback={<div data-testid="stage-1-fallback">Loading stage 1...</div>}
-            >
-              <BareStage id={1} ms={0} />
-            </Partial>
-            <Partial
-              id="stage-2"
-              fallback={<div data-testid="stage-2-fallback">Loading stage 2...</div>}
-            >
-              <BareStage id={2} ms={1000} />
-            </Partial>
-            <Partial
-              id="stage-3"
-              fallback={<div data-testid="stage-3-fallback">Loading stage 3...</div>}
-            >
-              <BareStage id={3} ms={2000} />
-            </Partial>
-          </div>
-        </body>
-      </html>
+
+          <body>
+            <h1>Bare Streaming Test (now via Partials)</h1>
+            <BareRefetchButton />
+            <div style={{ marginTop: "1.5rem" }}>
+              <Partial
+                id="stage-1"
+                fallback={
+                  <div data-testid="stage-1-fallback">Loading stage 1...</div>
+                }
+              >
+                <BareStage id={1} ms={0} />
+              </Partial>
+              <Partial
+                id="stage-2"
+                fallback={
+                  <div data-testid="stage-2-fallback">Loading stage 2...</div>
+                }
+              >
+                <BareStage id={2} ms={1000} />
+              </Partial>
+              <Partial
+                id="stage-3"
+                fallback={
+                  <div data-testid="stage-3-fallback">Loading stage 3...</div>
+                }
+              >
+                <BareStage id={3} ms={2000} />
+              </Partial>
+            </div>
+          </body>
+        </html>
+      </Partial>
     </PartialRoot>
   );
 }

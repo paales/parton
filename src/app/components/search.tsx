@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { usePartial, usePartialParams } from "../../lib/partial-client.tsx";
+import { silentReplace } from "../../framework/silent-replace.ts";
 
 /**
  * Search toggle buttons for the header.
@@ -214,12 +215,7 @@ export function SearchInput({
       } else {
         url.searchParams.delete("q");
       }
-      History.prototype.replaceState.call(
-        history,
-        history.state,
-        "",
-        url.toString(),
-      );
+      silentReplace(url);
     } else {
       // Partial mode: send ?q= only on the refetch URL, never in history.
       // The server reads searchQuery from url.searchParams.get("q") just

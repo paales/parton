@@ -29,7 +29,7 @@ async function main() {
     }, [setPayload_]);
 
     React.useEffect(() => {
-      return listenNavigation(() => fetchRscPayload());
+      return listenNavigation((url) => fetchRscPayload(url));
     }, []);
 
     return payload.root;
@@ -128,51 +128,26 @@ async function main() {
   }
 }
 
-function listenNavigation(onNavigation: () => void) {
-  window.addEventListener("popstate", onNavigation);
+import { consumeSilentFlag } from "./silent-replace.ts";
 
-  const oldPushState = window.history.pushState;
-  window.history.pushState = function (...args) {
-    const res = oldPushState.apply(this, args);
-    onNavigation();
-    return res;
+function listenNavigation(onNavigation: (url: string) => Promise<void>) {
+  const handler = (event: NavigateEvent) => {
+    if (!event.canIntercept) return;
+    if (event.hashChange || event.downloadRequest !== null) return;
+    if (event.formMethod === "POST") return;
+    // Silent URL updates (LoadMore's ?pages=, SearchInput's ?q= in URL
+    // mode) flip a short-lived flag via `silentReplace()`. When set, we
+    // skip the intercept so the URL updates for bookmarkability but no
+    // server round-trip fires.
+    if (consumeSilentFlag()) return;
+
+    event.intercept({
+      handler: () => onNavigation(event.destination.url),
+    });
   };
 
-  const oldReplaceState = window.history.replaceState;
-  window.history.replaceState = function (...args) {
-    const res = oldReplaceState.apply(this, args);
-    onNavigation();
-    return res;
-  };
-
-  function onClick(e: MouseEvent) {
-    const link = (e.target as Element).closest("a");
-    if (
-      link &&
-      link instanceof HTMLAnchorElement &&
-      link.href &&
-      (!link.target || link.target === "_self") &&
-      link.origin === location.origin &&
-      !link.hasAttribute("download") &&
-      e.button === 0 &&
-      !e.metaKey &&
-      !e.ctrlKey &&
-      !e.altKey &&
-      !e.shiftKey &&
-      !e.defaultPrevented
-    ) {
-      e.preventDefault();
-      history.pushState(null, "", link.href);
-    }
-  }
-  document.addEventListener("click", onClick);
-
-  return () => {
-    document.removeEventListener("click", onClick);
-    window.removeEventListener("popstate", onNavigation);
-    window.history.pushState = oldPushState;
-    window.history.replaceState = oldReplaceState;
-  };
+  navigation.addEventListener("navigate", handler);
+  return () => navigation.removeEventListener("navigate", handler);
 }
 
 main();

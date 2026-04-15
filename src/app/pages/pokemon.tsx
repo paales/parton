@@ -7,14 +7,10 @@ import {
 } from "../components/search.tsx";
 import { LoadMore, PageSentinel } from "../components/load-more.tsx";
 import { client } from "../data.ts";
-import {
-  graphql,
-  readFragment,
-  type FragmentOf,
-} from "../pokeapi-graphql.ts";
+import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts";
 import { getRequest } from "../../framework/context.ts";
 
-const PAGE_SIZE = 12;
+const PAGE_SIZE = 24;
 
 const PokemonListFields = graphql(`
   fragment PokemonListFields on pokemon_v2_pokemon {
@@ -50,7 +46,11 @@ const SearchPokemonQuery = graphql(
 const PokemonListQuery = graphql(
   `
     query PokemonList($limit: Int!, $offset: Int!) {
-      pokemon_v2_pokemon(limit: $limit, offset: $offset, order_by: { id: asc }) {
+      pokemon_v2_pokemon(
+        limit: $limit
+        offset: $offset
+        order_by: { id: asc }
+      ) {
         ...PokemonListFields
       }
     }
@@ -117,7 +117,9 @@ const PokemonSpeciesQuery = graphql(`
 
 type SpriteJson = {
   front_default?: string | null;
-  other?: { "official-artwork"?: { front_default?: string | null } | null } | null;
+  other?: {
+    "official-artwork"?: { front_default?: string | null } | null;
+  } | null;
 } | null;
 
 function extractSprite(sprites: unknown): string | null {
@@ -222,6 +224,22 @@ export function PokemonPage() {
           <Partial id="species">
             <SpeciesPartial pokemonId={pokemonId} />
           </Partial>
+          <div style={{ height: "80vh" }} data-testid="lazy-spacer" />
+          <Partial
+            id="trivia"
+            renderOn={{ on: "visible", rootMargin: "0px" }}
+            fallback={
+              <div
+                className="card"
+                data-testid="trivia-fallback"
+                style={{ color: "#888", fontStyle: "italic" }}
+              >
+                Loading trivia…
+              </div>
+            }
+          >
+            <TriviaPartial pokemonId={pokemonId} />
+          </Partial>
         </>
       ) : (
         <>
@@ -268,7 +286,9 @@ function toSearchResult(
   raw: FragmentOf<typeof PokemonListFields>,
 ): SearchResult {
   const pokemon = readFragment(PokemonListFields, raw);
-  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites);
+  const spriteUrl = extractSprite(
+    pokemon.pokemon_v2_pokemonsprites[0]?.sprites,
+  );
   const types = pokemon.pokemon_v2_pokemontypes.map(
     (t) => t.pokemon_v2_type?.name ?? "",
   );
@@ -360,9 +380,7 @@ async function SearchStage2({ query }: { query: string }) {
 
   return (
     <div>
-      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>
-        Stage 2 — 1s delay
-      </h3>
+      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>Stage 2 — 1s delay</h3>
       <SearchResultGrid results={results} testId="stage-2-content" />
     </div>
   );
@@ -375,9 +393,7 @@ async function SearchStage3({ query }: { query: string }) {
 
   return (
     <div>
-      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>
-        Stage 3 — 2s delay
-      </h3>
+      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>Stage 3 — 2s delay</h3>
       <SearchResultGrid results={results} testId="stage-3-content" />
     </div>
   );
@@ -425,7 +441,9 @@ function PokemonCard({ raw }: { raw: FragmentOf<typeof PokemonListFields> }) {
   const types = pokemon.pokemon_v2_pokemontypes.map(
     (t) => t.pokemon_v2_type?.name ?? "",
   );
-  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites);
+  const spriteUrl = extractSprite(
+    pokemon.pokemon_v2_pokemonsprites[0]?.sprites,
+  );
 
   return (
     <a href={`/pokemon/${id}`} className="card" style={{ display: "block" }}>
@@ -461,7 +479,9 @@ async function HeroPartial({ pokemonId }: { pokemonId: number }) {
     slot: t.slot,
     name: t.pokemon_v2_type?.name ?? "",
   }));
-  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites);
+  const spriteUrl = extractSprite(
+    pokemon.pokemon_v2_pokemonsprites[0]?.sprites,
+  );
 
   return (
     <div
@@ -469,20 +489,20 @@ async function HeroPartial({ pokemonId }: { pokemonId: number }) {
       style={{ display: "flex", gap: "2rem", alignItems: "center" }}
     >
       {spriteUrl && (
-        <img src={spriteUrl} alt={name} loading="lazy" style={{ width: 200, height: 200 }} />
+        <img
+          src={spriteUrl}
+          alt={name}
+          loading="lazy"
+          style={{ width: 200, height: 200 }}
+        />
       )}
       <div>
-        <h1
-          style={{ textTransform: "capitalize" as const, fontSize: "2rem" }}
-        >
+        <h1 style={{ textTransform: "capitalize" as const, fontSize: "2rem" }}>
           #{id} {name}
         </h1>
         <div style={{ marginTop: "0.75rem" }}>
           {types.map((t) => (
-            <span
-              key={t.slot}
-              className={`badge badge-${t.name || "default"}`}
-            >
+            <span key={t.slot} className={`badge badge-${t.name || "default"}`}>
               {t.name}
             </span>
           ))}
@@ -564,6 +584,21 @@ async function StatsPartial({ pokemonId }: { pokemonId: number }) {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+async function TriviaPartial({ pokemonId }: { pokemonId: number }) {
+  // Short delay to make streaming visible after the IntersectionObserver
+  // fires — mirrors a slow enrichment API.
+  await new Promise((r) => setTimeout(r, 500));
+  return (
+    <div className="card" data-testid="trivia-content">
+      <h2>Trivia</h2>
+      <div className="meta" style={{ marginTop: "0.5rem" }}>
+        Loaded on demand via <code>renderOn="visible"</code> — pokemon id{" "}
+        <code>{pokemonId}</code>.
       </div>
     </div>
   );

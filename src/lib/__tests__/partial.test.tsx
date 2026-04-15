@@ -11,7 +11,19 @@ vi.mock("../partial-error-boundary.tsx", () => ({
 	PartialErrorBoundary: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+// Keep the DeferredPartial identity stable so tests can assert on it —
+// but don't pull in the real client module (useEffect + IntersectionObserver).
+vi.mock("../deferred-partial.tsx", () => ({
+	DeferredPartial: function DeferredPartial(props: {
+		id: string;
+		fallback?: React.ReactNode;
+	}) {
+		return props.fallback ?? null;
+	},
+}));
+
 import { PartialRoot, Partial } from "../partial.tsx";
+import { DeferredPartial } from "../deferred-partial.tsx";
 import { runWithRequestAsync } from "../../framework/context.ts";
 
 function Hero() {
@@ -511,6 +523,101 @@ describe("PartialRoot architecture", () => {
 		expect(freshIds).toEqual(["cart"]);
 		const str = JSON.stringify(result);
 		expect(str).toContain("cart-content");
+	});
+});
+
+describe("Deferred render (renderOn)", () => {
+	function Bio() { return <article>deferred-bio-content</article>; }
+
+	it("substitutes DeferredPartial for children on full nav", async () => {
+		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<PartialRoot>
+					<Partial id="hero"><Hero /></Partial>
+					<Partial id="bio" renderOn="visible" fallback={<span>loading-bio...</span>}>
+						<Bio />
+					</Partial>
+				</PartialRoot>,
+			),
+		);
+		const str = JSON.stringify(result);
+		expect(str).toContain("Hero");
+		expect(str).not.toContain("deferred-bio-content");
+		// Mocked DeferredPartial renders the fallback.
+		expect(str).toContain("loading-bio...");
+	});
+
+	it("renders real content when the partial is explicitly requested", async () => {
+		const { result } = await runWithRequestAsync(
+			fakeRequest({ partials: "bio" }),
+			async () =>
+				renderToJSON(
+					<PartialRoot>
+						<Partial id="hero"><Hero /></Partial>
+						<Partial id="bio" renderOn="visible" fallback={<span>bio-loading</span>}>
+							<Bio />
+						</Partial>
+					</PartialRoot>,
+				),
+		);
+		// Fallback-prop partials wrap in Suspense, which keeps `fallback` in the
+		// tree as a sibling prop — so asserting only the real content is present.
+		const str = JSON.stringify(result);
+		expect(str).toContain("deferred-bio-content");
+	});
+
+	it("accepts the object form with rootMargin and threshold", async () => {
+		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<PartialRoot>
+					<Partial
+						id="bio"
+						renderOn={{ on: "visible", rootMargin: "200px", threshold: 0.1 }}
+						fallback={<span>bio-fallback</span>}
+					>
+						<Bio />
+					</Partial>
+				</PartialRoot>,
+			),
+		);
+		const str = JSON.stringify(result);
+		expect(str).not.toContain("deferred-bio-content");
+		expect(str).toContain("bio-fallback");
+	});
+
+	it("renders real content when an __inputs override targets it", async () => {
+		const inputs = JSON.stringify({ bio: {} });
+		const { result } = await runWithRequestAsync(
+			fakeRequest({ partials: "bio", __inputs: inputs }),
+			async () =>
+				renderToJSON(
+					<PartialRoot>
+						<Partial id="bio" renderOn="visible" fallback={<span>bio-fallback</span>}>
+							<Bio />
+						</Partial>
+					</PartialRoot>,
+				),
+		);
+		const str = JSON.stringify(result);
+		expect(str).toContain("deferred-bio-content");
+	});
+
+	it("does not render deferred content during initial full render (no call to Bio)", async () => {
+		const calls: number[] = [];
+		function TrackedBio() {
+			calls.push(1);
+			return <article>tracked-bio</article>;
+		}
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<PartialRoot>
+					<Partial id="bio" renderOn="visible" fallback={<span>bio-fallback</span>}>
+						<TrackedBio />
+					</Partial>
+				</PartialRoot>,
+			),
+		);
+		expect(calls).toHaveLength(0);
 	});
 });
 

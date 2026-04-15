@@ -41,12 +41,28 @@ import {
   PartialsClient,
   type PartialDebugEntry,
 } from "./partial-client.tsx";
-import { Partial, type PartialProps } from "./partial-component.tsx";
+import {
+  Partial,
+  type PartialProps,
+  type RenderOn,
+} from "./partial-component.tsx";
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx";
+import { DeferredPartial } from "./deferred-partial.tsx";
 import { getRequest } from "../framework/context.ts";
 import { djb2 as hashFingerprint } from "./hash.ts";
 
-export { Partial, type PartialProps };
+export { Partial, type PartialProps, type RenderOn };
+
+interface NormalizedRenderOn {
+  on: "visible";
+  rootMargin?: string;
+  threshold?: number;
+}
+
+function normalizeRenderOn(value: RenderOn): NormalizedRenderOn {
+  if (value === "visible") return { on: "visible" };
+  return { ...value };
+}
 
 interface PartialRootProps {
   children: ReactNode;
@@ -62,6 +78,8 @@ interface PartialEntry {
   cacheTtl: number;
   /** Suspense fallback for streaming */
   fallback: ReactNode;
+  /** Deferred-render trigger (null when undeferred) */
+  renderOn: NormalizedRenderOn | null;
 }
 
 function isPartialElement(
@@ -144,6 +162,7 @@ function collectPartials(
         tags: props.tags ?? [],
         cacheTtl: props.cache ?? 0,
         fallback: props.fallback ?? null,
+        renderOn: props.renderOn ? normalizeRenderOn(props.renderOn) : null,
       });
       // Recurse into the content to find nested Partials
       entries.push(...collectPartials(props.children, seen, depth + 1));
@@ -273,6 +292,7 @@ function transformForStreaming(
   counter = { v: 0 },
   overrides: Record<string, Record<string, unknown>> = {},
   version: string = "0",
+  explicitIds: Set<string> | null = null,
 ): ReactNode[] {
   const result: ReactNode[] = [];
   React.Children.forEach(children, (child) => {
@@ -281,14 +301,46 @@ function transformForStreaming(
       return;
     }
     if (isPartialElement(child)) {
-      const { id, fallback } = child.props;
-      // Apply __inputs override (from usePartial().refetch({...})) to the
-      // Partial's content (which is a single child element in the common case).
+      const { id, fallback, renderOn } = child.props;
       const override = overrides[id];
-      let content = override ? applyInputs(child.props.children, override) : child.props.children;
-      // Recurse into content to handle nested Partials
-      const transformedContent = transformForStreaming(content, counter, overrides, version);
-      const inner = transformedContent.length === 1 ? transformedContent[0] : transformedContent;
+      const isExplicit =
+        (explicitIds != null && explicitIds.has(id)) || override != null;
+
+      // Deferred render: when `renderOn` is set and the client did not
+      // explicitly request this partial, substitute the DeferredPartial
+      // client component (observer + fallback) instead of the children.
+      // On intersection it dispatches a refetch, which re-renders this
+      // partial with the real content via the normal cache-merge path.
+      let inner: ReactNode;
+      if (renderOn && !isExplicit) {
+        const spec = normalizeRenderOn(renderOn);
+        inner = (
+          <DeferredPartial
+            id={id}
+            fallback={fallback}
+            rootMargin={spec.rootMargin}
+            threshold={spec.threshold}
+          />
+        );
+      } else {
+        // Apply __inputs override (from usePartial().refetch({...})) to the
+        // Partial's content (which is a single child element in the common case).
+        const content = override
+          ? applyInputs(child.props.children, override)
+          : child.props.children;
+        // Recurse into content to handle nested Partials
+        const transformedContent = transformForStreaming(
+          content,
+          counter,
+          overrides,
+          version,
+          explicitIds,
+        );
+        inner =
+          transformedContent.length === 1
+            ? transformedContent[0]
+            : transformedContent;
+      }
 
       if (fallback != null) {
         // Empty version ⇒ bare key (revalidate mode): client adopts the
@@ -326,6 +378,7 @@ function transformForStreaming(
         counter,
         overrides,
         version,
+        explicitIds,
       );
       result.push(
         React.cloneElement(child, { key: wrapKey }, ...inner),
@@ -480,10 +533,31 @@ export async function PartialRoot({ children }: PartialRootProps) {
 
   const freshIds = activeEntries.map((e) => e.id);
 
-  // Apply partial input overrides, strip nested partials from content.
+  // Build the set of partial ids the client explicitly asked for. Used to
+  // decide whether a `renderOn`-deferred partial should render its real
+  // content (explicit request → yes) or the DeferredPartial placeholder
+  // (initial render / unrelated refetch → yes).
+  const explicitIds = new Set<string>();
+  if (requestedIds) for (const id of requestedIds) explicitIds.add(id);
+  for (const id of Object.keys(partialInputs)) explicitIds.add(id);
+
+  // Apply partial input overrides, strip nested partials from content,
+  // and swap in the DeferredPartial for renderOn partials that weren't
+  // explicitly requested.
   const activeChildren = activeEntries.map((e) => {
+    if (e.renderOn && !explicitIds.has(e.id)) {
+      const content = (
+        <DeferredPartial
+          id={e.id}
+          fallback={e.fallback}
+          rootMargin={e.renderOn.rootMargin}
+          threshold={e.renderOn.threshold}
+        />
+      );
+      return { id: e.id, content, fallback: e.fallback };
+    }
     const overrides = partialInputs[e.id];
-    let content = overrides ? applyInputs(e.content, overrides) : e.content;
+    const content = overrides ? applyInputs(e.content, overrides) : e.content;
     const stripped = nestedIds.has(e.id) ? content : stripNested(content, nestedIds);
     return { id: e.id, content: stripped, fallback: e.fallback };
   });
@@ -517,7 +591,7 @@ export async function PartialRoot({ children }: PartialRootProps) {
         debug={debug}
         fetchMs={0}
       >
-        {transformForStreaming(children, { v: 0 }, partialInputs, streamVersion)}
+        {transformForStreaming(children, { v: 0 }, partialInputs, streamVersion, explicitIds)}
       </PartialsClient>
     );
   }

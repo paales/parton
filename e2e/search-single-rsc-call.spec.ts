@@ -12,12 +12,17 @@ import { test, expect } from "@playwright/test";
 test("single keystroke in search dispatches exactly one RSC call", async ({
   page,
 }) => {
-  const rscCalls: Array<{ url: string; partials: string | null }> = [];
+  const rscCalls: Array<{ url: string; partials: string | null; time: number }> = [];
+  const t0 = Date.now();
   page.on("request", (req) => {
     const url = req.url();
-    if (url.includes("/_.rsc")) {
+    if (url.includes("_.rsc")) {
       const u = new URL(url);
-      rscCalls.push({ url, partials: u.searchParams.get("partials") });
+      rscCalls.push({
+        url,
+        partials: u.searchParams.get("partials"),
+        time: Date.now() - t0,
+      });
     }
   });
 
@@ -46,7 +51,7 @@ test("single keystroke in search dispatches exactly one RSC call", async ({
   // Report what we saw (helps diagnose failures).
   console.log(`\n=== RSC calls during keystroke (${rscCalls.length}) ===`);
   for (const c of rscCalls) {
-    console.log(`  partials=${c.partials}`);
+    console.log(`  [${c.time}ms] partials=${c.partials}  url=${c.url}`);
   }
 
   // Stages-only refetch is the ONE expected call.

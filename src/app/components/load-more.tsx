@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePartial } from "../../lib/partial-client.tsx";
+import { silentReplace } from "../../framework/silent-replace.ts";
 
 /**
  * Tracks which page partials are currently visible.
@@ -18,15 +19,9 @@ function silentlyUpdatePages() {
 
   if (maxVisible < current) {
     // Scrolling up — update URL for bookmarking/refresh without
-    // triggering a server fetch. Uses the unpatched replaceState
-    // so the navigation listener in entry.browser doesn't fire.
+    // triggering a server fetch via the Navigation API listener.
     url.searchParams.set("pages", String(maxVisible));
-    History.prototype.replaceState.call(
-      history,
-      history.state,
-      "",
-      url.toString(),
-    );
+    silentReplace(url);
   }
 }
 
@@ -44,10 +39,17 @@ export function PageSentinel({ page }: { page: number }) {
     const observer = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         visiblePages.add(page);
-      } else {
-        visiblePages.delete(page);
-        silentlyUpdatePages();
+        return;
       }
+      // Only trigger the silent URL update when a page that *was* visible
+      // leaves the viewport. Without this guard, a newly mounted page that
+      // has not yet been scrolled to fires an initial "not intersecting"
+      // event, which yanks the URL back down and races with LoadMore
+      // bumping it up again — causing the URL to flip between N and N+1
+      // on pageload.
+      if (!visiblePages.has(page)) return;
+      visiblePages.delete(page);
+      silentlyUpdatePages();
     });
 
     observer.observe(el);
@@ -96,17 +98,11 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
 
         if (entry.isIntersecting && !triggered.current) {
           triggered.current = true;
-          // Silent URL update for bookmarkability — bypasses the patched
-          // replaceState so the navigation listener in entry.browser.tsx
-          // doesn't fire a full-page refetch.
+          // Silent URL update for bookmarkability — flagged via the
+          // Navigation API's `info.silent` so no full-page refetch fires.
           const url = new URL(window.location.href);
           url.searchParams.set("pages", String(nextPage));
-          History.prototype.replaceState.call(
-            history,
-            history.state,
-            "",
-            url.toString(),
-          );
+          silentReplace(url);
           // Partial refetch: only the new page and the load-more sentinel
           // are fresh. Everything else is served from the client cache.
           dispatchPage();
