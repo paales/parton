@@ -12,3 +12,8 @@
 #!.yarn/cache
 node_modules
 dist
+
+# Playwright
+test-results/
+playwright-report/
+.last-run.json
