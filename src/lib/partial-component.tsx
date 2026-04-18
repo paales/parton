@@ -70,9 +70,8 @@ export interface PartialProps {
  *   1. **Static**: `<PartialRoot>`'s `transformForStreaming` walks the
  *      JSX `children` chain, finds `<Partial>` elements, and REPLACES
  *      them with a PartialBoundary+Suspense+ErrorBoundary chain
- *      (applying `__inputs` overrides and version-stamping keys for
- *      progressive streaming on refetch). The `<Partial>` element
- *      itself is never rendered by React in this path.
+ *      (applying `__inputs` overrides). The `<Partial>` element itself
+ *      is never rendered by React in this path.
  *
  *   2. **Dynamic** (this component body): a `<Partial>` produced inside
  *      an opaque function component — `ProductList.map(p => <Partial
@@ -84,9 +83,11 @@ export interface PartialProps {
  *      preservation survives Flight because Suspense is a React
  *      built-in, unlike server components which dissolve).
  *
- * Dynamic Partials reconcile in place on refetch (bare `id` key, no
- * version stamp) — no progressive-streaming fresh-mount trick. That's
- * the right default for live refresh of small leaves like prices.
+ * Both paths use the partial's bare `id` as the Suspense `key`, so
+ * React reconciles each boundary in place across refetches. The
+ * client's flushSync commit is what drives progressive streaming:
+ * pending children outside a transition surface the fallback while
+ * each Flight chunk commits independently.
  */
 export function Partial({
   id,

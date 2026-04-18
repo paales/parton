@@ -199,7 +199,16 @@ async function resolveLazies(node: ReactNode): Promise<ReactNode> {
   if (children == null) return node;
   const newChildren = await resolveLazies(children);
   if (newChildren === children) return node;
-  return cloneElement(node, {}, newChildren);
+  // Spread arrays as variadic so React treats each child as a
+  // positional sibling (implicit key) rather than an explicit
+  // array member (requires `key=`). Flight serializes static JSX
+  // siblings like `<a><img/><h2/><div/></a>` as an array on the
+  // children prop, so without this the decoded tree would trip
+  // React's "each child in a list should have a unique key" warning
+  // every time the cloned element is committed on the client.
+  return Array.isArray(newChildren)
+    ? cloneElement(node, {}, ...newChildren)
+    : cloneElement(node, {}, newChildren);
 }
 
 // ─── Partial strip / reinject ──────────────────────────────────────────
@@ -302,7 +311,8 @@ function stripPartials(node: ReactNode): {
     const kids = (n.props as { children?: ReactNode }).children;
     if (kids == null) return n;
     const nk = walk(kids);
-    return nk === kids ? n : cloneElement(n, {}, nk);
+    if (nk === kids) return n;
+    return Array.isArray(nk) ? cloneElement(n, {}, ...nk) : cloneElement(n, {}, nk);
   };
 
   const stripped = walk(node);
@@ -342,7 +352,10 @@ function reinject(
   const kids = (node.props as { children?: ReactNode }).children;
   if (kids == null) return node;
   const nk = reinject(kids, partials);
-  return nk === kids ? node : cloneElement(node, {}, nk);
+  if (nk === kids) return node;
+  return Array.isArray(nk)
+    ? cloneElement(node, {}, ...nk)
+    : cloneElement(node, {}, nk);
 }
 
 // ─── Cache component ────────────────────────────────────────────────────

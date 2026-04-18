@@ -54,8 +54,12 @@ async function installTracker(page: import("@playwright/test").Page) {
       for (let i = 1; i <= 3; i++) {
         const content = document.querySelector(`[data-testid="stage-${i}-content"]`);
         const fallback = document.querySelector(`[data-testid="stage-${i}-fallback"]`);
-        if (content) parts.push(`S${i}:content`);
-        else if (fallback) parts.push(`S${i}:fallback`);
+        // Fallback first: during a Suspense re-suspend, React keeps the
+        // old content in the DOM (hidden) while rendering the fallback
+        // alongside it. Content-first would report "content" for the
+        // whole refetch and never see the fallback flash.
+        if (fallback) parts.push(`S${i}:fallback`);
+        else if (content) parts.push(`S${i}:content`);
         else parts.push(`S${i}:absent`);
       }
       parts.push(document.querySelector("header") ? "HDR:yes" : "HDR:no");
@@ -159,6 +163,10 @@ test("URL mode: first keystroke streams stages 2/3 progressively", async ({
   expect(initial.header).toBe(true);
 
   await installTracker(page);
+  // Opt into streaming mode so fallbacks flash + chunks commit per
+  // stage. Default is startTransition (preserve old results, no
+  // fallback) which this test is not about.
+  await page.locator('[data-testid="disable-transition-toggle"] input').check();
   const input = page.locator("input[type=text]");
   // Wait for hydration: click+focus the input before the keypress so the
   // React onChange handler is attached. Without this, the first keystroke
@@ -261,6 +269,8 @@ test("Partial mode: first keystroke streams stages 2/3 without changing the URL"
   expect(initial.header).toBe(true);
 
   await installTracker(page);
+  // Opt into streaming mode (see URL mode test for why).
+  await page.locator('[data-testid="disable-transition-toggle"] input').check();
   const input = page.locator("input[type=text]");
   await input.click();
   await input.focus();

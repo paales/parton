@@ -67,7 +67,7 @@ export function MagentoPage() {
       <main>
         <RefreshAllPricesButton />
         <Partial id="products">
-          <Cache id="products" dep={{ search }}>
+          <Cache id="products" dep={{ search }} ttl={12}>
             <ProductGrid search={search} />
           </Cache>
         </Partial>

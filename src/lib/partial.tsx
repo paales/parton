@@ -267,7 +267,9 @@ function stripNested(
   if (children == null) return content;
   const newChildren = stripNested(children, nestedIds);
   if (newChildren === children) return content;
-  return React.cloneElement(content, {}, newChildren);
+  return Array.isArray(newChildren)
+    ? React.cloneElement(content, {}, ...newChildren)
+    : React.cloneElement(content, {}, newChildren);
 }
 
 /**
@@ -283,8 +285,8 @@ function transformForStreaming(
   children: ReactNode,
   counter = { v: 0 },
   overrides: Record<string, Record<string, unknown>> = {},
-  version: string = "0",
   explicitIds: Set<string> | null = null,
+  skipIds: Set<string> | null = null,
 ): ReactNode[] {
   const result: ReactNode[] = [];
   React.Children.forEach(children, (child) => {
@@ -298,6 +300,21 @@ function transformForStreaming(
       const isExplicit =
         (explicitIds != null && explicitIds.has(id)) || override != null;
 
+      // Fingerprint skip: the client has this partial cached with the
+      // same structural fingerprint. Emit a placeholder so the client
+      // template substitutes from its existing cache entry. No work
+      // done here, no GraphQL call, no bytes streamed for the content.
+      if (skipIds != null && skipIds.has(id) && !isExplicit) {
+        result.push(
+          React.createElement("i", {
+            key: id,
+            hidden: true,
+            "data-partial": true,
+          }),
+        );
+        return;
+      }
+
       // Apply __inputs override (from usePartial().refetch({...})) to the
       // Partial's content (which is a single child element in the common case).
       const content = override
@@ -308,8 +325,8 @@ function transformForStreaming(
         content,
         counter,
         overrides,
-        version,
         explicitIds,
+        skipIds,
       );
       const inner =
         transformedContent.length === 1
@@ -317,12 +334,9 @@ function transformForStreaming(
           : transformedContent;
 
       if (fallback != null) {
-        // Empty version ⇒ bare key (revalidate mode): client adopts the
-        // previously cached stamped key so React reconciles in place.
-        const suspenseKey = version ? `${id}#${version}` : id;
         result.push(
           <Suspense
-            key={suspenseKey}
+            key={id}
             fallback={
               <PartialErrorBoundary partialId={id} fallback={errorWith}>
                 {fallback}
@@ -351,8 +365,8 @@ function transformForStreaming(
         (child.props as any).children,
         counter,
         overrides,
-        version,
         explicitIds,
+        skipIds,
       );
       result.push(
         React.cloneElement(child, { key: wrapKey }, ...inner),
@@ -575,46 +589,21 @@ export async function PartialRoot({ children }: PartialRootProps) {
   // to populate the client cache.
   const isPartialRefetch = hasGlobalFilter || populateCache;
 
-  // ── Suspense key-stamping: what the `fallback` prop on <Partial> is really for ──
+  // Suspense keys are always the partial's bare `id`. React reconciles
+  // the boundary in place across refetches. The commit mode on the
+  // client decides what the user sees:
   //
-  // When a <Partial fallback={…}> is refetched, the framework wraps its
-  // content in <Suspense key={`${id}#${streamVersion}`}>. The version
-  // changes per request, so React treats the new boundary as a fresh
-  // element, unmounts the old one, and mounts the new one. Mounting a
-  // fresh Suspense means: its fallback shows immediately, each inner
-  // Suspense boundary starts pending, and as Flight chunks arrive from
-  // the server each inner boundary commits its content independently.
+  //   Default (`startTransition`): React holds the current UI visible
+  //   until the new content is fully ready. No Suspense fallback flash,
+  //   no per-chunk streaming — one atomic swap. Good default for
+  //   refreshes where the partial "just replaces a value".
   //
-  // This is the ONLY way we've found to get **progressive streaming on
-  // refetch** through React's current concurrent-rendering model. Without
-  // a key change:
-  //   - In flushSync mode: inner fallbacks still flash, but the outer
-  //     subtree reconciles in place — might work, but less predictable.
-  //   - In startTransition mode: React waits for the whole new subtree
-  //     to be ready before committing. You lose per-inner-boundary
-  //     streaming entirely — it's all-or-nothing.
-  //
-  // So the key stamp is not about "UX: flash a spinner on refetch" —
-  // it's about preserving streaming semantics through the refetch
-  // pipeline. A product list with N async rows streams in row-by-row
-  // as server chunks arrive, instead of waiting for the whole list.
-  //
-  // The **revalidate mode** bare key (id without version stamp) gives
-  // the opposite behavior: reconcile in place, no progressive streaming,
-  // no fallback flash. Appropriate for cases like the cart badge where
-  // you want the old value visible while the new one loads (paired with
-  // a client-side transition to show an isPending spinner on the
-  // trigger button). Opt in via `?revalidate=1` on the refetch URL.
-  //
-  // If we ever want users to control this per-partial (e.g. write their
-  // own <Suspense> inside without the framework wrap), we'd expose the
-  // stream version as a hook so they can key their own Suspense — the
-  // stamping mechanism stays, the wrapping location moves.
-  const isRevalidate = requestUrl.searchParams.has("revalidate");
-
-  const streamVersion = isRevalidate
-    ? ""
-    : `${requestUrl.searchParams.get("n") ?? ""}-${Date.now()}`;
+  //   Opt-in (`usePartial(id).refetch(props, { disableTransition: true })`):
+  //   sets `?disableTransition=1` on the refetch URL; the client
+  //   commits without a transition, so React shows Suspense fallbacks
+  //   for pending children and commits Flight chunks as they arrive.
+  //   Use this where per-row progressive reveal is a UX win (search,
+  //   filters).
 
   const activeEntries = [
     ...allPartials.filter((e) => {
@@ -677,16 +666,38 @@ export async function PartialRoot({ children }: PartialRootProps) {
   // Partial that's been conditionally removed). Fall back to a full
   // render so the client reconciles against a fresh tree.
   if (!isPartialRefetch || populateCache || registryMiss) {
+    // Fingerprint-based skip: any partial whose computed fingerprint
+    // matches the one the client reports in `?cached=id:fp,…` has
+    // the same element shape (same component type + same scalar
+    // props, recursively). We emit a placeholder for those instead
+    // of running the data-fetching server components — the client
+    // keeps showing the entry it already has in `_cache`.
+    //
+    // `populateCache` skips this optimization: it runs after a server
+    // action when the client cache is empty (first action post-
+    // streaming), and we need to render everything to repopulate.
+    //
+    // Explicitly-requested partials (`?partials=`, `__inputs`) never
+    // skip; they're the reason the caller fired the refetch.
+    const skipIds = new Set<string>();
+    if (!populateCache) {
+      for (const [id, fp] of fingerprints) {
+        if (explicitIds.has(id)) continue;
+        const cachedFp = cachedFingerprints.get(id);
+        if (cachedFp != null && cachedFp === fp) skipIds.add(id);
+      }
+    }
+    const streamedFreshIds = freshIds.filter((id) => !skipIds.has(id));
     return (
       <PartialsClient
         mode="streaming"
         template={template}
-        freshIds={freshIds}
+        freshIds={streamedFreshIds}
         fingerprints={fpObject}
         debug={debug}
         fetchMs={0}
       >
-        {transformForStreaming(children, { v: 0 }, partialInputs, streamVersion, explicitIds)}
+        {transformForStreaming(children, { v: 0 }, partialInputs, explicitIds, skipIds)}
       </PartialsClient>
     );
   }
@@ -698,10 +709,9 @@ export async function PartialRoot({ children }: PartialRootProps) {
   const wrappedChildren = activeChildren.map(({ id, content, fallback, errorWith }) => {
     const inner = content;
     if (fallback != null) {
-      const suspenseKey = isRevalidate ? id : `${id}#${streamVersion}`;
       return (
         <Suspense
-          key={suspenseKey}
+          key={id}
           fallback={
             <PartialErrorBoundary partialId={id} fallback={errorWith}>
               {fallback}

@@ -170,17 +170,17 @@ export function PokemonPage() {
       {searchOpen && (
         <SearchDialog open>
           <SearchInput query={searchQuery} mode={searchMode!} />
-          <Partial
-            id="stage-1"
-            fallback={
-              <div
-                data-testid="stage-1-fallback"
-                style={{ color: "#666", padding: "0.5rem" }}
-              >
-                Loading stage 1...
-              </div>
-            }
-          >
+          {/*
+            Stage 1 has no `fallback` — the framework therefore does
+            not wrap it in a Suspense boundary. SearchStage1 still
+            awaits a GraphQL query, but that suspend resolves in the
+            outer RSC stream before the enclosing partial's chunk
+            emits, so the client commits stage-1's content inline
+            with the rest of the response. No loading flash, no
+            per-chunk streaming — appropriate for a fast "always-on"
+            slice that sits at the top of the dialog.
+          */}
+          <Partial id="stage-1">
             <Cache id="SearchStage1" dep={{ searchQuery }}>
               <SearchStage1 query={searchQuery} />
             </Cache>

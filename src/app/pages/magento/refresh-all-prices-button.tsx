@@ -23,7 +23,6 @@ export function RefreshAllPricesButton() {
       if (!handler) return;
       const url = new URL(window.location.href);
       url.searchParams.set("tags", "price");
-      url.searchParams.set("revalidate", "1");
       await handler(url.toString());
     });
   }

@@ -1,4 +1,14 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, request } from "@playwright/test";
+
+// Cold-start every run so the `<Cache>` store doesn't short-circuit
+// stage-2/3's artificial delays. Without this, a prior test's cached
+// `{searchQuery: "ab"}` entry would return instantly and the fallback
+// never flashes.
+test.beforeEach(async ({ baseURL }) => {
+  const ctx = await request.newContext();
+  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`);
+  await ctx.dispose();
+});
 
 test("measure stage appearance timing with raw setState", async ({ page }) => {
   const errors: string[] = [];
@@ -42,17 +52,20 @@ test("measure stage appearance timing with raw setState", async ({ page }) => {
       for (let i = 1; i <= 3; i++) {
         const content = document.querySelector(`[data-testid="stage-${i}-content"]`);
         const fallback = document.querySelector(`[data-testid="stage-${i}-fallback"]`);
-        if (content) {
+        // Fallback first: on re-suspend, React keeps old content in DOM
+        // (hidden) and renders the fallback alongside. Checking fallback
+        // first lets the observer actually see the loading state.
+        if (fallback) {
+          parts.push(`S${i}:FALLBACK`);
+          if (!w.__t.stages[`stage${i}_fb`]) {
+            w.__t.stages[`stage${i}_fb`] = Math.round(performance.now() - w.__t.t0);
+          }
+        } else if (content) {
           const text = content.textContent?.slice(0, 30) ?? "";
           const isNew = text !== (w.__t.initSnapshot[`stage${i}`] ?? "").slice(0, 30);
           parts.push(`S${i}:${isNew ? "NEW" : "old"}("${text.slice(0,15)}")`);
           if (isNew && !w.__t.stages[`stage${i}`]) {
             w.__t.stages[`stage${i}`] = Math.round(performance.now() - w.__t.t0);
-          }
-        } else if (fallback) {
-          parts.push(`S${i}:FALLBACK`);
-          if (!w.__t.stages[`stage${i}_fb`]) {
-            w.__t.stages[`stage${i}_fb`] = Math.round(performance.now() - w.__t.t0);
           }
         } else {
           parts.push(`S${i}:GONE`);

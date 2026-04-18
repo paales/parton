@@ -35,18 +35,28 @@ type DispatchFn = (
   target: {
     id: string;
     props?: Record<string, unknown>;
-    revalidate?: boolean;
+    disableTransition?: boolean;
   },
 ) => Promise<void>;
 
 /** Options for `usePartial().refetch(props, options)` */
 export interface PartialRefetchOptions {
   /**
-   * Revalidate mode: preserve the current Suspense content while fresh
-   * content loads (no fallback flash). Default: false (fresh mount — fallback
-   * shows immediately). Overrides the action-level default.
+   * Disable the transition wrapper on commit.
+   *
+   * Default (`false`): the client wraps the response commit in
+   * `startTransition`, so React keeps the current UI visible until
+   * the new content is fully ready. No Suspense fallback flash, no
+   * per-chunk streaming — the whole refetch appears as one atomic
+   * swap. Good for "just swap values" UX (cart badge, prices).
+   *
+   * `true`: commit without a transition. React shows Suspense
+   * fallbacks for pending children and commits Flight chunks as
+   * they arrive, giving per-row progressive streaming. Good for
+   * search / filter results where per-row reveal improves perceived
+   * latency.
    */
-  revalidate?: boolean;
+  disableTransition?: boolean;
 }
 
 const PartialRefetchContext = createContext<DispatchFn>(async () => {
@@ -134,17 +144,13 @@ function substituteNested(
 
   if (!isValidElement(node)) return node;
 
-  const keyStr = node.key != null ? String(node.key) : null;
-  if (keyStr) {
-    const hashIdx = keyStr.indexOf("#");
-    const partialId = hashIdx >= 0 ? keyStr.slice(0, hashIdx) : keyStr;
-    if (partialId !== skipId) {
-      if (isPlaceholder(node)) {
-        return cache.get(partialId) ?? node;
-      }
-      const fresh = cache.get(partialId);
-      if (fresh && fresh !== node) return fresh;
+  const partialId = node.key != null ? String(node.key) : null;
+  if (partialId && partialId !== skipId) {
+    if (isPlaceholder(node)) {
+      return cache.get(partialId) ?? node;
     }
+    const fresh = cache.get(partialId);
+    if (fresh && fresh !== node) return fresh;
   }
 
   // Don't walk into Suspense — children may be lazy RSC refs
@@ -154,7 +160,13 @@ function substituteNested(
   if (children == null) return node;
   const newChildren = substituteNested(children, cache, skipId);
   if (newChildren === children) return node;
-  return cloneElement(node, {}, newChildren);
+  // Spread arrays as variadic — see the matching comment in
+  // cache.tsx#resolveLazies. Flight-decoded children are arrays
+  // even for static JSX siblings, and a bare `cloneElement(node,
+  // {}, arr)` triggers React's "unique key" warning.
+  return Array.isArray(newChildren)
+    ? cloneElement(node, {}, ...newChildren)
+    : cloneElement(node, {}, newChildren);
 }
 
 const LAZY_SYMBOL_STR = "Symbol(react.lazy)";
@@ -198,14 +210,10 @@ function cacheFromStreamingChildren(
   }
   if (!isValidElement(node)) return;
 
-  const keyStr = node.key != null ? String(node.key) : null;
-  if (keyStr) {
-    const hashIdx = keyStr.indexOf("#");
-    const partialId = hashIdx >= 0 ? keyStr.slice(0, hashIdx) : keyStr;
-    if (freshIds.has(partialId)) {
-      cache.set(partialId, node);
-      if (node.type === Suspense) return;
-    }
+  const partialId = node.key != null ? String(node.key) : null;
+  if (partialId && freshIds.has(partialId)) {
+    cache.set(partialId, node);
+    if (node.type === Suspense) return;
   }
 
   const inner = (node.props as any)?.children;
@@ -323,7 +331,7 @@ export function usePartial(
       const p = dispatchFn({
         id: partialId,
         props,
-        revalidate: options?.revalidate,
+        disableTransition: options?.disableTransition,
       }).finally(() => setIsPending(false));
       return p;
     },
@@ -350,7 +358,7 @@ export function PartialsClient({
     Array<{
       id: string;
       props?: Record<string, unknown>;
-      revalidate?: boolean;
+      disableTransition?: boolean;
     }>
   >([]);
   const flushRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
@@ -360,13 +368,13 @@ export function PartialsClient({
       targets: Array<{
         id: string;
         props?: Record<string, unknown>;
-        revalidate?: boolean;
+        disableTransition?: boolean;
       }>,
     ) => {
       const url = new URL(window.location.href);
 
-      if (targets.some((t) => t.revalidate)) {
-        url.searchParams.set("revalidate", "1");
+      if (targets.some((t) => t.disableTransition)) {
+        url.searchParams.set("disableTransition", "1");
       }
 
       // Apply (and clear) any transient search-params set via usePartialParams.
@@ -440,23 +448,12 @@ export function PartialsClient({
     for (const [id, fp] of Object.entries(fingerprints)) {
       fps.set(id, fp);
     }
-    const prevCache = new Map(cache);
-    cache.clear();
+    // Don't clear — the server emits placeholders for partials whose
+    // fingerprint matched the client's `?cached=` list and excludes
+    // them from `freshIds`. Those entries must stay in the cache so
+    // `renderTemplate` can fill the template's placeholders from them.
+    // Fresh partials overwrite their entries in `cacheFromStreamingChildren`.
     cacheFromStreamingChildren(children, cache, new Set(freshIds));
-    for (const [id, node] of cache) {
-      if (!isValidElement(node) || node.key == null) continue;
-      const rawKey = String(node.key);
-      if (rawKey.indexOf("#") >= 0) continue;
-      const prev = prevCache.get(id);
-      if (
-        prev &&
-        isValidElement(prev) &&
-        prev.key != null &&
-        prev.key !== node.key
-      ) {
-        cache.set(id, cloneElement(node, { key: prev.key }));
-      }
-    }
     _debug = [];
 
     const rendered = renderTemplate(template, cache);
@@ -471,23 +468,7 @@ export function PartialsClient({
   // ── Cache mode ──────────────────────────────────────────────────────
   Children.forEach(children, (child) => {
     if (isValidElement(child) && child.key != null) {
-      const rawKey = String(child.key);
-      const hashIdx = rawKey.indexOf("#");
-      const partialId = hashIdx >= 0 ? rawKey.slice(0, hashIdx) : rawKey;
-
-      let toCache = child;
-      if (hashIdx < 0) {
-        const prev = cache.get(partialId);
-        if (
-          prev &&
-          isValidElement(prev) &&
-          prev.key != null &&
-          prev.key !== child.key
-        ) {
-          toCache = cloneElement(child, { key: prev.key });
-        }
-      }
-      cache.set(partialId, toCache);
+      cache.set(String(child.key), child);
     }
   });
 

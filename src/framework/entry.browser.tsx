@@ -7,7 +7,6 @@ import {
 } from "@vitejs/plugin-rsc/browser";
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
-import { flushSync } from "react-dom";
 import { rscStream } from "rsc-html-stream/client";
 import type { RscPayload } from "./entry.rsc";
 import { GlobalErrorBoundary } from "./error-boundary";
@@ -46,33 +45,30 @@ async function main() {
         url.searchParams.set("cached", cachedIds.join(","));
       }
     }
-    // Revalidate path: commit inside a transition so React holds the
-    // current Suspense content visible while fresh content resolves,
-    // instead of showing the fallback (which flushSync would do).
-    const isRevalidate = url.searchParams.has("revalidate");
+    // Suspense keys are bare partial ids — React reconciles each
+    // boundary in place across refetches. The two commit paths differ
+    // only in how React treats pending children on the client:
+    //
+    //   setPayload (default, wraps in startTransition): React holds
+    //     the current UI visible until the new content is fully
+    //     ready. No Suspense fallback flash, no per-chunk streaming.
+    //     Good for "just swap values" UX like a cart badge or live
+    //     price (pair with `isPending` on the trigger).
+    //
+    //   setPayloadRaw (opt-in via ?disableTransition=1): plain post-
+    //     await setState, outside any transition. React 19 shows
+    //     Suspense fallbacks for pending children and commits Flight
+    //     chunks as they arrive, giving per-row progressive streaming.
+    //     Good for search / filter results where per-row reveal
+    //     improves perceived latency.
+    const disableTransition = url.searchParams.has("disableTransition");
     const renderRequest = createRscRenderRequest(url.toString());
-
-    // Streaming RSC consumption: createFromReadableStream resolves when the
-    // root chunk arrives, with lazy refs for pending suspended subtrees.
-    //
-    // The server version-stamps each Suspense `key` per request (see
-    // partial.tsx → streamVersion). When we commit the new payload, React
-    // sees the version-stamped Suspense keys as NEW elements (different key
-    // from the previous render), unmounts the old ones, and mounts fresh
-    // boundaries — those display their fallbacks immediately and reveal
-    // content as each lazy ref resolves. The surrounding tree (html/head/
-    // body/nav) keeps stable keys and reconciles in place, so the page
-    // shell stays mounted (no flash).
-    //
-    // flushSync with setPayloadRaw (not startTransition) is required:
-    // transitions would hold back showing fallbacks for the still-pending
-    // lazy refs.
     const response = await fetch(renderRequest);
     const payload = await createFromReadableStream<RscPayload>(response.body!);
-    if (isRevalidate) {
-      setPayload(payload);
+    if (disableTransition) {
+      setPayloadRaw(payload);
     } else {
-      flushSync(() => setPayloadRaw(payload));
+      setPayload(payload);
     }
   }
 

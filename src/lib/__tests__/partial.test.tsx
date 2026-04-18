@@ -199,7 +199,7 @@ describe("PartialRoot architecture", () => {
 		expect(str).toContain("Species");
 	});
 
-	it("renders all partials on full render even with cached fingerprints", async () => {
+	it("skips re-rendering partials whose fingerprint matches the client's ?cached= entry", async () => {
 		let fingerprints: Record<string, string> = {};
 		vi.mocked(await import("../partial-client.tsx")).PartialsClient = (({
 			children,
@@ -222,6 +222,10 @@ describe("PartialRoot architecture", () => {
 		expect(fingerprints.hero).toBeDefined();
 		expect(fingerprints.stats).toBeDefined();
 
+		// Second render: client reports the `hero` fingerprint
+		// unchanged, so the server emits a `<i data-partial hidden
+		// key="hero">` placeholder instead of running `<Hero/>`.
+		// `stats` has no cached fingerprint → still renders fresh.
 		const { result } = await runWithRequestAsync(
 			fakeRequest({ cached: `hero:${fingerprints.hero}` }),
 			async () =>
@@ -234,7 +238,7 @@ describe("PartialRoot architecture", () => {
 		);
 		const str = JSON.stringify(result);
 		expect(str).toContain("Stats");
-		expect(str).toContain("Hero");
+		expect(str).not.toContain("Hero");
 	});
 
 	it("fingerprints are stable for same element tree", async () => {

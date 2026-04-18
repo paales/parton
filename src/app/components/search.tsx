@@ -189,6 +189,16 @@ export function SearchInput({
   mode: "partial" | "url";
 }) {
   const [value, setValue] = useState(query);
+  // A/B the two commit modes live. Default (`disableTransition: false`)
+  // wraps the commit in startTransition, so React holds the old results
+  // visible until the new ones are fully ready — one atomic swap, no
+  // fallback flash. Checked (`true`) falls back to a plain setState, so
+  // each stage's Suspense shows its fallback and commits as its chunk
+  // arrives — per-row streaming.
+  const [disableTransition, setDisableTransition] = useState(false);
+  const disableTransitionRef = useRef(disableTransition);
+  disableTransitionRef.current = disableTransition;
+
   const [dispatchStage1] = usePartial("stage-1");
   const [dispatchStage2] = usePartial("stage-2");
   const [dispatchStage3] = usePartial("stage-3");
@@ -224,10 +234,11 @@ export function SearchInput({
       setTransientParams({ q: q || null });
     }
 
+    const opts = { disableTransition: disableTransitionRef.current };
     // Dispatch all three stages in the same tick — they batch into one request
-    dispatchStage1({ query: q });
-    dispatchStage2({ query: q });
-    await dispatchStage3({ query: q });
+    dispatchStage1({ query: q }, opts);
+    dispatchStage2({ query: q }, opts);
+    await dispatchStage3({ query: q }, opts);
     inFlightRef.current = false;
     // Re-check: user may have typed more while request was in flight
     sendLatest();
@@ -242,53 +253,85 @@ export function SearchInput({
   const isStale = value !== dispatchedRef.current || inFlightRef.current;
 
   return (
-    <div style={{ position: "relative" }}>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => handleChange(e.target.value)}
-        placeholder="Search pokemon by name..."
-        autoFocus
-        style={{
-          width: "100%",
-          padding: "0.75rem 1rem",
-          paddingRight: "2.5rem",
-          background: "#1a1a2e",
-          border: "1px solid #4a5568",
-          borderRadius: 8,
-          color: "#ededed",
-          fontSize: "1rem",
-          outline: "none",
-        }}
-      />
-      {isStale && (
-        <span
+    <div>
+      <div style={{ position: "relative" }}>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => handleChange(e.target.value)}
+          placeholder="Search pokemon by name..."
+          autoFocus
           style={{
-            position: "absolute",
-            right: 12,
-            top: "50%",
-            transform: "translateY(-50%)",
-            display: "inline-block",
-            width: 16,
-            height: 16,
-            border: "2px solid #888",
-            borderTopColor: "#ededed",
-            borderRadius: "50%",
-            animation: "spin 0.6s linear infinite",
+            width: "100%",
+            padding: "0.75rem 1rem",
+            paddingRight: "2.5rem",
+            background: "#1a1a2e",
+            border: "1px solid #4a5568",
+            borderRadius: 8,
+            color: "#ededed",
+            fontSize: "1rem",
+            outline: "none",
           }}
         />
-      )}
-      <span
+        {isStale && (
+          <span
+            style={{
+              position: "absolute",
+              right: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
+              display: "inline-block",
+              width: 16,
+              height: 16,
+              border: "2px solid #888",
+              borderTopColor: "#ededed",
+              borderRadius: "50%",
+              animation: "spin 0.6s linear infinite",
+            }}
+          />
+        )}
+      </div>
+      <div
         style={{
-          position: "absolute",
-          right: 12,
-          bottom: -20,
-          fontSize: "0.65rem",
-          color: "#555",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginTop: "0.5rem",
+          fontSize: "0.75rem",
+          color: "#888",
         }}
       >
-        {mode === "partial" ? "usePartial (ephemeral)" : "URL (bookmarkable)"}
-      </span>
+        <label
+          data-testid="disable-transition-toggle"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={disableTransition}
+            onChange={(e) => setDisableTransition(e.target.checked)}
+          />
+          <span>
+            disableTransition:{" "}
+            <code style={{ color: disableTransition ? "#8b8" : "#8bd" }}>
+              {String(disableTransition)}
+            </code>
+          </span>
+          <span style={{ color: "#555" }}>
+            {disableTransition
+              ? "plain setState — fallback flashes, streams per chunk"
+              : "startTransition — preserve UI, no fallback, no streaming"}
+          </span>
+        </label>
+        <span style={{ color: "#555" }}>
+          {mode === "partial" ? "usePartial (ephemeral)" : "URL (bookmarkable)"}
+        </span>
+      </div>
     </div>
   );
 }

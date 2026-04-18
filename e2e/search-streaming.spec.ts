@@ -27,6 +27,11 @@ test("search stages stream progressively on AJAX refetch", async ({ page }) => {
   await page.waitForSelector('[data-testid="stage-3-content"]', { timeout: 15000 });
   console.log("Initial SSR: all 3 stages loaded");
 
+  // Opt into streaming commit mode. Default is startTransition
+  // (preserve UI, no fallback, no per-chunk streaming), which this
+  // test is not about.
+  await page.locator('[data-testid="disable-transition-toggle"] input').check();
+
   // 2. Inject timing tracker before typing
   await page.evaluate(() => {
     const w = window as any;
@@ -43,8 +48,13 @@ test("search stages stream progressively on AJAX refetch", async ({ page }) => {
       for (let i = 1; i <= 3; i++) {
         const content = document.querySelector(`[data-testid="stage-${i}-content"]`);
         const fallback = document.querySelector(`[data-testid="stage-${i}-fallback"]`);
-        if (content) parts.push(`S${i}:content`);
-        else if (fallback) parts.push(`S${i}:fallback`);
+        // Fallback first: when a Suspense boundary re-suspends on
+        // update, React keeps the old content element in the DOM
+        // (hidden) and renders the fallback alongside it. A
+        // content-first check would report "content" throughout and
+        // miss the fallback flash entirely.
+        if (fallback) parts.push(`S${i}:fallback`);
+        else if (content) parts.push(`S${i}:content`);
         else parts.push(`S${i}:absent`);
       }
       return parts.join("|");

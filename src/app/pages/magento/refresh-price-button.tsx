@@ -14,7 +14,7 @@ export function RefreshPriceButton({ sku }: { sku: string }) {
     <button
       type="button"
       data-testid={`refresh-price-${sku}`}
-      onClick={() => refetch(undefined, { revalidate: true })}
+      onClick={() => refetch()}
       disabled={isPending}
       style={{
         background: "transparent",

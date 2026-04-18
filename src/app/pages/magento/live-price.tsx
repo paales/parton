@@ -5,7 +5,11 @@ import { RefreshPriceButton } from "./refresh-price-button.tsx";
  * product's base price in gray so the user can clearly see each
  * product switch into "loading" state during a refresh.
  */
-export function LivePriceFallback({ sku, basePrice, currency }: {
+export function LivePriceFallback({
+  sku,
+  basePrice,
+  currency,
+}: {
   sku: string;
   basePrice: number;
   currency: string;
@@ -48,12 +52,16 @@ export function LivePriceFallback({ sku, basePrice, currency }: {
  * Artificial 200ms delay so a refresh actually suspends — otherwise
  * it commits instantly and you never see the fallback flash.
  */
-export async function LivePrice({ sku, basePrice, currency }: {
+export async function LivePrice({
+  sku,
+  basePrice,
+  currency,
+}: {
   sku: string;
   basePrice: number;
   currency: string;
 }) {
-  await new Promise((r) => setTimeout(r, 200));
+  // await new Promise((r) => setTimeout(r, 200));
 
   // Fresh fluctuation on every render — `Date.now()` ticks at ms
   // precision so every click produces a new value, and `Math.random`
@@ -76,7 +84,11 @@ export async function LivePrice({ sku, basePrice, currency }: {
       }}
     >
       <span
-        style={{ color: "#48bb78", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
+        style={{
+          color: "#48bb78",
+          fontWeight: 600,
+          fontVariantNumeric: "tabular-nums",
+        }}
       >
         {currency} {live.toFixed(2)}
       </span>
