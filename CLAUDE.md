@@ -2,12 +2,13 @@
 
 Research project: a React CMS data layer inspired by Shopify Liquid. Pages are composed of independently re-renderable server-rendered partials; data is fetched with hand-written GraphQL queries via `graphql-request`, typed end-to-end with [gql.tada](https://gql-tada.0no.co/).
 
-> **Historical note:** an earlier iteration used a proxy-based data layer where field access _was_ the query. That design is preserved in `PROXY_DESIGN.md` and the implementation still lives in `src/lib/` but is no longer used by the app. Do not reach for it.
+> **Historical note:** an earlier iteration used a proxy-based data layer where field access _was_ the query. That design is preserved in `proxy-design/` and is no longer wired into the app. Do not reach for it.
 
 ## Project Structure
 
-- `notes` for design documents.
-- `src/lib/` — Partials library (`partial.tsx`, `partial-client.tsx`, `partial-cache.ts`, `orchestrator.ts`, `multipart.ts`, `hash.ts`, `partial-error-boundary.tsx`). Also contains the legacy proxy data layer (see `PROXY_DESIGN.md`).
+- `notes/` — current design notes (start at `notes/README.md`). Historical docs live in `notes/archive/`.
+- `src/lib/` — Partials library (`partial.tsx`, `partial-component.tsx`, `partial-client.tsx`, `partial-registry.ts`, `partial-request-state.ts`, `partial-error-boundary.tsx`, `cache.tsx`, `hash.ts`, `multipart.ts`, `partial-cache.ts`, `when-visible.tsx`, `when-visible-client.tsx`).
+- `proxy-design/` — legacy proxy data layer (see `proxy-design/README.md`).
 - `src/app/` — Example application (PokeAPI + Magento backends)
 - `src/framework/` — RSC plumbing (vite-plugin-rsc, Vite 8, React 19)
 
@@ -52,90 +53,75 @@ const data = await client.request(CartQuery, { cartId });
 
 ## Partials Architecture
 
-Pages are flat lists of independently re-renderable partials (inspired by Shopify's section rendering). Every `Partials` instance requires a `namespace` prop to disambiguate IDs across nested instances. Filter with `?partials=namespace/id`.
+Pages are composed of independently re-renderable partials (inspired by Shopify's section rendering). The framework exposes one primitive — `<Partial id="...">` — wrapped by a single framework-owned `<PartialRoot>` at the top of the RSC entry. Page authors never see `<PartialRoot>`; they just use `<Partial>` anywhere in the JSX tree.
+
+Filter with `?partials=<id>` or `?tags=<tag>`. Refetch with `usePartial(id).refetch()`.
 
 ### Partials must be server components
 
-All partials and their rendering components are server components. Client components are only for interactivity (buttons, forms) nested inside partials.
+All `<Partial>` content must render in the RSC environment. Client components are only for interactivity (buttons, forms) nested inside partials. Deep Partials inside opaque async components (e.g. `.map()` inside a product list) are first-class — see the Dynamic Partials section below.
 
-### Namespace is required
+### Authoring
 
-Every `<Partials>` MUST have a `namespace` prop. A namespace is just a prefix for the partial ID to avoid collisions between nested Partials instances. The namespace is transparent to component authors — `usePartial("cart")` automatically resolves to `"magento/cart"` based on the enclosing Partials context.
+```tsx
+<Partial id="header">
+  <header>
+    {new Date().toLocaleString()}
+    <Partial id="cart" tags={["cart"]} fallback={<CartBadge quantity={"?"} />}>
+      <CartPartial />
+    </Partial>
+  </header>
+</Partial>
 
-### Nesting Partials
+<Partial id="products">
+  <Cache id="products" dep={{ search }} ttl={60}>
+    <ProductGrid search={search} />
+  </Cache>
+</Partial>
+```
 
-Partials instances can be nested. The outer instance (e.g., `namespace="layout"`) wraps the page shell (head, nav, body). The inner instance (e.g., `namespace="magento"`) wraps the page-specific content (header, cart, products).
+No namespace. No `<Partials>` wrapper. No `key`. Ids are globally unique per page; duplicates throw during render.
 
-When `?partials=magento/cart` is requested:
+### Dynamic Partials (inside `.map()`)
 
-1. **Outer (layout)**: no IDs start with `layout/` → pass-through
-2. **Inner (magento)**: `magento/cart` matches → filters to just cart
-
-Pass-through is necessary because the server must execute the outer's "page" child for the inner Partials to run at all (RSC is server-rendered).
-
-### Pass-through optimization: HTML vs component heuristic
-
-During pass-through, the outer instance must render enough for inner instances to execute. But not all outer partials need re-rendering:
-
-- **HTML-type partials** (`<head key="head">`, `<nav key="nav">`) can't contain nested Partials or read request context. If their fingerprint matches the client's cached version, they're **skipped** during pass-through.
-- **Component-type partials** (`<PokemonPage key="page" />`) might contain nested Partials instances or depend on URL/context. They **always render** during pass-through.
-
-On full navigation (no `?partials=` filter), ALL partials render regardless — URL changes can affect any component's output.
+A Partial produced inside an async component's return value (e.g. per-row in a product grid) is picked up the same as a statically-placed one. Each `<Partial>` render calls `<PartialBoundary>` which side-effects into a **route-scoped registry** (`src/lib/partial-registry.ts`); subsequent refetches consult the registry to resolve ids/tags without re-running ancestors. See `notes/DYNAMIC_PARTIAL_REGISTRY.md`.
 
 ### Fingerprints
 
-Each partial has a fingerprint (hash of its element tree shape). The client sends `?cached=layout/head:fp,layout/nav:fp,...` with all known fingerprints. Fingerprints are used for:
-
-1. **Pass-through skip**: HTML-type partials with matching fingerprints skip during pass-through (see above)
-2. **Client change detection**: the client PartialsClient uses fingerprints to track which partials have changed
-
-**Critical implementation detail**: `_tokensByNamespace` in `partial-client.tsx` accumulates cached tokens across ALL PartialsClient instances (keyed by namespace). If this were a simple overwrite, nested instances would clobber each other's tokens and the outer's fingerprints wouldn't be sent → the outer would re-render everything on every refetch.
+Each Partial computes a structural fingerprint (hash of component types + scalar props + children shape). The client sends `?cached=id:fp,…` with every refetch. `<Partial>` skips (emits an `<i data-partial hidden>` placeholder) when its fingerprint matches what the client already has, so the browser fills from `_cache` and no bytes are wasted on unchanged subtrees.
 
 ### usePartial hook
 
-`usePartial(id)` returns `{ refetch(props?), isPending }`:
+`const [refetch, isPending] = usePartial(id);`
 
-- `refetch()` — invalidation: re-render with current props
-- `refetch({ query: "pika" })` — re-render with overridden props (via `__inputs`)
+- `refetch()` — re-render with current props.
+- `refetch({ query: "pika" })` — re-render with `__inputs` overrides applied via `cloneElement`.
 
-The hook reads the namespace from React context. Component authors never write the namespace prefix:
+### `<Cache>` composition
 
-```tsx
-// Inside <Partials namespace="pokemon">
-const hero = usePartial("hero"); // → sends ?partials=pokemon/hero
-hero.refetch();
-```
-
-### Tags and cache
-
-Partials can declare tags and cache TTL via reserved props:
-
-```tsx
-<CartBadge key="cart" tags={["cart"]} cache={60} />
-```
-
-- `tags` — group partials for bulk invalidation: `{ invalidate: { tags: ["cart"] } }`
-- `cache` — server-side data cache TTL in seconds (keyed by the GraphQL query string)
-- Reserved props are stripped before rendering the component (via `stripReservedProps`)
+`<Cache id dep ttl staleWhileRevalidate>` wraps a subtree and serves stored Flight bytes on hit. Dynamic Partials inside the cached region stay live via strip-on-store / reinject-on-return (see `notes/SERVER_CACHE_NOTES.md`). Cache key folds `dep` with the sorted list of partial ids inside the subtree, so adding/removing a Partial invalidates the entry.
 
 ### Server action invalidation
 
-Server actions return invalidation instructions. **Prefer tags** over IDs — tags are namespace-agnostic and don't couple actions to page structure:
+Server actions return invalidation instructions:
 
 ```ts
-// By tag (preferred — namespace-agnostic)
-return { invalidate: { tags: ["cart"] } };
-// By ID (must include namespace prefix)
-return { invalidate: ["magento/cart"] };
-// Mixed
-return { invalidate: { ids: ["layout/nav"], tags: ["cart"] } };
+return { invalidate: { tags: ["cart"] } };   // by tag (preferred)
+return { invalidate: ["cart"] };              // by id
+return { invalidate: { ids: ["nav"], tags: ["cart"] } };
 ```
 
-**IMPORTANT**: ID-based invalidation (`["cart"]`) without the namespace prefix will NOT match any Partials instance — both outer and inner instances pass through and re-render everything. Always use the full namespaced ID or use tag-based invalidation.
+Ids are global — no prefix — and match 1:1 against `<Partial id>`.
 
-### Template and client merge
+### Refetch commit behavior
 
-The server sends a structural template (layout wrappers with placeholders for partials) plus fresh partial content. The client `PartialsClient` fills placeholders from its cache, merging fresh content with cached content. This means non-requested partials stay visible without re-rendering.
+The client wraps refetches in `React.startTransition` by default: preserve UI, atomic swap, no fallback flash. Opt into per-chunk streaming (fallback + per-boundary reveal as each chunk arrives) per refetch:
+
+```ts
+refetch({ query: "pika" }, { disableTransition: true });
+```
+
+See `notes/archive/BARE_KEY_REFETCH.md` for the history.
 
 ## Development
 

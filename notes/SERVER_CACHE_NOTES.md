@@ -1,6 +1,12 @@
-# Server-side render-output caching — spike notes (2026-04-16)
+# Server-side render-output caching — design notes
 
-Status: **working prototype**. Green across 44/44 vitest + 17/17 playwright.
+**Added:** 2026-04-16 (initial spike)
+**Updated:** 2026-04-18 (post unified-path refactor — see `LESSONS_FROM_REFACTOR.md`)
+**Files:** `src/lib/cache.tsx`
+
+Status: **in use**. Shipped in the Magento demo wrapping `<ProductGrid>`
+inside `<Partial id="products">`. See `e2e/cache-demo.spec.ts` and
+`e2e/magento-cache-hit-renders-body.spec.ts` for regression coverage.
 
 ## The question
 
@@ -213,20 +219,20 @@ snapshot).
 
 Before serializing children to bytes, walk the tree and replace
 every partial-bearing subtree with a placeholder (`<i hidden
-data-partial key={id}/>` — same shape `buildTemplate` uses). Store
-*that* template. On output, walk the decoded tree and swap
-placeholders back to the **live** partial elements from the current
-render.
+data-partial key={id}/>` — same shape `<Partial>` emits when it
+decides to skip). Store *that* template. On output, walk the decoded
+tree and swap placeholders back to the **live** partial elements
+from the current render.
 
 Recognition rules for a partial-bearing subtree (in
 `stripPartials`):
-1. Element is a `<PartialBoundary>` (the self-wrap path for dynamic
-   partials — see `DYNAMIC_PARTIAL_REGISTRY.md`).
+1. Element is a `<PartialBoundary>` (the self-wrap emitted by
+   `<Partial>` — see `DYNAMIC_PARTIAL_REGISTRY.md`).
 2. Element is an existing `<i data-partial>` placeholder (cache-mode
    refetch templates already have these).
-3. Element has a `key` matching a known partial id in the
-   route-scoped registry (the streaming-mode Suspense/EB chain
-   produced by `transformForStreaming`).
+3. Element has a `partialId` prop matching a known id in the
+   route-scoped registry (the partial wrapper emitted by
+   `<Partial>` — a keyed `<Suspense>` or `<PartialErrorBoundary>`).
 
 The cache key folds in the **sorted list of partial ids** inside
 the subtree (`hashDep([dep, ids])`). Adding or removing a partial

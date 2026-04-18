@@ -1,25 +1,15 @@
 # Dynamic Partial Registry — design notes
 
 **Added:** 2026-04-16
+**Updated:** 2026-04-18 (post unified-path refactor — see `LESSONS_FROM_REFACTOR.md`)
 **Files:** `src/lib/partial-registry.ts`, `src/lib/partial-component.tsx`, `src/lib/partial.tsx`
-**Related:** `PARTIAL_WRAPPER_DESIGN.md` (baseline `<Partial>` API), `SERVER_CACHE_NOTES.md` (composition with `<Cache>`)
+**Related:** `SERVER_CACHE_NOTES.md` (composition with `<Cache>`), `archive/PARTIAL_WRAPPER_DESIGN.md` (historical `<Partial>` API proposal)
 
 ---
 
-## 1. The gap
+## 1. The gap the registry closes
 
-`<PartialRoot>` discovers partials by walking the JSX tree through the
-`.props.children` chain — `collectPartials` in `partial.tsx`. That walk
-doesn't execute function components, so it only finds `<Partial>`
-elements that:
-
-1. Are direct children of `<PartialRoot>`, its descendants in
-   structural wrappers (`<html>`, `<body>`, `<Fragment>`), or
-2. Are passed *as the `children` prop* to another element (structural
-   or component).
-
-That misses the canonical CMS pattern of a product list producing one
-partial per row:
+A CMS page often produces one Partial per row inside an async component:
 
 ```tsx
 async function ProductList() {
@@ -36,26 +26,28 @@ async function ProductList() {
 }
 ```
 
-`<ProductList/>` is a leaf to `collectPartials` (no `.children` prop).
-Every `price-<sku>` Partial is invisible to the static walker. Before
-the registry, that meant:
+An async `ProductList` component is a leaf from the outside — its
+return value (including every `price-<sku>` Partial) only exists
+after it executes. Without a runtime registry, that would mean:
 
-- `?partials=price-X` refetches had nothing to route to — the page
-  came back empty.
-- `?tags=price` couldn't resolve, because the tag index was built
-  from the static walk too.
-- Server-action invalidations by id never matched.
+- `?partials=price-X` refetches would have nothing to route to — the
+  page would have to re-run the full page tree to find the Partial.
+- `?tags=price` couldn't resolve without a full render.
+- Server-action invalidations by id wouldn't match until the next
+  full render populated an index.
 
 ## 2. The design in one paragraph
 
-The `<Partial>` component self-wraps with `<PartialBoundary>`, which
-is a thin server-only pass-through. When React renders `PartialBoundary`
-(which only happens for *dynamic* partials — `transformForStreaming`
-replaces static ones outright), it side-effects into a module-level
-**route-scoped registry** keyed by `(pathname, partialId)`. Subsequent
-refetches in `<PartialRoot>` consult the registry to resolve ids and
-tags that `collectPartials` didn't see. A registry miss falls back to
-a full streaming render.
+Every `<Partial>` renders a `<PartialBoundary>` wrapper that
+side-effects into a module-level **route-scoped registry** keyed by
+`(pathname, partialId)`. Because this registration happens during
+the normal React render (not a pre-walk), it picks up every Partial
+the page produces, including ones generated inside `.map()` in async
+components. Subsequent refetches in `<PartialRoot>` consult the
+registry to resolve ids and tags directly. A registry miss
+(route never rendered in this process, or the id is genuinely
+unknown) falls back to a full streaming render, which re-populates
+the registry as a side effect.
 
 ## 3. Data
 
@@ -79,43 +71,11 @@ so stale module references don't persist across edits.
 
 ## 4. Who populates it
 
-Two paths, both write through `registerPartial`:
-
-**Static path** — `PartialRoot` calls it directly after
-`collectPartials`, before rendering:
-
-```ts
-for (const entry of allPartials) {
-  registerPartial(routePath, entry.id, {
-    content: entry.content, fallback: entry.fallback,
-    errorWith: entry.errorWith, tags: entry.tags,
-  });
-}
-```
-
-**Dynamic path** — `<Partial>` self-wraps in `PartialBoundary`, which
-registers as a side effect during render:
+One path, during render. `<Partial>` (`partial-component.tsx`)
+renders `<PartialBoundary>`, which side-effects into the registry
+as React executes it:
 
 ```tsx
-// partial-component.tsx
-export function Partial({ id, children, fallback, errorWith, tags }) {
-  return (
-    <PartialBoundary
-      id={id}
-      content={children}
-      fallback={fallback ?? null}
-      errorWith={errorWith}
-      tags={tags ?? []}
-    >
-      <Suspense key={id} fallback={/* … */}>
-        <PartialErrorBoundary partialId={id} fallback={errorWith}>
-          {children}
-        </PartialErrorBoundary>
-      </Suspense>
-    </PartialBoundary>
-  );
-}
-
 export function PartialBoundary({ id, content, fallback, errorWith, tags, children }) {
   const route = new URL(getRequest().url).pathname;
   registerPartial(route, id, { content, fallback, errorWith, tags });
@@ -123,100 +83,84 @@ export function PartialBoundary({ id, content, fallback, errorWith, tags, childr
 }
 ```
 
-For *static* partials `transformForStreaming` replaces `<Partial>`
-with a Suspense/ErrorBoundary chain *before* React renders, so the
-`Partial` function body never runs. The registry entry for static
-partials comes from `PartialRoot`'s direct call. For *dynamic*
-partials, `transformForStreaming` can't see them; React renders the
-`<Partial>` element directly; its body runs, wraps, and
-`PartialBoundary` side-effects in.
+Every Partial the page produces gets registered — static or dynamic,
+deep inside an async component or at the top of the route tree.
 
-Two paths, one registry — `registerPartial` just overwrites. If a
-partial is visible both statically *and* as a dynamically-rendered
-copy, static wins because it runs first. The content is identical
-either way.
+There is also a one-shot **bootstrap walk** (`seedRegistry` in
+`partial.tsx`, ~30 lines) that does a cheap static JSX scan to
+populate the registry from whatever Partials are visible without
+rendering. Purpose: a first-request cache-mode refetch (before any
+full render has populated the route) can still resolve ids. Runtime
+self-registration handles every later request and every dynamic
+Partial. See `LESSONS_FROM_REFACTOR.md` §5 side notes for the
+rationale for keeping it.
 
 ## 5. Who consults it
 
-`PartialRoot` in cache mode, at two junction points:
-
-### 5.1 Id resolution (registry supplement)
-
-After computing `effectiveRequestedIds` from `?partials=` and
-`?tags=`, supplement the active entries for any id that's missing
-from the static tree:
+`PartialRoot` in cache mode. After parsing `?partials=` and `?tags=`
+from the request, it looks up each requested id in the registry and
+renders its snapshot as a flat sibling:
 
 ```ts
-const staticIds = new Set(allPartials.map(e => e.id));
-const registrySupplement: PartialEntry[] = [];
-let registryMiss = false;
-if (effectiveRequestedIds && !populateCache) {
-  for (const id of effectiveRequestedIds) {
-    if (staticIds.has(id)) continue;
-    const snap = lookupPartial(routePath, id);
-    if (snap) {
-      registrySupplement.push({
-        id, content: snap.content, depth: 0, tags: [],
-        cacheTtl: 0, fallback: snap.fallback, errorWith: snap.errorWith,
-      });
-    } else {
-      registryMiss = true;   // fall back to full render below
-      break;
-    }
-  }
+// sketch — see src/lib/partial.tsx
+for (const id of requestedIds) {
+  const snap = lookupPartial(routePath, id);
+  if (!snap) { registryMiss = true; break; }
+  activeEntries.push({ id, snap });
 }
-if (registryMiss) effectiveRequestedIds = null;   // full fresh render
+if (registryMiss) return fullStreamingRender();   // re-populates registry
 ```
 
-### 5.2 Tag resolution
+Tag resolution works the same way — iterate the route's snapshots,
+match `snap.tags` against the requested tag set, collect matching ids.
 
-The tag index is built from *both* the static tree and the route
-registry, so `?tags=price` picks up every `price-<sku>` dynamically-
-produced `<Partial tags={["price"]}>`:
+On cache-mode refetch, each active entry re-runs through `<Partial>`
+(with its content from the snapshot). The Partial body computes
+its own fingerprint, applies any `__inputs` override, decides
+render-vs-placeholder, and wraps the output. The registry is purely
+a content/metadata lookup; all the decision logic lives in the
+Partial component body.
 
-```ts
-for (const entry of allPartials) for (const tag of entry.tags) addTag(tag, entry.id);
-const routeSnapshots = getRouteSnapshots(requestUrl.pathname);
-if (routeSnapshots) {
-  for (const [id, snap] of routeSnapshots) {
-    for (const tag of snap.tags) addTag(tag, id);
-  }
-}
-```
-
-## 6. Client-side: keyed Suspense preservation
+## 6. Client-side: partialId prop survives Flight
 
 For the client's `cacheFromStreamingChildren` / `substituteNested`
 walkers to find a dynamic partial at refetch time, something in the
-rendered tree has to carry a key that survives the Flight boundary.
-`PartialBoundary` is a server component — it dissolves during
-serialization. The `<Suspense key={id}>` inside `Partial`'s self-wrap
-is a React built-in and **does** preserve its key across Flight.
-`cacheFromStreamingChildren` strips the trailing `#<version>` (if
-any) and uses the prefix as the partial id.
+rendered tree has to carry an identifier that survives the Flight
+boundary. `PartialBoundary` is a server component — it dissolves
+during serialization. The wrapper that ends up on the wire is a
+`<Suspense key={id}>` (when the Partial has a fallback) or a
+`<PartialErrorBoundary key={id} partialId={id}>` (when it doesn't).
 
-This is why `Partial`'s self-wrap wraps in `Suspense` even when the
-author passed no `fallback` prop — the key has to survive.
+The client walkers identify partial wrappers via the **`partialId`
+prop**, not via class/type identity and not via `node.key`:
+
+- `node.key` is unreliable when a Partial is produced inside a
+  `.map()` — Flight combines the caller's key with the wrapper's
+  own key into a composite string (`"page-1,page-1"`).
+- Class identity (`node.type === PartialErrorBoundary`) breaks at
+  the RSC → SSR module boundary — imported class references don't
+  `===` the types on elements decoded from Flight.
+- The `partialId` string prop travels through Flight verbatim and
+  is stable across the module boundary.
+
+Suspense keys stay clean (no composite key bug) because Suspense is
+a React built-in, so when a Partial has a fallback and is wrapped in
+Suspense, `node.key` works too — but `partialId` is the source of
+truth. See `LESSONS_FROM_REFACTOR.md` §3–§4.
 
 ## 7. Registry-miss fallback
 
-If `effectiveRequestedIds` contains an id that's neither in the
-static tree nor the registry, the partial is genuinely unknown on
-this route — either the user clicked a stale ref button, or the
-conditional JSX that produced it no longer reaches that branch.
-Instead of returning an empty partial, `PartialRoot` **forces a
-full streaming render**:
-
-```ts
-if (!isPartialRefetch || populateCache || registryMiss) {
-  return <PartialsClient mode="streaming" …>{transformForStreaming(…)}</PartialsClient>;
-}
-```
+If a requested id is missing from the registry, the partial is
+genuinely unknown on this route — either the user clicked a stale
+ref button, or the conditional JSX that produced it no longer
+reaches that branch. Instead of returning an empty partial,
+`PartialRoot` **forces a full streaming render** (pass `children`
+directly through `<PartialsClient mode="streaming">`).
 
 Navigation-like behavior: the client reconciles against a fresh
-tree, the stale partial just isn't there anymore. Plus: every live
-partial on the route registers itself during that fresh render, so
-the next refetch can resolve by id again.
+tree; the stale partial just isn't there anymore. Every live partial
+on the route also registers itself during that fresh render, so the
+next refetch can resolve by id again.
 
 ## 8. Persistence + HMR
 
@@ -241,17 +185,17 @@ top-level `beforeEach(clearRegistry)` to neutralize this.
 
 ## 9. What the registry does *not* do
 
-**It doesn't skip ancestor execution.** On a dynamic-partial refetch
-(`?partials=price-X`), the server looks up `price-X` in the registry
-and adds it to `activeEntries`. But the template (built from the
-route's JSX) still includes `<ProductList/>` as a leaf, and
-rendering the template re-runs ProductList — which fetches all
-products, produces all Partials, and registers them again. The
-registry prevents *empty responses* for dynamic refetches; it does
-not prevent the cost of running the ancestor to produce the DOM
-scaffolding.
+**It doesn't skip ancestor execution on a full render.** On a
+dynamic-partial refetch (`?partials=price-X`), the registry lets the
+server render only `price-X` as a flat sibling — ancestors don't run
+in this path. But on a streaming render (no filter, or a registry
+miss), ancestors execute as normal to produce the DOM scaffolding
+plus register every descendant Partial. The registry saves work on
+the refetch hot path; it doesn't save work on the cold-start /
+miss / fresh-render path.
 
-To actually skip ancestor execution, wrap the producer in `<Cache>`:
+To additionally skip ancestor execution on full renders, wrap the
+producer in `<Cache>`:
 
 ```tsx
 <Partial id="products">
@@ -262,11 +206,11 @@ To actually skip ancestor execution, wrap the producer in `<Cache>`:
 ```
 
 On a cache hit, ProductList doesn't run. The cached bytes contain
-keyed Suspense elements for each dynamic partial. Client-side
-`substituteNested` (with the lazy-ref unwrap added in
-`STREAMING_DEBUG_NOTES.md · 2026-04-16`) descends into the cached
-subtree, finds `<Suspense key="price-X">`, and swaps in the fresh
-content.
+keyed partial wrappers for each dynamic partial. Client-side
+`substituteNested` (with Flight lazy-ref unwrapping — see
+`archive/STREAMING_DEBUG_NOTES.md · 2026-04-16 · Lazy-ref truncation`)
+descends into the cached subtree, finds each wrapper by its
+`partialId` prop, and swaps in the fresh content.
 
 ## 10. Trust boundary note
 

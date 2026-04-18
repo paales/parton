@@ -20,25 +20,22 @@ Deliberately skipped (Inertia has these, we don't need them): Deferred Props (Su
 
 ---
 
-## State-preserving refetches (2026-04-16)
+## State-preserving refetches — RESOLVED (2026-04-16 → 2026-04-17)
 
-Today's partial-refetch dichotomy in `partial.tsx`:
+**Resolution:** bare-key + `startTransition` default. The old
+`?revalidate=1` flag and `streamVersion` key stamping are gone. React
+19.3 on a bare-key refetch reconciles in place AND streams per-chunk
+(outside transitions), so the fresh-mount / revalidate split was
+unnecessary. Full write-up: `LESSONS.md` §1–§3 and
+`archive/BARE_KEY_REFETCH.md`.
 
-- **Fresh mount** (default, `<Suspense key={id#version}>`) → React unmounts/remounts → progressive streaming of nested Suspense boundaries works, **client state inside is destroyed**.
-- **Revalidate** (opt-in `?revalidate=1`, bare `<Suspense key={id}>`) → reconcile in place → **client state preserved**, no progressive streaming (startTransition waits for whole subtree).
+Open tail:
 
-Live-search is the canonical casualty: every keystroke that refetches risks nuking input focus, selection, scroll, IME state. Cart-badge works in revalidate mode because it has no inner Suspense boundaries to stream.
-
-The `revalidate` flag exists _purely_ because of how React reconciled pending Suspense subtrees in the React version this was built against. If that changed in React 19 stable, the whole distinction might collapse.
-
-Things to investigate, in order:
-
-1. **Re-test streaming-on-update in React 19 stable.** Bare-key refetch + multiple nested async Suspense boundaries. Do chunks flush progressively without the remount? If yes → delete the `revalidate` branch, default to bare key, problem solved.
-2. **If (1) fails**, decouple render identity (what Suspense's `key` controls) from state identity (what client components care about). Candidate: a `<PartialState scope="search-form">` boundary — tiny client component that caches its children's state via context/ref, survives parent Suspense remounts. Non-trivial to make work with arbitrary client hooks inside, but tractable for known state holders.
-3. **`<Activity/>` is _not_ the fix.** Activity keeps a subtree mounted-but-paused; it doesn't let a _new_ render _inherit_ the paused tree's state. Useful for tab-style preservation, not for "server content updated, client state stays."
-4. **Ship the instance-identity debugger.** `useRef(() => randomColor())` rendered as a small corner dot in dev builds. Dot color changes → component remounted. Turns "did my component just remount" from a guessing game into a glance. Lives alongside the PartialDebugPanel status dots.
-
-Chat context: 2026-04-16 — user flagged that the current fresh-mount / revalidate split is load-bearing only because of streaming, and may be removable.
+- **Instance-identity debugger.** `useRef(() => randomColor())`
+  rendered as a small corner dot in dev builds. Dot color changes →
+  component remounted. Turns "did my component just remount" from a
+  guessing game into a glance. Still worth building; lives alongside
+  the PartialDebugPanel status dots.
 
 ---
 
@@ -79,71 +76,26 @@ Follow-ups worth considering:
 
 ---
 
-## Cache component bakes in dynamic Partials (2026-04-17)
+## Cache + dynamic Partials — RESOLVED (2026-04-17)
 
-`<Cache><ProductGrid/></Cache>` — the children passed to Cache is
-the **unrendered** `<ProductGrid/>` element. `stripPartials` walks
-that input tree, can't see through an opaque function component,
-finds no Partials, strips nothing. Then `renderToReadableStream`
-renders ProductGrid, producing `<Partial id="price-${sku}">` inside
-each card with `<LivePrice/>` baked in. Those bytes are what get
-cached. On hit, the baked-in prices are served verbatim, so
-individual `tags=["price"]` refetches work (they go through the
-registry, not the cache) but the cache entry itself holds stale
-prices until its TTL expires.
+**Resolution:** `<Cache>` now uses strip-on-store + reinject-on-return.
+The rendered tree has its partial-bearing subtrees replaced with `<i
+data-partial>` placeholders before the bytes are stored; on hit, the
+registry is consulted to splice live `<PartialBoundary>` elements
+back into the decoded tree. Dynamic partials inside a cached region
+stay live. See `SERVER_CACHE_NOTES.md · Follow-up · The fix: strip-
+on-store + reinject-on-return` for the implementation notes.
 
-### Proposed fix
+Open tails:
 
-Render first, strip the rendered tree, re-encode:
-
-```ts
-// On cache miss:
-const rawBytes = await renderAndBuffer(children);
-const decoded = await createFromReadableStream(bytesToStream(rawBytes));
-const resolved = await resolveLazies(decoded);
-const { stripped, partials, ids } = stripPartials(resolved);
-const bytes = await renderAndBuffer(stripped);
-store.set(key, { bytes, partialIds: [...partials.keys()], ... });
-return reinject(resolved, partials);
-```
-
-On hit:
-
-```ts
-const decoded = await createFromReadableStream(bytesToStream(entry.bytes));
-const resolved = await resolveLazies(decoded);
-// Rebuild the partials map from registry, so reinject has something
-// to splice in (the cached bytes are pure placeholders).
-const partials = new Map<string, ReactElement>();
-for (const id of entry.partialIds) {
-  const snap = lookupPartial(route, id);
-  if (!snap) continue;
-  partials.set(id, <PartialBoundary id={id} {...snap}>{snap.content}</PartialBoundary>);
-}
-return reinject(resolved, partials);
-```
-
-Cost: double render on miss (render + strip + re-encode). Benefit:
-cached bytes only hold scaffolding; every hit still executes fresh
-per-partial content. This matches the documented design goal in
-`cache.tsx` top comment ("Cache captures the stable scaffolding,
-partials stay live").
-
-### Open questions
-
-1. If the cache hit occurs for a request where the registry has been
-   cleared (HMR, new process), `lookupPartial` returns nothing and
-   the hit degrades to the current behavior — cached bytes with no
-   live partials, placeholder `<i>` elements in the rendered output.
-   Could fall back to rendering fresh, but that defeats the cache.
-   Best bet: do a full render on the first request per process/HMR
-   so the registry populates, cache the stripped version on that
-   render, serve hits thereafter.
-2. Double-render on miss doubles first-load latency. Might not
-   matter if miss rate is low; if it does, we'd need a zero-copy
-   way to "strip the tree while streaming" — more complex.
-
-Chat context: 2026-04-17 — user noticed LivePrice was frozen inside
-cached ProductGrid and asked if Cache was supposed to keep child
-Partials live. Existing behavior documented honestly; fix deferred
-to a future session because the proper solution is non-trivial.
+1. **Double-render on miss.** The fix renders, strips, re-encodes.
+   Doubles first-load latency. Acceptable for the demo; if a real
+   miss rate shows up in practice, a "strip while streaming" path
+   would avoid the second render.
+2. **Post-HMR cold hit.** If the cache hit lands on a request after
+   `clearRegistry()` (HMR, new process), `lookupPartial` returns
+   nothing and reinject produces placeholders only. Today this is
+   harmless in practice — the test harness clears both stores
+   together via `/__test/clear-caches`, and real dev restarts flush
+   both via the HMR listener. Worth keeping in mind if we ever add
+   a cross-process cache backend (Redis).

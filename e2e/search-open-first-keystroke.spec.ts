@@ -3,7 +3,7 @@ import { test, expect, request } from "@playwright/test";
 /**
  * E2E test: first-keystroke behavior after opening search.
  *
- * Two modes, both working after STREAMING_DEBUG_NOTES §10 + §14:
+ * Two modes, both working after notes/archive/STREAMING_DEBUG_NOTES §10 + §14:
  *
  * URL mode (`?search=url`) — writes `?q=` to `window.location` via
  * `history.replaceState`, making the query bookmarkable.

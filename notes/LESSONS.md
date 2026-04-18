@@ -5,6 +5,12 @@ bare-key Suspense reconciliation, fingerprint-based skip, flipped
 transition default, and the round-trip that was silently dropping
 implicit keys.
 
+> **Companion doc:** `LESSONS_FROM_REFACTOR.md` (2026-04-18) captures
+> the separate lessons from collapsing the two Partial discovery paths
+> into one — `als.enterWith` vs `als.run`, conditional Suspense wrap,
+> prop-based wrapper detection, `partialId` vs `node.key`, the test-mock
+> reset pattern. Read both together for the full post-mortem.
+
 ---
 
 ## 1. Re-validate assumptions against the current React every time
@@ -85,7 +91,7 @@ to. Result: every card on every search refetch threw "each child in
 a list should have a unique key" warnings.
 
 Fix in every walker that rebuilds nodes (`resolveLazies`,
-`substituteNested`, `stripPartials`, `stripNested`, `reinject`):
+`substituteNested`, `stripPartials`, `reinject`):
 spread arrays into variadic children so the implicit positional keys
 stay:
 

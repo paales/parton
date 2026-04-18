@@ -146,7 +146,7 @@ interface PartialsClientProps {
  * refs (from the RSC Flight stream) as `props.children`; any `React.Children.*`
  * helper on those thenables causes React to resolve them during reconcile
  * instead of showing a fallback on remount, which breaks progressive
- * streaming on refetch. See STREAMING_DEBUG_NOTES.md §7-8.
+ * streaming on refetch. See notes/archive/STREAMING_DEBUG_NOTES.md §7-8.
  */
 function isPlaceholder(child: React.ReactElement): boolean {
   return child.type === "i" && (child.props as any)["data-partial"] === true;
