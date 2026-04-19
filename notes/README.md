@@ -8,10 +8,12 @@ design documents and debugging sessions live in `archive/`.
 | File | What it covers |
 |---|---|
 | `PARTIAL_ARCHITECTURE.md` | **North-star doc.** The one-paragraph goal, what follows from it, the mental model for server/client state and request lifecycle, and an implementation-status table tracking the convergence of the code against the goal. Read this first. |
-| `LESSONS_FROM_REFACTOR.md` | The 2026-04-18 unified-path refactor — `als.enterWith` vs `als.run`, conditional Suspense wrap, prop-based wrapper detection, `partialId` vs `node.key`, test-mock reset pattern. The authoritative post-mortem for the current Partial runtime. |
+| `PARTIAL_CACHE_DESIGN.md` | Proposal to fold `<Cache>` into `<Partial cache={…}>`. Addresses the `__inputs`-can't-drill-through-Cache compose problem and collapses two identifiers into one. Status: designed, not yet implemented. Will supersede `SERVER_CACHE_NOTES.md` when it lands. |
+| `LESSONS_2026-04-19.md` | Latest session — removing `seedRegistry` and `buildTemplate`, the Flight-composite key problem on placeholders, `cloneElement` can't drill through wrappers, `startTransition` + slow children = invisibly-stale UX, "stash + checkout" to tell regressions from pre-existing. |
+| `LESSONS_FROM_REFACTOR.md` | The 2026-04-18 unified-path refactor — `als.enterWith` vs `als.run`, conditional Suspense wrap, prop-based wrapper detection, `partialId` vs `node.key`, test-mock reset pattern. Side notes updated 2026-04-19 for what's since shipped. |
 | `LESSONS.md` | Earlier refetch-mechanics lessons (2026-04-16 → 2026-04-17) — bare-key Suspense reconciliation, fingerprint-based skip, flipped transition default, Flight serialization losing implicit keys. Pairs with `LESSONS_FROM_REFACTOR.md`. |
-| `DYNAMIC_PARTIAL_REGISTRY.md` | Why the route-scoped registry exists, how `<PartialBoundary>` populates it during render, how `<PartialRoot>` consults it on refetch. Updated 2026-04-18 for the unified-path model. |
-| `SERVER_CACHE_NOTES.md` | `<Cache>` component design — Flight-buffer round-trip, TTL + LRU + SWR, strip-on-store / reinject-on-return so dynamic Partials inside a cached region stay live. |
+| `DYNAMIC_PARTIAL_REGISTRY.md` | Why the route-scoped registry exists, how `<PartialBoundary>` populates it during render, how `refreshRegistry` / `clearRoute` keep it in sync, how `<PartialRoot>` consults it on refetch. Updated 2026-04-19 (`seedRegistry` removed). |
+| `SERVER_CACHE_NOTES.md` | Current `<Cache>` component design — Flight-buffer round-trip, TTL + LRU + SWR, strip-on-store / reinject-on-return so dynamic Partials inside a cached region stay live. Being superseded by `PARTIAL_CACHE_DESIGN.md`. |
 | `DEFER_ACTIVATORS.md` | `<Partial defer>` + activator components (`<WhenVisible>`, `<WhenStored>`, `<AnyOf>`) and the `useActivate` primitive. Three defer modes, activator contract, state-source interaction. |
 | `IDEAS.md` | Forward-looking backlog — lazy partials, prefetch links, event hooks, `_cache` pruning, per-partial opt-out. Resolved ideas are retained with a "RESOLVED" banner pointing to where the work landed. |
 

@@ -1,9 +1,9 @@
 # Dynamic Partial Registry — design notes
 
 **Added:** 2026-04-16
-**Updated:** 2026-04-18 (post unified-path refactor — see `LESSONS_FROM_REFACTOR.md`)
+**Updated:** 2026-04-19 (static walker fully removed — see `LESSONS_2026-04-19.md`)
 **Files:** `src/lib/partial-registry.ts`, `src/lib/partial-component.tsx`, `src/lib/partial.tsx`
-**Related:** `SERVER_CACHE_NOTES.md` (composition with `<Cache>`), `archive/PARTIAL_WRAPPER_DESIGN.md` (historical `<Partial>` API proposal)
+**Related:** `SERVER_CACHE_NOTES.md` (composition with `<Cache>`), `PARTIAL_CACHE_DESIGN.md` (fold Cache into Partial), `archive/PARTIAL_WRAPPER_DESIGN.md` (historical `<Partial>` API proposal)
 
 ---
 
@@ -86,14 +86,22 @@ export function PartialBoundary({ id, content, fallback, errorWith, tags, childr
 Every Partial the page produces gets registered — static or dynamic,
 deep inside an async component or at the top of the route tree.
 
-There is also a one-shot **bootstrap walk** (`seedRegistry` in
-`partial.tsx`, ~30 lines) that does a cheap static JSX scan to
-populate the registry from whatever Partials are visible without
-rendering. Purpose: a first-request cache-mode refetch (before any
-full render has populated the route) can still resolve ids. Runtime
-self-registration handles every later request and every dynamic
-Partial. See `LESSONS_FROM_REFACTOR.md` §5 side notes for the
-rationale for keeping it.
+**`refreshRegistry` runs at the start of every `PartialRoot`** to
+refresh existing snapshots from the current request's JSX
+(`partial.tsx`). It walks `children`, and for each statically-visible
+`<Partial>` whose id is already in the registry, overwrites the
+snapshot with the current render's bindings. Reason: cache-mode
+refetches resolve via registry snapshots, and closures like
+`<Cache dep={{searchQuery}}>` inside a snapshot would otherwise
+stay pinned to the URL params of the request that first registered
+them. `refreshRegistry` does **not** add new ids — the
+registry-miss fallback (to streaming mode) is what handles
+shape-change requests. See `LESSONS_2026-04-19.md` §1.
+
+`clearRoute(route)` runs at the start of every streaming render,
+emptying the registry so only the current layout's partials
+remain. Paired with `refreshRegistry`, these keep the registry in
+sync with the most recent full render.
 
 ## 5. Who consults it
 
@@ -115,11 +123,14 @@ Tag resolution works the same way — iterate the route's snapshots,
 match `snap.tags` against the requested tag set, collect matching ids.
 
 On cache-mode refetch, each active entry re-runs through `<Partial>`
-(with its content from the snapshot). The Partial body computes
-its own fingerprint, applies any `__inputs` override, decides
-render-vs-placeholder, and wraps the output. The registry is purely
-a content/metadata lookup; all the decision logic lives in the
-Partial component body.
+(with its content from the snapshot, refreshed by `refreshRegistry`
+immediately above). The Partial body computes its own fingerprint,
+applies any `__inputs` override, decides render-vs-placeholder, and
+wraps the output. The registry is purely a content/metadata lookup;
+all the decision logic lives in the Partial component body. No
+server-side template is sent — the client's persisted `_template`
+(derived from the last streaming render) is what gets filled with
+the refetched entries.
 
 ## 6. Client-side: partialId prop survives Flight
 

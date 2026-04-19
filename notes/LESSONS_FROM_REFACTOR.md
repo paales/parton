@@ -172,17 +172,22 @@ Two rules that fell out of the fix:
 
 ## Side notes
 
-- `seedRegistry` survived the cut. It's a 30-line static JSX walk in
-  `PartialRoot` that bootstraps the registry from statically-visible
-  Partials so a first-request cache-mode refetch (before any full
-  render has populated the registry) can still resolve ids. Runtime
-  self-registration handles every later request and every dynamic
-  Partial. Worth the 30 lines to avoid a mandatory warmup render.
-- `buildTemplate` + the `<i hidden data-partial>` placeholders are
-  still how the client fills in non-fresh slots. The template is the
-  only remaining piece of the "pre-compute the layout" idea. An
-  experiment worth doing later: drop the per-refetch template and
-  trust the client's last-known template instead.
+- **Historical status line — both side notes below have shipped.** See
+  `LESSONS_2026-04-19.md` and `PARTIAL_ARCHITECTURE.md` for the
+  current state.
+- ~~`seedRegistry` survived the cut.~~ **Removed 2026-04-19**, replaced
+  by `refreshRegistry` — a targeted walk that updates existing
+  snapshots each request but does not add new ids. The "seed so
+  first-request cache-mode can resolve" role is now handled by
+  the registry-miss fallback (falls through to streaming mode,
+  populates, re-renders).
+- ~~`buildTemplate` + `<i hidden data-partial>` placeholders.~~
+  **Server-side `buildTemplate` removed 2026-04-19.** The client
+  derives the template from the rendered payload and persists it
+  in module state across refetches — no per-refetch template
+  bytes on the wire. The `<i hidden data-partial data-partial-id>`
+  placeholder shape stays; it's emitted by `deriveTemplate` on the
+  client and by the Partial body on fingerprint-match skips.
 - The `cacheFromStreamingChildren` "don't descend into a cached
   Suspense" rule is still load-bearing for progressive streaming.
   Fix for bug #2 sidestepped it (the outer partial wrapper isn't a
