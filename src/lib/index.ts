@@ -7,9 +7,6 @@ export type {
   ActivatorProps,
   DeferSpec,
 } from "./partial-component.tsx";
-export { WhenVisible, type WhenVisibleProps } from "./when-visible.tsx";
-export { WhenStored, type WhenStoredProps } from "./when-stored.tsx";
-export { AnyOf, type AnyOfProps } from "./any-of.tsx";
 export {
   PartialsClient,
   getCachedPartialIds,

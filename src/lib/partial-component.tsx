@@ -57,8 +57,9 @@ export function PartialBoundary({
  * - `ReactElement` — an activator component. The framework clones it
  *   with `{partialId: id}` and passes the Partial's fallback as
  *   children. The activator is responsible for calling
- *   `usePartial(partialId)[0]()` when its condition fires. See
- *   `WhenVisible` / `WhenStored` for canonical implementations.
+ *   `usePartial(partialId)[0]()` when its condition fires. Authors
+ *   write their own activators — see `src/app/components/when-visible.tsx`
+ *   / `when-stored.tsx` in the demo app for reference implementations.
  */
 export type DeferSpec = true | ReactElement<ActivatorProps>;
 

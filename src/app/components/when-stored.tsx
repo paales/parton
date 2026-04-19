@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
-import { useActivate } from "./partial-client.tsx";
-import type { ActivatorProps } from "./partial-component.tsx";
+import { useActivate } from "../../lib/partial-client.tsx";
+import type { ActivatorProps } from "../../lib/partial-component.tsx";
 
 export interface WhenStoredProps extends ActivatorProps {
   /** The storage key to watch. */

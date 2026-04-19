@@ -7,8 +7,8 @@ import {
   type FragmentInstance,
   type ReactNode,
 } from "react";
-import { useActivate } from "./partial-client.tsx";
-import type { ActivatorProps } from "./partial-component.tsx";
+import { useActivate } from "../../lib/partial-client.tsx";
+import type { ActivatorProps } from "../../lib/partial-component.tsx";
 
 export interface WhenVisibleProps extends ActivatorProps {
   /** `IntersectionObserver.rootMargin`. Default `"0px"`. */

@@ -25,8 +25,6 @@
 
 - On the /defer-demo It would be nice if we could demonstrate how multiple racing conditions can happen; Say we have a streaming bit on this page, a fallback partial is loading and taking a second. During the pageload we want initialize the defer components as soon as possible.
 
-- Remove AnyOf, not really a primitive and should be removed.
-
 - Is it possible multiple fetches can happen simultaneously? So for example we are refreshing the LivePrice and also fetch the cart and paginate to the next page? Or should these actions be sequential? What happens in race conditions, will that just work?
 
 - The refetch policy of a Partial and how it should fall back should depend on the Partial and not the caller I think. By default everything should resolve synchronously without any additional configuration.

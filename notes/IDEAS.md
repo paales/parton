@@ -6,7 +6,7 @@
 
 ### Refetch-trigger pattern — SHIPPED as `useActivate`
 
-`<WhenVisible>` is now one of several activators composed from the `useActivate(partialId, subscribe)` hook. Adding a new trigger type (idle, event, mediaQuery) is ~30 lines against that contract. Canonical activators today: `<WhenVisible>`, `<WhenStored>`, `<AnyOf>`.
+`<WhenVisible>` is one reference activator built on the `useActivate(partialId, subscribe)` hook. Adding a new trigger type (idle, event, mediaQuery) is ~30 lines against that contract. Reference activators (`<WhenVisible>`, `<WhenStored>`) live in userspace (`src/app/components/`) — the framework only ships `defer` + `useActivate`. The `<AnyOf>` wrapper and a subsequent array/fragment `DeferSpec` experiment were both removed on 2026-04-19: `defer` takes one element; composition is written as a bespoke activator when needed.
 
 ### Prefetch links
 

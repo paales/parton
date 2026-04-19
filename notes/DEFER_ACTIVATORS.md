@@ -1,7 +1,7 @@
 # `defer` + activators — design notes
 
 **Added:** 2026-04-18
-**Files:** `src/lib/partial-component.tsx`, `src/lib/partial-client.tsx`, `src/lib/when-visible.tsx`, `src/lib/when-stored.tsx`, `src/lib/any-of.tsx`
+**Files:** `src/lib/partial-component.tsx`, `src/lib/partial-client.tsx`. Reference activator implementations live in userspace: `src/app/components/when-visible.tsx`, `src/app/components/when-stored.tsx`.
 
 ---
 
@@ -34,6 +34,8 @@ Three modes for `defer`:
 | unset / `false` | Eager render (existing behavior).                                                                       |
 | `true`          | Emit fallback; no automatic trigger. App calls `usePartial(id).refetch()` from anywhere.                |
 | `ReactElement`  | Framework clones with `{partialId, children: fallback}`. Activator renders fallback + installs trigger. |
+
+Composition across activators is not a framework primitive. If an author wants "fire when visible OR when a key appears in storage," they write a single activator that subscribes to both sources and calls `fire()` from the first one to arrive.
 
 ## Activator contract
 
@@ -91,15 +93,20 @@ One prop, two activation reasons. The Partial body picks the path based on `defe
 ## What ships
 
 - `<Partial defer>` prop (`partial-component.tsx`).
-- `useActivate` hook (`partial-client.tsx`).
-- `<WhenVisible>` — IntersectionObserver activator (~70 lines, was ~130 across two files).
-- `<WhenStored storageKey as>` — localStorage/sessionStorage activator; passes the stored value through `__inputs`.
-- `<AnyOf activators={...}>` — first-to-fire composition. First activator in the list gets the fallback as children (and therefore the DOM range for observer-style activators); others get `null`.
+- `useActivate` hook (`partial-client.tsx`) — the primitive every activator is built on.
+
+Activators are userspace. The demo app provides two reference
+implementations in `src/app/components/`:
+
+- `<WhenVisible>` — IntersectionObserver activator using React 19 Fragment refs.
+- `<WhenStored storageKey as>` — `localStorage`/`sessionStorage` activator; passes the stored value through `__inputs`.
+
+New activators (`<WhenIdle>`, `<WhenMediaQuery>`, `<WhenEvent>`) are ~20–30 lines each against the `useActivate(partialId, subscribe)` contract. There is no "framework activator" registry — the framework only owns the `defer` prop + `useActivate` primitive.
 
 ## What doesn't ship
 
 - **Dev-mode warning** for stranded `defer={true}` Partials. Planned for the general partial debugging toolkit, not for this slice.
-- **Other activators** (`<WhenIdle>`, `<WhenMediaQuery>`, `<WhenEvent>`): 20–30 lines each whenever they're needed. The `useActivate` contract makes them uniform.
+- **A composition primitive.** `defer` takes one element. Authors who need "any of these should fire" write a bespoke activator. This was tried as a framework-level array/fragment `DeferSpec` in 2026-04-19 and removed the same day — the single-element shape is the lowest surface that works.
 
 ## Known sharp edges
 
@@ -107,4 +114,4 @@ One prop, two activation reasons. The Partial body picks the path based on `defe
 2. **`cloneElement` injects props the author didn't write.** `partialId` and `children` appear from the framework. Typed: `ActivatorProps` documents the contract.
 3. **Re-defer on stale not supported in v1.** Once activated, a Partial stays live for the session. If a Partial should go dormant again (unload after scrolling off-screen, expire after N seconds), the activator would need the equivalent of a reverse-refetch — there's no primitive today. `{once: false}` on `useActivate` is the first piece of that story.
 4. **`<Cache>` around a deferred Partial is fine** — when dormant, content doesn't run, so Cache never fires. First activation is a cold miss; Cache populates on first real render.
-5. **`<AnyOf>` only lets the first activator be DOM-observing.** Subsequent activators receive `null` children (no DOM range to observe). Window-level activators (storage, idle, events) compose freely.
+5. **No framework-level composition.** Only one activator per `defer`. Custom composite activators are always possible in userspace.

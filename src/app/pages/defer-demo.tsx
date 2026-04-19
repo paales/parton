@@ -1,7 +1,6 @@
 import { Partial, PartialRoot } from "../../lib/partial.tsx";
-import { WhenVisible } from "../../lib/when-visible.tsx";
-import { WhenStored } from "../../lib/when-stored.tsx";
-import { AnyOf } from "../../lib/any-of.tsx";
+import { WhenVisible } from "../components/when-visible.tsx";
+import { WhenStored } from "../components/when-stored.tsx";
 import {
   ActivateButton,
   StorageKeyEditor,
@@ -16,8 +15,12 @@ import { AppNav } from "../components/app-nav.tsx";
  *   2. `defer={<WhenStored .../>}` — activator reads localStorage on
  *      mount and on `storage` events; passes the value into the Partial
  *      via `__inputs`.
- *   3. `defer={<AnyOf activators={<><WhenVisible/><WhenStored/></>}/>}` —
- *      first-to-fire composition.
+ *   3. `defer={<WhenVisible/>}` — visibility-triggered activation via
+ *      IntersectionObserver.
+ *
+ * `WhenVisible` / `WhenStored` live in `src/app/components/` — they
+ * are userspace activators built against the framework's
+ * `useActivate` primitive, not library exports.
  *
  * Each activated content renders a server timestamp so the RSC
  * round-trip is visible (and assertable).
@@ -144,21 +147,21 @@ export function DeferDemoPage() {
               <StorageKeyEditor storageKey="demo-stored" testId="demo-stored" />
             </section>
 
-            {/* ── 3. <AnyOf> — visible OR stored composition ──────── */}
+            {/* ── 3. <WhenVisible> — viewport-triggered ─────────────── */}
             <section
               data-testid="section-any"
               className="card"
               style={{ marginBottom: "2rem" }}
             >
               <h2>
-                3. <code>&lt;AnyOf&gt;</code> — visible OR stored activation
+                3. <code>&lt;WhenVisible&gt;</code> — activates when the
+                fallback enters the viewport
               </h2>
               <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                Activates when <em>either</em> the fallback scrolls into view{" "}
-                <em>or</em> <code>localStorage["demo-any"]</code> is set. First
-                trigger wins.
+                Activates when the fallback scrolls into view. Uses an{" "}
+                <code>IntersectionObserver</code> attached to the fallback's
+                DOM range via a Fragment ref.
               </p>
-              <StorageKeyEditor storageKey="demo-any" testId="demo-any" />
               <div
                 data-testid="any-spacer"
                 style={{ height: "90vh" }}
@@ -166,22 +169,13 @@ export function DeferDemoPage() {
               />
               <Partial
                 id="any"
-                defer={
-                  <AnyOf
-                    activators={
-                      <>
-                        <WhenVisible />
-                        <WhenStored storageKey="demo-any" />
-                      </>
-                    }
-                  />
-                }
+                defer={<WhenVisible />}
                 fallback={
                   <div
                     data-testid="any-fallback"
                     style={{ color: "#888", fontStyle: "italic" }}
                   >
-                    dormant — scroll into view OR set the key above
+                    dormant — scroll into view to activate
                   </div>
                 }
               >

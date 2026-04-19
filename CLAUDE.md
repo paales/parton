@@ -7,7 +7,7 @@ Research project: a React CMS data layer inspired by Shopify Liquid. Pages are c
 ## Project Structure
 
 - `notes/` — current design notes (start at `notes/README.md`). Historical docs live in `notes/archive/`.
-- `src/lib/` — Partials library (`partial.tsx`, `partial-component.tsx`, `partial-client.tsx`, `partial-registry.ts`, `partial-request-state.ts`, `partial-error-boundary.tsx`, `cache.tsx`, `hash.ts`, `multipart.ts`, `partial-cache.ts`, `when-visible.tsx`, `when-visible-client.tsx`).
+- `src/lib/` — Partials library (`partial.tsx`, `partial-component.tsx`, `partial-client.tsx`, `partial-registry.ts`, `partial-request-state.ts`, `partial-error-boundary.tsx`, `cache.tsx`, `hash.ts`, `multipart.ts`, `partial-cache.ts`). Activator components (`WhenVisible`, `WhenStored`) live in userspace at `src/app/components/`.
 - `proxy-design/` — legacy proxy data layer (see `proxy-design/README.md`).
 - `src/app/` — Example application (PokeAPI + Magento backends)
 - `src/framework/` — RSC plumbing (vite-plugin-rsc, Vite 8, React 19)

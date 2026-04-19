@@ -1,5 +1,5 @@
 import { Partial } from "../../lib/partial.tsx";
-import { WhenVisible } from "../../lib/when-visible.tsx";
+import { WhenVisible } from "../components/when-visible.tsx";
 import { PartialControls } from "../components/partial-controls.tsx";
 import {
   SearchToggle,
