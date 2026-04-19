@@ -2,7 +2,7 @@
  * /cache-demo — server-side render-output caching spike.
  *
  * Two partials:
- *  - "Slow": simulates ~500ms server work. Wrapped in <Cache dep>.
+ *  - "Slow": simulates ~500ms server work. Uses `<Partial cache>`.
  *  - "Clock": renders the current time on every request. Not cached.
  *
  * Initial render populates both. Refetching the Slow partial on
@@ -12,7 +12,7 @@
  */
 
 import { Partial, PartialRoot } from "../../lib/partial.tsx";
-import { Cache, _cacheStats } from "../../lib/cache.tsx";
+import { _cacheStats } from "../../lib/cache.tsx";
 import { CacheControls } from "../components/cache-controls.tsx";
 import { ClickCounter } from "../components/click-counter.tsx";
 import { AppNav } from "../components/app-nav.tsx";
@@ -103,11 +103,11 @@ export function CacheDemoPage() {
 
           <Partial
             id="slow"
+            cache={{ flavor }}
+            ttl={60}
             fallback={<div data-testid="slow-fallback">Loading slow…</div>}
           >
-            <Cache id="slow" dep={{ flavor }} ttl={60}>
-              <SlowContent flavor={flavor} />
-            </Cache>
+            <SlowContent flavor={flavor} />
           </Partial>
 
           <Partial id="clock" fallback={<div>Loading clock…</div>}>

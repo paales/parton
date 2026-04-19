@@ -43,6 +43,11 @@ export interface PartialSnapshot {
   /** Tags declared on the Partial — used to resolve `?tags=X` refetches
    *  against dynamic partials that the bootstrap walk can't see. */
   tags: string[];
+  /** Cache dep object (if the Partial declared `cache={…}`). Stored so
+   *  cache-mode refetches re-apply the same cache semantics. */
+  cache?: unknown;
+  ttl?: number;
+  staleWhileRevalidate?: number;
 }
 
 const registry = new Map<string, Map<string, PartialSnapshot>>();

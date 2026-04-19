@@ -81,6 +81,16 @@ vi.mock("../partial-error-boundary.tsx", () => ({
 	},
 }));
 
+// Cache depends on `@vitejs/plugin-rsc/rsc` which resolves to a
+// virtual: URL only Vite can handle. In unit tests we mock it to
+// a bypass: return children as-is. End-to-end Cache behavior is
+// covered by e2e tests.
+vi.mock("../cache.tsx", () => ({
+	Cache: ({ children }: { children: React.ReactNode }) => children,
+	_cacheStats: () => ({ size: 0, keys: [] }),
+	_clearCache: () => {},
+}));
+
 import { PartialRoot, Partial } from "../partial.tsx";
 import { runWithRequestAsync } from "../../framework/context.ts";
 

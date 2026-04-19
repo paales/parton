@@ -1,5 +1,4 @@
 import { Partial } from "../../../lib/partial.tsx";
-import { Cache } from "../../../lib/cache.tsx";
 import { client } from "../../magento-data.ts";
 import { graphql, type ResultOf } from "../../magento-graphql.ts";
 import { getCookie, getRequest } from "../../../framework/context.ts";
@@ -66,10 +65,8 @@ export function MagentoPage() {
       </Partial>
       <main>
         <RefreshAllPricesButton />
-        <Partial id="products">
-          <Cache id="products" dep={{ search }} ttl={12}>
-            <ProductGrid search={search} />
-          </Cache>
+        <Partial id="products" cache={{ search }} ttl={12}>
+          <ProductGrid search={search} />
         </Partial>
       </main>
       <footer />

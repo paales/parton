@@ -4,6 +4,7 @@ import { registerPartial } from "./partial-registry.ts";
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx";
 import { requirePartialState } from "./partial-request-state.ts";
 import { djb2 as hashFingerprint } from "./hash.ts";
+import { Cache } from "./cache.tsx";
 
 /**
  * Recognizable wrapper around a rendered Partial.
@@ -22,6 +23,9 @@ export function PartialBoundary({
   fallback,
   errorWith,
   tags,
+  cache,
+  ttl,
+  staleWhileRevalidate,
   children,
 }: {
   id: string;
@@ -31,10 +35,21 @@ export function PartialBoundary({
   fallback: ReactNode;
   errorWith: ReactNode | undefined;
   tags: string[];
+  cache?: unknown;
+  ttl?: number;
+  staleWhileRevalidate?: number;
   children: ReactNode;
 }): ReactNode {
   const route = new URL(getRequest().url).pathname;
-  registerPartial(route, id, { content, fallback, errorWith, tags });
+  registerPartial(route, id, {
+    content,
+    fallback,
+    errorWith,
+    tags,
+    cache,
+    ttl,
+    staleWhileRevalidate,
+  });
   return children;
 }
 
@@ -69,7 +84,27 @@ export interface PartialProps {
   id: string;
   children: ReactNode;
   tags?: string[];
-  cache?: number;
+  /**
+   * Server-side render-output caching. When set, the Partial's
+   * rendered content is buffered into Flight bytes keyed by
+   * `(id, hash(cache + fingerprint))` and served from the store on
+   * subsequent hits. Any nested `<Partial>` inside the cached
+   * region remains a live hole — its own cache semantics apply.
+   *
+   * - absent → no caching, render normally.
+   * - a plain object → hashed to a cache key (`{search}`, `{locale,
+   *   userId}`, etc).
+   * - `false` → explicit opt-out (currently equivalent to absent;
+   *   reserved for a future `cacheInherit` story).
+   */
+  cache?: unknown;
+  /** Seconds until the cached entry expires. Undefined = never expire. */
+  ttl?: number;
+  /**
+   * Additional seconds after `ttl` during which the stored entry is
+   * served stale while a background refresh runs.
+   */
+  staleWhileRevalidate?: number;
   /**
    * Framework-provided display when the Partial isn't showing its
    * real content. Two activation paths:
@@ -193,6 +228,9 @@ export function Partial({
   errorWith,
   tags,
   defer,
+  cache,
+  ttl,
+  staleWhileRevalidate,
 }: PartialProps): ReactNode {
   const state = requirePartialState();
 
@@ -247,6 +285,9 @@ export function Partial({
       fallback: effectiveFallback,
       errorWith,
       tags: effectiveTags,
+      cache,
+      ttl,
+      staleWhileRevalidate,
     });
     return placeholderFor(id);
   }
@@ -283,6 +324,9 @@ export function Partial({
         fallback={effectiveFallback}
         errorWith={errorWith}
         tags={effectiveTags}
+        cache={cache}
+        ttl={ttl}
+        staleWhileRevalidate={staleWhileRevalidate}
       >
         <PartialErrorBoundary
           key={id}
@@ -295,6 +339,29 @@ export function Partial({
       </PartialBoundary>
     );
   }
+
+  // ── Cache (server-side render-output caching) ─────────────────────
+  //
+  // When `cache` is set, wrap the content in a `<Cache>` element so the
+  // Suspense boundary below treats the (async) Cache render the same
+  // way it treats any other async server component. Inlining Cache as
+  // a child — rather than `await`ing it here and threading the result
+  // through — keeps the Partial sync, so React RSC doesn't open an
+  // implicit async-server-component chunk around Partial itself. The
+  // outer Suspense only suspends on the Cache's await, which is what
+  // we want for fallback behavior.
+  //
+  // `applyInputs` has already been applied above, so Cache receives
+  // the overridden content. The cache key folds in the Partial id +
+  // the `cache` object + the structural fingerprint.
+  const cachedContent: ReactNode =
+    cache !== undefined && cache !== false ? (
+      <Cache id={id} dep={[cache, fp]} ttl={ttl} staleWhileRevalidate={staleWhileRevalidate}>
+        {content}
+      </Cache>
+    ) : (
+      content
+    );
 
   // ── Render ─────────────────────────────────────────────────────────
   //
@@ -332,7 +399,7 @@ export function Partial({
           partialFingerprint={fp}
           fallback={errorWith}
         >
-          {content}
+          {cachedContent}
         </PartialErrorBoundary>
       </Suspense>
     ) : (
@@ -342,7 +409,7 @@ export function Partial({
         partialFingerprint={fp}
         fallback={errorWith}
       >
-        {content}
+        {cachedContent}
       </PartialErrorBoundary>
     );
 
@@ -353,6 +420,9 @@ export function Partial({
       fallback={effectiveFallback}
       errorWith={errorWith}
       tags={effectiveTags}
+      cache={cache}
+      ttl={ttl}
+      staleWhileRevalidate={staleWhileRevalidate}
     >
       {rendered}
     </PartialBoundary>

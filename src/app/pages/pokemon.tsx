@@ -10,7 +10,6 @@ import { LoadMore, PageSentinel } from "../components/load-more.tsx";
 import { client } from "../data.ts";
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts";
 import { getRequest } from "../../framework/context.ts";
-import { Cache } from "../../lib/cache.tsx";
 
 const PAGE_SIZE = 24;
 
@@ -180,14 +179,13 @@ export function PokemonPage() {
             per-chunk streaming — appropriate for a fast "always-on"
             slice that sits at the top of the dialog.
           */}
-          <Partial id="stage-1">
-            <Cache id="SearchStage1" dep={{ searchQuery }}>
-              <SearchStage1 query={searchQuery} />
-            </Cache>
+          <Partial id="stage-1" cache={{ searchQuery }}>
+            <SearchStage1 query={searchQuery} />
           </Partial>
           {searchQuery && (
             <Partial
               id="stage-2"
+              cache={{ searchQuery }}
               fallback={
                 <div
                   data-testid="stage-2-fallback"
@@ -197,14 +195,13 @@ export function PokemonPage() {
                 </div>
               }
             >
-              <Cache id="SearchStage2" dep={{ searchQuery }}>
-                <SearchStage2 query={searchQuery} />
-              </Cache>
+              <SearchStage2 query={searchQuery} />
             </Partial>
           )}
           {searchQuery && (
             <Partial
               id="stage-3"
+              cache={{ searchQuery }}
               fallback={
                 <div
                   data-testid="stage-3-fallback"
@@ -214,9 +211,7 @@ export function PokemonPage() {
                 </div>
               }
             >
-              <Cache id="SearchStage3" dep={{ searchQuery }}>
-                <SearchStage3 query={searchQuery} />
-              </Cache>
+              <SearchStage3 query={searchQuery} />
             </Partial>
           )}
         </SearchDialog>
