@@ -19,8 +19,8 @@
  * `<PartialRoot>` is a thin orchestrator: it parses the request
  * params, sets up the request-scoped state that each `<Partial>`
  * reads during render, decides whether we're in streaming mode (full
- * page) or cache mode (partial refetch), and wraps the output in
- * `<PartialsClient>`.
+ * page) or cache mode (partial refetch, served from snapshots), and
+ * wraps the output in `<PartialsClient>`.
  *
  * Every decision about an individual partial — "render fresh?",
  * "emit placeholder because the fingerprint matched?", "apply an
@@ -28,7 +28,16 @@
  * There is no static walker; each Partial discovers itself by
  * running. Deep Partials produced inside `.map()` loops or other
  * opaque component bodies are first-class: they register themselves
- * on every render.
+ * via `<PartialBoundary>` on every render.
+ *
+ * Snapshots stored by `<PartialBoundary>` are captured JSX from the
+ * ancestor's most recent execution. `__inputs` overrides reach the
+ * content via `cloneElement` (now unimpeded — `<Cache>` is folded
+ * into `<Partial cache>`, so there is no intermediate wrapper); the
+ * Partial's fingerprint is computed from the content AFTER
+ * `applyInputs`, so cache-mode refetches with new inputs produce
+ * distinct keys and correctly miss stale entries. This replaces what
+ * the old `refreshRegistry` walker used to handle.
  */
 
 import React, { type ReactNode } from "react";
@@ -47,7 +56,6 @@ import {
   clearRoute,
   getRouteSnapshots,
   lookupPartial,
-  registerPartial,
   type PartialSnapshot,
 } from "./partial-registry.ts";
 import {
@@ -62,59 +70,6 @@ interface PartialRootProps {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
-
-function isPartialElement(
-  node: unknown,
-): node is React.ReactElement<PartialProps> {
-  return (
-    React.isValidElement(node) && (node as { type?: unknown }).type === Partial
-  );
-}
-
-/**
- * Walk the current request's JSX tree and overwrite existing registry
- * snapshots with the fresh content/fallback/tags for each
- * statically-visible `<Partial>`.
- *
- * Why: snapshots captured during an earlier render may have stale
- * closure state (`<Cache dep={{searchQuery}}>`, async component props
- * read from the URL via `getRequest()`). A cache-mode refetch of the
- * same id served from a stale snapshot would re-execute with the old
- * bindings. `__inputs` can't fix this — `cloneElement` only overrides
- * props on the outermost JSX element, and can't reach through a
- * `<Cache>` wrapper to the inner component.
- *
- * This walk is a PARTIAL refresh: it updates only ids already in the
- * registry. New ids are NOT added — that would make registry-miss
- * detection too optimistic and break shape-change refetches (e.g.
- * scrolling to page-N when page-N wasn't rendered last time).
- * Dynamic Partials (generated inside opaque components, invisible to
- * this walk) register via `<PartialBoundary>` as they run; they
- * already get fresh bindings that way.
- */
-function refreshRegistry(children: ReactNode, route: string): void {
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) return;
-    if (isPartialElement(child)) {
-      const props = child.props;
-      if (lookupPartial(route, props.id)) {
-        registerPartial(route, props.id, {
-          content: props.children,
-          fallback: props.fallback ?? null,
-          errorWith: props.errorWith,
-          tags: props.tags ?? [],
-          cache: props.cache,
-        });
-      }
-      refreshRegistry(props.children, route);
-    } else if ((child.props as { children?: ReactNode }).children != null) {
-      refreshRegistry(
-        (child.props as { children?: ReactNode }).children as ReactNode,
-        route,
-      );
-    }
-  });
-}
 
 function parseCachedFingerprints(raw: string | null): Map<string, string | null> {
   const out = new Map<string, string | null>();
@@ -163,8 +118,8 @@ function resolveTagsToIds(
 }
 
 /**
- * Reconstruct a `<Partial>` element from a registry snapshot. Used
- * in cache mode to render each explicitly-requested partial without
+ * Reconstruct a `<Partial>` element from a registry snapshot. Used in
+ * cache mode to render each explicitly-requested partial without
  * re-executing any ancestor component.
  */
 function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
@@ -202,12 +157,7 @@ export async function PartialRoot({ children }: PartialRootProps) {
 
   const route = requestUrl.pathname;
 
-  // Refresh snapshots for statically-visible Partials from the current
-  // request's JSX. Only updates ids that already have a registry
-  // entry — new ids are added by `<PartialBoundary>` as children
-  // render (streaming mode). See `refreshRegistry` for why.
-  refreshRegistry(children, route);
-
+  // Tag → id resolution reads the registry populated by PRIOR requests.
   const partialIds = parseRequestedIds(partialsParam);
   const tagIds = resolveTagsToIds(tagsParam, route);
   const requestedIds =
@@ -218,8 +168,8 @@ export async function PartialRoot({ children }: PartialRootProps) {
   const hasGlobalFilter = partialsParam != null || tagsParam != null;
   const isPartialRefetch = hasGlobalFilter || populateCache;
 
-  // Explicit ids are never skipped on a fingerprint match or filter
-  // — they're what the caller asked for.
+  // Explicit ids are never skipped on a fingerprint match or filter —
+  // they're what the caller asked for.
   const explicitIds = new Set<string>();
   if (requestedIds) for (const id of requestedIds) explicitIds.add(id);
   for (const id of Object.keys(partialInputs)) explicitIds.add(id);
@@ -236,8 +186,8 @@ export async function PartialRoot({ children }: PartialRootProps) {
 
   // Registry-miss fallback: a requested id that isn't in the registry
   // (e.g. a stale client-side button for a partial that no longer
-  // exists on this route) drops the filter and does a full render.
-  // Gives the client a fresh tree to reconcile against.
+  // exists on this route) drops the filter and does a full render so
+  // the client reconciles against a fresh tree.
   let registryMiss = false;
   if (state.isPartialRefetch && state.requestedIds) {
     for (const id of state.requestedIds) {
@@ -248,19 +198,15 @@ export async function PartialRoot({ children }: PartialRootProps) {
     }
   }
 
-
   // ── Streaming mode (full render) ──────────────────────────────────
+  //
+  // Every Partial runs; its body handles fingerprint-skip vs render.
+  // Ancestors re-execute, so snapshots registered during this render
+  // carry fresh closures — no refreshing walk required. Clear any
+  // stale snapshots up-front so ids that no longer appear on this
+  // request (e.g. `page-2` after the URL dropped to `?end=1`) don't
+  // leak into future tag/id lookups.
   if (!state.isPartialRefetch || registryMiss) {
-    // Reset to streaming semantics — every Partial renders itself
-    // (minus fingerprint-match skips) and each is a live element in
-    // the streamed tree.
-    //
-    // Clear any prior snapshots for this route so the registry
-    // reflects ONLY the partials the current layout produces.
-    // Otherwise stale entries (e.g. `page-2` registered when the
-    // user previously visited `?end=2`, but the current render only
-    // has `page-1`) would make future refetches resolve to
-    // cache-mode against a template the client never saw.
     clearRoute(route);
     const streamState: PartialRequestState = {
       ...state,
@@ -268,16 +214,7 @@ export async function PartialRoot({ children }: PartialRootProps) {
       isPartialRefetch: false,
     };
     enterPartialState(streamState);
-
-    // Debug entries aren't known ahead of time (deep partials
-    // register as they render). The debug panel will show whatever
-    // entries the next cache-mode refetch surfaces.
     const debug: PartialDebugEntry[] = [];
-
-    // No server-side template: the client derives it from the
-    // rendered children in `PartialsClient`, removing the need for
-    // `buildTemplate`'s static walk (and the "opaque components can't
-    // contain a Partial" invariant that walk imposed).
     return (
       <PartialsClient mode="streaming" debug={debug} fetchMs={0}>
         {children}
@@ -285,16 +222,23 @@ export async function PartialRoot({ children }: PartialRootProps) {
     );
   }
 
-  // ── Cache mode (partial refetch) ───────────────────────────────────
+  // ── Cache mode (partial refetch) ──────────────────────────────────
   //
   // Render each explicitly-requested partial from its registry
-  // snapshot, as a flat sibling list. Each runs the `<Partial>` body,
-  // which re-registers, applies `__inputs`, and wraps in Suspense +
-  // ErrorBoundary. No ancestor components execute — we've lifted the
-  // snapshot out of the registry and rendered it directly.
+  // snapshot as a flat sibling. The `<Partial>` body re-runs (applying
+  // `__inputs`, wrapping in Suspense + ErrorBoundary, re-registering)
+  // — but its ancestors do not. No server-side template: the client
+  // re-renders against the `_template` derived during the most recent
+  // streaming render.
   //
-  // No server-side template: the client re-renders against the
-  // `_template` it derived during the most recent streaming render.
+  // Why no refresh walk: snapshots store the JSX captured at the
+  // ancestor's most-recent execution. With `<Cache>` folded into
+  // `<Partial cache>`, there's no intermediate wrapper between
+  // `<Partial>` and its content, so `cloneElement(__inputs)` reaches
+  // the content component directly — parameterising by the current
+  // request. Closures that cloneElement can't reach stay stable-by-
+  // construction (sku from `.map()` iteration, etc.) and don't need
+  // refreshing.
   enterPartialState(state);
 
   const activeIds = [...(state.requestedIds ?? [])];
@@ -314,11 +258,7 @@ export async function PartialRoot({ children }: PartialRootProps) {
   }));
 
   return (
-    <PartialsClient
-      mode="cache"
-      debug={debug}
-      fetchMs={0}
-    >
+    <PartialsClient mode="cache" debug={debug} fetchMs={0}>
       {wrappedChildren}
     </PartialsClient>
   );

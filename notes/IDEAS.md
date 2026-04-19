@@ -198,8 +198,25 @@ Things the framework will need before it can host a real app. Flagged here so th
 Reading the architecture end-to-end, the framework is making two layered claims:
 
 1. **Partials as addressable RSC subtrees** — solid, working, primitive is coherent.
-2. **Runtime discovery over static analysis** — actively converging. Every architectural lessons doc (`LESSONS.md`, `LESSONS_FROM_REFACTOR.md`, `LESSONS_2026-04-19.md`) is about removing one more pre-walk. `refreshRegistry` is the last surviving one, and `user-ideas.md` already flags it as suspect.
+2. **Runtime discovery over static analysis** — fully realized. Every architectural lessons doc (`LESSONS.md`, `LESSONS_FROM_REFACTOR.md`, `LESSONS_2026-04-19.md`) is about removing one more pre-walk, and as of 2026-04-19 the last one (`refreshRegistry`) is gone.
 
 The second claim is the one that distinguishes this from Next.js App Router in the long run. Everything that reinstates a static walker (typed partial registries via codegen, explicit route manifests, declarative input schemas resolved at build time) works against it. When evaluating future directions, the test is: *can this self-register at render time instead of requiring a pre-render walk?* The selector addressing scheme above passes that test. Typed-handle codegen fails it. Keep that principle sharp — it's the architectural load-bearing idea and it's easy to erode one convenient walker at a time.
 
-A follow-up question that belongs in this frame: can `refreshRegistry` itself be eliminated by storing snapshots as render-time factories (thunks that re-close over the current request) rather than captured elements? Worth a focused design pass — if it works, claim (2) is fully paid off.
+### How `refreshRegistry` was eliminated (2026-04-19)
+
+The old walker refreshed registry snapshots before cache-mode refetches so their captured closures (e.g. `<SearchStage2 query={searchQuery}/>` where `searchQuery` came from the URL) reflected the current request. It existed because:
+
+- `cloneElement(__inputs)` couldn't drill through a `<Cache dep>` wrapper to reach the inner content.
+- The Partial's fingerprint was hashed from pre-override `children`, so even when `__inputs` did apply, the cache key stayed pinned to the stale snapshot's values → cache hit on stale bytes.
+
+Two changes made the walker redundant:
+
+1. `<Cache>` was folded into `<Partial cache>` (part of the auto-tracked cache-keys work), removing the intermediate wrapper. `cloneElement(__inputs)` now reaches the content component directly.
+2. `<Partial>`'s fingerprint is now computed AFTER `applyInputs` (`partial-component.tsx`). A cache-mode refetch whose inputs change a prop yields a distinct fingerprint, a distinct `<Cache>` key, and correctly misses stale entries.
+
+With those in place, deleting `refreshRegistry` kept all unit tests and e2e tests passing. The PartialRoot now has exactly two branches (streaming + cache-mode) with no author-JSX walking in either; `stripPartials`/`reinject` in `cache.tsx` is the only remaining walker and it operates on rendered output, not on author JSX.
+
+### Follow-up backlog
+
+- **Unify the two PartialRoot branches** into one. With the walker gone, cache-mode exists only as an optimization (skip ancestor execution on a refetch by rendering directly from snapshots). An alternative: always stream, and have authors wrap expensive ancestors in `<Partial cache>`. The ergonomic trade-off is worth a design pass — the simplification would also let `PartialsClient` shed its `mode` prop.
+- **Dynamic-partial-inside-cached-ancestor on partial refetch.** If a refetch targets a dynamic partial whose ancestor is wrapped in `<Partial cache>`, cache-mode pulls the dynamic partial's snapshot directly (works today). Under a unified always-streaming model the ancestor's Partial body would need to NOT skip when it contains a requested descendant — but that requires knowing topology ahead of render, i.e., a static walker. Likely the reason to keep cache-mode as the optimization path, even after the refresh walker is gone.

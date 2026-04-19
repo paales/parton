@@ -213,15 +213,24 @@ export function Partial({
   const effectiveTags = tags ?? [];
   const effectiveFallback = fallback ?? null;
 
-  // Fingerprint captures the structural shape of the children tree —
-  // used both for the client→server "did this change?" handshake and
-  // for registering the snapshot so nav-time skip decisions are stable.
-  const fp = hashFingerprint(fingerprintElement(children));
-
   // Apply __inputs override (if any) for both the rendered content
   // and the registered snapshot, so a later refetch replays with the
   // already-applied props.
   const content = override ? applyInputs(children, override) : children;
+
+  // Fingerprint captures the structural shape of the content tree —
+  // used both for the client→server "did this change?" handshake and
+  // for registering the snapshot so nav-time skip decisions are stable.
+  //
+  // Hashed AFTER `applyInputs` so that in cache-mode (where `children`
+  // is a snapshot captured from an earlier request) a refetch whose
+  // `__inputs` change a prop still produces a distinct fingerprint,
+  // and therefore a distinct Cache key. Without this, the snapshot's
+  // stale props would drive the fingerprint even though the actual
+  // rendered content has different prop values — causing the Cache to
+  // return the previous request's bytes. This replaces the need for
+  // the old `refreshRegistry` static walker.
+  const fp = hashFingerprint(fingerprintElement(content));
 
   // ── Skip decisions ─────────────────────────────────────────────────
   const cachedFp = state.cachedFingerprints.get(id);

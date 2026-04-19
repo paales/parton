@@ -1,7 +1,7 @@
 # Dynamic Partial Registry — design notes
 
 **Added:** 2026-04-16
-**Updated:** 2026-04-19 (static walker fully removed — see `LESSONS_2026-04-19.md`)
+**Updated:** 2026-04-19 (static refresh walker fully removed; stale-snapshot correctness now driven by fingerprint-after-applyInputs)
 **Files:** `src/lib/partial-registry.ts`, `src/lib/partial-component.tsx`, `src/lib/partial.tsx`
 **Related:** `SERVER_CACHE_NOTES.md` (composition with `<Cache>`), `PARTIAL_CACHE_DESIGN.md` (fold Cache into Partial), `/archive/PARTIAL_WRAPPER_DESIGN.md` (historical `<Partial>` API proposal)
 
@@ -97,22 +97,22 @@ export function PartialBoundary({
 Every Partial the page produces gets registered — static or dynamic,
 deep inside an async component or at the top of the route tree.
 
-**`refreshRegistry` runs at the start of every `PartialRoot`** to
-refresh existing snapshots from the current request's JSX
-(`partial.tsx`). It walks `children`, and for each statically-visible
-`<Partial>` whose id is already in the registry, overwrites the
-snapshot with the current render's bindings. Reason: cache-mode
-refetches resolve via registry snapshots, and closures like
-`<Cache dep={{searchQuery}}>` inside a snapshot would otherwise
-stay pinned to the URL params of the request that first registered
-them. `refreshRegistry` does **not** add new ids — the
-registry-miss fallback (to streaming mode) is what handles
-shape-change requests. See `LESSONS_2026-04-19.md` §1.
-
 `clearRoute(route)` runs at the start of every streaming render,
 emptying the registry so only the current layout's partials
-remain. Paired with `refreshRegistry`, these keep the registry in
-sync with the most recent full render.
+remain. This is the only registry-maintenance walk — there is no
+longer a static refresh walker.
+
+**Stale snapshot content across cache-mode refetches is handled by
+fingerprint-after-applyInputs, not by a refresh walker.** The
+`<Partial>` body computes its structural fingerprint AFTER applying
+any `__inputs` override (`partial-component.tsx`). A cache-mode
+refetch whose `__inputs` change a prop therefore yields a distinct
+fingerprint and a distinct `<Cache>` key — the stale entry misses
+cleanly. Combined with the `<Cache>`-fold-into-`<Partial cache>`
+change, `cloneElement(__inputs)` reaches the content component
+directly (no intermediate wrapper to drill through), so this fully
+replaces the old `refreshRegistry` walker. See
+`LESSONS_2026-04-19.md` §1 and §3 for the predecessor design.
 
 ## 5. Who consults it
 

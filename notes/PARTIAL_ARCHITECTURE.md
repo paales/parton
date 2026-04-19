@@ -39,28 +39,32 @@ not just its static roots.
 
 ## What follows from the goal
 
-**No decision-making static walker on the server.** Every decision
-— render fresh, emit placeholder, apply `__inputs`, register in the
-registry — is made inside the `<Partial>` body when it runs. The
-old `buildTemplate` / `seedRegistry` pre-walks are gone.
+**No static walker on the server.** Every decision — render fresh,
+emit placeholder, apply `__inputs`, register in the registry — is
+made inside the `<Partial>` body when it runs. The old
+`buildTemplate` / `seedRegistry` / `refreshRegistry` pre-walks are
+all gone.
 
-Two narrow, non-decision-making walks remain and are load-bearing:
+One narrow, non-decision-making walk remains and is load-bearing:
 
-- **`refreshRegistry`** (`partial.tsx`) runs at the top of
-  `PartialRoot` and overwrites existing registry snapshots for
-  statically-visible Partials with the current request's fresh
-  closures. It never adds new ids and makes no render decisions;
-  it exists purely because snapshots captured during an earlier
-  render can carry stale closure bindings (URL-derived props,
-  `<Cache dep={...}>` state) that `cloneElement(__inputs)` can't
-  reach through wrappers. See `DYNAMIC_PARTIAL_REGISTRY.md` and
-  `LESSONS_2026-04-19.md`.
 - **`stripPartials` / `reinject`** (`cache.tsx`) walk the subtree
   handed to `<Cache>` to hollow out partial-bearing regions
   before serialization and splice live partial elements back in
   after decode. This is the strip-on-store / reinject-on-return
   composition described in the Caching section of the top-level
-  `CLAUDE.md`.
+  `CLAUDE.md`. This runs on the rendered output, not on author
+  JSX — it's a runtime walk, not a static one.
+
+The stale-snapshot problem that `refreshRegistry` used to solve
+(snapshots captured in request N have closures from request N, but
+request N+1's cache-mode refetch needs the current request's values)
+is now handled by computing the Partial's structural fingerprint
+AFTER `applyInputs` — so a refetch whose `__inputs` change a prop
+yields a distinct fingerprint, distinct Cache key, and correctly
+misses the stale entry. Combined with the `<Cache>`-fold-into-
+`<Partial cache>` change that eliminated the intermediate wrapper
+`cloneElement` couldn't drill through, this makes the static
+refresh walk unnecessary. See `LESSONS_2026-04-19.md` §1 and §3.
 
 **One primitive, one rule.** `<Partial>` behaves the same whether
 it's at the top of a page, nested inside another Partial, or
@@ -152,8 +156,9 @@ instead of rendering. The client keeps its existing entry.
 | `buildTemplate` + `seedRegistry` removed | ✅ shipped |
 | No "opaque component" invariant; `<AppNav/>` can be declared freely | ✅ shipped |
 | Server-side registry cleared at the start of each streaming render (stale-shape safety) | ✅ shipped |
+| `refreshRegistry` static walker removed; stale-snapshot correctness driven by fingerprint-after-applyInputs | ✅ shipped (2026-04-19) |
 
-The architecture in this doc matches the code as of 2026-04-18.
+The architecture in this doc matches the code as of 2026-04-19.
 Mode-selection inside `PartialsClient` (`mode="streaming"` vs
 `mode="cache"`) is still an internal distinction for merging fresh
 payloads into the persisted template — the public contract and the

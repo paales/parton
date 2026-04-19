@@ -670,12 +670,9 @@ export function PartialsClient({
   // entry from a prior render still backs the template.
   //
   // Template is DERIVED on the client from the rendered children (not
-  // built server-side). This means opaque server components only
-  // execute once per request — via the streamed `children` path — and
-  // the "opaque component must be wrapped in a Partial" invariant goes
-  // away. The derived template is persisted in module state so
-  // subsequent cache-mode refetches can reuse it without a server
-  // round-trip.
+  // built server-side). The derived template is persisted in module
+  // state so subsequent cache-mode refetches can reuse it without a
+  // server round-trip.
   //
   // Fingerprints land in `_fingerprints` via `PartialErrorBoundary`'s
   // render-time `registerClientPartial` call — no props plumbing here.
@@ -701,8 +698,7 @@ export function PartialsClient({
   //
   // Reuses the client-derived `_template` from the most recent
   // streaming render. Cache-mode is always preceded by a full render
-  // (either the initial HTML load or a registry-miss fallback), so
-  // `_template` is guaranteed to be populated.
+  // (initial HTML load), so `_template` is guaranteed to be populated.
   Children.forEach(children, (child) => {
     if (!isValidElement(child)) return;
     const id = isPartialWrapper(child) ? getPartialId(child) : (child.key != null ? String(child.key) : null);
