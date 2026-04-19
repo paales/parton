@@ -62,6 +62,19 @@ import {
 
 // ─── Store ─────────────────────────────────────────────────────────────
 
+/**
+ * Portable entry stored by a `CacheStore` backend. All fields are
+ * primitives or Uint8Array, so this round-trips cleanly over Redis /
+ * KV / SQLite / HTTP.
+ *
+ * Note the absence of dynamic-partial snapshots: those hold live
+ * React element references (component functions like `LivePrice`) that
+ * can't cross a process boundary. They live in a process-local
+ * `snapshotIndex` (below), keyed by the same cache key. On a cache hit
+ * where the snapshot side-table is empty (fresh process, or a
+ * hypothetical distributed backend handed us bytes from another
+ * instance), we force a miss so the snapshots repopulate.
+ */
 interface Entry {
   bytes: Uint8Array;
   /** Fresh until this timestamp (ms epoch); Infinity = never expire. */
@@ -69,17 +82,6 @@ interface Entry {
   /** Servable (as stale) until this timestamp. If > expiresAt, we have a
    *  stale-while-revalidate window: serve cached, kick off async refresh. */
   staleUntil: number;
-  /**
-   * Partials that registered inside this subtree's render — dynamic
-   * ones that `stripPartials` didn't see because they were produced
-   * inside opaque components. Stored so each cache hit can:
-   *   1. Re-register them into the route registry (enables tag-based
-   *      invalidation / refetch of holes inside a cached region).
-   *   2. Reinject fresh `<Partial>` elements at each placeholder,
-   *      so the held content is live on every hit even though the
-   *      surrounding cached bytes are frozen.
-   */
-  dynamicSnapshots: Map<string, PartialSnapshot>;
 }
 
 /**
@@ -146,6 +148,41 @@ class MemoryCacheStore implements CacheStore {
 }
 
 const store: CacheStore = new MemoryCacheStore();
+
+/**
+ * Process-local side-table holding dynamic-partial snapshots per
+ * cache key. Populated on miss, read on hit. Deliberately NOT part of
+ * `CacheStore`:
+ *
+ *   • A `PartialSnapshot.content` is a live React element whose
+ *     `type` points at a server-component function (e.g. `LivePrice`).
+ *     Flight doesn't serialize server-component references as
+ *     "re-executable" — it runs them at encode time and stores the
+ *     output. Round-tripping through bytes would freeze LivePrice's
+ *     tick for the Cache entry's whole lifetime.
+ *   • The registry in `partial-registry.ts` has the same live-element
+ *     dependency. It's in-process by design.
+ *
+ * On a hit, if the snapshot side-table is empty for this key (fresh
+ * process, HMR reload, or a hypothetical distributed CacheStore that
+ * handed us bytes from another instance), the Cache component forces
+ * a miss so the snapshots repopulate. That costs one render per
+ * process per key, which is a bounded cost — far cheaper than
+ * serving `<i data-partial>` placeholders with no fill.
+ */
+const snapshotIndex = new Map<string, Map<string, PartialSnapshot>>();
+const SNAPSHOT_INDEX_MAX = 10_000;
+
+function setSnapshots(key: string, snaps: Map<string, PartialSnapshot>): void {
+  snapshotIndex.delete(key);
+  snapshotIndex.set(key, snaps);
+  while (snapshotIndex.size > SNAPSHOT_INDEX_MAX) {
+    const oldest = snapshotIndex.keys().next().value;
+    if (oldest === undefined) break;
+    snapshotIndex.delete(oldest);
+  }
+}
+
 /** Async SWR refreshes currently in progress. Prevents duplicate
  *  refreshes when many requests hit a stale entry concurrently.
  *  In-process only — distributed stampede control is a separate
@@ -657,13 +694,18 @@ export async function Cache({
   const route = new URL(getRequest().url).pathname;
 
   const existing = await store.get(key);
-  if (existing) {
+  // Snapshots are process-local — if the bytes came from another
+  // process (or we're post-restart / post-HMR), the index is empty
+  // for this key. Treat that as a miss so the snapshot side-table
+  // repopulates from a fresh render. See `snapshotIndex` for why.
+  const existingSnapshots = existing ? snapshotIndex.get(key) : undefined;
+  if (existing && existingSnapshots) {
     if (existing.expiresAt > now || existing.staleUntil > now) {
       // Fresh or stale-SWR hit. Either way, decode, reinject both
       // static and dynamic partials, and re-register dynamics into
       // the route registry so tag/id refetches can find them.
       // (`store.get` already bumped the LRU order for us.)
-      registerDynamicSnapshots(route, existing.dynamicSnapshots);
+      registerDynamicSnapshots(route, existingSnapshots);
       // If stale, kick off a background refresh (same flow as miss
       // below).
       if (existing.expiresAt <= now && !refreshing.has(key)) {
@@ -677,7 +719,7 @@ export async function Cache({
       );
       const resolved = await resolveLazies(decoded);
       const withStatic = reinject(resolved, partials);
-      return reinjectDynamic(withStatic, existing.dynamicSnapshots);
+      return reinjectDynamic(withStatic, existingSnapshots);
     }
     // Past staleUntil — treat as miss.
   }
@@ -760,8 +802,12 @@ async function renderMissAndStore(
     const cleanBytes = await renderAndBuffer(holeTree);
     await store.set(
       key,
-      freshEntry(cleanBytes, snapshots, ttl, staleWhileRevalidate, Date.now()),
+      freshEntry(cleanBytes, ttl, staleWhileRevalidate, Date.now()),
     );
+    // Index the snapshots in the process-local side-table so future
+    // hits on this key (in this process) can rebuild the dynamic
+    // holes with live element references.
+    setSnapshots(key, snapshots);
     return snapshots;
   })();
 
@@ -793,7 +839,6 @@ async function refreshEntry(
 
 function freshEntry(
   bytes: Uint8Array,
-  dynamicSnapshots: Map<string, PartialSnapshot>,
   ttl: number | undefined,
   swr: number | undefined,
   now: number,
@@ -804,7 +849,7 @@ function freshEntry(
     swr != null && ttl != null
       ? expiresAt + swr * 1000
       : expiresAt;
-  return { bytes, dynamicSnapshots, expiresAt, staleUntil };
+  return { bytes, expiresAt, staleUntil };
 }
 
 // ─── Dev / debugging helpers ────────────────────────────────────────────
@@ -815,6 +860,7 @@ export function _cacheStats(): Promise<{ size: number; keys: string[] }> {
 
 export async function _clearCache(): Promise<void> {
   await store.clear();
+  snapshotIndex.clear();
   inFlightMiss.clear();
   refreshing.clear();
 }
