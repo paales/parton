@@ -39,6 +39,7 @@
  */
 
 import {
+  Suspense,
   cloneElement,
   createElement,
   isValidElement,
@@ -50,9 +51,14 @@ import {
   renderToReadableStream,
 } from "@vitejs/plugin-rsc/rsc";
 import { djb2 } from "./hash.ts";
-import { PartialBoundary } from "./partial-component.tsx";
+import { Partial, PartialBoundary } from "./partial-component.tsx";
 import { getRequest } from "../framework/context.ts";
-import { lookupPartial } from "./partial-registry.ts";
+import {
+  getRouteSnapshots,
+  lookupPartial,
+  registerPartial,
+  type PartialSnapshot,
+} from "./partial-registry.ts";
 
 // ─── Store ─────────────────────────────────────────────────────────────
 
@@ -63,11 +69,21 @@ interface Entry {
   /** Servable (as stale) until this timestamp. If > expiresAt, we have a
    *  stale-while-revalidate window: serve cached, kick off async refresh. */
   staleUntil: number;
+  /**
+   * Partials that registered inside this subtree's render — dynamic
+   * ones that `stripPartials` didn't see because they were produced
+   * inside opaque components. Stored so each cache hit can:
+   *   1. Re-register them into the route registry (enables tag-based
+   *      invalidation / refetch of holes inside a cached region).
+   *   2. Reinject fresh `<Partial>` elements at each placeholder,
+   *      so the held content is live on every hit even though the
+   *      surrounding cached bytes are frozen.
+   */
+  dynamicSnapshots: Map<string, PartialSnapshot>;
 }
 
 const MAX_ENTRIES = 10_000;
 const store = new Map<string, Entry>();
-const inFlight = new Map<string, Promise<Uint8Array>>();
 /** Async SWR refreshes currently in progress. Prevents duplicate
  *  refreshes when many requests hit a stale entry concurrently. */
 const refreshing = new Set<string>();
@@ -220,19 +236,31 @@ async function resolveLazies(node: ReactNode): Promise<ReactNode> {
  * came from a Cache hit or a refetch template.
  */
 function placeholderFor(id: string): ReactElement {
+  // `data-partial-id` is the stable id for the placeholder — Flight
+  // may composite the outer `.map()` key with the element's own key
+  // into `"outer,inner"` for placeholders produced inside a dynamic
+  // Partial, so `String(node.key)` isn't safe as an id source.
   return createElement("i", {
     key: id,
     hidden: true,
     "data-partial": true,
+    "data-partial-id": id,
   });
 }
 
 function isExistingPlaceholder(node: ReactElement): boolean {
   return (
     node.type === "i" &&
-    (node.props as Record<string, unknown>)["data-partial"] === true &&
-    node.key != null
+    (node.props as Record<string, unknown>)["data-partial"] === true
   );
+}
+
+function placeholderIdOf(node: ReactElement): string | null {
+  const props = node.props as { ["data-partial-id"]?: unknown };
+  if (typeof props["data-partial-id"] === "string") {
+    return props["data-partial-id"];
+  }
+  return node.key != null ? String(node.key) : null;
 }
 
 /**
@@ -343,8 +371,11 @@ function reinject(
   if (!isValidElement(node)) return node;
 
   if (isExistingPlaceholder(node)) {
-    const live = partials.get(String(node.key));
-    if (live) return live;
+    const id = placeholderIdOf(node);
+    if (id) {
+      const live = partials.get(id);
+      if (live) return live;
+    }
     return node;
   }
 
@@ -355,6 +386,157 @@ function reinject(
   return Array.isArray(nk)
     ? cloneElement(node, {}, ...nk)
     : cloneElement(node, {}, nk);
+}
+
+// ─── Dynamic partial strip / reinject ────────────────────────────────────
+//
+// `stripPartials` (above) walks the JSX input. It can't see Partials
+// produced inside opaque async components (e.g. `ProductGrid` ->
+// `.map(p => <Partial id={"price-" + p.sku}/>)`) because those only
+// exist AFTER render. The helpers below operate on the rendered
+// output tree — they find every already-rendered Partial wrapper
+// and strip it so the stored cache bytes are hole-only. On every
+// hit, we re-register the captured snapshots into the current
+// route registry (so tag-based refetches like `?tags=price` see
+// them) and reinject a fresh `<Partial>` element at each hole
+// position so the held content renders live per request.
+
+/**
+ * True if `node` is a rendered wrapper emitted by `<Partial>`. Two
+ * shapes: (a) a keyed `<Suspense>` (fallback-bearing Partial), or
+ * (b) any element carrying a `partialId` string prop
+ * (`PartialErrorBoundary` without a Suspense).
+ */
+function renderedWrapperId(node: ReactElement): string | null {
+  const props = node.props as { partialId?: unknown };
+  if (typeof props.partialId === "string") return props.partialId;
+  if (node.type === Suspense && node.key != null) {
+    // Flight keeps Suspense keys clean (React built-in, not
+    // composited with outer .map keys). Safe to use.
+    return String(node.key);
+  }
+  return null;
+}
+
+/**
+ * Walk a rendered tree. For every rendered Partial wrapper whose id
+ * is NOT already tracked (i.e. not stripped statically from input
+ * JSX), capture the corresponding snapshot from the route registry
+ * and replace with a placeholder. Returns the stripped tree + the
+ * captured dynamic snapshots.
+ */
+function stripDynamicWrappers(
+  node: ReactNode,
+  skipIds: Set<string>,
+): { stripped: ReactNode; snapshots: Map<string, PartialSnapshot> } {
+  const snapshots = new Map<string, PartialSnapshot>();
+  const route = new URL(getRequest().url).pathname;
+
+  const walk = (n: ReactNode): ReactNode => {
+    if (n == null || typeof n === "boolean") return n;
+    if (typeof n === "string" || typeof n === "number") return n;
+    if (Array.isArray(n)) {
+      let changed = false;
+      const out = n.map((c) => {
+        const w = walk(c);
+        if (w !== c) changed = true;
+        return w;
+      });
+      return changed ? out : n;
+    }
+    if (!isValidElement(n)) return n;
+
+    const wid = renderedWrapperId(n);
+    if (wid && !skipIds.has(wid)) {
+      const snap = lookupPartial(route, wid);
+      if (snap) {
+        snapshots.set(wid, snap);
+        return placeholderFor(wid);
+      }
+    }
+
+    const kids = (n.props as { children?: ReactNode }).children;
+    if (kids == null) return n;
+    const nk = walk(kids);
+    if (nk === kids) return n;
+    return Array.isArray(nk)
+      ? cloneElement(n, {}, ...nk)
+      : cloneElement(n, {}, nk);
+  };
+
+  return { stripped: walk(node), snapshots };
+}
+
+/**
+ * Walk a decoded tree and replace every placeholder whose id is a
+ * known dynamic snapshot with a fresh `<Partial>` element built
+ * from that snapshot. The Partial body re-runs each request, so
+ * the held content renders live even though the surrounding
+ * cached bytes are frozen.
+ */
+function reinjectDynamic(
+  node: ReactNode,
+  snapshots: Map<string, PartialSnapshot>,
+): ReactNode {
+  if (snapshots.size === 0) return node;
+  if (node == null || typeof node === "boolean") return node;
+  if (typeof node === "string" || typeof node === "number") return node;
+  if (Array.isArray(node)) {
+    let changed = false;
+    const out = node.map((c) => {
+      const r = reinjectDynamic(c, snapshots);
+      if (r !== c) changed = true;
+      return r;
+    });
+    return changed ? out : node;
+  }
+  if (!isValidElement(node)) return node;
+
+  if (isExistingPlaceholder(node)) {
+    const id = placeholderIdOf(node);
+    if (id) {
+      const snap = snapshots.get(id);
+      if (snap) {
+        return createElement(
+          Partial,
+          {
+            id,
+            fallback: snap.fallback ?? undefined,
+            errorWith: snap.errorWith,
+            tags: snap.tags,
+            cache: snap.cache,
+            ttl: snap.ttl,
+            staleWhileRevalidate: snap.staleWhileRevalidate,
+          },
+          snap.content,
+        );
+      }
+    }
+    return node;
+  }
+
+  const kids = (node.props as { children?: ReactNode }).children;
+  if (kids == null) return node;
+  const nk = reinjectDynamic(kids, snapshots);
+  if (nk === kids) return node;
+  return Array.isArray(nk)
+    ? cloneElement(node, {}, ...nk)
+    : cloneElement(node, {}, nk);
+}
+
+/**
+ * Push every snapshot in `snapshots` into the route-scoped registry
+ * so cache-mode refetches (`?partials=ID` / `?tags=…`) can resolve
+ * dynamic Partials produced inside this cached subtree even when
+ * the producer (e.g. `ProductGrid`) didn't run this request.
+ */
+function registerDynamicSnapshots(
+  route: string,
+  snapshots: Map<string, PartialSnapshot>,
+): void {
+  for (const [sId, snap] of snapshots) {
+    registerPartial(route, sId, snap);
+  }
 }
 
 // ─── Cache component ────────────────────────────────────────────────────
@@ -425,68 +607,128 @@ export async function Cache({
   const { stripped, partials, ids } = stripPartials(children);
   const key = `${id}:${hashDep([dep, ids])}`;
   const now = Date.now();
+  const route = new URL(getRequest().url).pathname;
 
   const existing = store.get(key);
   if (existing) {
-    if (existing.expiresAt > now) {
-      // Fresh hit. Decode, fully resolve lazies, reinject live partials.
+    if (existing.expiresAt > now || existing.staleUntil > now) {
+      // Fresh or stale-SWR hit. Either way, decode, reinject both
+      // static and dynamic partials, and re-register dynamics into
+      // the route registry so tag/id refetches can find them.
       touch(key);
-      const decoded = await createFromReadableStream<ReactNode>(
-        bytesToStream(existing.bytes),
-      );
-      const resolved = await resolveLazies(decoded);
-      return reinject(resolved, partials);
-    }
-    if (existing.staleUntil > now) {
-      // SWR: serve the stale bytes, kick off a background refresh if
-      // one isn't already in progress for this key. The refresh runs
-      // outside this render's await so the response isn't delayed.
-      // The refresh re-renders the *stripped* subtree (placeholders
-      // only) — partial content is intentionally not part of the
-      // cached snapshot.
-      touch(key);
-      if (!refreshing.has(key)) {
+      registerDynamicSnapshots(route, existing.dynamicSnapshots);
+      // If stale, kick off a background refresh (same flow as miss
+      // below).
+      if (existing.expiresAt <= now && !refreshing.has(key)) {
         refreshing.add(key);
-        // Fire-and-forget. Errors during refresh: log, keep the stale
-        // entry (next request serves stale again until it expires).
-        void renderAndBuffer(stripped)
-          .then((fresh) => {
-            const t = Date.now();
-            store.set(key, freshEntry(fresh, ttl, staleWhileRevalidate, t));
-            evictIfNeeded();
-          })
-          .catch((err) => {
-            console.error(`[cache] SWR refresh failed for ${key}:`, err);
-          })
+        void refreshEntry(route, key, stripped, partials, ttl, staleWhileRevalidate)
+          .catch((err) => console.error(`[cache] SWR refresh failed for ${key}:`, err))
           .finally(() => refreshing.delete(key));
       }
       const decoded = await createFromReadableStream<ReactNode>(
         bytesToStream(existing.bytes),
       );
       const resolved = await resolveLazies(decoded);
-      return reinject(resolved, partials);
+      const withStatic = reinject(resolved, partials);
+      return reinjectDynamic(withStatic, existing.dynamicSnapshots);
     }
     // Past staleUntil — treat as miss.
   }
 
-  // Miss or fully expired. Dedupe concurrent misses so only one render runs.
-  let pending = inFlight.get(key);
+  // Miss or fully expired. Dedupe concurrent misses so only one
+  // render runs.
+  const staticIdSet = new Set(ids);
+  let pending = inFlightMiss.get(key);
   if (!pending) {
-    pending = renderAndBuffer(stripped).finally(() => inFlight.delete(key));
-    inFlight.set(key, pending);
+    pending = renderMissAndStore(
+      route,
+      key,
+      stripped,
+      staticIdSet,
+      ttl,
+      staleWhileRevalidate,
+    ).finally(() => inFlightMiss.delete(key));
+    inFlightMiss.set(key, pending);
   }
-  const bytes = await pending;
+  const { liveTree } = await pending;
 
-  store.set(key, freshEntry(bytes, ttl, staleWhileRevalidate, now));
+  // Return the ALREADY-RENDERED tree — the dynamic Partials
+  // executed (and registered into the route registry) during the
+  // miss render itself, so the current response has live content
+  // inline. Subsequent hits rehydrate via reinjectDynamic off the
+  // stored snapshots; trying to rebuild the Partials here would
+  // trip `seenIds`'s duplicate-id guard (they already registered
+  // in this same render pass).
+  return reinject(liveTree, partials);
+}
+
+// ─── Miss helpers ──────────────────────────────────────────────────────
+
+/** Replaces the old renderAndBuffer-only inFlight map with one that
+ *  also memoizes the stripped dynamic snapshots so concurrent misses
+ *  get the same tree + snapshot set, not two independent renders. */
+const inFlightMiss = new Map<
+  string,
+  Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }>
+>();
+
+async function renderMissAndStore(
+  route: string,
+  key: string,
+  stripped: ReactNode,
+  staticIds: Set<string>,
+  ttl: number | undefined,
+  staleWhileRevalidate: number | undefined,
+): Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }> {
+  const rawBytes = await renderAndBuffer(stripped);
+  const rawDecoded = await createFromReadableStream<ReactNode>(bytesToStream(rawBytes));
+  const rawResolved = await resolveLazies(rawDecoded);
+
+  // Strip dynamic Partial wrappers from the rendered tree. Anything
+  // already accounted for by `staticIds` (ie. stripPartials saw it
+  // in the input JSX) is skipped — we don't want to double-strip.
+  const { stripped: holeTree, snapshots: dynamicSnapshots } = stripDynamicWrappers(
+    rawResolved,
+    staticIds,
+  );
+
+  // Re-encode the fully-stripped tree for storage. This is the
+  // second render on miss — acceptable since misses happen once
+  // per key, and the hit-path decode is then tiny (placeholders
+  // only) and hydration is live (reinjectDynamic rebuilds fresh
+  // Partials from snapshots per request).
+  const cleanBytes = await renderAndBuffer(holeTree);
+  store.set(
+    key,
+    freshEntry(cleanBytes, dynamicSnapshots, ttl, staleWhileRevalidate, Date.now()),
+  );
   evictIfNeeded();
 
-  const decoded = await createFromReadableStream<ReactNode>(bytesToStream(bytes));
-  const resolved = await resolveLazies(decoded);
-  return reinject(resolved, partials);
+  // Return the LIVE pre-strip tree — dynamic partials already ran
+  // during this render pass, so we hand that back for the current
+  // response. Future hits will reinject fresh from snapshots.
+  return { liveTree: rawResolved, dynamicSnapshots };
+}
+
+async function refreshEntry(
+  route: string,
+  key: string,
+  stripped: ReactNode,
+  partials: Map<string, ReactElement>,
+  ttl: number | undefined,
+  staleWhileRevalidate: number | undefined,
+): Promise<void> {
+  // SWR refresh: re-render + re-strip + re-store with updated
+  // dynamic snapshots. The current response already served the
+  // stale bytes; this runs in the background.
+  void partials; // reserved for future: static partials could drift too
+  const staticIds = new Set<string>(); // refresh only the bytes + dynamic set
+  await renderMissAndStore(route, key, stripped, staticIds, ttl, staleWhileRevalidate);
 }
 
 function freshEntry(
   bytes: Uint8Array,
+  dynamicSnapshots: Map<string, PartialSnapshot>,
   ttl: number | undefined,
   swr: number | undefined,
   now: number,
@@ -497,7 +739,7 @@ function freshEntry(
     swr != null && ttl != null
       ? expiresAt + swr * 1000
       : expiresAt;
-  return { bytes, expiresAt, staleUntil };
+  return { bytes, dynamicSnapshots, expiresAt, staleUntil };
 }
 
 // ─── Dev / debugging helpers ────────────────────────────────────────────
@@ -508,7 +750,7 @@ export function _cacheStats(): { size: number; keys: string[] } {
 
 export function _clearCache(): void {
   store.clear();
-  inFlight.clear();
+  inFlightMiss.clear();
   refreshing.clear();
 }
 
