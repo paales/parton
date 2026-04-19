@@ -72,18 +72,15 @@ export function DeferDemoPage() {
           </head>
         </Partial>
         <body>
-          <Partial id="nav">
-            <AppNav />
-          </Partial>
+          <AppNav />
           <main style={{ padding: "1rem 0" }}>
             <h1 style={{ marginBottom: "1rem" }}>
               Partial defer — feature demo
             </h1>
             <p style={{ color: "#888", marginBottom: "2rem" }}>
-              Three activation shapes for{" "}
-              <code>&lt;Partial defer&gt;</code>. Each section stays
-              dormant until its trigger fires; the activated content
-              renders a server timestamp so you can confirm the RSC
+              Three activation shapes for <code>&lt;Partial defer&gt;</code>.
+              Each section stays dormant until its trigger fires; the activated
+              content renders a server timestamp so you can confirm the RSC
               round-trip.
             </p>
 
@@ -117,10 +114,7 @@ export function DeferDemoPage() {
                 </div>
               </Partial>
               <div style={{ marginTop: "0.75rem" }}>
-                <ActivateButton
-                  partialId="manual"
-                  label="Activate manually"
-                />
+                <ActivateButton partialId="manual" label="Activate manually" />
               </div>
             </section>
 
@@ -131,14 +125,13 @@ export function DeferDemoPage() {
               style={{ marginBottom: "2rem" }}
             >
               <h2>
-                2. <code>&lt;WhenStored&gt;</code> — activates when
-                localStorage key appears
+                2. <code>&lt;WhenStored&gt;</code> — activates when localStorage
+                key appears
               </h2>
               <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                The activator reads{" "}
-                <code>localStorage["demo-stored"]</code> on mount and on{" "}
-                <code>storage</code> events. When present, activates the
-                Partial and passes the value in via{" "}
+                The activator reads <code>localStorage["demo-stored"]</code> on
+                mount and on <code>storage</code> events. When present,
+                activates the Partial and passes the value in via{" "}
                 <code>__inputs.stored</code>.
               </p>
               <Partial
@@ -149,17 +142,14 @@ export function DeferDemoPage() {
                     data-testid="stored-fallback"
                     style={{ color: "#888", fontStyle: "italic" }}
                   >
-                    dormant — set{" "}
-                    <code>localStorage["demo-stored"]</code> to activate
+                    dormant — set <code>localStorage["demo-stored"]</code> to
+                    activate
                   </div>
                 }
               >
                 <StoredContent />
               </Partial>
-              <StorageKeyEditor
-                storageKey="demo-stored"
-                testId="demo-stored"
-              />
+              <StorageKeyEditor storageKey="demo-stored" testId="demo-stored" />
             </section>
 
             {/* ── 3. <AnyOf> — visible OR stored composition ──────── */}
@@ -169,13 +159,12 @@ export function DeferDemoPage() {
               style={{ marginBottom: "2rem" }}
             >
               <h2>
-                3. <code>&lt;AnyOf&gt;</code> — visible OR stored
-                activation
+                3. <code>&lt;AnyOf&gt;</code> — visible OR stored activation
               </h2>
               <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                Activates when <em>either</em> the fallback scrolls into
-                view <em>or</em> <code>localStorage["demo-any"]</code> is
-                set. First trigger wins.
+                Activates when <em>either</em> the fallback scrolls into view{" "}
+                <em>or</em> <code>localStorage["demo-any"]</code> is set. First
+                trigger wins.
               </p>
               <StorageKeyEditor storageKey="demo-any" testId="demo-any" />
               <div

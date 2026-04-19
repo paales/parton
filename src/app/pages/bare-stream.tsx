@@ -86,12 +86,12 @@ export function BarePage() {
         </Partial>
         <body>
           <ScrollRestore />
-          <Partial id="nav">
-            <AppNav />
-          </Partial>
+          <AppNav />
           <h1>Infinite Scroll (renderOn-style singleton slot)</h1>
           <p style={{ color: "#888", marginBottom: "1rem" }}>
-            <a href="/" data-testid="link-home">← Home</a>
+            <a href="/" data-testid="link-home">
+              ← Home
+            </a>
             {" · "}
             <span data-testid="end-readout">end={end}</span>
           </p>

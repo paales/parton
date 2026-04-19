@@ -38,11 +38,9 @@ async function SlowContent({ flavor }: { flavor: string }) {
       }}
     >
       <div style={{ fontWeight: 600 }}>Slow content (flavor: {flavor})</div>
-      <div
-        style={{ color: "#888", fontSize: "0.8rem", marginTop: "0.25rem" }}
-      >
-        rendered {slowRenderCount} time{slowRenderCount === 1 ? "" : "s"} · computed at{" "}
-        {new Date().toISOString()}
+      <div style={{ color: "#888", fontSize: "0.8rem", marginTop: "0.25rem" }}>
+        rendered {slowRenderCount} time{slowRenderCount === 1 ? "" : "s"} ·
+        computed at {new Date().toISOString()}
       </div>
       {/* Client component nested inside a cached subtree — proves the
           buffer/decode round-trip preserves client references. */}
@@ -65,9 +63,7 @@ function Clock() {
       }}
     >
       <div style={{ fontWeight: 600 }}>Clock (always fresh)</div>
-      <div
-        style={{ color: "#888", fontSize: "0.8rem", marginTop: "0.25rem" }}
-      >
+      <div style={{ color: "#888", fontSize: "0.8rem", marginTop: "0.25rem" }}>
         Server time: {new Date().toISOString()}
       </div>
     </div>
@@ -96,9 +92,7 @@ export function CacheDemoPage() {
           </head>
         </Partial>
         <body>
-          <Partial id="nav">
-            <AppNav />
-          </Partial>
+          <AppNav />
           <h1>Server-side cache spike</h1>
           <p style={{ color: "#888" }}>
             flavor=<code>{flavor}</code> · cache size:{" "}
@@ -107,7 +101,10 @@ export function CacheDemoPage() {
 
           <CacheControls />
 
-          <Partial id="slow" fallback={<div data-testid="slow-fallback">Loading slow…</div>}>
+          <Partial
+            id="slow"
+            fallback={<div data-testid="slow-fallback">Loading slow…</div>}
+          >
             <Cache id="slow" dep={{ flavor }} ttl={60}>
               <SlowContent flavor={flavor} />
             </Cache>
@@ -118,8 +115,9 @@ export function CacheDemoPage() {
           </Partial>
 
           <div style={{ marginTop: "2rem", color: "#666", fontSize: "0.8rem" }}>
-            Server <code>slowRenderCount</code>: <span data-testid="server-render-count">{slowRenderCount}</span>
-            <br/>
+            Server <code>slowRenderCount</code>:{" "}
+            <span data-testid="server-render-count">{slowRenderCount}</span>
+            <br />
             Try: change <code>?flavor=</code>, refetch the slow partial, reload.
           </div>
         </body>

@@ -125,6 +125,24 @@ async function renderToJSON(element: React.ReactNode): Promise<any> {
 	return null;
 }
 
+/**
+ * Cache-mode is only meaningful after a streaming render has populated
+ * the route registry. This helper warms the registry by doing a
+ * no-filter render of the same tree, then performs the actual request
+ * under test and returns its rendered output.
+ */
+async function warmThenRender(
+	params: Record<string, string>,
+	tree: React.ReactNode,
+): Promise<any> {
+	await runWithRequestAsync(fakeRequest(), async () => renderToJSON(tree));
+	return (
+		await runWithRequestAsync(fakeRequest(params), async () =>
+			renderToJSON(tree),
+		)
+	).result;
+}
+
 describe("PartialRoot architecture", () => {
 	it("renders all partials when no filter", async () => {
 		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
@@ -140,29 +158,27 @@ describe("PartialRoot architecture", () => {
 	});
 
 	it("filters to requested partials", async () => {
-		const { result } = await runWithRequestAsync(fakeRequest({ partials: "hero,stats" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="hero"><Hero /></Partial>
-					<Partial id="stats"><Stats /></Partial>
-					<Partial id="species"><Species /></Partial>
-				</PartialRoot>,
-			),
+		const tree = (
+			<PartialRoot>
+				<Partial id="hero"><Hero /></Partial>
+				<Partial id="stats"><Stats /></Partial>
+				<Partial id="species"><Species /></Partial>
+			</PartialRoot>
 		);
+		const result = await warmThenRender({ partials: "hero,stats" }, tree);
 		const rendered = result.filter(Boolean);
 		expect(rendered).toHaveLength(2);
 	});
 
 	it("filters to single partial", async () => {
-		const { result } = await runWithRequestAsync(fakeRequest({ partials: "stats" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="hero"><Hero /></Partial>
-					<Partial id="stats"><Stats /></Partial>
-					<Partial id="species"><Species /></Partial>
-				</PartialRoot>,
-			),
+		const tree = (
+			<PartialRoot>
+				<Partial id="hero"><Hero /></Partial>
+				<Partial id="stats"><Stats /></Partial>
+				<Partial id="species"><Species /></Partial>
+			</PartialRoot>
 		);
+		const result = await warmThenRender({ partials: "stats" }, tree);
 		const rendered = result.filter(Boolean);
 		expect(rendered).toHaveLength(1);
 	});
@@ -187,19 +203,18 @@ describe("PartialRoot architecture", () => {
 		function Cart() {
 			return <span>cart-content</span>;
 		}
-		const { result } = await runWithRequestAsync(fakeRequest({ partials: "cart" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="header">
-						<div>
-							Timestamp
-							<Partial id="cart"><Cart /></Partial>
-						</div>
-					</Partial>
-					<Partial id="stats"><Stats /></Partial>
-				</PartialRoot>,
-			),
+		const tree = (
+			<PartialRoot>
+				<Partial id="header">
+					<div>
+						Timestamp
+						<Partial id="cart"><Cart /></Partial>
+					</div>
+				</Partial>
+				<Partial id="stats"><Stats /></Partial>
+			</PartialRoot>
 		);
+		const result = await warmThenRender({ partials: "cart" }, tree);
 		const str = JSON.stringify(result);
 		expect(str).toContain("cart-content");
 		expect(str).not.toContain("Timestamp");
@@ -210,19 +225,18 @@ describe("PartialRoot architecture", () => {
 		function Cart() {
 			return <span>cart-content</span>;
 		}
-		const { result } = await runWithRequestAsync(fakeRequest({ partials: "header" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="header">
-						<div>
-							Timestamp
-							<Partial id="cart"><Cart /></Partial>
-						</div>
-					</Partial>
-					<Partial id="stats"><Stats /></Partial>
-				</PartialRoot>,
-			),
+		const tree = (
+			<PartialRoot>
+				<Partial id="header">
+					<div>
+						Timestamp
+						<Partial id="cart"><Cart /></Partial>
+					</div>
+				</Partial>
+				<Partial id="stats"><Stats /></Partial>
+			</PartialRoot>
 		);
+		const result = await warmThenRender({ partials: "header" }, tree);
 		const str = JSON.stringify(result);
 		expect(str).toContain("Timestamp");
 		expect(str).not.toContain("cart-content");
@@ -415,15 +429,15 @@ describe("PartialRoot architecture", () => {
 	});
 
 	it("refetch without props still renders when not in cached", async () => {
-		const { result } = await runWithRequestAsync(
-			fakeRequest({ partials: "hero", cached: "stats:somefp" }),
-			async () =>
-				renderToJSON(
-					<PartialRoot>
-						<Partial id="hero"><Hero /></Partial>
-						<Partial id="stats"><Stats /></Partial>
-					</PartialRoot>,
-				),
+		const tree = (
+			<PartialRoot>
+				<Partial id="hero"><Hero /></Partial>
+				<Partial id="stats"><Stats /></Partial>
+			</PartialRoot>
+		);
+		const result = await warmThenRender(
+			{ partials: "hero", cached: "stats:somefp" },
+			tree,
 		);
 		const str = JSON.stringify(result);
 		expect(str).toContain("Hero");
@@ -446,15 +460,14 @@ describe("PartialRoot architecture", () => {
 		function CartBadge() { return <span>cart-badge</span>; }
 		function CartDrawer() { return <div>cart-drawer</div>; }
 		function ProductGrid() { return <div>products</div>; }
-		const { result } = await runWithRequestAsync(fakeRequest({ tags: "cart" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="badge" tags={["cart", "header"]}><CartBadge /></Partial>
-					<Partial id="drawer" tags={["cart"]}><CartDrawer /></Partial>
-					<Partial id="products" tags={["catalog"]}><ProductGrid /></Partial>
-				</PartialRoot>,
-			),
+		const tree = (
+			<PartialRoot>
+				<Partial id="badge" tags={["cart", "header"]}><CartBadge /></Partial>
+				<Partial id="drawer" tags={["cart"]}><CartDrawer /></Partial>
+				<Partial id="products" tags={["catalog"]}><ProductGrid /></Partial>
+			</PartialRoot>
 		);
+		const result = await warmThenRender({ tags: "cart" }, tree);
 		const str = JSON.stringify(result);
 		expect(str).toContain("cart-badge");
 		expect(str).toContain("cart-drawer");
@@ -465,16 +478,16 @@ describe("PartialRoot architecture", () => {
 		function A() { return <span>a-content</span>; }
 		function B() { return <span>b-content</span>; }
 		function C() { return <span>c-content</span>; }
-		const { result } = await runWithRequestAsync(
-			fakeRequest({ partials: "a", tags: "group" }),
-			async () =>
-				renderToJSON(
-					<PartialRoot>
-						<Partial id="a"><A /></Partial>
-						<Partial id="b" tags={["group"]}><B /></Partial>
-						<Partial id="c"><C /></Partial>
-					</PartialRoot>,
-				),
+		const tree = (
+			<PartialRoot>
+				<Partial id="a"><A /></Partial>
+				<Partial id="b" tags={["group"]}><B /></Partial>
+				<Partial id="c"><C /></Partial>
+			</PartialRoot>
+		);
+		const result = await warmThenRender(
+			{ partials: "a", tags: "group" },
+			tree,
 		);
 		const str = JSON.stringify(result);
 		expect(str).toContain("a-content");
@@ -502,16 +515,15 @@ describe("PartialRoot architecture", () => {
 	});
 
 	it("filters nested partial inside keyless wrapper", async () => {
-		const { result } = await runWithRequestAsync(fakeRequest({ partials: "stats" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="hero"><Hero /></Partial>
-					<main>
-						<Partial id="stats"><Stats /></Partial>
-					</main>
-				</PartialRoot>,
-			),
+		const tree = (
+			<PartialRoot>
+				<Partial id="hero"><Hero /></Partial>
+				<main>
+					<Partial id="stats"><Stats /></Partial>
+				</main>
+			</PartialRoot>
 		);
+		const result = await warmThenRender({ partials: "stats" }, tree);
 		const str = JSON.stringify(result);
 		expect(str).toContain("Stats");
 		expect(str).not.toContain("Hero");
@@ -521,16 +533,13 @@ describe("PartialRoot architecture", () => {
 		function Cart() { return <span>cart-content</span>; }
 		function Products() { return <span>products</span>; }
 
-		const { result } = await runWithRequestAsync(
-			fakeRequest({ tags: "cart" }),
-			async () =>
-				renderToJSON(
-					<PartialRoot>
-						<Partial id="cart" tags={["cart"]}><Cart /></Partial>
-						<Partial id="products"><Products /></Partial>
-					</PartialRoot>,
-				),
+		const tree = (
+			<PartialRoot>
+				<Partial id="cart" tags={["cart"]}><Cart /></Partial>
+				<Partial id="products"><Products /></Partial>
+			</PartialRoot>
 		);
+		const result = await warmThenRender({ tags: "cart" }, tree);
 
 		expect(renderCapture.freshIds).toEqual(["cart"]);
 		const str = JSON.stringify(result);
@@ -950,13 +959,16 @@ describe("Streaming mode", () => {
 	});
 
 	it("partial refetch uses cache mode", async () => {
+		const tree = (
+			<PartialRoot>
+				<Partial id="hero"><Hero /></Partial>
+				<Partial id="stats"><Stats /></Partial>
+			</PartialRoot>
+		);
+		// Warm registry with a streaming render, then refetch.
+		await runWithRequestAsync(fakeRequest(), async () => renderToJSON(tree));
 		await runWithRequestAsync(fakeRequest({ partials: "hero" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="hero"><Hero /></Partial>
-					<Partial id="stats"><Stats /></Partial>
-				</PartialRoot>,
-			),
+			renderToJSON(tree),
 		);
 		expect(renderCapture.mode).toBe("cache");
 	});
@@ -1043,17 +1055,20 @@ describe("Streaming mode", () => {
 		expect(renderCapture.fingerprints).toHaveProperty("stats");
 	});
 
-	it("cache mode renders template and wraps children in error boundaries", async () => {
+	it("cache mode renders only the requested partial as children", async () => {
+		const tree = (
+			<PartialRoot>
+				<Partial id="hero"><Hero /></Partial>
+				<Partial id="stats"><Stats /></Partial>
+			</PartialRoot>
+		);
+		await runWithRequestAsync(fakeRequest(), async () => renderToJSON(tree));
 		await runWithRequestAsync(fakeRequest({ partials: "hero" }), async () =>
-			renderToJSON(
-				<PartialRoot>
-					<Partial id="hero"><Hero /></Partial>
-					<Partial id="stats"><Stats /></Partial>
-				</PartialRoot>,
-			),
+			renderToJSON(tree),
 		);
 
-		expect(renderCapture.template).toBeDefined();
+		// Template is now client-derived, not a server prop.
+		expect(renderCapture.mode).toBe("cache");
 		const children = React.Children.toArray(renderCapture.children);
 		expect(children.length).toBe(1);
 	});
@@ -1085,15 +1100,15 @@ describe("Streaming mode", () => {
 		function CartBadge() { return <span>cart-badge</span>; }
 		function Products() { return <span>products</span>; }
 
-		const { result } = await runWithRequestAsync(
-			fakeRequest({ tags: "cart", cached: "cart:abc,products:def" }),
-			async () =>
-				renderToJSON(
-					<PartialRoot>
-						<Partial id="cart" tags={["cart"]}><CartBadge /></Partial>
-						<Partial id="products"><Products /></Partial>
-					</PartialRoot>,
-				),
+		const tree = (
+			<PartialRoot>
+				<Partial id="cart" tags={["cart"]}><CartBadge /></Partial>
+				<Partial id="products"><Products /></Partial>
+			</PartialRoot>
+		);
+		const result = await warmThenRender(
+			{ tags: "cart", cached: "cart:abc,products:def" },
+			tree,
 		);
 
 		expect(renderCapture.freshIds).toEqual(["cart"]);
@@ -1130,28 +1145,26 @@ describe("Cart invalidation: header must not re-render", () => {
 		return <div data-testid="products">Products here</div>;
 	}
 
+	const cartTree = (
+		<PartialRoot>
+			<Partial id="header">
+				<header>
+					Timestamp: 2024-01-01
+					<Partial id="cart" tags={["cart"]} fallback={<span>?</span>}>
+						<CartBadge quantity={5} />
+					</Partial>
+				</header>
+			</Partial>
+			<main>
+				<Partial id="products"><ProductGrid /></Partial>
+			</main>
+		</PartialRoot>
+	);
+
 	it("tag=cart with cache: only cart is fresh, header and products are cached", async () => {
-		await runWithRequestAsync(
-			fakeRequest({
-				tags: "cart",
-				cached: "header:h1,cart:c1,products:p1",
-			}),
-			async () =>
-				renderToJSON(
-					<PartialRoot>
-						<Partial id="header">
-							<header>
-								Timestamp: 2024-01-01
-								<Partial id="cart" tags={["cart"]} fallback={<span>?</span>}>
-									<CartBadge quantity={5} />
-								</Partial>
-							</header>
-						</Partial>
-						<main>
-							<Partial id="products"><ProductGrid /></Partial>
-						</main>
-					</PartialRoot>,
-				),
+		await warmThenRender(
+			{ tags: "cart", cached: "header:h1,cart:c1,products:p1" },
+			cartTree,
 		);
 
 		expect(renderCapture.freshIds).toEqual(["cart"]);
@@ -1160,27 +1173,9 @@ describe("Cart invalidation: header must not re-render", () => {
 	});
 
 	it("tag=cart with cache: header content is NOT in the rendered output", async () => {
-		const { result } = await runWithRequestAsync(
-			fakeRequest({
-				tags: "cart",
-				cached: "header:h1,cart:c1,products:p1",
-			}),
-			async () =>
-				renderToJSON(
-					<PartialRoot>
-						<Partial id="header">
-							<header>
-								Timestamp: 2024-01-01
-								<Partial id="cart" tags={["cart"]} fallback={<span>?</span>}>
-									<CartBadge quantity={5} />
-								</Partial>
-							</header>
-						</Partial>
-						<main>
-							<Partial id="products"><ProductGrid /></Partial>
-						</main>
-					</PartialRoot>,
-				),
+		const result = await warmThenRender(
+			{ tags: "cart", cached: "header:h1,cart:c1,products:p1" },
+			cartTree,
 		);
 
 		const str = JSON.stringify(result);

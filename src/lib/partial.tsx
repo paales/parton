@@ -31,7 +31,7 @@
  * on every render.
  */
 
-import React, { Suspense, type ReactNode } from "react";
+import React, { type ReactNode } from "react";
 import {
   PartialsClient,
   type PartialDebugEntry,
@@ -44,9 +44,9 @@ import {
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx";
 import { getRequest } from "../framework/context.ts";
 import {
+  clearRoute,
   getRouteSnapshots,
   lookupPartial,
-  registerPartial,
   type PartialSnapshot,
 } from "./partial-registry.ts";
 import {
@@ -61,99 +61,6 @@ interface PartialRootProps {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
-
-/**
- * Build a structural template from the children tree: keyless wrappers
- * are preserved, `<Partial>` elements are replaced with placeholders.
- * The client fills those placeholders from its cache on every render
- * (both streaming and cache modes), so non-requested partials stay
- * visible without re-rendering.
- *
- * This still walks the input JSX — but only for *statically-visible*
- * `<Partial>` elements at the top level. Deep Partials are invisible
- * to this walk (same as before). That's fine: they don't need their
- * own top-level placeholder in the template; they live inside their
- * ancestor's content instead.
- */
-function isPartialElement(
-  node: unknown,
-): node is React.ReactElement<PartialProps> {
-  return React.isValidElement(node) && (node as { type?: unknown }).type === Partial;
-}
-
-/**
- * Seed the route-scoped registry from the JSX tree.
- *
- * This walks `children` looking for `<Partial>` elements visible
- * through the static chain — keyless structural wrappers and the
- * `children` prop of any element, including function components that
- * forward their children. It does NOT see Partials produced inside
- * opaque component bodies (e.g. `.map(p => <Partial/>)`); those get
- * registered by their own render via `<PartialBoundary>`.
- *
- * The purpose is purely to bootstrap the registry so the very first
- * request to a route — even if it's a cache-mode refetch — can
- * resolve requested ids without having to fall back to a full
- * render. Everything else (fingerprints, filter decisions, __inputs,
- * duplicate detection) is handled at render time by `<Partial>` itself.
- */
-function seedRegistry(children: ReactNode, route: string): void {
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) return;
-    if (isPartialElement(child)) {
-      const props = child.props;
-      registerPartial(route, props.id, {
-        content: props.children,
-        fallback: props.fallback ?? null,
-        errorWith: props.errorWith,
-        tags: props.tags ?? [],
-      });
-      seedRegistry(props.children, route);
-    } else if ((child.props as { children?: ReactNode }).children != null) {
-      seedRegistry(
-        (child.props as { children?: ReactNode }).children as ReactNode,
-        route,
-      );
-    }
-  });
-}
-
-function buildTemplate(
-  children: ReactNode,
-  counter = { v: 0 },
-): ReactNode[] {
-  const result: ReactNode[] = [];
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) {
-      result.push(child);
-      return;
-    }
-    if (isPartialElement(child)) {
-      result.push(
-        React.createElement("i", {
-          key: child.props.id,
-          hidden: true,
-          "data-partial": true,
-        }),
-      );
-    } else if ((child.props as { children?: ReactNode }).children != null) {
-      const wrapKey = `_${counter.v++}`;
-      result.push(
-        React.cloneElement(
-          child,
-          { key: wrapKey },
-          ...buildTemplate(
-            (child.props as { children?: ReactNode }).children as ReactNode,
-            counter,
-          ),
-        ),
-      );
-    } else {
-      result.push(React.cloneElement(child, { key: `_${counter.v++}` }));
-    }
-  });
-  return result;
-}
 
 function parseCachedFingerprints(raw: string | null): Map<string, string | null> {
   const out = new Map<string, string | null>();
@@ -240,11 +147,6 @@ export async function PartialRoot({ children }: PartialRootProps) {
 
   const route = requestUrl.pathname;
 
-  // Seed the registry from the static JSX tree. This is the only
-  // static walk in the whole pipeline; everything else is driven by
-  // runtime registration via `<PartialBoundary>`.
-  seedRegistry(children, route);
-
   const partialIds = parseRequestedIds(partialsParam);
   const tagIds = resolveTagsToIds(tagsParam, route);
   const requestedIds =
@@ -285,13 +187,20 @@ export async function PartialRoot({ children }: PartialRootProps) {
     }
   }
 
-  const template = buildTemplate(children);
 
   // ── Streaming mode (full render) ──────────────────────────────────
   if (!state.isPartialRefetch || registryMiss) {
     // Reset to streaming semantics — every Partial renders itself
     // (minus fingerprint-match skips) and each is a live element in
     // the streamed tree.
+    //
+    // Clear any prior snapshots for this route so the registry
+    // reflects ONLY the partials the current layout produces.
+    // Otherwise stale entries (e.g. `page-2` registered when the
+    // user previously visited `?end=2`, but the current render only
+    // has `page-1`) would make future refetches resolve to
+    // cache-mode against a template the client never saw.
+    clearRoute(route);
     const streamState: PartialRequestState = {
       ...state,
       requestedIds: null,
@@ -304,13 +213,12 @@ export async function PartialRoot({ children }: PartialRootProps) {
     // entries the next cache-mode refetch surfaces.
     const debug: PartialDebugEntry[] = [];
 
+    // No server-side template: the client derives it from the
+    // rendered children in `PartialsClient`, removing the need for
+    // `buildTemplate`'s static walk (and the "opaque components can't
+    // contain a Partial" invariant that walk imposed).
     return (
-      <PartialsClient
-        mode="streaming"
-        template={template}
-        debug={debug}
-        fetchMs={0}
-      >
+      <PartialsClient mode="streaming" debug={debug} fetchMs={0}>
         {children}
       </PartialsClient>
     );
@@ -323,6 +231,9 @@ export async function PartialRoot({ children }: PartialRootProps) {
   // which re-registers, applies `__inputs`, and wraps in Suspense +
   // ErrorBoundary. No ancestor components execute — we've lifted the
   // snapshot out of the registry and rendered it directly.
+  //
+  // No server-side template: the client re-renders against the
+  // `_template` it derived during the most recent streaming render.
   enterPartialState(state);
 
   const activeIds = [...(state.requestedIds ?? [])];
@@ -344,7 +255,6 @@ export async function PartialRoot({ children }: PartialRootProps) {
   return (
     <PartialsClient
       mode="cache"
-      template={template}
       debug={debug}
       fetchMs={0}
     >

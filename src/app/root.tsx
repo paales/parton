@@ -60,9 +60,7 @@ export function Root() {
           </head>
         </Partial>
         <body>
-          <Partial id="nav">
-            <AppNav />
-          </Partial>
+          <AppNav />
           {pickRoute(url, [
             ["/magento", () => MagentoPage()],
             ["/magento/*", () => MagentoPage()],

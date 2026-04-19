@@ -129,7 +129,6 @@ interface PartialsClientProps {
    *   and the rest are served from the client cache.
    */
   mode?: "streaming" | "cache";
-  template: ReactNode;
   /** Per-partial debug metadata */
   debug: PartialDebugEntry[];
   /** Total fetch time for all parallel queries */
@@ -151,6 +150,19 @@ interface PartialsClientProps {
  */
 function isPlaceholder(child: React.ReactElement): boolean {
   return child.type === "i" && (child.props as any)["data-partial"] === true;
+}
+
+/**
+ * Id for a placeholder `<i>`. Prefer the `data-partial-id` prop, which
+ * is stable, over `node.key`, which Flight can composite with an outer
+ * `.map()` key into `"outer,inner"` for dynamic Partials.
+ */
+function getPlaceholderId(node: React.ReactElement): string | null {
+  const props = node.props as { ["data-partial-id"]?: unknown };
+  if (typeof props["data-partial-id"] === "string") {
+    return props["data-partial-id"];
+  }
+  return node.key != null ? String(node.key) : null;
 }
 
 /**
@@ -189,10 +201,11 @@ function substituteNested(
 
   if (!isValidElement(node)) return node;
 
-  // Placeholder: substitute from cache (placeholders carry the id on key).
-  if (node.key != null && isPlaceholder(node)) {
-    const id = String(node.key);
-    if (id !== skipId) return cache.get(id) ?? node;
+  // Placeholder: substitute from cache. Id comes from the
+  // `data-partial-id` prop (stable), not the key (Flight composites).
+  if (isPlaceholder(node)) {
+    const id = getPlaceholderId(node);
+    if (id && id !== skipId) return cache.get(id) ?? node;
   }
 
   // Partial-shape wrapper: substitute with the cache entry if it
@@ -291,6 +304,57 @@ function cacheFromStreamingChildren(
   }
 }
 
+/**
+ * Walk the streamed children tree and produce a structural template:
+ * DOM wrappers and non-partial elements preserved with stable keys,
+ * partial wrappers replaced with `<i data-partial hidden key={id}>`
+ * placeholders.
+ *
+ * This is the client-side replacement for the old server-side
+ * `buildTemplate` walk. Running on the client means we see the tree
+ * AFTER `<Partial>` bodies have decided fresh-vs-skip, so opaque
+ * server components only execute once (via the streamed `children`
+ * path). No more "Partial inside an opaque component must be wrapped
+ * at the callsite" invariant.
+ *
+ * Same lazy-safety rule as `cacheFromStreamingChildren`: stop at
+ * partial wrappers (don't descend into their children, which may be
+ * unresolved Flight lazies). Everything non-partial walks freely.
+ */
+function deriveTemplate(node: ReactNode): ReactNode {
+  if (node == null || typeof node === "boolean") return node;
+  if (typeof node === "string" || typeof node === "number") return node;
+  if (Array.isArray(node)) {
+    return node.map((c) => deriveTemplate(c as ReactNode));
+  }
+  const unwrapped = unwrapLazy(node);
+  if (unwrapped !== node) {
+    return deriveTemplate(unwrapped as ReactNode);
+  }
+  if (!isValidElement(node)) return node;
+
+  if (isPartialWrapper(node)) {
+    const id = getPartialId(node);
+    return id ? <i key={id} hidden data-partial data-partial-id={id} /> : node;
+  }
+  if (isPlaceholder(node)) {
+    // Already a placeholder (server emitted a fingerprint-match skip);
+    // re-emit with a clean key derived from `data-partial-id` to
+    // undo any Flight key-composite artifacts (e.g. "page-1,page-1"
+    // for .map()-produced placeholders).
+    const id = getPlaceholderId(node);
+    return id ? <i key={id} hidden data-partial data-partial-id={id} /> : node;
+  }
+
+  const inner = (node.props as any)?.children;
+  if (inner == null) return node;
+  const newInner = deriveTemplate(inner);
+  if (newInner === inner) return node;
+  return Array.isArray(newInner)
+    ? cloneElement(node, {}, ...newInner)
+    : cloneElement(node, {}, newInner);
+}
+
 function renderTemplate(
   template: ReactNode,
   cache: Map<string, ReactNode>,
@@ -302,10 +366,12 @@ function renderTemplate(
       result.push(child);
       return;
     }
-    if (child.key != null && isPlaceholder(child)) {
-      const id = String(child.key);
-      const cached = cache.get(id);
-      if (cached) result.push(substituteNested(cached, cache, id));
+    if (isPlaceholder(child)) {
+      const id = getPlaceholderId(child);
+      if (id) {
+        const cached = cache.get(id);
+        if (cached) result.push(substituteNested(cached, cache, id));
+      }
       return;
     }
     if ((child.props as any).children != null) {
@@ -329,6 +395,19 @@ function renderTemplate(
 const _cache = new Map<string, ReactNode>();
 const _fingerprints = new Map<string, string>();
 let _debug: PartialDebugEntry[] = [];
+
+/**
+ * Structural layout skeleton, derived from the most recent full-payload
+ * render via `deriveTemplate`. Persisted across refetches so the server
+ * doesn't need to ship the template bytes on every partial refetch.
+ * Re-derived whenever a full payload arrives (covers layout changes
+ * across route navigations).
+ *
+ * Keyed by route (pathname + search). Same-URL refetches reuse the
+ * cached template; different-URL navigations re-derive.
+ */
+let _template: ReactNode = null;
+let _templateRoute: string | null = null;
 
 /**
  * Register a partial's fingerprint from the client side.
@@ -487,7 +566,6 @@ export function useActivate(
 
 export function PartialsClient({
   mode = "cache",
-  template,
   debug,
   fetchMs,
   children,
@@ -591,13 +669,26 @@ export function PartialsClient({
   // (`<i data-partial hidden>`) are left alone so the existing cache
   // entry from a prior render still backs the template.
   //
+  // Template is DERIVED on the client from the rendered children (not
+  // built server-side). This means opaque server components only
+  // execute once per request — via the streamed `children` path — and
+  // the "opaque component must be wrapped in a Partial" invariant goes
+  // away. The derived template is persisted in module state so
+  // subsequent cache-mode refetches can reuse it without a server
+  // round-trip.
+  //
   // Fingerprints land in `_fingerprints` via `PartialErrorBoundary`'s
   // render-time `registerClientPartial` call — no props plumbing here.
   if (mode === "streaming") {
     cacheFromStreamingChildren(children, cache);
+    const derived = deriveTemplate(children);
+    _template = derived;
+    if (typeof window !== "undefined") {
+      _templateRoute = window.location.pathname + window.location.search;
+    }
     _debug = [];
 
-    const rendered = renderTemplate(template, cache);
+    const rendered = renderTemplate(derived, cache);
     return (
       <PartialRefetchContext value={dispatchFn}>
         {rendered}
@@ -607,6 +698,11 @@ export function PartialsClient({
   }
 
   // ── Cache mode ──────────────────────────────────────────────────────
+  //
+  // Reuses the client-derived `_template` from the most recent
+  // streaming render. Cache-mode is always preceded by a full render
+  // (either the initial HTML load or a registry-miss fallback), so
+  // `_template` is guaranteed to be populated.
   Children.forEach(children, (child) => {
     if (!isValidElement(child)) return;
     const id = isPartialWrapper(child) ? getPartialId(child) : (child.key != null ? String(child.key) : null);
@@ -619,7 +715,7 @@ export function PartialsClient({
     ...debug,
   ];
 
-  const rendered = renderTemplate(template, cache);
+  const rendered = renderTemplate(_template, cache);
   return (
     <PartialRefetchContext value={dispatchFn}>
       {rendered}

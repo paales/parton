@@ -126,12 +126,15 @@ instead of rendering. The client keeps its existing entry.
 | `<Partial>` body handles all decisions at render time | ✅ shipped |
 | Client `_cache` + `_fingerprints` populated from rendered payload | ✅ shipped |
 | Cache-mode refetch renders from registry snapshots, bypassing ancestors | ✅ shipped |
-| `getCachedPartialIds()` reports deep Partials (fingerprint-skip covers entire tree) | ⬜ todo — currently iterates `_cache` |
-| Client-derived `_template`, persisted across refetches | ⬜ todo — currently server-built via `buildTemplate` |
-| `buildTemplate` + `seedRegistry` removed | ⬜ todo — follows from client-derived template |
-| No "opaque component" invariant; `<AppNav/>` can be declared freely | ⬜ todo — follows from `buildTemplate` removal |
-| One unified `PartialsClient` code path (no `mode="streaming"` vs `mode="cache"`) | ⬜ todo — follows from above |
+| `getCachedPartialIds()` reports deep Partials (fingerprint-skip covers entire tree) | ✅ shipped |
+| Client-derived `_template`, persisted across refetches | ✅ shipped |
+| `buildTemplate` + `seedRegistry` removed | ✅ shipped |
+| No "opaque component" invariant; `<AppNav/>` can be declared freely | ✅ shipped |
+| Server-side registry cleared at the start of each streaming render (stale-shape safety) | ✅ shipped |
 
-When the ⬜ items are done, the architecture in this doc matches the
-code. Until then, `DEFER_ACTIVATORS.md` §Known sharp edges #6 remains
-a real-but-temporary constraint.
+The architecture in this doc matches the code as of 2026-04-18.
+Mode-selection inside `PartialsClient` (`mode="streaming"` vs
+`mode="cache"`) is still an internal distinction for merging fresh
+payloads into the persisted template — the public contract and the
+server's response shape are uniform; only the internal merge path
+differs. Unifying the two is cosmetic and deferred.

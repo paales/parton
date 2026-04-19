@@ -149,8 +149,13 @@ function applyInputs(
 }
 
 function placeholderFor(id: string): ReactElement {
+  // `data-partial-id` is the authoritative source for the id on the
+  // client walks. Flight sometimes composites the outer .map() key
+  // with the element's own key into `"outer,inner"`, which would
+  // break id-lookup by `String(node.key)` for placeholders emitted
+  // inside a `.map()`-produced Partial.
   return (
-    <i key={id} hidden data-partial />
+    <i key={id} hidden data-partial data-partial-id={id} />
   );
 }
 

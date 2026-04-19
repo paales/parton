@@ -82,6 +82,18 @@ export function getRouteSnapshots(
   return registry.get(route);
 }
 
+/**
+ * Drop all snapshots for a route. Called at the start of every
+ * streaming render so the registry reflects ONLY the partials the
+ * current layout produced — stale entries from prior renders (e.g.
+ * `page-2` registered when `?end=2` was visited earlier) do not
+ * linger and cause future refetches to take the cache-mode path
+ * when they should fall back to streaming.
+ */
+export function clearRoute(route: string): void {
+  registry.delete(route);
+}
+
 export function clearRegistry(): void {
   registry.clear();
 }
