@@ -18,6 +18,8 @@
 
 Deliberately skipped (Inertia has these, we don't need them): Deferred Props (Suspense is better), useForm (RSC actions cover it), stacked modals (too specific), full Visit API surface.
 
+Also deliberately skipped (2026-04-19): an `await getLocalStorage('key')` / `getMousePosition()` DSL that would bail a server component's render on a client-state read and re-render when the value arrives. Sharp edges win over ergonomics: (1) hidden control flow — every `await` becomes a latent Partial boundary invisible at the call-site; (2) every read implicitly subscribes, adding a client→server subscription lifecycle the one-shot model doesn't have; (3) per-client cache keys break the `<Partial cache>` model (either explode the cache fleet or disable caching for anything reading client state); (4) SSR has no access to localStorage so every page ships the fallback first, causing a hydration-time flip; (5) streams of client state to the server re-rendering continuously (mouse position, websocket multiplayer) route client-owned data through a request/response abstraction that isn't shaped for it. The existing `<Partial defer={<WhenStored .../>}>` pattern already covers the consent-banner / hydration-dependent-content use case with the defer boundary *visible in the JSX* — that legibility is load-bearing for the "look at the tree and see the boundaries" design promise.
+
 ---
 
 ## State-preserving refetches — RESOLVED (2026-04-16 → 2026-04-17)

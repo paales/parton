@@ -29,8 +29,6 @@
 
 - I read something about a Route cache for the partial templates, we don't strictly have routes in the framework, so what consists as a route?
 
-- As for defer; I see a future where `const consent = async getLocalStorage('consent')` would work. It would immediatly bail the render of the component and show the fallback of the component and move effectively set the component in defer mode from there-on. const {x,y} = getMousePosition(), ahhaha, that would be insane, streaming all the mouse positions to the server and continiously return the newly updated component. Oh that brings in a cute research would websockets with a continuous stream back work, effectively making multiplayer possible.
-
 - Should we do getPartial().header('x') would that be a better equivalent of usePartial()?
 
 - Later: GraphQL @defer support in combination with Suspense.
