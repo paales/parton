@@ -49,6 +49,9 @@ export interface PartialSnapshot {
   cache?: CacheOptions;
 }
 
+// CATEGORY C (notes/SERVER_ISOLATION.md) — route-scoped snapshot store
+// shared across requests. Rebuilt on HMR / process restart; cleared on
+// full streaming renders for a given route via clearRoute(route).
 const registry = new Map<string, Map<string, PartialSnapshot>>();
 
 function routeBucket(route: string): Map<string, PartialSnapshot> {

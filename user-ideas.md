@@ -44,7 +44,5 @@
 
   Attribute selectors eliminate the id-family problem. Instead of PriceOf(sku) you write <Partial tagName="price" data-sku={sku}> and refetch with usePartial('.price[data-sku="ABC"]'). Dynamic partials stop being a special case — they're just selectors. Also worth considering: are ids even necessary, or are they just "tag with a uniqueness constraint"? If you commit to selectors, id might just be syntactic sugar for "tag that must be unique on the page" — and #foo is shorthand for the uniqueness-checked version of .foo. That collapses two concepts into one.
 
-- How is the 'server' doing? I assume each module scoped variable should be request scoped? We can wrap everything in a ALS to get this isolation right?
-
 - Later: GraphQL @defer support in combination with Suspense.
 - Later: GraphQL response cache and query caching. Add a product to the cart and dont need to refetch the cart because the same normalized cache is shared between the two requests, creating a faster roundtrip.

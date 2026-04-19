@@ -23,6 +23,9 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+// CATEGORY C (notes/SERVER_ISOLATION.md) — shared GraphQL response cache.
+// Entries keyed by query hash + variables; safe to share across users for
+// anonymous queries, and authenticated queries should not end up here.
 const cache = new Map<string, CacheEntry>();
 
 import { djb2 as hashQuery } from "./hash.ts";

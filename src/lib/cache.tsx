@@ -133,13 +133,15 @@ class MemoryCacheStore implements CacheStore {
   }
 }
 
+// CATEGORY C (notes/SERVER_ISOLATION.md) — intentional shared cache. Key
+// surface includes per-request variants via the auto-tracked manifest, so
+// entries are safe to share across users.
 const store: CacheStore = new MemoryCacheStore();
 
-// Process-local side-table holding dynamic-partial snapshots per
-// cache key. Populated on miss, read on hit. See the long explanation
-// retained from the previous version: dynamic partial snapshots
-// reference live React element functions that can't serialize, so
-// they stay in-process.
+// CATEGORY C — process-local side-table holding dynamic-partial snapshots
+// per cache key. Populated on miss, read on hit. Dynamic partial snapshots
+// reference live React element functions that can't serialize, so they
+// stay in-process.
 const snapshotIndex = new Map<string, Map<string, PartialSnapshot>>();
 const SNAPSHOT_INDEX_MAX = 10_000;
 
@@ -160,9 +162,16 @@ function setSnapshots(key: string, snaps: Map<string, PartialSnapshot>): void {
  * Lives alongside `snapshotIndex` — process-local, in-memory. Doesn't
  * need to cross process boundaries (a fresh process rebuilds it on
  * first render). Never serialized.
+ *
+ * CATEGORY C (notes/SERVER_ISOLATION.md) — intentional shared.
  */
 const manifestStore = new Map<string, Set<string>>();
 
+// CATEGORY C — SWR in-flight guard. Two concurrent requests may both see
+// !has(key) before either adds; both kick off a refresh. Correctness is
+// fine (both read the stale cached bytes); the extra refresh work in the
+// race window is accepted in exchange for avoiding a mutex. Documented
+// in notes/SERVER_ISOLATION.md §C.
 const refreshing = new Set<string>();
 
 function stableStringify(value: unknown): string {
@@ -682,6 +691,8 @@ async function cacheImpl(
 
 // ─── Miss helpers ──────────────────────────────────────────────────────
 
+// CATEGORY C (notes/SERVER_ISOLATION.md) — cold-miss dedupe. Multiple
+// requests hitting the same cold key share one in-flight render Promise.
 const inFlightMiss = new Map<
   string,
   Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }>
