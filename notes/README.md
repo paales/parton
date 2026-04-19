@@ -7,6 +7,7 @@ design documents and debugging sessions live in `archive/`.
 
 | File | What it covers |
 |---|---|
+| `PARTIAL_ARCHITECTURE.md` | **North-star doc.** The one-paragraph goal, what follows from it, the mental model for server/client state and request lifecycle, and an implementation-status table tracking the convergence of the code against the goal. Read this first. |
 | `LESSONS_FROM_REFACTOR.md` | The 2026-04-18 unified-path refactor — `als.enterWith` vs `als.run`, conditional Suspense wrap, prop-based wrapper detection, `partialId` vs `node.key`, test-mock reset pattern. The authoritative post-mortem for the current Partial runtime. |
 | `LESSONS.md` | Earlier refetch-mechanics lessons (2026-04-16 → 2026-04-17) — bare-key Suspense reconciliation, fingerprint-based skip, flipped transition default, Flight serialization losing implicit keys. Pairs with `LESSONS_FROM_REFACTOR.md`. |
 | `DYNAMIC_PARTIAL_REGISTRY.md` | Why the route-scoped registry exists, how `<PartialBoundary>` populates it during render, how `<PartialRoot>` consults it on refetch. Updated 2026-04-18 for the unified-path model. |

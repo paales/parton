@@ -358,12 +358,20 @@ let _transientParams: Record<string, string | null> | null = null;
  * Module-level accessor for cached partial tokens.
  * Returns "id:fingerprint" pairs so the server can detect shape changes.
  * Used by the browser entry to send ?cached= during navigation.
+ *
+ * Source of truth is `_fingerprints`, not `_cache`. Every rendered
+ * Partial — top-level OR deep (`.map()`-generated, nested inside an
+ * ancestor's subtree) — registers its fingerprint client-side as its
+ * wrapper mounts via `PartialErrorBoundary`. Reporting from
+ * `_fingerprints` means the skip-on-unchanged optimization applies
+ * uniformly across the entire tree; deep Partials that live inside
+ * an ancestor's `_cache` entry (rather than as a standalone key) are
+ * reported correctly. See `notes/PARTIAL_ARCHITECTURE.md`.
  */
 export function getCachedPartialIds(): string[] {
   const out: string[] = [];
-  for (const id of _cache.keys()) {
-    const fp = _fingerprints.get(id);
-    out.push(fp ? `${id}:${fp}` : id);
+  for (const [id, fp] of _fingerprints) {
+    out.push(`${id}:${fp}`);
   }
   return out;
 }
