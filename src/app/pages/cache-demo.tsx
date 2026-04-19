@@ -70,10 +70,10 @@ function Clock() {
   );
 }
 
-export function CacheDemoPage() {
+export async function CacheDemoPage() {
   const url = new URL(getRequest().url);
   const flavor = url.searchParams.get("flavor") ?? "vanilla";
-  const stats = _cacheStats();
+  const stats = await _cacheStats();
 
   return (
     <PartialRoot>

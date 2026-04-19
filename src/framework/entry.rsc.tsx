@@ -34,7 +34,7 @@ async function handler(request: Request): Promise<Response> {
           import("../lib/partial-cache.ts"),
           import("../lib/partial-registry.ts"),
         ]);
-      _clearCache();
+      await _clearCache();
       clearCache();
       clearRegistry();
       return new Response("ok", { status: 200 });

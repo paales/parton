@@ -82,10 +82,74 @@ interface Entry {
   dynamicSnapshots: Map<string, PartialSnapshot>;
 }
 
-const MAX_ENTRIES = 10_000;
-const store = new Map<string, Entry>();
+/**
+ * Storage surface for the cache — async by contract so callers have
+ * to `await` every access. The in-memory implementation resolves
+ * immediately, but a real backend (Redis, KV, SQLite, etc.) would
+ * not; keeping the signature async up front prevents sync-only
+ * assumptions (e.g. "the value is there the instant I set it",
+ * "keys() is O(1)") from leaking into `Cache` and becoming bugs
+ * the day someone swaps the implementation.
+ *
+ * LRU semantics are the store's responsibility: the in-memory impl
+ * bumps on `get` (re-insert to move to the tail of the iteration
+ * order) and evicts the oldest on `set` when size exceeds the cap.
+ * A Redis backend would use its own TTL + maxmemory-policy.
+ */
+interface CacheStore {
+  get(key: string): Promise<Entry | undefined>;
+  set(key: string, entry: Entry): Promise<void>;
+  delete(key: string): Promise<void>;
+  clear(): Promise<void>;
+  stats(): Promise<{ size: number; keys: string[] }>;
+}
+
+class MemoryCacheStore implements CacheStore {
+  private readonly map = new Map<string, Entry>();
+  private readonly maxEntries: number;
+
+  constructor(maxEntries = 10_000) {
+    this.maxEntries = maxEntries;
+  }
+
+  async get(key: string): Promise<Entry | undefined> {
+    const entry = this.map.get(key);
+    if (entry !== undefined) {
+      // LRU bump — re-insert to move this key to the tail of the
+      // iteration order.
+      this.map.delete(key);
+      this.map.set(key, entry);
+    }
+    return entry;
+  }
+
+  async set(key: string, entry: Entry): Promise<void> {
+    this.map.set(key, entry);
+    while (this.map.size > this.maxEntries) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+  }
+
+  async delete(key: string): Promise<void> {
+    this.map.delete(key);
+  }
+
+  async clear(): Promise<void> {
+    this.map.clear();
+  }
+
+  async stats(): Promise<{ size: number; keys: string[] }> {
+    return { size: this.map.size, keys: [...this.map.keys()] };
+  }
+}
+
+const store: CacheStore = new MemoryCacheStore();
 /** Async SWR refreshes currently in progress. Prevents duplicate
- *  refreshes when many requests hit a stale entry concurrently. */
+ *  refreshes when many requests hit a stale entry concurrently.
+ *  In-process only — distributed stampede control is a separate
+ *  layer (a distributed lock at the store boundary). */
 const refreshing = new Set<string>();
 
 function stableStringify(value: unknown): string {
@@ -110,23 +174,6 @@ function stableStringify(value: unknown): string {
 
 function hashDep(dep: unknown): string {
   return djb2(stableStringify(dep));
-}
-
-function touch(key: string): void {
-  // Re-insert to bump LRU order.
-  const entry = store.get(key);
-  if (entry) {
-    store.delete(key);
-    store.set(key, entry);
-  }
-}
-
-function evictIfNeeded(): void {
-  while (store.size > MAX_ENTRIES) {
-    const oldest = store.keys().next().value;
-    if (oldest === undefined) break;
-    store.delete(oldest);
-  }
 }
 
 // ─── Lazy-ref resolution ───────────────────────────────────────────────
@@ -609,13 +656,13 @@ export async function Cache({
   const now = Date.now();
   const route = new URL(getRequest().url).pathname;
 
-  const existing = store.get(key);
+  const existing = await store.get(key);
   if (existing) {
     if (existing.expiresAt > now || existing.staleUntil > now) {
       // Fresh or stale-SWR hit. Either way, decode, reinject both
       // static and dynamic partials, and re-register dynamics into
       // the route registry so tag/id refetches can find them.
-      touch(key);
+      // (`store.get` already bumped the LRU order for us.)
       registerDynamicSnapshots(route, existing.dynamicSnapshots);
       // If stale, kick off a background refresh (same flow as miss
       // below).
@@ -711,11 +758,10 @@ async function renderMissAndStore(
     // fresh Partial elements from snapshots on every hit so held
     // content stays live.
     const cleanBytes = await renderAndBuffer(holeTree);
-    store.set(
+    await store.set(
       key,
       freshEntry(cleanBytes, snapshots, ttl, staleWhileRevalidate, Date.now()),
     );
-    evictIfNeeded();
     return snapshots;
   })();
 
@@ -763,12 +809,12 @@ function freshEntry(
 
 // ─── Dev / debugging helpers ────────────────────────────────────────────
 
-export function _cacheStats(): { size: number; keys: string[] } {
-  return { size: store.size, keys: [...store.keys()] };
+export function _cacheStats(): Promise<{ size: number; keys: string[] }> {
+  return store.stats();
 }
 
-export function _clearCache(): void {
-  store.clear();
+export async function _clearCache(): Promise<void> {
+  await store.clear();
   inFlightMiss.clear();
   refreshing.clear();
 }
@@ -776,8 +822,14 @@ export function _clearCache(): void {
 // Dev: invalidate the whole cache on HMR. Cached Flight bytes
 // reference client-component module ids that Vite may reassign
 // between updates; rather than try to detect stale ids, we just
-// blow it away and let misses repopulate.
+// blow it away and let misses repopulate. Fire-and-forget — Vite
+// HMR hooks are synchronous; clearing is cheap enough in-memory
+// that we don't need to serialize against incoming renders.
 if (import.meta.hot) {
-  import.meta.hot.on("vite:beforeUpdate", () => _clearCache());
-  import.meta.hot.on("vite:beforeFullReload", () => _clearCache());
+  import.meta.hot.on("vite:beforeUpdate", () => {
+    void _clearCache();
+  });
+  import.meta.hot.on("vite:beforeFullReload", () => {
+    void _clearCache();
+  });
 }

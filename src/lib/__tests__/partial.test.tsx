@@ -87,8 +87,8 @@ vi.mock("../partial-error-boundary.tsx", () => ({
 // covered by e2e tests.
 vi.mock("../cache.tsx", () => ({
 	Cache: ({ children }: { children: React.ReactNode }) => children,
-	_cacheStats: () => ({ size: 0, keys: [] }),
-	_clearCache: () => {},
+	_cacheStats: async () => ({ size: 0, keys: [] }),
+	_clearCache: async () => {},
 }));
 
 import { PartialRoot, Partial } from "../partial.tsx";
