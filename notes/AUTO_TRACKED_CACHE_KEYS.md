@@ -64,7 +64,9 @@ Initial set:
 | `getCookie(name)`      | `cookie:${name}`               |
 | `getHeader(name)`      | `header:${name.toLowerCase()}` |
 | `getSearchParam(name)` | `url:${name}`                  |
-| `getPathname()`        | `url:_pathname`                |
+| `getRoute(pattern)`    | `route:${pattern}`             |
+
+`getRoute("/p/:slug")` matches the current pathname against a pattern with `:name` segments and returns the extracted params. At manifest-resolution time the pattern is re-matched against the live request, so two requests on different products produce different values under the *same* manifest key — one registry snapshot can serve the whole `/p/:slug` family (the closure-prop alternative would require per-pathname snapshots). `getPathname()` was removed on 2026-04-20 — it was equivalent to "my cache varies by full pathname" which is the anti-pattern `getRoute` is designed to replace.
 
 `getRequest()` itself stays available as the unstructured escape hatch but does **not** participate in tracking — its return value is the whole `Request` object and the runtime can't tell what the caller will pluck off it. Calling `getRequest().headers.get("x-foo")` and not also calling `getHeader("x-foo")` is the same class of bug as forgetting an `vary` key under today's manual model. We'll surface it as a dev-mode warning ("you read from `getRequest()` inside a cached Partial; the result is not in the cache key — use `getHeader`/etc. or move it into `cache.vary`").
 
@@ -87,7 +89,7 @@ Two checks, fired at different points in the render:
    ```
    HoistingViolationError: Partial "products" read "url:promo" on this render,
    but its previous renders didn't read it. Request accessors (getCookie /
-   getHeader / getSearchParam / getPathname) must be called unconditionally
+   getHeader / getSearchParam / getRoute) must be called unconditionally
    at the top of the component body, like React hooks. Move the read above
    any conditional branching, or — if the input genuinely shouldn't
    participate in the cache key — pass it through cache.vary instead.
@@ -241,7 +243,7 @@ Three top-level cache-related props collapse to one nested object. That object r
 
 ## What landed
 
-- [x] Tracked accessors in `src/framework/context.ts`: `getCookie`, `getHeader`, `getSearchParam`, `getPathname`. Each pushes `kind:name` into the ALS-held `ManifestScope`.
+- [x] Tracked accessors in `src/framework/context.ts`: `getCookie`, `getHeader`, `getSearchParam`, `getRoute`. Each pushes `kind:name` into the ALS-held `ManifestScope`. (`getPathname` was removed on 2026-04-20 — equivalent to "cache varies by full pathname", which is the anti-pattern `getRoute` replaces.)
 - [x] `<Cache>` opens a fresh `ManifestScope` per call. Nested Partials get their own scope (ALS scopes stack naturally).
 - [x] `manifestStore: Map<id+fp+ids-hash, Set<string>>` (process-local, in `cache.tsx`).
 - [x] Key derivation: `${id}:${fp}:${djb2(ids.join(","))}:${djb2(stableStringify([manifestValues, vary]))}`.
@@ -252,7 +254,7 @@ Three top-level cache-related props collapse to one nested object. That object r
 
 Tests:
 
-- [x] Manifest population for cookie / header / url / pathname (`tracked-accessors.test.ts`).
+- [x] Manifest population for cookie / header / url / route (`tracked-accessors.test.ts`).
 - [x] Nested scopes attribute reads correctly (`tracked-accessors.test.ts`).
 - [x] Hoisting violation throws with partialId + key + previous keys + suggested fix (`tracked-accessors.test.ts`).
 - [x] First render with `stored: null` doesn't throw (`tracked-accessors.test.ts`).

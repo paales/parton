@@ -9,7 +9,7 @@ import {
 import { LoadMore, PageSentinel } from "../components/load-more.tsx";
 import { client } from "../data.ts";
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts";
-import { getRequest } from "../../framework/context.ts";
+import { getRequest, getRoute } from "../../framework/context.ts";
 
 const PAGE_SIZE = 24;
 
@@ -132,8 +132,13 @@ function extractSprite(sprites: unknown): string | null {
 
 export function PokemonPage() {
   const url = new URL(getRequest().url);
-  const pokemonMatch = url.pathname.match(/^\/pokemon\/(\d+)$/);
-  const pokemonId = pokemonMatch ? Number(pokemonMatch[1]) : undefined;
+  // `/pokemon/:id` extracted via the framework's tracked accessor.
+  // Only consume the result if the id is numeric — the pattern matches
+  // any non-slash segment, so `/pokemon/nav` would otherwise leak
+  // through as a "non-numeric id".
+  const routeIdStr = getRoute("/pokemon/:id")?.id;
+  const pokemonId =
+    routeIdStr && /^\d+$/.test(routeIdStr) ? Number(routeIdStr) : undefined;
   const searchMode = url.searchParams.get("search") as "url" | "partial" | null;
   const searchOpen = searchMode != null;
   const searchQuery = url.searchParams.get("q") ?? "";

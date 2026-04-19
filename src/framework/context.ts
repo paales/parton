@@ -6,7 +6,7 @@
  * Set-Cookie headers for the response.
  *
  * Tracked accessors (`getCookie`, `getHeader`, `getSearchParam`,
- * `getPathname`) additionally push their `(kind, name)` into a
+ * `getRoute`) additionally push their `(kind, name)` into a
  * per-Partial *access manifest* held in a second ALS slot. A cached
  * Partial uses that manifest as its cache key surface — so the author
  * doesn't have to re-declare which cookies/headers/URL params their
@@ -105,7 +105,7 @@ export class HoistingViolationError extends Error {
     super(
       `Partial "${partialId}" read "${newKey}" on this render, but its previous ` +
         `renders didn't read it. Request accessors (getCookie / getHeader / ` +
-        `getSearchParam / getPathname) must be called unconditionally at the ` +
+        `getSearchParam / getRoute) must be called unconditionally at the ` +
         `top of the component body, like React hooks. Move the read above ` +
         `any conditional branching, or — if the input genuinely shouldn't ` +
         `participate in the cache key — pass it through cache.vary instead. ` +
@@ -155,16 +155,64 @@ export function resolveManifest(manifest: Set<string>): Record<string, string> {
         values[spec] = store.request.headers.get(name) ?? "";
         break;
       case "url":
-        values[spec] =
-          name === "_pathname"
-            ? url.pathname
-            : (url.searchParams.get(name) ?? "");
+        values[spec] = url.searchParams.get(name) ?? "";
         break;
+      case "route": {
+        const matched = matchRoutePattern(url.pathname, name);
+        if (!matched) {
+          values[spec] = "";
+          break;
+        }
+        // Stable serialization: sort keys so manifest hashing is
+        // deterministic regardless of JS object property order.
+        const sorted: Record<string, string> = {};
+        for (const k of Object.keys(matched).sort()) sorted[k] = matched[k];
+        values[spec] = JSON.stringify(sorted);
+        break;
+      }
       default:
         values[spec] = "";
     }
   }
   return values;
+}
+
+/**
+ * Match a URL pathname against a pattern with `:name` segments.
+ *
+ *   matchRoutePattern("/p/bulbasaur", "/p/:slug") → { slug: "bulbasaur" }
+ *   matchRoutePattern("/p/x/reviews/2", "/p/:slug/reviews/:page")
+ *     → { slug: "x", page: "2" }
+ *   matchRoutePattern("/other", "/p/:slug") → null
+ *
+ * Segment semantics:
+ *   - Static segments must match literally.
+ *   - `:name` matches any single non-slash segment; value decoded.
+ *   - Length must match (no optional or wildcard segments for now).
+ *   - Leading / trailing slashes are normalized.
+ *
+ * Kept as a stand-alone helper (not the `URLPattern`-based `matchPath`
+ * from `router.ts`) because this one is small, allocation-light, and
+ * runs inside `resolveManifest` on every cache key build.
+ */
+export function matchRoutePattern(
+  pathname: string,
+  pattern: string,
+): Record<string, string> | null {
+  const pathSegs = pathname.split("/").filter(Boolean);
+  const patSegs = pattern.split("/").filter(Boolean);
+  if (pathSegs.length !== patSegs.length) return null;
+  const params: Record<string, string> = {};
+  for (let i = 0; i < patSegs.length; i++) {
+    const pat = patSegs[i];
+    const seg = pathSegs[i];
+    if (pat.startsWith(":")) {
+      params[pat.slice(1)] = decodeURIComponent(seg);
+    } else if (pat !== seg) {
+      return null;
+    }
+  }
+  return params;
 }
 
 // ─── Tracked accessors ─────────────────────────────────────────────────
@@ -197,9 +245,30 @@ export function getSearchParam(name: string): string | null {
   return new URL(getStore().request.url).searchParams.get(name);
 }
 
-export function getPathname(): string {
-  trackAccess("url", "_pathname");
-  return new URL(getStore().request.url).pathname;
+/**
+ * Match the current request's pathname against a pattern with `:name`
+ * segments and return the extracted params (or `null` if no match).
+ *
+ *   const { slug } = getRoute("/p/:slug") ?? {};
+ *
+ * Tracked as a `<Partial cache>` manifest key. The PATTERN (not the
+ * extracted values) is what gets recorded — resolution re-runs on
+ * every cache-key build, so two requests with different matched
+ * values hash to different entries. Authors who want a single Partial
+ * snapshot to serve every `/p/:slug` URL should prefer this accessor
+ * over closure-capturing props.
+ *
+ * Pattern grammar: static segments + `:name` capture. Matches segment
+ * count exactly; no wildcards / optional segments yet.
+ */
+export function getRoute(
+  pattern: string,
+): Record<string, string> | null {
+  trackAccess("route", pattern);
+  return matchRoutePattern(
+    new URL(getStore().request.url).pathname,
+    pattern,
+  );
 }
 
 export function setCookie(
