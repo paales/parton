@@ -47,6 +47,7 @@ import {
   clearRoute,
   getRouteSnapshots,
   lookupPartial,
+  registerPartial,
   type PartialSnapshot,
 } from "./partial-registry.ts";
 import {
@@ -61,6 +62,58 @@ interface PartialRootProps {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
+
+function isPartialElement(
+  node: unknown,
+): node is React.ReactElement<PartialProps> {
+  return (
+    React.isValidElement(node) && (node as { type?: unknown }).type === Partial
+  );
+}
+
+/**
+ * Walk the current request's JSX tree and overwrite existing registry
+ * snapshots with the fresh content/fallback/tags for each
+ * statically-visible `<Partial>`.
+ *
+ * Why: snapshots captured during an earlier render may have stale
+ * closure state (`<Cache dep={{searchQuery}}>`, async component props
+ * read from the URL via `getRequest()`). A cache-mode refetch of the
+ * same id served from a stale snapshot would re-execute with the old
+ * bindings. `__inputs` can't fix this — `cloneElement` only overrides
+ * props on the outermost JSX element, and can't reach through a
+ * `<Cache>` wrapper to the inner component.
+ *
+ * This walk is a PARTIAL refresh: it updates only ids already in the
+ * registry. New ids are NOT added — that would make registry-miss
+ * detection too optimistic and break shape-change refetches (e.g.
+ * scrolling to page-N when page-N wasn't rendered last time).
+ * Dynamic Partials (generated inside opaque components, invisible to
+ * this walk) register via `<PartialBoundary>` as they run; they
+ * already get fresh bindings that way.
+ */
+function refreshRegistry(children: ReactNode, route: string): void {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return;
+    if (isPartialElement(child)) {
+      const props = child.props;
+      if (lookupPartial(route, props.id)) {
+        registerPartial(route, props.id, {
+          content: props.children,
+          fallback: props.fallback ?? null,
+          errorWith: props.errorWith,
+          tags: props.tags ?? [],
+        });
+      }
+      refreshRegistry(props.children, route);
+    } else if ((child.props as { children?: ReactNode }).children != null) {
+      refreshRegistry(
+        (child.props as { children?: ReactNode }).children as ReactNode,
+        route,
+      );
+    }
+  });
+}
 
 function parseCachedFingerprints(raw: string | null): Map<string, string | null> {
   const out = new Map<string, string | null>();
@@ -146,6 +199,12 @@ export async function PartialRoot({ children }: PartialRootProps) {
   }
 
   const route = requestUrl.pathname;
+
+  // Refresh snapshots for statically-visible Partials from the current
+  // request's JSX. Only updates ids that already have a registry
+  // entry — new ids are added by `<PartialBoundary>` as children
+  // render (streaming mode). See `refreshRegistry` for why.
+  refreshRegistry(children, route);
 
   const partialIds = parseRequestedIds(partialsParam);
   const tagIds = resolveTagsToIds(tagsParam, route);
