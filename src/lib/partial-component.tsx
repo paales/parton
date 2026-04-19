@@ -77,9 +77,22 @@ export interface ActivatorProps {
 }
 
 export interface PartialProps {
-  id: string;
+  /**
+   * Unique-per-page identifier. Addressable via `usePartial("id")` or
+   * `usePartial("#id")`. Optional when `tags` is provided — an id-less
+   * Partial synthesizes `__anon:<sorted-tags>` internally and can only
+   * be refetched via a tag selector (`usePartial(".tag")`).
+   */
+  id?: string;
   children?: ReactNode;
-  tags?: string[];
+  /**
+   * Non-unique labels. Accepts an array or a whitespace-separated
+   * string (`"price product"` ≡ `["price", "product"]`), same shape as
+   * DOM `className`. Used for family-wide refetch/invalidation:
+   * `usePartial(".price")` refetches every Partial with the `price`
+   * tag; `.price.product` matches the intersection.
+   */
+  tags?: string | string[];
   /**
    * Server-side render-output caching. Shape follows HTTP
    * `Cache-Control`: `{maxAge, staleWhileRevalidate, vary?, bypass?}`.
@@ -169,6 +182,42 @@ function applyInputs(
   return content;
 }
 
+/**
+ * Normalize a `tags` prop (array OR whitespace-separated string) into a
+ * deduplicated string array. Empty / all-whitespace input yields `[]`.
+ */
+export function normalizeTags(input: string | string[] | undefined): string[] {
+  if (input == null) return [];
+  const raw = Array.isArray(input) ? input : input.split(/\s+/);
+  const out: string[] = [];
+  for (const t of raw) {
+    const trimmed = t.trim();
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Resolve the effective id for a Partial. If the author passed an `id`
+ * prop, use it. Otherwise synthesize one from sorted tags — lets
+ * anonymous Partials still register / skip / cache under a stable key.
+ * Throws if neither id nor tags is usable (there's no way to address
+ * the Partial at all).
+ */
+function resolveEffectiveId(
+  rawId: string | undefined,
+  tags: string[],
+): string {
+  if (rawId) return rawId;
+  if (tags.length === 0) {
+    throw new Error(
+      "<Partial> requires either `id` or `tags`. An id-less Partial needs " +
+        "at least one tag so it can be addressed via `usePartial(\".tag\")`.",
+    );
+  }
+  return `__anon:${[...tags].sort().join(",")}`;
+}
+
 function placeholderFor(id: string): ReactElement {
   // `data-partial-id` is the authoritative source for the id on the
   // client walks. Flight sometimes composites the outer .map() key
@@ -192,7 +241,7 @@ function placeholderFor(id: string): ReactElement {
  * miss them.
  */
 export function Partial({
-  id,
+  id: rawId,
   children,
   fallback,
   errorWith,
@@ -202,16 +251,22 @@ export function Partial({
 }: PartialProps): ReactNode {
   const state = requirePartialState();
 
+  const effectiveTags = normalizeTags(tags);
+  const id = resolveEffectiveId(rawId, effectiveTags);
+
   if (state.seenIds.has(id)) {
     throw new Error(
-      `Duplicate partial id "${id}". Partial ids must be unique per page.`,
+      rawId
+        ? `Duplicate partial id "${id}". Partial ids must be unique per page.`
+        : `Duplicate anonymous <Partial> with tags [${effectiveTags.join(", ")}]. ` +
+          `Two id-less Partials synthesized the same internal id — add an explicit ` +
+          `id to at least one, or give them distinguishing tags.`,
     );
   }
   state.seenIds.add(id);
 
   const override = state.partialInputs[id];
   const isExplicit = state.explicitIds.has(id);
-  const effectiveTags = tags ?? [];
   const effectiveFallback = fallback ?? null;
 
   // Apply __inputs override (if any) for both the rendered content
@@ -283,6 +338,7 @@ export function Partial({
           key={id}
           partialId={id}
           partialFingerprint={fp}
+          partialTags={effectiveTags}
           fallback={errorWith}
         >
           {dormant}
@@ -321,6 +377,7 @@ export function Partial({
           <PartialErrorBoundary
             partialId={id}
             partialFingerprint={fp}
+            partialTags={effectiveTags}
             fallback={errorWith}
           >
             {effectiveFallback}
@@ -330,6 +387,7 @@ export function Partial({
         <PartialErrorBoundary
           partialId={id}
           partialFingerprint={fp}
+          partialTags={effectiveTags}
           fallback={errorWith}
         >
           {cachedContent}
@@ -340,6 +398,7 @@ export function Partial({
         key={id}
         partialId={id}
         partialFingerprint={fp}
+        partialTags={effectiveTags}
         fallback={errorWith}
       >
         {cachedContent}

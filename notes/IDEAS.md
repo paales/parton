@@ -113,30 +113,27 @@ Open tails:
 
 ---
 
-## Stringly-typed ids — selector-based addressing (2026-04-19)
+## Stringly-typed ids — selector-based addressing — SHIPPED (2026-04-19)
 
-**Problem.** `<Partial id="hero">` on the server and `usePartial("hero")` on the client are linked only by a string. No rename support, no uniqueness guarantee beyond the runtime throw, no help for dynamic ids (`price-${sku}`) that self-register via `PartialBoundary`. `user-ideas.md` §stringly-typed-ids has the raw notes.
+**Resolution.** `<Partial>` now accepts optional `id` and `tags` (as an array OR a whitespace-separated string, like DOM `className`). An id-less Partial synthesizes `__anon:<sorted-tags>` internally — addressable only via a tag selector. `usePartial(selector)` parses one of four shapes:
 
-**Direction being explored: CSS-selector addressing.** Keep the string, but treat it like `className` / `id` on DOM: non-unique `tagName={"price product"}` alongside a unique (optional) `id`. `usePartial` accepts a selector string and the returned handle acts on the matched set:
+- `"hero"` — bare string, by id (back-compat).
+- `"#hero"` — by id (explicit).
+- `".price"` — every Partial tagged `price`.
+- `".price.featured"` — every Partial tagged both `price` AND `featured` (AND intersection).
 
-- `usePartial("#header")` — unique-id match (today's behavior, sugar for "tag with uniqueness constraint").
-- `usePartial(".price")` — every Partial carrying the `price` tag. Refetching the handle refetches all matches.
-- `usePartial('.price[data-sku="ABC"]')` — attribute selector keys by arbitrary data, which eliminates the id-family problem: dynamic Partials stop being a special case.
+A selector matching N ids fans out into one microtask-batched RSC request. `isPending` stays true until every match resolves. Demo at `/selector-demo`; regression cover in `e2e/selector-demo.spec.ts`.
 
-Why this beats the alternatives we considered:
+**Deferred from the original sketch:**
 
-- **Typed handles / `definePartial`** — nice type story but breaks on the server/client split (a server component can't be imported into a client bundle, so `usePartial(HeroHandle)` needs a bundler-level `"use partial"` directive à la `"use server"`. Doable, but large).
-- **Typed factories / partial families** — HOC-shaped, which the user rejected as a primitive. Collapses into the selector story anyway (a family is just `.tagName[attr=value]`).
-- **Codegen union types** — still worth doing as a cheap stepping stone (scan for `<Partial id>` literals, emit `type PartialId = "hero" | …` for autocomplete + typo detection), but doesn't solve dynamic ids.
+- **Attribute selectors (`.price[data-sku="ABC"]`).** Skipped — dynamic Partial families keep using explicit ids (`price-${sku}`) + a shared tag. Attribute selectors would eliminate id-family plumbing entirely but require `data-*` attribute tracking in `PartialSnapshot`; saved for later if the pain shows up.
+- **Collapsing `id` into "tag with uniqueness constraint".** Rejected — ids still show up in `?partials=` URLs, debug logs, and grep. Keeping id as a distinct primitive for unique addressing paid more than it cost.
+- **Codegen union types for ids.** Separate cheap stepping-stone; would be a pure type-level improvement (scan for `<Partial id>` literals, emit `type PartialId = "hero" | …`) and doesn't conflict with anything shipped above.
 
-**Two decisions this design needs.**
+**Growth vectors still open:**
 
-1. Does `usePartial(".price")` return one handle that batches across matches, or a list? Recommend one handle — "refetch the selection" is the operation.
-2. If selectors are the public API, is `id` just "tag with uniqueness constraint"? Likely yes — collapse the concepts. `#foo` becomes the uniqueness-checked form of `.foo`.
-
-**Pseudo-selectors are a growth vector.** `.price:cached`, `.price:stale`, `.price:visible` give you a vocabulary to grow into (condition-scoped invalidation, observability filters) without inventing new APIs per case.
-
-**Tag-first refetch policy.** A related simplification: de-emphasize per-id refetch in favor of tag-based invalidation as the primary channel. Most "refetch this specific thing" calls are really "invalidate this *kind* of thing." If tags are the public API and ids are the internal address, the stringly-typed surface shrinks considerably.
+- **Pseudo-selectors** (`.price:cached`, `.price:visible`) — not needed yet, but the `parseSelector` grammar has room.
+- **Tag-first refetch policy** as the default DX for most invalidation flows — mostly a docs/convention call now that the runtime supports it.
 
 ---
 

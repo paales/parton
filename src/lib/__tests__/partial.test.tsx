@@ -1556,3 +1556,138 @@ describe("Partial defer prop", () => {
 		expect(renderCapture.fingerprints.feed).toBeDefined();
 	});
 });
+
+describe("normalizeTags", () => {
+	it("splits a whitespace-separated string", async () => {
+		const { normalizeTags } = await import("../partial-component.tsx");
+		expect(normalizeTags("price product featured")).toEqual([
+			"price",
+			"product",
+			"featured",
+		]);
+	});
+
+	it("accepts an array as-is", async () => {
+		const { normalizeTags } = await import("../partial-component.tsx");
+		expect(normalizeTags(["cart", "header"])).toEqual(["cart", "header"]);
+	});
+
+	it("deduplicates + trims", async () => {
+		const { normalizeTags } = await import("../partial-component.tsx");
+		expect(normalizeTags("  cart  cart  header ")).toEqual(["cart", "header"]);
+	});
+
+	it("empty / undefined → []", async () => {
+		const { normalizeTags } = await import("../partial-component.tsx");
+		expect(normalizeTags(undefined)).toEqual([]);
+		expect(normalizeTags("")).toEqual([]);
+		expect(normalizeTags("   ")).toEqual([]);
+	});
+});
+
+describe("Partial id optional + tag synthesis", () => {
+	it("accepts a whitespace-separated tags string", async () => {
+		const { result } = await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<PartialRoot>
+					<Partial id="thing" tags="price product">
+						<span>hello</span>
+					</Partial>
+				</PartialRoot>,
+			),
+		);
+		const { lookupPartial } = await import("../partial-registry.ts");
+		const snap = lookupPartial("/test", "thing");
+		expect(snap?.tags).toEqual(["price", "product"]);
+		expect(JSON.stringify(result)).toContain("hello");
+	});
+
+	it("synthesizes __anon:<sorted-tags> id when no id is provided", async () => {
+		await runWithRequestAsync(fakeRequest(), async () =>
+			renderToJSON(
+				<PartialRoot>
+					<Partial tags="cart">
+						<span>anon</span>
+					</Partial>
+				</PartialRoot>,
+			),
+		);
+		const { lookupPartial } = await import("../partial-registry.ts");
+		const snap = lookupPartial("/test", "__anon:cart");
+		expect(snap).toBeDefined();
+		expect(snap?.tags).toEqual(["cart"]);
+	});
+
+	it("throws when neither id nor tags is provided", async () => {
+		await expect(
+			runWithRequestAsync(fakeRequest(), async () =>
+				renderToJSON(
+					<PartialRoot>
+						<Partial>
+							<span>nope</span>
+						</Partial>
+					</PartialRoot>,
+				),
+			),
+		).rejects.toThrow(/requires either `id` or `tags`/);
+	});
+
+	it("throws on duplicate anonymous Partials (same tags)", async () => {
+		await expect(
+			runWithRequestAsync(fakeRequest(), async () =>
+				renderToJSON(
+					<PartialRoot>
+						<>
+							<Partial tags="cart">
+								<span>a</span>
+							</Partial>
+							<Partial tags="cart">
+								<span>b</span>
+							</Partial>
+						</>
+					</PartialRoot>,
+				),
+			),
+		).rejects.toThrow(/Duplicate anonymous/);
+	});
+});
+
+describe("parseSelector + resolveSelector", () => {
+	it("parses #id as id selector", async () => {
+		const { parseSelector } = (await vi.importActual(
+			"../partial-client.tsx",
+		)) as typeof import("../partial-client.tsx");
+		expect(parseSelector("#header")).toEqual({ id: "header", tags: [] });
+	});
+
+	it("parses .tag as one-tag selector", async () => {
+		const { parseSelector } = (await vi.importActual(
+			"../partial-client.tsx",
+		)) as typeof import("../partial-client.tsx");
+		expect(parseSelector(".cart")).toEqual({ tags: ["cart"] });
+	});
+
+	it("parses .tag.tag2 as multi-tag intersection", async () => {
+		const { parseSelector } = (await vi.importActual(
+			"../partial-client.tsx",
+		)) as typeof import("../partial-client.tsx");
+		expect(parseSelector(".price.featured")).toEqual({
+			tags: ["price", "featured"],
+		});
+	});
+
+	it("treats bare strings as ids", async () => {
+		const { parseSelector } = (await vi.importActual(
+			"../partial-client.tsx",
+		)) as typeof import("../partial-client.tsx");
+		expect(parseSelector("search")).toEqual({ id: "search", tags: [] });
+	});
+
+	it("empty selector → empty tags", async () => {
+		const { parseSelector } = (await vi.importActual(
+			"../partial-client.tsx",
+		)) as typeof import("../partial-client.tsx");
+		expect(parseSelector("")).toEqual({ tags: [] });
+	});
+});
+

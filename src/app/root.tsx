@@ -3,6 +3,7 @@ import { MagentoPage } from "./pages/magento/product-list.tsx";
 import { BarePage } from "./pages/bare-stream.tsx";
 import { CacheDemoPage } from "./pages/cache-demo.tsx";
 import { DeferDemoPage } from "./pages/defer-demo.tsx";
+import { SelectorDemoPage } from "./pages/selector-demo.tsx";
 import { PartialRoot, Partial } from "../lib/partial.tsx";
 import { getRequest } from "../framework/context.ts";
 import { matchPath, pickRoute } from "../framework/router.ts";
@@ -15,6 +16,7 @@ export function Root() {
   if (matchPath(url, "/bare")) return <BarePage />;
   if (matchPath(url, "/cache-demo")) return <CacheDemoPage />;
   if (matchPath(url, "/defer-demo")) return <DeferDemoPage />;
+  if (matchPath(url, "/selector-demo")) return <SelectorDemoPage />;
 
   return (
     <PartialRoot>

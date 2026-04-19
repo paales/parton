@@ -53,9 +53,9 @@ const data = await client.request(CartQuery, { cartId });
 
 ## Partials Architecture
 
-Pages are composed of independently re-renderable partials (inspired by Shopify's section rendering). The framework exposes one primitive — `<Partial id="...">` — wrapped by a single framework-owned `<PartialRoot>` at the top of the RSC entry. Page authors never see `<PartialRoot>`; they just use `<Partial>` anywhere in the JSX tree.
+Pages are composed of independently re-renderable partials (inspired by Shopify's section rendering). The framework exposes one primitive — `<Partial>` — wrapped by a single framework-owned `<PartialRoot>` at the top of the RSC entry. Page authors never see `<PartialRoot>`; they just use `<Partial>` anywhere in the JSX tree.
 
-Filter with `?partials=<id>` or `?tags=<tag>`. Refetch with `usePartial(id).refetch()`.
+A Partial is addressable by `id` (unique per page), by `tags` (non-unique labels, like DOM `className`), or both. Filter with `?partials=<id>` or `?tags=<tag>`. Refetch with `usePartial(selector).refetch()` where the selector is one of `"id"` / `"#id"` / `".tag"` / `".tag.tag2"`.
 
 ### Partials must be server components
 
@@ -67,7 +67,7 @@ All `<Partial>` content must render in the RSC environment. Client components ar
 <Partial id="header">
   <header>
     {new Date().toLocaleString()}
-    <Partial id="cart" tags={["cart"]} fallback={<CartBadge quantity={"?"} />}>
+    <Partial id="cart" tags="cart header" fallback={<CartBadge quantity={"?"} />}>
       <CartPartial />
     </Partial>
   </header>
@@ -76,9 +76,18 @@ All `<Partial>` content must render in the RSC environment. Client components ar
 <Partial id="products" cache={{ maxAge: 60 }}>
   <ProductGrid search={search} />
 </Partial>
+
+{/* id-less — addressable only via .ad-slot */}
+<Partial tags="ad-slot">
+  <HouseAd />
+</Partial>
 ```
 
-No namespace. No `<Partials>` wrapper. No `key`. Ids are globally unique per page; duplicates throw during render.
+No namespace. No `<Partials>` wrapper. No `key`.
+
+- **`id`** is optional; when provided, it must be unique per page (duplicates throw). Bare-string and `#id` selectors address it.
+- **`tags`** is optional; accepts an array OR a whitespace-separated string (`"price product"`) mirroring DOM `className`. `.tag` and `.tag.tag2` selectors match.
+- A Partial must have at least one of the two. An id-less Partial synthesizes `__anon:<sorted-tags>` internally.
 
 ### Dynamic Partials (inside `.map()`)
 
@@ -90,10 +99,18 @@ Each Partial computes a structural fingerprint (hash of component types + scalar
 
 ### usePartial hook
 
-`const [refetch, isPending] = usePartial(id);`
+`const [refetch, isPending] = usePartial(selector);`
 
-- `refetch()` — re-render with current props.
-- `refetch({ query: "pika" })` — re-render with `__inputs` overrides applied via `cloneElement`.
+- `refetch()` — re-render the matched Partial(s) with current props.
+- `refetch({ query: "pika" })` — re-render with `__inputs` overrides applied via `cloneElement`. Each matched id gets the same override.
+
+Selector grammar:
+
+- `"hero"` or `"#hero"` — by id.
+- `".cart"` — every Partial tagged `cart`.
+- `".price.featured"` — every Partial tagged both `price` AND `featured` (intersection).
+
+A selector matching multiple ids fans out into one microtask-batched refetch. `isPending` stays `true` until every match resolves. Selectors resolving to zero matches are silent no-ops.
 
 ### Caching (`<Partial cache={…}>`)
 

@@ -418,6 +418,13 @@ function renderTemplate(
  */
 const _cache = new Map<string, ReactNode>();
 const _fingerprints = new Map<string, string>();
+/**
+ * id → Set of tags currently carried by that Partial. Populated by
+ * `PartialErrorBoundary` at render time via `registerClientPartial`.
+ * Lookups by `usePartial(".tag")` intersect across Sets to resolve
+ * a selector to a concrete id list.
+ */
+const _partialTags = new Map<string, Set<string>>();
 let _debug: PartialDebugEntry[] = [];
 
 /**
@@ -434,15 +441,25 @@ let _template: ReactNode = null;
 let _templateRoute: string | null = null;
 
 /**
- * Register a partial's fingerprint from the client side.
+ * Register a partial's fingerprint (and tags) from the client side.
  *
  * Called by `<PartialErrorBoundary>` during its render, which is how
  * each `<Partial>`'s fingerprint gets into `_fingerprints` without a
  * server prop round-trip. Later `getCachedPartialIds()` reads from
- * here to tell the server what's already cached.
+ * here to tell the server what's already cached. Tags go into
+ * `_partialTags` so `usePartial(".tag")` selectors can resolve.
  */
-export function registerClientPartial(id: string, fingerprint: string): void {
+export function registerClientPartial(
+  id: string,
+  fingerprint: string,
+  tags?: readonly string[],
+): void {
   _fingerprints.set(id, fingerprint);
+  if (tags && tags.length > 0) {
+    _partialTags.set(id, new Set(tags));
+  } else {
+    _partialTags.delete(id);
+  }
 }
 
 /**
@@ -495,15 +512,87 @@ export function usePartialParams(): (
 }
 
 /**
- * Hook to interact with a partial — like useActionState for sections.
+ * Parsed selector. An id selector resolves to a single id; a tag
+ * selector resolves to every id carrying ALL listed tags (intersection).
+ */
+interface ParsedSelector {
+  /** Set when the selector addressed a single id directly. */
+  id?: string;
+  /** Tags to intersect when resolving. Empty array for id selectors. */
+  tags: string[];
+}
+
+/**
+ * Parse a selector string:
+ *   - `"#header"` / `"header"` → id selector (bare strings stay ids for
+ *     back-compat with the pre-selector API).
+ *   - `".cart"` → one-tag selector.
+ *   - `".cart.product"` → multi-tag selector (AND / intersection).
  *
- * Binds to one partial by ID. Returns [dispatch, isPending]:
+ * Attribute selectors (`.price[data-sku="ABC"]`) were deferred —
+ * dynamic Partial families still use explicit ids (`price-${sku}`) +
+ * a shared tag.
+ */
+export function parseSelector(sel: string): ParsedSelector {
+  if (sel.length === 0) return { tags: [] };
+  if (sel[0] === "#") return { id: sel.slice(1), tags: [] };
+  if (sel[0] === ".") {
+    const tags = sel
+      .slice(1)
+      .split(".")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    return { tags };
+  }
+  // Bare string: treat as id.
+  return { id: sel, tags: [] };
+}
+
+/**
+ * Resolve a parsed selector against the client-side tag index. Returns
+ * the list of matching ids.
  *
- *   const [dispatch, isPending] = usePartial("search");
- *   dispatch({ query: "bulba" });
+ * Id selectors pass straight through — the client may legitimately
+ * dispatch to an id it doesn't know locally (lazy pagination appending
+ * `page-N+1`, deferred Partials activated by external triggers, etc.).
+ * The server resolves/registers the id on render.
+ *
+ * Tag selectors intersect `_partialTags`: an id matches only if its
+ * registered tag Set is a superset of `tags` (AND semantics). Tag
+ * resolution DOES require client-side knowledge — there's no way to
+ * know which ids carry which tags without having seen them render.
+ */
+export function resolveSelector(parsed: ParsedSelector): string[] {
+  if (parsed.id) return [parsed.id];
+  if (parsed.tags.length === 0) return [];
+  const out: string[] = [];
+  for (const [id, idTags] of _partialTags) {
+    if (parsed.tags.every((t) => idTags.has(t))) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Hook to interact with one or more Partials — like `useActionState`
+ * for re-renderable sections.
+ *
+ * The argument is a selector string:
+ *
+ *   usePartial("search")                 // by id (bare string)
+ *   usePartial("#header")                // by id (explicit)
+ *   usePartial(".cart")                  // all Partials tagged "cart"
+ *   usePartial(".price.featured")        // ids tagged BOTH price AND featured
+ *
+ * Returns `[refetch, isPending]`. Selectors matching multiple Partials
+ * fan out: one microtask-batched RSC request refetches all matches.
+ * `isPending` stays true until every match resolves.
+ *
+ * A selector that resolves to zero matches is a silent no-op —
+ * selector queries against empty sets aren't usually bugs (e.g. the
+ * tagged Partial was elsewhere on a prior page).
  */
 export function usePartial(
-  partialId: string,
+  selector: string,
 ): [
   (
     props?: Record<string, unknown>,
@@ -519,15 +608,22 @@ export function usePartial(
       props?: Record<string, unknown>,
       options?: PartialRefetchOptions,
     ): Promise<void> => {
+      const ids = resolveSelector(parseSelector(selector));
+      if (ids.length === 0) return Promise.resolve();
       setIsPending(true);
-      const p = dispatchFn({
-        id: partialId,
-        props,
-        disableTransition: options?.disableTransition,
-      }).finally(() => setIsPending(false));
+      const promises = ids.map((id) =>
+        dispatchFn({
+          id,
+          props,
+          disableTransition: options?.disableTransition,
+        }),
+      );
+      const p = Promise.all(promises)
+        .then(() => undefined)
+        .finally(() => setIsPending(false));
       return p;
     },
-    [partialId, dispatchFn],
+    [selector, dispatchFn],
   );
 
   return [dispatch, isPending];
@@ -722,6 +818,7 @@ export function PartialsClient({
       if (!liveIds.has(id)) _cache.delete(id);
     }
     _fingerprints.clear();
+    _partialTags.clear();
 
     const rendered = renderTemplate(derived, cache);
     return (
