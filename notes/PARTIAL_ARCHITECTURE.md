@@ -39,10 +39,28 @@ not just its static roots.
 
 ## What follows from the goal
 
-**No static walker on the server.** Every decision — render fresh,
-emit placeholder, apply `__inputs`, register in the registry — is
-made inside the `<Partial>` body when it runs. There is no
-pre-walk of the JSX tree.
+**No decision-making static walker on the server.** Every decision
+— render fresh, emit placeholder, apply `__inputs`, register in the
+registry — is made inside the `<Partial>` body when it runs. The
+old `buildTemplate` / `seedRegistry` pre-walks are gone.
+
+Two narrow, non-decision-making walks remain and are load-bearing:
+
+- **`refreshRegistry`** (`partial.tsx`) runs at the top of
+  `PartialRoot` and overwrites existing registry snapshots for
+  statically-visible Partials with the current request's fresh
+  closures. It never adds new ids and makes no render decisions;
+  it exists purely because snapshots captured during an earlier
+  render can carry stale closure bindings (URL-derived props,
+  `<Cache dep={...}>` state) that `cloneElement(__inputs)` can't
+  reach through wrappers. See `DYNAMIC_PARTIAL_REGISTRY.md` and
+  `LESSONS_2026-04-19.md`.
+- **`stripPartials` / `reinject`** (`cache.tsx`) walk the subtree
+  handed to `<Cache>` to hollow out partial-bearing regions
+  before serialization and splice live partial elements back in
+  after decode. This is the strip-on-store / reinject-on-return
+  composition described in the Caching section of the top-level
+  `CLAUDE.md`.
 
 **One primitive, one rule.** `<Partial>` behaves the same whether
 it's at the top of a page, nested inside another Partial, or
@@ -105,9 +123,12 @@ instead of rendering. The client keeps its existing entry.
 
 ## What does not exist (and why)
 
-- **`buildTemplate` / `seedRegistry`** — static JSX walks on the
-  server. Not needed: the client derives the template, and every
-  Partial self-registers at render time.
+- **`buildTemplate` / `seedRegistry`** — pre-render static JSX
+  walks that drove rendering decisions. Not needed: the client
+  derives the template, and every Partial self-registers at
+  render time. (The remaining targeted walks — `refreshRegistry`
+  and `stripPartials` — refresh snapshots and rewrite cached
+  subtrees; they do not gate rendering.)
 - **"Opaque component contains Partial" invariant** — gone.
   `<AppNav/>` can hold a `<Partial>` inside and live anywhere in the
   JSX tree; render-time registration doesn't care about JSX

@@ -13,29 +13,33 @@
 - **`defer={true}` as an escape hatch** for activation that isn't structural — cookie banner, websocket, cross-page signal — so the Partial doesn't need to contain its own trigger.
 - **Uniform contract** for activators: `{ partialId, children }` both injected.
 
-Previously rejected in `archive/PARTIAL_WRAPPER_DESIGN.md` §11 on the argument "app logic doesn't fit in a config DSL". That argument still holds for an enum/object DSL (`defer={{on: "visible", debounce: 300}}`). It doesn't hold against `defer={<ActivatorElement/>}`: the activator IS app code, just reshaped into a component slot.
+Previously rejected in `/archive/PARTIAL_WRAPPER_DESIGN.md` §11 on the argument "app logic doesn't fit in a config DSL". That argument still holds for an enum/object DSL (`defer={{on: "visible", debounce: 300}}`). It doesn't hold against `defer={<ActivatorElement/>}`: the activator IS app code, just reshaped into a component slot.
 
 ## Shape
 
 ```tsx
-<Partial id="feed" fallback={<Skel/>} defer={<WhenVisible rootMargin="200px"/>}>
-  <Feed/>
+<Partial
+  id="feed"
+  fallback={<Skel />}
+  defer={<WhenVisible rootMargin="200px" />}
+>
+  <Feed />
 </Partial>
 ```
 
 Three modes for `defer`:
 
-| Value | Semantics |
-|---|---|
-| unset / `false` | Eager render (existing behavior). |
-| `true` | Emit fallback; no automatic trigger. App calls `usePartial(id).refetch()` from anywhere. |
-| `ReactElement` | Framework clones with `{partialId, children: fallback}`. Activator renders fallback + installs trigger. |
+| Value           | Semantics                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| unset / `false` | Eager render (existing behavior).                                                                       |
+| `true`          | Emit fallback; no automatic trigger. App calls `usePartial(id).refetch()` from anywhere.                |
+| `ReactElement`  | Framework clones with `{partialId, children: fallback}`. Activator renders fallback + installs trigger. |
 
 ## Activator contract
 
 ```ts
 interface ActivatorProps {
-  partialId?: string;   // INJECTED — required at runtime; optional at type level
+  partialId?: string; // INJECTED — required at runtime; optional at type level
   children?: ReactNode; // INJECTED — the fallback
 }
 ```
@@ -49,7 +53,7 @@ Every activator is one `useActivate` call:
 ```ts
 useActivate(partialId, (fire) => {
   const obs = new IntersectionObserver(
-    (e) => e.some(x => x.isIntersecting) && fire(),
+    (e) => e.some((x) => x.isIntersecting) && fire(),
     { rootMargin, threshold },
   );
   obs.observe(node);

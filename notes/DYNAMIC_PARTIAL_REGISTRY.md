@@ -3,7 +3,7 @@
 **Added:** 2026-04-16
 **Updated:** 2026-04-19 (static walker fully removed — see `LESSONS_2026-04-19.md`)
 **Files:** `src/lib/partial-registry.ts`, `src/lib/partial-component.tsx`, `src/lib/partial.tsx`
-**Related:** `SERVER_CACHE_NOTES.md` (composition with `<Cache>`), `PARTIAL_CACHE_DESIGN.md` (fold Cache into Partial), `archive/PARTIAL_WRAPPER_DESIGN.md` (historical `<Partial>` API proposal)
+**Related:** `SERVER_CACHE_NOTES.md` (composition with `<Cache>`), `PARTIAL_CACHE_DESIGN.md` (fold Cache into Partial), `/archive/PARTIAL_WRAPPER_DESIGN.md` (historical `<Partial>` API proposal)
 
 ---
 
@@ -14,13 +14,17 @@ A CMS page often produces one Partial per row inside an async component:
 ```tsx
 async function ProductList() {
   const products = await fetchProducts();
-  return products.map(p => (
+  return products.map((p) => (
     <ProductItem
       key={p.sku}
       product={p}
       // ↓ Partial is produced inside ProductList's *return value*,
       //   not passed as ProductList's children prop.
-      price={<Partial id={`price-${p.sku}`}><GoldPrice sku={p.sku}/></Partial>}
+      price={
+        <Partial id={`price-${p.sku}`}>
+          <GoldPrice sku={p.sku} />
+        </Partial>
+      }
     />
   ));
 }
@@ -54,7 +58,7 @@ the registry as a side effect.
 ```ts
 // src/lib/partial-registry.ts
 interface PartialSnapshot {
-  content: ReactNode;                 // the original children JSX
+  content: ReactNode; // the original children JSX
   fallback: ReactNode;
   errorWith: ReactNode | undefined;
   tags: string[];
@@ -76,10 +80,17 @@ renders `<PartialBoundary>`, which side-effects into the registry
 as React executes it:
 
 ```tsx
-export function PartialBoundary({ id, content, fallback, errorWith, tags, children }) {
+export function PartialBoundary({
+  id,
+  content,
+  fallback,
+  errorWith,
+  tags,
+  children,
+}) {
   const route = new URL(getRequest().url).pathname;
   registerPartial(route, id, { content, fallback, errorWith, tags });
-  return children;          // pass-through
+  return children; // pass-through
 }
 ```
 
@@ -113,10 +124,13 @@ renders its snapshot as a flat sibling:
 // sketch — see src/lib/partial.tsx
 for (const id of requestedIds) {
   const snap = lookupPartial(routePath, id);
-  if (!snap) { registryMiss = true; break; }
+  if (!snap) {
+    registryMiss = true;
+    break;
+  }
   activeEntries.push({ id, snap });
 }
-if (registryMiss) return fullStreamingRender();   // re-populates registry
+if (registryMiss) return fullStreamingRender(); // re-populates registry
 ```
 
 Tag resolution works the same way — iterate the route's snapshots,
@@ -194,7 +208,7 @@ to reuse the same fake URL (`http://localhost/test`), so entries
 from one test leak into the next. `partial.test.tsx` has a
 top-level `beforeEach(clearRegistry)` to neutralize this.
 
-## 9. What the registry does *not* do
+## 9. What the registry does _not_ do
 
 **It doesn't skip ancestor execution on a full render.** On a
 dynamic-partial refetch (`?partials=price-X`), the registry lets the
@@ -219,7 +233,7 @@ producer in `<Cache>`:
 On a cache hit, ProductList doesn't run. The cached bytes contain
 keyed partial wrappers for each dynamic partial. Client-side
 `substituteNested` (with Flight lazy-ref unwrapping — see
-`archive/STREAMING_DEBUG_NOTES.md · 2026-04-16 · Lazy-ref truncation`)
+`/archive/STREAMING_DEBUG_NOTES.md · 2026-04-16 · Lazy-ref truncation`)
 descends into the cached subtree, finds each wrapper by its
 `partialId` prop, and swaps in the fresh content.
 
@@ -231,6 +245,6 @@ renders the snapshot with optional `__inputs` overrides supplied by
 the client via `usePartial(id).refetch(props)`. Props that travel
 from client to server are user-controllable; the partial's content
 component must validate its own inputs. This is the same trust
-model as today's `__inputs` mechanism. The *type* (e.g. `GoldPrice`
+model as today's `__inputs` mechanism. The _type_ (e.g. `GoldPrice`
 function reference) stays server-side in the registry — only props
 are client-mutable.

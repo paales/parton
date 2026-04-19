@@ -3,7 +3,7 @@
 **Status:** implemented (2026-04-19).
 **Files:** `src/framework/context.ts` (tracked accessors + `ManifestScope` + `HoistingViolationError`), `src/lib/cache-options.ts` (`CacheOptions` type), `src/lib/cache.tsx` (manifest store + key derivation + sync hoisting check), `src/lib/partial-component.tsx` (`PartialProps.cache` shape).
 **Tests:** `src/framework/__tests__/tracked-accessors.test.ts` (manifest + hoisting unit tests), `e2e/cache-auto-tracking.spec.ts` (auto-tracked keys via the cache-demo page).
-**Predecessors (now archived):** `archive/SERVER_CACHE_NOTES.md` (original `<Cache dep>` mechanics), `archive/PARTIAL_CACHE_DESIGN.md` (the fold proposal — superseded by this).
+**Predecessors (now archived):** `/archive/SERVER_CACHE_NOTES.md` (original `<Cache dep>` mechanics), `/archive/PARTIAL_CACHE_DESIGN.md` (the fold proposal — superseded by this).
 
 ---
 
@@ -12,7 +12,7 @@
 Two things, taken together:
 
 1. **`cache` carries Cache-Control directives, not deps.** The cache key is no longer a hash of an author-supplied object; it's derived automatically from the request state the Partial body actually reads.
-2. **The accessor surface (`getCookie`, `getHeader`, `getSearchParam`, …) is tracked.** During render, every accessor call pushes `(kind, name)` into a per-Partial *access manifest*. That manifest is the cache key surface.
+2. **The accessor surface (`getCookie`, `getHeader`, `getSearchParam`, …) is tracked.** During render, every accessor call pushes `(kind, name)` into a per-Partial _access manifest_. That manifest is the cache key surface.
 
 ```tsx
 // Before (PARTIAL_CACHE_DESIGN proposal):
@@ -39,12 +39,12 @@ The author no longer restates dependencies the runtime can already see. The cach
 
 `cache` is an object with HTTP `Cache-Control`-style fields. Presence of the prop opts the Partial into caching; the value carries the directives.
 
-| Field | Type | Meaning |
-|---|---|---|
-| `maxAge` | `number` (seconds) | Fresh window. Equivalent to `Cache-Control: max-age=N`. |
-| `staleWhileRevalidate` | `number` (seconds) | Additional window after `maxAge` during which the stored entry is served stale and a background refresh runs. Same semantics as the HTTP directive. |
-| `vary` | `Readonly<Record<string, string \| number \| boolean \| null \| undefined>>` (optional) | Additional scalar values that identify this snapshot. Canonical case: a dynamic route param like `sku` on a product page — resolved before render, can't be seen by the tracker, but is what makes one product's cached bytes different from another's. Scalar-only by TS: `vary: { product: productObj }` is a type error, forcing the author to pick the identifying field (`{ product: product.id }`). Named after HTTP `Vary`; the bend is that HTTP vary names headers while ours carries already-resolved values. |
-| `bypass` | `boolean` (optional) | Skip caching for this render only. Survives from today's `<Cache>` for dev/preview. |
+| Field                  | Type                                                                                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxAge`               | `number` (seconds)                                                                      | Fresh window. Equivalent to `Cache-Control: max-age=N`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `staleWhileRevalidate` | `number` (seconds)                                                                      | Additional window after `maxAge` during which the stored entry is served stale and a background refresh runs. Same semantics as the HTTP directive.                                                                                                                                                                                                                                                                                                                                                                     |
+| `vary`                 | `Readonly<Record<string, string \| number \| boolean \| null \| undefined>>` (optional) | Additional scalar values that identify this snapshot. Canonical case: a dynamic route param like `sku` on a product page — resolved before render, can't be seen by the tracker, but is what makes one product's cached bytes different from another's. Scalar-only by TS: `vary: { product: productObj }` is a type error, forcing the author to pick the identifying field (`{ product: product.id }`). Named after HTTP `Vary`; the bend is that HTTP vary names headers while ours carries already-resolved values. |
+| `bypass`               | `boolean` (optional)                                                                    | Skip caching for this render only. Survives from today's `<Cache>` for dev/preview.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 Absent `cache` → no caching, render normally.
 
@@ -55,16 +55,16 @@ Absent `cache` → no caching, render normally.
 A small, closed set of typed accessor functions, each of which:
 
 1. Reads from the AsyncLocalStorage-held request store (already exists in `context.ts`).
-2. Pushes `(kind, name) → value` into the per-render *access manifest* held in a separate ALS slot.
+2. Pushes `(kind, name) → value` into the per-render _access manifest_ held in a separate ALS slot.
 
 Initial set:
 
-| Accessor | Manifest key |
-|---|---|
-| `getCookie(name)` | `cookie:${name}` |
-| `getHeader(name)` | `header:${name.toLowerCase()}` |
-| `getSearchParam(name)` | `url:${name}` |
-| `getPathname()` | `url:_pathname` |
+| Accessor               | Manifest key                   |
+| ---------------------- | ------------------------------ |
+| `getCookie(name)`      | `cookie:${name}`               |
+| `getHeader(name)`      | `header:${name.toLowerCase()}` |
+| `getSearchParam(name)` | `url:${name}`                  |
+| `getPathname()`        | `url:_pathname`                |
 
 `getRequest()` itself stays available as the unstructured escape hatch but does **not** participate in tracking — its return value is the whole `Request` object and the runtime can't tell what the caller will pluck off it. Calling `getRequest().headers.get("x-foo")` and not also calling `getHeader("x-foo")` is the same class of bug as forgetting an `vary` key under today's manual model. We'll surface it as a dev-mode warning ("you read from `getRequest()` inside a cached Partial; the result is not in the cache key — use `getHeader`/etc. or move it into `cache.vary`").
 
@@ -74,7 +74,7 @@ Module-level scope (`process.env.NODE_ENV`, in-memory caches) is by definition s
 
 The manifest is a **set**, not a sequence — order doesn't matter, but membership must be stable across renders of the same Partial. If one render reads `cookie:cart_id` and `header:auth`, the next must read the same set.
 
-Why: the cache key derives from the manifest's *contents*. If a request lands on a render branch that only reads `cookie:cart_id`, the key is computed from one cookie. The next request lands on the other branch and reads `cookie:cart_id` + `url:promo` — different key, miss, repopulate, evict the previous entry. The cache thrashes silently. The whole optimisation degrades to "compute every time."
+Why: the cache key derives from the manifest's _contents_. If a request lands on a render branch that only reads `cookie:cart_id`, the key is computed from one cookie. The next request lands on the other branch and reads `cookie:cart_id` + `url:promo` — different key, miss, repopulate, evict the previous entry. The cache thrashes silently. The whole optimisation degrades to "compute every time."
 
 **The rule, framed like React hooks:** request accessors must be called unconditionally, at the top of the Partial body, before any branching. Same shape as `useState` / `useEffect`. The reason differs (we track membership, not position) but the discipline matches: the runtime needs a stable contract about what state this render reads.
 
@@ -96,7 +96,7 @@ Two checks, fired at different points in the render:
 
 2. **Missing-key check (post-render, soft fail).** After the storage branch finishes reading the render output, we compare the produced manifest to the stored one again. The "added" case has already thrown by then, so the only remaining mismatch is "stored had X, current didn't touch X" — a branch that reads strictly less. We log + preserve the existing entry rather than overwrite. Hard-throwing here would require waiting for the full render before sending the response, which would defeat cold-miss streaming.
 
-Both checks run in dev *and* prod — silent thrash is worse than a hard failure (added) or stale serve (missing).
+Both checks run in dev _and_ prod — silent thrash is worse than a hard failure (added) or stale serve (missing).
 
 ### Static lint rule
 
@@ -113,7 +113,9 @@ async function Cart() {
 // ✓ fine
 async function Cart() {
   const id = getCookie("cart_id");
-  if (user.loggedIn) { /* use id */ }
+  if (user.loggedIn) {
+    /* use id */
+  }
 }
 ```
 
@@ -168,10 +170,10 @@ Missing-key case: caught by the post-render comparison in the storage branch. Lo
 
 ## Defer interaction
 
-`defer` controls *when* the body runs (dormant → activated). The cache key still represents *what request state the body depends on when it runs*. Two cases:
+`defer` controls _when_ the body runs (dormant → activated). The cache key still represents _what request state the body depends on when it runs_. Two cases:
 
 1. **Defer is dormant** (first render of a deferred Partial): the body doesn't run. No manifest produced this request. No cache lookup. Fallback emits.
-2. **Activator fires a refetch:** the refetch goes through the ordinary cache path. If the manifest is already known (from any prior render of this Partial in this process), the runtime can compute the key *without* running the body and serve from cache. If the manifest is unknown, the refetch is a cold render that establishes it.
+2. **Activator fires a refetch:** the refetch goes through the ordinary cache path. If the manifest is already known (from any prior render of this Partial in this process), the runtime can compute the key _without_ running the body and serve from cache. If the manifest is unknown, the refetch is a cold render that establishes it.
 
 This means a deferred + cached Partial can serve a warm cache hit on its very first activation if a previous request already populated the manifest. That's the desired behaviour.
 
@@ -228,12 +230,12 @@ There is no `getVary()` accessor. Vary values are Partial configuration, resolve
 
 ## Surface comparison
 
-| Concern | Today | After fold (`PARTIAL_CACHE_DESIGN`) | After this proposal |
-|---|---|---|---|
-| Opt into caching | `<Cache>` wrapper | `cache={…}` prop with deps | `cache={…}` prop with directives |
-| Declare deps | `dep` prop | `cache` value | (auto-tracked, `cache.vary` for the rest) |
-| Freshness | `ttl`, `staleWhileRevalidate` props | same | `cache.maxAge`, `cache.staleWhileRevalidate` |
-| Skip cache | `bypass` prop | `bypass` prop | `cache.bypass` |
+| Concern          | Today                               | After fold (`PARTIAL_CACHE_DESIGN`) | After this proposal                          |
+| ---------------- | ----------------------------------- | ----------------------------------- | -------------------------------------------- |
+| Opt into caching | `<Cache>` wrapper                   | `cache={…}` prop with deps          | `cache={…}` prop with directives             |
+| Declare deps     | `dep` prop                          | `cache` value                       | (auto-tracked, `cache.vary` for the rest)    |
+| Freshness        | `ttl`, `staleWhileRevalidate` props | same                                | `cache.maxAge`, `cache.staleWhileRevalidate` |
+| Skip cache       | `bypass` prop                       | `bypass` prop                       | `cache.bypass`                               |
 
 Three top-level cache-related props collapse to one nested object. That object reads like an HTTP `Cache-Control` header, which is a familiar mental model.
 
@@ -262,6 +264,6 @@ Tests:
 
 - **`getRequest()` warning vs error.** Today it's the only way to read arbitrary request state. Promoting accessor surface to "the only tracked path" + warning on `getRequest` inside cached Partials seems right. Hard error feels too aggressive while the accessor surface is still small.
 - **Manifest persistence.** Today's snapshotIndex is process-local; the manifest store has the same property. If we add a distributed entry store later, we either (a) ship manifests alongside entries (small, easy) or (b) accept first-render miss per process (acceptable, see the `existingSnapshots` check in `cache.tsx`).
-- **What counts as the Partial's "body" for ALS scope.** Currently `Partial({...})` is sync and the user's content is rendered as children inside `<Cache>`. The manifest needs to span the user's component execution, not just the `Partial` function call. The cleanest scope is around the *content* render — open at the top of the cache miss path, close after content resolves. On a cache hit, no manifest open (we already have one stored).
+- **What counts as the Partial's "body" for ALS scope.** Currently `Partial({...})` is sync and the user's content is rendered as children inside `<Cache>`. The manifest needs to span the user's component execution, not just the `Partial` function call. The cleanest scope is around the _content_ render — open at the top of the cache miss path, close after content resolves. On a cache hit, no manifest open (we already have one stored).
 - **Nested Partials and manifest scope.** A Partial inside another Partial gets its own manifest (its own id). The outer Partial's manifest does **not** include accessor calls made inside the inner Partial. Mechanically: the inner Partial opens its own ALS scope that shadows the outer one for the duration of its body. Need to validate this lines up with how AsyncLocalStorage nests in practice (it does — `als.run` creates a new context, returns to the outer on exit).
 - **Server actions.** A server action that reads request state and returns `invalidate: { tags: [...] }` doesn't need a manifest — actions don't participate in caching directly. But if a future API ever caches action responses, the same model applies.

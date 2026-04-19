@@ -27,7 +27,7 @@ Deliberately skipped (Inertia has these, we don't need them): Deferred Props (Su
 19.3 on a bare-key refetch reconciles in place AND streams per-chunk
 (outside transitions), so the fresh-mount / revalidate split was
 unnecessary. Full write-up: `LESSONS.md` §1–§3 and
-`archive/BARE_KEY_REFETCH.md`.
+`/archive/BARE_KEY_REFETCH.md`.
 
 Open tail:
 
@@ -88,10 +88,15 @@ on-store + reinject-on-return` for the implementation notes.
 
 Open tails:
 
-1. **Double-render on miss.** The fix renders, strips, re-encodes.
-   Doubles first-load latency. Acceptable for the demo; if a real
-   miss rate shows up in practice, a "strip while streaming" path
-   would avoid the second render.
+1. **Double-render on miss — RESOLVED.** On cold miss
+   `renderToReadableStream` runs once; `stream.tee()` splits it
+   into a user branch (decoded immediately, streamed to the outer
+   render) and a storage branch (buffered, re-stripped of dynamic
+   wrappers, re-encoded, stored in the background). User-facing
+   latency is not doubled; inner async work (GraphQL) still fires
+   exactly once. CPU / memory overhead from the storage-side
+   encode → decode → re-encode cycle remains, but runs off the
+   critical path. See `renderMissAndStore` in `cache.tsx`.
 2. **Post-HMR cold hit.** If the cache hit lands on a request after
    `clearRegistry()` (HMR, new process), `lookupPartial` returns
    nothing and reinject produces placeholders only. Today this is
@@ -99,3 +104,102 @@ Open tails:
    together via `/__test/clear-caches`, and real dev restarts flush
    both via the HMR listener. Worth keeping in mind if we ever add
    a cross-process cache backend (Redis).
+
+---
+
+## Stringly-typed ids — selector-based addressing (2026-04-19)
+
+**Problem.** `<Partial id="hero">` on the server and `usePartial("hero")` on the client are linked only by a string. No rename support, no uniqueness guarantee beyond the runtime throw, no help for dynamic ids (`price-${sku}`) that self-register via `PartialBoundary`. `user-ideas.md` §stringly-typed-ids has the raw notes.
+
+**Direction being explored: CSS-selector addressing.** Keep the string, but treat it like `className` / `id` on DOM: non-unique `tagName={"price product"}` alongside a unique (optional) `id`. `usePartial` accepts a selector string and the returned handle acts on the matched set:
+
+- `usePartial("#header")` — unique-id match (today's behavior, sugar for "tag with uniqueness constraint").
+- `usePartial(".price")` — every Partial carrying the `price` tag. Refetching the handle refetches all matches.
+- `usePartial('.price[data-sku="ABC"]')` — attribute selector keys by arbitrary data, which eliminates the id-family problem: dynamic Partials stop being a special case.
+
+Why this beats the alternatives we considered:
+
+- **Typed handles / `definePartial`** — nice type story but breaks on the server/client split (a server component can't be imported into a client bundle, so `usePartial(HeroHandle)` needs a bundler-level `"use partial"` directive à la `"use server"`. Doable, but large).
+- **Typed factories / partial families** — HOC-shaped, which the user rejected as a primitive. Collapses into the selector story anyway (a family is just `.tagName[attr=value]`).
+- **Codegen union types** — still worth doing as a cheap stepping stone (scan for `<Partial id>` literals, emit `type PartialId = "hero" | …` for autocomplete + typo detection), but doesn't solve dynamic ids.
+
+**Two decisions this design needs.**
+
+1. Does `usePartial(".price")` return one handle that batches across matches, or a list? Recommend one handle — "refetch the selection" is the operation.
+2. If selectors are the public API, is `id` just "tag with uniqueness constraint"? Likely yes — collapse the concepts. `#foo` becomes the uniqueness-checked form of `.foo`.
+
+**Pseudo-selectors are a growth vector.** `.price:cached`, `.price:stale`, `.price:visible` give you a vocabulary to grow into (condition-scoped invalidation, observability filters) without inventing new APIs per case.
+
+**Tag-first refetch policy.** A related simplification: de-emphasize per-id refetch in favor of tag-based invalidation as the primary channel. Most "refetch this specific thing" calls are really "invalidate this *kind* of thing." If tags are the public API and ids are the internal address, the stringly-typed surface shrinks considerably.
+
+---
+
+## Framework direction — backlog (2026-04-19)
+
+Captured from a design session that walked the full app + lib + framework surface and compared it against `user-ideas.md`. These are directions that are not yet in-flight anywhere; some overlap with user-ideas at a conceptual level but add a concrete shape.
+
+### Request-scoped data loader / dedup
+
+Two Partials that both call `client.request(ProductsQuery)` today each hit the API. There's no per-request memo. A `useLoader(key, fn)` primitive — or a DataLoader-style batcher for per-row fetches — would dedupe within one render and make dynamic Partials (price-per-sku) composable without N+1. This is the simpler, framework-level analogue of the GraphQL normalized cache in `user-ideas.md` §graphql-response-cache; worth shipping first because it's independent of the data layer.
+
+### Optimistic updates as a Partial primitive
+
+Server-action → invalidate is round-tripping. `<Partial optimistic={(prev, input) => next}>` would render the optimistic state immediately and reconcile on commit. Same plumbing as `__inputs`, different phase of the lifecycle. Pairs naturally with the form primitives below.
+
+### Cache invalidation by manifest value
+
+Today `<Cache>` entries can be invalidated by id or tag. The manifest store already records *which* cookies/headers/URL params each entry depends on (see `AUTO_TRACKED_CACHE_KEYS.md`). So `invalidateByManifest({ cookie: "user_id", value: "42" })` could walk the manifest store and drop every entry read under that cookie value. Missing third axis of invalidation; falls out nearly for free from the tracked-accessor design.
+
+### Cross-tab sync via BroadcastChannel
+
+When tab A runs a server action that invalidates `["cart"]`, tab B is stale. A BroadcastChannel propagating invalidation signals across same-origin tabs would make multi-tab behaviour correct by default. Strictly simpler than server-push realtime (no websocket infra) and probably what 90% of apps actually need.
+
+### Re-defer / unmount policy
+
+`DEFER_ACTIVATORS.md` §Known-sharp-edges flags this: once activated, a Partial can't go dormant again. Design space: `<Partial unmountWhen={<WhenHidden/>}>`, memory-pressure eviction, TTL after last interaction. Relevant for long-session CMS pages where hundreds of Partials accumulate.
+
+### Form primitives on top of Partials
+
+React 19 actions + `useFormState` + the existing `invalidate` directive can be unified into a `<PartialForm partial="cart" action={addToCart}>` primitive: action runs, returns new cart, partial re-renders, progressive enhancement works without JS. No new protocol — ergonomics on top of what `entry.rsc.tsx` §server-action-handling already implements.
+
+### Speculation Rules API integration
+
+Browsers now have native prerender/prefetch. A framework-level `<PartialPrefetch>` could emit `<script type="speculationrules">` for likely-next refetch URLs, getting hover-prefetch without JS. Complement to the existing hover-prefetch idea earlier in this doc (§Prefetch-links).
+
+### Flash / toast return channel from server actions
+
+Actions invalidate Partials; they could also `return { flash: "Added to cart" }`. A `<FlashPartial>` that subscribes to action return values and displays transient messages would let actions communicate outcomes without the app hand-wiring channels. Small but high-leverage for CMS authoring flows.
+
+### Deployment-unit split / remote Partials
+
+The strip-and-reinject mechanics in `cache.tsx` already support this: the outer cached bytes can come from anywhere as long as placeholders get reinjected on the way out. Framed this way, each Partial becomes independently deployable — one in a worker, one on origin, one from a CDN HTML fragment. This is probably where the "Remote rendered" idea in `user-ideas.md` naturally wants to land.
+
+### Static export / SSG mode
+
+A build step that renders a route at build time, marks the Partials that can't be prerendered (anything reading cookies/headers — the manifest already tells us), and emits an HTML shell plus stubs for the dynamic Partials. Astro-style "islands of dynamism in a static shell," strongly aligned with the "CMS" framing in the repo name.
+
+---
+
+## Operational concerns — not yet designed (2026-04-19)
+
+Things the framework will need before it can host a real app. Flagged here so they don't get forgotten behind the more interesting primitive work.
+
+- **Error recovery beyond `errorWith`.** `PartialErrorBoundary` exists but the design stops at "show a fallback and a retry button." Missing: typed errors, retry/backoff policies, circuit breakers, serve-stale-on-error (the SWR entry is still there — why not reuse it on transient errors?), error → observability hook.
+- **Testing harness for Partials.** No primitive for unit-testing a single Partial with mocked request context. Would force `getRequest()` / `getCookie()` / etc. to be injectable (not just ambient) and pay large DX dividends.
+- **Accessibility defaults for refetch.** `aria-busy` during pending, focus restoration policy across swaps, live-region announcements. Currently on the app; will be pile-of-ad-hoc in a year.
+- **Per-Partial observability.** Trace context threaded through Partial boundaries so logs group automatically. Pairs with the debug-overlay idea in `user-ideas.md` §partial-debugging-component.
+- **i18n as a Partial concern.** Locale switching that refetches only locale-sensitive Partials (`tags={["i18n"]}`). Locale as a first-class input alongside URL/cookie state.
+- **CMS authoring mode.** Conspicuously absent given the repo name. Directions: draft/preview modes as a Partial property, author-editable regions identified by tag/selector, per-Partial publish workflows, edit-in-place overlays. If the framework's positioning is "CMS," this isn't optional — it's the core use case.
+
+---
+
+## Meta principle — prefer runtime discovery to static analysis (2026-04-19)
+
+Reading the architecture end-to-end, the framework is making two layered claims:
+
+1. **Partials as addressable RSC subtrees** — solid, working, primitive is coherent.
+2. **Runtime discovery over static analysis** — actively converging. Every architectural lessons doc (`LESSONS.md`, `LESSONS_FROM_REFACTOR.md`, `LESSONS_2026-04-19.md`) is about removing one more pre-walk. `refreshRegistry` is the last surviving one, and `user-ideas.md` already flags it as suspect.
+
+The second claim is the one that distinguishes this from Next.js App Router in the long run. Everything that reinstates a static walker (typed partial registries via codegen, explicit route manifests, declarative input schemas resolved at build time) works against it. When evaluating future directions, the test is: *can this self-register at render time instead of requiring a pre-render walk?* The selector addressing scheme above passes that test. Typed-handle codegen fails it. Keep that principle sharp — it's the architectural load-bearing idea and it's easy to erode one convenient walker at a time.
+
+A follow-up question that belongs in this frame: can `refreshRegistry` itself be eliminated by storing snapshots as render-time factories (thunks that re-close over the current request) rather than captured elements? Worth a focused design pass — if it works, claim (2) is fully paid off.

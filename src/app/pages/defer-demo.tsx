@@ -21,14 +21,6 @@ import { AppNav } from "../components/app-nav.tsx";
  *
  * Each activated content renders a server timestamp so the RSC
  * round-trip is visible (and assertable).
- *
- * NOTE on layout: all content is inlined into a single component body,
- * not factored into intermediate `<Section>` server components. Reason:
- * the framework's `buildTemplate` walk only sees Partials that are
- * direct JSX descendants of `<PartialRoot>`. A Partial hidden inside an
- * intermediate opaque component would execute on both the template
- * path and the children path, triggering a duplicate-id error. This
- * mirrors how `<MagentoPage>` is structured.
  */
 function Timestamp({ prefix }: { prefix: string }) {
   return (
