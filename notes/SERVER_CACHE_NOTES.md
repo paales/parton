@@ -104,17 +104,6 @@ module-id references in cached bytes.
   Partial; the Partial's Suspense boundary still wraps as normal.
 
 ## What it can't do (yet / limits)
-
-- **Blocks the outer render until the subtree fully resolves.**
-  `readAll` consumes the entire Flight stream before caching, so on
-  a cold miss the outer render can't stream anything past the
-  `<Cache>` until the subtree completes. For cached-on-hit this is
-  instant, but cold-miss UX loses progressive streaming within the
-  cached range. Mitigation for now: keep cacheable subtrees small
-  and data-bound so the cold render is the only one that blocks.
-  Future: if we ever splice Flight chunks directly into the outer
-  stream (with row-id remapping), streaming within Cache becomes
-  possible.
 - **No tag-based invalidation.** Per user decision — not in this
   spike. Only TTL + LRU + HMR-reset + SWR. A tag layer would add a
   reverse map `Map<tag, Set<cacheKey>>` and a `revalidateTag()`
@@ -273,3 +262,53 @@ when you want to observe the component's fresh output without
 nuking the whole cache. Present in the type signature; cache-demo
 doesn't exercise it directly but `MagentoPage` uses it during
 iteration.
+
+---
+
+## Follow-up (2026-04-19) · streaming within cached subtree on cold miss
+
+### The problem
+
+Cold-cache loads of `/magento` stalled the whole page for ~1s
+before any content — including `LivePriceFallback` Suspense fallbacks
+inside `ProductGrid` — painted. Warm hits worked fine: decode-on-hit
+returns a tree whose live holes re-run per request, so inner Suspense
+fallbacks stream naturally.
+
+Root cause: on miss, `<Cache>` called `renderToReadableStream`, then
+`readAll` to buffer every byte before decoding. `readAll` only resolves
+when the stream closes, which means every inner Suspense chunk has
+already completed. By the time Cache returned, its subtree was fully
+resolved — the outer render never saw a pending boundary to suspend on.
+
+### The fix: `stream.tee()` split
+
+`renderMissAndStore` now tees the inner Flight stream:
+
+1. **User branch** — decoded immediately with `createFromReadableStream`.
+   Inner Suspense boundaries stay as lazy refs; the outer Flight
+   serializer re-emits them as lazy chunks. Client paints fallbacks
+   until each chunk streams in. The render side-effects (Partial
+   self-registration) still happen inline because the inner render
+   proceeds whether or not someone buffers its output.
+2. **Storage branch** — buffered with `readAll` in a background task,
+   decoded, `resolveLazies`'d, stripped of dynamic Partial wrappers,
+   re-encoded as hole-only bytes, and stored. The current response
+   returns without waiting on this; subsequent hits see the stored
+   entry as soon as the task completes.
+
+Regression coverage: `e2e/cache-miss-streaming-fallback.spec.ts`
+asserts the fallback paints >400ms before the content resolves, on
+both cold and warm loads.
+
+### Limits that carry over
+
+- `reinject` (static-partial re-injection) walks the decoded tree but
+  does not descend into lazy chunks. A `<Partial>` placed inside an
+  async component's children — where the rendered placeholder ends up
+  inside a Suspense chunk — would not be reinjected on a streaming
+  miss. None of the current demos exercise that shape; add a dedicated
+  test if it ships.
+- The background storage task runs one extra re-encode (hole-only
+  bytes) per miss. Acceptable: misses are once per key, and hit-path
+  decode is tiny after that.

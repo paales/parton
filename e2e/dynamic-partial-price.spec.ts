@@ -38,9 +38,9 @@ test("dynamic live-price Partial is discoverable and individually refetchable by
 
   // Wait for the price grid to materialize. If the Partial self-wrap
   // weren't running / registering, these wouldn't be here.
-  const firstPrice = page.locator('[data-testid^="live-price-"]').first();
+  const firstPrice = page.locator('[data-testid^="live-price-"][data-price-tick]').first();
   await expect(firstPrice).toBeVisible({ timeout: 15000 });
-  const priceCount = await page.locator('[data-testid^="live-price-"]').count();
+  const priceCount = await page.locator('[data-testid^="live-price-"][data-price-tick]').count();
   expect(priceCount).toBeGreaterThan(1);
 
   const testId = await (await firstPrice.elementHandle())!.getAttribute(
@@ -71,7 +71,7 @@ test("clicking refresh updates the targeted price's tick in the DOM", async ({
 }) => {
   await page.goto("/magento");
 
-  const firstPrice = page.locator('[data-testid^="live-price-"]').first();
+  const firstPrice = page.locator('[data-testid^="live-price-"][data-price-tick]').first();
   await expect(firstPrice).toBeVisible({ timeout: 15000 });
 
   const testId = await (await firstPrice.elementHandle())!.getAttribute(
@@ -83,7 +83,7 @@ test("clicking refresh updates the targeted price's tick in the DOM", async ({
   expect(tickBefore).toBeTruthy();
 
   // Read a sibling product's tick — should stay put across this refresh.
-  const otherPrice = page.locator('[data-testid^="live-price-"]').nth(1);
+  const otherPrice = page.locator('[data-testid^="live-price-"][data-price-tick]').nth(1);
   const otherTickBefore = await otherPrice.getAttribute("data-price-tick");
 
   await page.locator(`[data-testid="refresh-price-${sku}"]`).click();
@@ -122,7 +122,7 @@ test("clicking 'refresh all prices' updates every visible price in one request",
   });
 
   await page.goto("/magento");
-  const firstPrice = page.locator('[data-testid^="live-price-"]').first();
+  const firstPrice = page.locator('[data-testid^="live-price-"][data-price-tick]').first();
   await expect(firstPrice).toBeVisible({ timeout: 15000 });
 
   // Hydration must have installed `window.__rsc_partial_refetch`
@@ -135,7 +135,7 @@ test("clicking 'refresh all prices' updates every visible price in one request",
   );
 
   // Snapshot all visible ticks before the click.
-  const before = await page.$$eval('[data-testid^="live-price-"]', (els) =>
+  const before = await page.$$eval('[data-testid^="live-price-"][data-price-tick]', (els) =>
     els.map((el) => ({
       testId: el.getAttribute("data-testid") ?? "",
       tick: el.getAttribute("data-price-tick") ?? "",
@@ -155,7 +155,7 @@ test("clicking 'refresh all prices' updates every visible price in one request",
   // Every price's tick should update to a new value.
   await expect
     .poll(async () => {
-      const after = await page.$$eval('[data-testid^="live-price-"]', (els) =>
+      const after = await page.$$eval('[data-testid^="live-price-"][data-price-tick]', (els) =>
         els.map((el) => ({
           testId: el.getAttribute("data-testid") ?? "",
           tick: el.getAttribute("data-price-tick") ?? "",

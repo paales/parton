@@ -621,7 +621,7 @@ export async function Cache({
       // below).
       if (existing.expiresAt <= now && !refreshing.has(key)) {
         refreshing.add(key);
-        void refreshEntry(route, key, stripped, partials, ttl, staleWhileRevalidate)
+        void refreshEntry(key, stripped, partials, ttl, staleWhileRevalidate)
           .catch((err) => console.error(`[cache] SWR refresh failed for ${key}:`, err))
           .finally(() => refreshing.delete(key));
       }
@@ -641,7 +641,6 @@ export async function Cache({
   let pending = inFlightMiss.get(key);
   if (!pending) {
     pending = renderMissAndStore(
-      route,
       key,
       stripped,
       staticIdSet,
@@ -652,13 +651,15 @@ export async function Cache({
   }
   const { liveTree } = await pending;
 
-  // Return the ALREADY-RENDERED tree — the dynamic Partials
-  // executed (and registered into the route registry) during the
-  // miss render itself, so the current response has live content
-  // inline. Subsequent hits rehydrate via reinjectDynamic off the
-  // stored snapshots; trying to rebuild the Partials here would
-  // trip `seenIds`'s duplicate-id guard (they already registered
-  // in this same render pass).
+  // `liveTree` is the decoded user-facing branch of the teed Flight
+  // stream. It resolves as soon as the top-level chunk is parsed —
+  // inner Suspense boundaries stay as lazy refs so the outer render
+  // serializes them as lazy chunks and the client sees fallbacks
+  // until they stream in. Dynamic Partials inside registered
+  // themselves during the inner render itself, so `seenIds`'s
+  // duplicate guard is not tripped (we're not rebuilding those
+  // Partials here — they exist as ordinary subtrees inside the
+  // resolved Flight output).
   return reinject(liveTree, partials);
 }
 
@@ -673,45 +674,63 @@ const inFlightMiss = new Map<
 >();
 
 async function renderMissAndStore(
-  route: string,
   key: string,
   stripped: ReactNode,
   staticIds: Set<string>,
   ttl: number | undefined,
   staleWhileRevalidate: number | undefined,
 ): Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }> {
-  const rawBytes = await renderAndBuffer(stripped);
-  const rawDecoded = await createFromReadableStream<ReactNode>(bytesToStream(rawBytes));
-  const rawResolved = await resolveLazies(rawDecoded);
+  // Render the subtree to Flight ONCE, then tee the stream:
+  //   • one branch is decoded immediately and handed back to the
+  //     outer render. Its inner Suspense boundaries stay as lazy
+  //     refs, so the outer Flight serializer re-emits them as lazy
+  //     chunks and the client paints fallbacks until they stream in.
+  //   • the other branch is buffered, fully resolved, stripped of
+  //     dynamic Partial wrappers, re-encoded, and stored. This runs
+  //     in the background so it never blocks the current response.
+  const stream = renderToReadableStream(stripped);
+  const [userBranch, storageBranch] = stream.tee();
 
-  // Strip dynamic Partial wrappers from the rendered tree. Anything
-  // already accounted for by `staticIds` (ie. stripPartials saw it
-  // in the input JSX) is skipped — we don't want to double-strip.
-  const { stripped: holeTree, snapshots: dynamicSnapshots } = stripDynamicWrappers(
-    rawResolved,
-    staticIds,
-  );
+  const dynamicSnapshotsPromise = (async () => {
+    const rawBytes = await readAll(storageBranch);
+    const rawDecoded = await createFromReadableStream<ReactNode>(
+      bytesToStream(rawBytes),
+    );
+    const rawResolved = await resolveLazies(rawDecoded);
 
-  // Re-encode the fully-stripped tree for storage. This is the
-  // second render on miss — acceptable since misses happen once
-  // per key, and the hit-path decode is then tiny (placeholders
-  // only) and hydration is live (reinjectDynamic rebuilds fresh
-  // Partials from snapshots per request).
-  const cleanBytes = await renderAndBuffer(holeTree);
-  store.set(
-    key,
-    freshEntry(cleanBytes, dynamicSnapshots, ttl, staleWhileRevalidate, Date.now()),
-  );
-  evictIfNeeded();
+    // Strip dynamic Partial wrappers from the rendered tree.
+    // `staticIds` accounts for partials that `stripPartials` already
+    // pulled from the INPUT JSX; we don't want to double-strip those.
+    const { stripped: holeTree, snapshots } = stripDynamicWrappers(
+      rawResolved,
+      staticIds,
+    );
 
-  // Return the LIVE pre-strip tree — dynamic partials already ran
-  // during this render pass, so we hand that back for the current
-  // response. Future hits will reinject fresh from snapshots.
-  return { liveTree: rawResolved, dynamicSnapshots };
+    // Re-encode the fully-stripped tree for storage. Hit-path decode
+    // is then tiny (placeholders only); reinjectDynamic rebuilds
+    // fresh Partial elements from snapshots on every hit so held
+    // content stays live.
+    const cleanBytes = await renderAndBuffer(holeTree);
+    store.set(
+      key,
+      freshEntry(cleanBytes, snapshots, ttl, staleWhileRevalidate, Date.now()),
+    );
+    evictIfNeeded();
+    return snapshots;
+  })();
+
+  // Don't drop uncaught background errors — surface them so a broken
+  // storage path is visible instead of silently poisoning future hits
+  // (which would correctly take the miss path but do so forever).
+  dynamicSnapshotsPromise.catch((err) => {
+    console.error(`[cache] storage finalize failed for ${key}:`, err);
+  });
+
+  const liveTree = await createFromReadableStream<ReactNode>(userBranch);
+  return { liveTree, dynamicSnapshots: new Map() };
 }
 
 async function refreshEntry(
-  route: string,
   key: string,
   stripped: ReactNode,
   partials: Map<string, ReactElement>,
@@ -723,7 +742,7 @@ async function refreshEntry(
   // stale bytes; this runs in the background.
   void partials; // reserved for future: static partials could drift too
   const staticIds = new Set<string>(); // refresh only the bytes + dynamic set
-  await renderMissAndStore(route, key, stripped, staticIds, ttl, staleWhileRevalidate);
+  await renderMissAndStore(key, stripped, staticIds, ttl, staleWhileRevalidate);
 }
 
 function freshEntry(
