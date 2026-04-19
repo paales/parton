@@ -18,7 +18,7 @@ import { PartialRoot, Partial } from "../../lib/partial.tsx";
 import { NextObserver } from "../components/next-observer.tsx";
 import { ScrollRestore } from "../components/scroll-restore.tsx";
 import { AppNav } from "../components/app-nav.tsx";
-import { getRequest } from "../../framework/context.ts";
+import { getSearchParam } from "../../framework/context.ts";
 
 const ITEMS_PER_PAGE = 10;
 const ITEM_HEIGHT = 80;
@@ -59,8 +59,7 @@ function PageBlock({ page }: { page: number }) {
 }
 
 export function BarePage() {
-  const url = new URL(getRequest().url);
-  const end = Math.max(1, Number(url.searchParams.get("end")) || 1);
+  const end = Math.max(1, Number(getSearchParam("end")) || 1);
 
   const pages = Array.from({ length: end }, (_, i) => {
     const page = i + 1;

@@ -1,7 +1,7 @@
 import { Partial } from "../../../lib/partial.tsx";
 import { client } from "../../magento-data.ts";
 import { graphql, type ResultOf } from "../../magento-graphql.ts";
-import { getCookie, getRequest } from "../../../framework/context.ts";
+import { getCookie, getSearchParam } from "../../../framework/context.ts";
 import { AddToCartButton } from "./add-to-cart-button.tsx";
 import { CartBadge } from "./cart-badge.tsx";
 import { LivePrice, LivePriceFallback } from "./live-price.tsx";
@@ -46,8 +46,7 @@ type ProductItem = NonNullable<
 >;
 
 export function MagentoPage() {
-  const url = new URL(getRequest().url);
-  const search = url.searchParams.get("q") ?? "";
+  const search = getSearchParam("q") ?? "";
 
   return (
     <>

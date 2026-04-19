@@ -64,9 +64,11 @@ Initial set:
 | `getCookie(name)`      | `cookie:${name}`               |
 | `getHeader(name)`      | `header:${name.toLowerCase()}` |
 | `getSearchParam(name)` | `url:${name}`                  |
-| `getRoute(pattern)`    | `route:${pattern}`             |
+| `getPathname(pattern)` | `pathname:${pattern}`          |
 
-`getRoute("/p/:slug")` matches the current pathname against a pattern with `:name` segments and returns the extracted params. At manifest-resolution time the pattern is re-matched against the live request, so two requests on different products produce different values under the *same* manifest key — one registry snapshot can serve the whole `/p/:slug` family (the closure-prop alternative would require per-pathname snapshots). `getPathname()` was removed on 2026-04-20 — it was equivalent to "my cache varies by full pathname" which is the anti-pattern `getRoute` is designed to replace.
+`getPathname("/p/:slug")` matches the current pathname against a pattern with `:name` segments and returns the extracted params. At manifest-resolution time the pattern is re-matched against the live request, so two requests on different products produce different values under the *same* manifest key — one registry snapshot can serve the whole `/p/:slug` family (the closure-prop alternative would require per-pathname snapshots).
+
+The **pattern argument is required** — there's no zero-arg form. The old `getPathname()` returning the raw pathname string was removed on 2026-04-20 because its manifest key was effectively "cache varies by full URL," which is the anti-pattern this whole design is built to avoid. A required pattern makes the scaling intent explicit at the call site.
 
 `getRequest()` itself stays available as the unstructured escape hatch but does **not** participate in tracking — its return value is the whole `Request` object and the runtime can't tell what the caller will pluck off it. Calling `getRequest().headers.get("x-foo")` and not also calling `getHeader("x-foo")` is the same class of bug as forgetting an `vary` key under today's manual model. We'll surface it as a dev-mode warning ("you read from `getRequest()` inside a cached Partial; the result is not in the cache key — use `getHeader`/etc. or move it into `cache.vary`").
 

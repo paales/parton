@@ -157,7 +157,7 @@ export function resolveManifest(manifest: Set<string>): Record<string, string> {
       case "url":
         values[spec] = url.searchParams.get(name) ?? "";
         break;
-      case "route": {
+      case "pathname": {
         const matched = matchRoutePattern(url.pathname, name);
         if (!matched) {
           values[spec] = "";
@@ -249,7 +249,7 @@ export function getSearchParam(name: string): string | null {
  * Match the current request's pathname against a pattern with `:name`
  * segments and return the extracted params (or `null` if no match).
  *
- *   const { slug } = getRoute("/p/:slug") ?? {};
+ *   const { slug } = getPathname("/p/:slug") ?? {};
  *
  * Tracked as a `<Partial cache>` manifest key. The PATTERN (not the
  * extracted values) is what gets recorded — resolution re-runs on
@@ -260,11 +260,16 @@ export function getSearchParam(name: string): string | null {
  *
  * Pattern grammar: static segments + `:name` capture. Matches segment
  * count exactly; no wildcards / optional segments yet.
+ *
+ * (This is the only pathname accessor the framework ships — there's
+ * no zero-arg "give me the raw pathname" form. Making a pattern
+ * required steers authors away from caches that key on the full URL,
+ * which blows up registry storage on high-cardinality routes.)
  */
-export function getRoute(
+export function getPathname(
   pattern: string,
 ): Record<string, string> | null {
-  trackAccess("route", pattern);
+  trackAccess("pathname", pattern);
   return matchRoutePattern(
     new URL(getStore().request.url).pathname,
     pattern,

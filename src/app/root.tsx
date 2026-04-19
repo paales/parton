@@ -5,18 +5,15 @@ import { CacheDemoPage } from "./pages/cache-demo.tsx";
 import { DeferDemoPage } from "./pages/defer-demo.tsx";
 import { SelectorDemoPage } from "./pages/selector-demo.tsx";
 import { PartialRoot, Partial } from "../lib/partial.tsx";
-import { getRequest } from "../framework/context.ts";
 import { matchPath, pickRoute } from "../framework/router.ts";
 import { DebugToolbar } from "./components/debug-toolbar.tsx";
 import { AppNav } from "./components/app-nav.tsx";
 
 export function Root() {
-  const url = new URL(getRequest().url);
-
-  if (matchPath(url, "/bare")) return <BarePage />;
-  if (matchPath(url, "/cache-demo")) return <CacheDemoPage />;
-  if (matchPath(url, "/defer-demo")) return <DeferDemoPage />;
-  if (matchPath(url, "/selector-demo")) return <SelectorDemoPage />;
+  if (matchPath("/bare")) return <BarePage />;
+  if (matchPath("/cache-demo")) return <CacheDemoPage />;
+  if (matchPath("/defer-demo")) return <DeferDemoPage />;
+  if (matchPath("/selector-demo")) return <SelectorDemoPage />;
 
   return (
     <PartialRoot>
@@ -63,7 +60,7 @@ export function Root() {
         </Partial>
         <body>
           <AppNav />
-          {pickRoute(url, [
+          {pickRoute([
             ["/magento", () => MagentoPage()],
             ["/magento/*", () => MagentoPage()],
             ["/*", () => PokemonPage()],

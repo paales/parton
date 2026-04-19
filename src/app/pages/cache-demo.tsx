@@ -16,7 +16,7 @@ import { _cacheStats } from "../../lib/cache.tsx";
 import { CacheControls } from "../components/cache-controls.tsx";
 import { ClickCounter } from "../components/click-counter.tsx";
 import { AppNav } from "../components/app-nav.tsx";
-import { getRequest, getSearchParam } from "../../framework/context.ts";
+import { getSearchParam } from "../../framework/context.ts";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -76,8 +76,7 @@ function Clock() {
 }
 
 export async function CacheDemoPage() {
-  const url = new URL(getRequest().url);
-  const flavor = url.searchParams.get("flavor") ?? "vanilla";
+  const flavor = getSearchParam("flavor") ?? "vanilla";
   const stats = await _cacheStats();
 
   return (

@@ -13,7 +13,7 @@ import {
   HoistingViolationError,
   getCookie,
   getHeader,
-  getRoute,
+  getPathname,
   getSearchParam,
   matchRoutePattern,
   resolveManifest,
@@ -208,12 +208,12 @@ describe("matchRoutePattern", () => {
   });
 });
 
-describe("getRoute", () => {
+describe("getPathname", () => {
   it("returns matched params from the current pathname", async () => {
     await runWithRequestAsync(
       new Request("http://localhost/p/bulbasaur"),
       async () => {
-        expect(getRoute("/p/:slug")).toEqual({ slug: "bulbasaur" });
+        expect(getPathname("/p/:slug")).toEqual({ slug: "bulbasaur" });
       },
     );
   });
@@ -222,26 +222,26 @@ describe("getRoute", () => {
     await runWithRequestAsync(
       new Request("http://localhost/other"),
       async () => {
-        expect(getRoute("/p/:slug")).toBeNull();
+        expect(getPathname("/p/:slug")).toBeNull();
       },
     );
   });
 
-  it("tracks access with `route:<pattern>` manifest key", async () => {
+  it("tracks access with `pathname:<pattern>` manifest key", async () => {
     const scope = freshScope();
     await runWithRequestAsync(
       new Request("http://localhost/p/bulbasaur"),
       async () => {
         await runWithCacheManifest(scope, async () => {
-          getRoute("/p/:slug");
+          getPathname("/p/:slug");
         });
       },
     );
-    expect([...scope.current]).toEqual(["route:/p/:slug"]);
+    expect([...scope.current]).toEqual(["pathname:/p/:slug"]);
   });
 
   it("resolveManifest produces distinct values for different matched params", async () => {
-    const manifest = new Set(["route:/p/:slug"]);
+    const manifest = new Set(["pathname:/p/:slug"]);
 
     const v1 = await runWithRequestAsync(
       new Request("http://localhost/p/bulbasaur"),
@@ -251,31 +251,31 @@ describe("getRoute", () => {
       new Request("http://localhost/p/charizard"),
       async () => resolveManifest(manifest),
     );
-    expect(v1.result["route:/p/:slug"]).toBe('{"slug":"bulbasaur"}');
-    expect(v2.result["route:/p/:slug"]).toBe('{"slug":"charizard"}');
-    expect(v1.result["route:/p/:slug"]).not.toBe(
-      v2.result["route:/p/:slug"],
+    expect(v1.result["pathname:/p/:slug"]).toBe('{"slug":"bulbasaur"}');
+    expect(v2.result["pathname:/p/:slug"]).toBe('{"slug":"charizard"}');
+    expect(v1.result["pathname:/p/:slug"]).not.toBe(
+      v2.result["pathname:/p/:slug"],
     );
   });
 
   it("resolveManifest emits empty string on pattern miss", async () => {
-    const manifest = new Set(["route:/p/:slug"]);
+    const manifest = new Set(["pathname:/p/:slug"]);
     const v = await runWithRequestAsync(
       new Request("http://localhost/elsewhere"),
       async () => resolveManifest(manifest),
     );
-    expect(v.result["route:/p/:slug"]).toBe("");
+    expect(v.result["pathname:/p/:slug"]).toBe("");
   });
 
   it("serializes matched params with sorted keys", async () => {
-    const manifest = new Set(["route:/a/:y/:x"]);
+    const manifest = new Set(["pathname:/a/:y/:x"]);
     const v = await runWithRequestAsync(
       new Request("http://localhost/a/second/first"),
       async () => resolveManifest(manifest),
     );
     // `x` comes first alphabetically, so the serialized object puts
     // `x` before `y`.
-    expect(v.result["route:/a/:y/:x"]).toBe(
+    expect(v.result["pathname:/a/:y/:x"]).toBe(
       '{"x":"first","y":"second"}',
     );
   });
