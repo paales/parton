@@ -55,7 +55,7 @@ export function MagentoPage() {
           {new Date().toLocaleString()}
           <Partial
             id="cart"
-            tags={["cart"]}
+            tags={"cart"}
             fallback={<CartBadge quantity={"?"} />}
           >
             <CartPartial />
@@ -154,7 +154,7 @@ function ProductCard({ product }: { product: ProductItem }) {
         // while the refreshed LivePrice is resolving.
         <Partial
           id={`price-${sku}`}
-          tags={["price"]}
+          tags={"price"}
           fallback={
             <LivePriceFallback
               sku={sku}

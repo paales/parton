@@ -4,6 +4,7 @@ import { BarePage } from "./pages/bare-stream.tsx";
 import { CacheDemoPage } from "./pages/cache-demo.tsx";
 import { DeferDemoPage } from "./pages/defer-demo.tsx";
 import { SelectorDemoPage } from "./pages/selector-demo.tsx";
+import { SentinelsDemoPage } from "./pages/sentinels-demo.tsx";
 import { NotFoundPage } from "./pages/not-found.tsx";
 import { PartialRoot, Partial } from "../lib/partial.tsx";
 import { matchPath, pickRoute } from "../framework/router.ts";
@@ -46,6 +47,7 @@ function renderRoute() {
   if (matchPath("/cache-demo")) return <CacheDemoPage />;
   if (matchPath("/defer-demo")) return <DeferDemoPage />;
   if (matchPath("/selector-demo")) return <SelectorDemoPage />;
+  if (matchPath("/sentinels-demo")) return <SentinelsDemoPage />;
   if (matchPath("/not-found-demo")) return notFound();
   if (matchPath("/redirect-demo")) return redirect("/cache-demo");
 

@@ -28,6 +28,8 @@ export function AppNav() {
         <a href="/defer-demo">Defer Demo</a>
         {" · "}
         <a href="/selector-demo">Selector Demo</a>
+        {" · "}
+        <a href="/sentinels-demo">Sentinels Demo</a>
       </nav>
     </Partial>
   );
