@@ -6,14 +6,35 @@
  * Set-Cookie headers for the response.
  *
  * Tracked accessors (`getCookie`, `getHeader`, `getSearchParam`,
- * `getRoute`) additionally push their `(kind, name)` into a
+ * `getPathname`) additionally push their `(kind, name)` into a
  * per-Partial *access manifest* held in a second ALS slot. A cached
  * Partial uses that manifest as its cache key surface — so the author
  * doesn't have to re-declare which cookies/headers/URL params their
  * content depends on. See `notes/AUTO_TRACKED_CACHE_KEYS.md`.
+ *
+ * ── Frame scoping (2026-04-21) ─────────────────────────────────────
+ * Accessors also consult a per-request **frame cache** — a mutable
+ * `{ current: Request | null }` cell created by `React.cache()`,
+ * following the pattern of https://github.com/zhangyu1818/react-server-only-context.
+ * `<Partial frame="…">`'s `FrameWrapper` mutates the cell before
+ * rendering children; accessors read it. The cell is a per-request
+ * singleton, so sibling frames mutate sequentially as React walks
+ * their subtrees depth-first.
+ *
+ * Discipline: accessors must be called BEFORE any `await` in a
+ * server component body (the same rule as `HoistingViolationError`
+ * for cache manifest keys). After an await the cell may have been
+ * mutated by a sibling frame.
+ *
+ * We dropped the Flight render+decode round-trip that previously
+ * contained the scope — it killed progressive streaming inside
+ * frames, which is load-bearing for slow async content. The cache
+ * pattern preserves streaming at the cost of the hoisting
+ * discipline (which we already enforce).
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { cache } from "react";
 
 interface FrameworkControl {
   notFound?: boolean;
@@ -59,6 +80,56 @@ export interface ManifestScope {
 }
 
 const manifestContext = new AsyncLocalStorage<ManifestScope>();
+
+// ─── Frame scope (React.cache mutation cell) ──────────────────────
+
+/**
+ * Per-frame scope seen by descendant server components rendered
+ * inside a `<Partial frame="name">`. Accessors call `frameRequest()`
+ * which reads the cell; falls back to the ALS request when no
+ * frame is active.
+ *
+ * Frames can't use React Context for scoping because React's RSC
+ * build (`react.react-server.js`) deliberately excludes
+ * `createContext` — server components can't create their own
+ * providers. `React.cache` gives us a per-request-singleton object
+ * we can mutate during render; descendants see the mutation if
+ * they read accessors at the top of their body (before any await).
+ */
+export interface FrameScope {
+  /** Synthetic Request this frame's accessors resolve against. */
+  request: Request;
+  /** Frame name — debugging. */
+  name: string;
+}
+
+/**
+ * React.cache memoizes this function per request. The mutable cell
+ * it returns is shared by every reader in the same render pass;
+ * `FrameWrapper` writes to `current` before rendering children,
+ * accessors read it.
+ */
+const frameScopeCell = cache((): { current: FrameScope | null } => ({
+  current: null,
+}));
+
+/**
+ * Called by `FrameWrapper` before rendering a framed subtree. The
+ * cell is mutated in place; descendants reading accessors pick up
+ * the new value.
+ */
+export function setCurrentFrameScope(scope: FrameScope | null): void {
+  frameScopeCell().current = scope;
+}
+
+/** Current frame scope, or `null` if no frame is active. */
+export function getCurrentFrameScope(): FrameScope | null {
+  return frameScopeCell().current;
+}
+
+function frameRequest(): Request | null {
+  return frameScopeCell().current?.request ?? null;
+}
 
 export function runWithRequest<T>(
   request: Request,
@@ -146,12 +217,21 @@ function trackAccess(kind: string, name: string): void {
  * `<Cache>` to derive a cache key before running the Partial body on
  * subsequent requests.
  *
+ * `request` defaults to the top-level ALS request. Callers inside a
+ * frame (e.g. `<Cache>` when it sits inside a `<Partial frame=…>`)
+ * pass the frame's Request so URL/pathname keys resolve against the
+ * frame's URL instead of the page's.
+ *
  * Does NOT participate in tracking — we're reading on behalf of the
  * cache layer, not the user's component.
  */
-export function resolveManifest(manifest: Set<string>): Record<string, string> {
+export function resolveManifest(
+  manifest: Set<string>,
+  request?: Request,
+): Record<string, string> {
   const store = getStore();
-  const url = new URL(store.request.url);
+  const effectiveRequest = request ?? store.request;
+  const url = new URL(effectiveRequest.url);
   const values: Record<string, string> = {};
   for (const spec of manifest) {
     const colonIdx = spec.indexOf(":");
@@ -160,10 +240,10 @@ export function resolveManifest(manifest: Set<string>): Record<string, string> {
     const name = spec.slice(colonIdx + 1);
     switch (kind) {
       case "cookie":
-        values[spec] = readCookieRaw(store, name) ?? "";
+        values[spec] = readCookieFromRequest(effectiveRequest, name) ?? "";
         break;
       case "header":
-        values[spec] = store.request.headers.get(name) ?? "";
+        values[spec] = effectiveRequest.headers.get(name) ?? "";
         break;
       case "url":
         values[spec] = url.searchParams.get(name) ?? "";
@@ -228,32 +308,48 @@ export function matchRoutePattern(
 
 // ─── Tracked accessors ─────────────────────────────────────────────────
 
-function readCookieRaw(store: RequestStore, name: string): string | undefined {
-  // Check cookies set during this request first (e.g., by a server action
-  // that ran before the re-render). These are in Set-Cookie format.
+/**
+ * Read a cookie from a Request, considering any Set-Cookies added
+ * during this request's ALS scope (server actions that fired earlier
+ * in the chain).
+ *
+ * The Set-Cookie accumulator is always page-scoped (cookies live on
+ * the response, not per-frame), so it's read from the ALS store
+ * regardless of whether `request` is the page request or a frame's.
+ */
+function readCookieFromRequest(request: Request, name: string): string | undefined {
+  const store = getStore();
   for (let i = store.cookies.length - 1; i >= 0; i--) {
     const match = store.cookies[i].match(new RegExp(`^${name}=([^;]*)`));
     if (match) return match[1];
   }
-  // Fall back to the incoming request Cookie header.
-  const header = store.request.headers.get("cookie") ?? "";
+  const header = request.headers.get("cookie") ?? "";
   const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
   return match?.[1];
 }
 
+/**
+ * Return the Request tracked accessors should read from: the current
+ * frame's Request if we're inside a `<Partial frame=…>`, otherwise
+ * the top-level page Request.
+ */
+function currentRequest(): Request {
+  return frameRequest() ?? getStore().request;
+}
+
 export function getCookie(name: string): string | undefined {
   trackAccess("cookie", name);
-  return readCookieRaw(getStore(), name);
+  return readCookieFromRequest(currentRequest(), name);
 }
 
 export function getHeader(name: string): string | null {
   trackAccess("header", name.toLowerCase());
-  return getStore().request.headers.get(name);
+  return currentRequest().headers.get(name);
 }
 
 export function getSearchParam(name: string): string | null {
   trackAccess("url", name);
-  return new URL(getStore().request.url).searchParams.get(name);
+  return new URL(currentRequest().url).searchParams.get(name);
 }
 
 /**
@@ -282,7 +378,7 @@ export function getPathname(
 ): Record<string, string> | null {
   trackAccess("pathname", pattern);
   return matchRoutePattern(
-    new URL(getStore().request.url).pathname,
+    new URL(currentRequest().url).pathname,
     pattern,
   );
 }

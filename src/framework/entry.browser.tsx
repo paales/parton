@@ -11,7 +11,11 @@ import { rscStream } from "rsc-html-stream/client";
 import type { RscPayload } from "./entry.rsc";
 import { GlobalErrorBoundary } from "./error-boundary";
 import { createRscRenderRequest } from "./request";
-import { getCachedPartialIds } from "../lib/partial-client";
+import {
+  _dispatchFrameRefetch,
+  _readFramesSnapshot,
+  getCachedPartialIds,
+} from "../lib/partial-client";
 
 async function main() {
   let setPayload: (v: RscPayload) => void;
@@ -137,6 +141,80 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
     // (it re-runs against the existing module state). Pass it through
     // so the browser does a real cross-document reload.
     if (event.navigationType === "reload") return;
+
+    // Frame navigation via `frame(name).navigate()`. The imperative
+    // call does `history.pushState` + `_dispatchFrameRefetch`
+    // itself, so we only intercept here on TRAVERSAL (browser back/
+    // forward on a frame-state entry) — that's when the listener is
+    // the only place that knows to re-run the refetch.
+    //
+    // For the initial push of a frame nav, skip this branch (let
+    // the default fall through to page-nav logic, which no-ops
+    // because `frame.navigate` called `history.pushState` with the
+    // same URL — canIntercept stays true, so we need to also skip
+    // the page-level intercept below via a silent flag).
+    // Browser back/forward. Two axes need handling on a traverse:
+    //   1. Page URL changed (e.g. /frames-demo?product=beta → /frames-demo)
+    //      — the main page content needs a full refetch.
+    //   2. Frame snapshots differ between destination and current
+    //      — each differing frame needs its server session updated
+    //      AND its subtree re-rendered.
+    //
+    // Both axes are handled in one request: we build a refetch URL
+    // with the destination's page URL AND append `__frame/__frameUrl`
+    // pairs for every frame that changed, so the server applies the
+    // session updates, then does a streaming render for the new URL.
+    //
+    // If the URL didn't change and only frames changed, skip the full
+    // render and fire targeted per-frame refetches instead — keeps
+    // drawer-shaped back navigation cheap (cart/menu within the same
+    // page URL).
+    if (event.navigationType === "traverse") {
+      const destSnap = _readFramesSnapshot(event.destination.getState?.());
+      const currentSnap = _readFramesSnapshot(
+        typeof navigation !== "undefined"
+          ? navigation.currentEntry?.getState() ?? null
+          : null,
+      );
+      const names = new Set([
+        ...Object.keys(destSnap),
+        ...Object.keys(currentSnap),
+      ]);
+      const diffs: Array<{ name: string; url: string }> = [];
+      for (const name of names) {
+        const dest = destSnap[name]?.url;
+        const cur = currentSnap[name]?.url;
+        if (dest && dest !== cur) diffs.push({ name, url: dest });
+      }
+      const urlChanged = event.destination.url !== window.location.href;
+      if (urlChanged) {
+        event.intercept({
+          handler: async () => {
+            const url = new URL(event.destination.url);
+            for (const d of diffs) {
+              url.searchParams.append("__frame", d.name);
+              url.searchParams.append("__frameUrl", d.url);
+            }
+            const handler = (window as Window & {
+              __rsc_partial_refetch?: (url: string) => Promise<void>;
+            }).__rsc_partial_refetch;
+            if (handler) await handler(url.toString());
+          },
+        });
+        return;
+      }
+      if (diffs.length > 0) {
+        event.intercept({
+          handler: async () => {
+            await Promise.all(
+              diffs.map((d) => _dispatchFrameRefetch(d.name, d.url)),
+            );
+          },
+        });
+        return;
+      }
+    }
+
     // Silent URL updates (LoadMore's ?pages=, SearchInput's ?q= in URL
     // mode) flip a short-lived flag via `silentReplace()`. When set, we
     // skip the intercept so the URL updates for bookmarkability but no

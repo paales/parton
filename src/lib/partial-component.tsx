@@ -1,7 +1,9 @@
 import { Suspense, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
-import { getRequest } from "../framework/context.ts";
+import { getRequest, setCurrentFrameScope } from "../framework/context.ts";
+import { getSessionFrameUrl } from "../framework/session.ts";
 import { registerPartial } from "./partial-registry.ts";
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx";
+import { FrameNameProvider } from "./partial-client.tsx";
 import { requirePartialState } from "./partial-request-state.ts";
 import { djb2 as hashFingerprint } from "./hash.ts";
 import { Cache } from "./cache.tsx";
@@ -25,6 +27,8 @@ export function PartialBoundary({
   errorWith,
   tags,
   cache,
+  frame,
+  frameUrl,
   children,
 }: {
   id: string;
@@ -35,6 +39,8 @@ export function PartialBoundary({
   errorWith: ReactNode | undefined;
   tags: string[];
   cache?: CacheOptions;
+  frame?: string;
+  frameUrl?: string;
   children: ReactNode;
 }): ReactNode {
   const route = new URL(getRequest().url).pathname;
@@ -44,6 +50,8 @@ export function PartialBoundary({
     errorWith,
     tags,
     cache,
+    frame,
+    frameUrl,
   });
   return children;
 }
@@ -125,6 +133,33 @@ export interface PartialProps {
    * the activator) instead of executing its children.
    */
   defer?: DeferSpec;
+  /**
+   * Open a new **frame** scope for this Partial's descendants. Frames
+   * are "server iframes": everything inside the Partial resolves
+   * tracked accessors (`getSearchParam`, `getPathname`, `getCookie`,
+   * `getHeader`) against the FRAME's URL instead of the page URL.
+   *
+   * The `frame` value names the frame for session lookup and client-
+   * side navigation (`frame("cart").navigate(…)` — see task 4). The
+   * URL the accessors resolve against is picked in this order:
+   *
+   *   1. The server session's entry for this frame name (task 3).
+   *   2. `frameUrl` prop (author-provided initial URL).
+   *   3. The page URL (identity — the frame and page agree).
+   *
+   * See `notes/FRAME_SCOPING.md` for why this is a React Context and
+   * not an ALS scope. The hoisting rule (read accessors before any
+   * `await`) applies the same way it does for the cache manifest.
+   */
+  frame?: string;
+  /**
+   * Initial URL for the frame. Used as the fallback when the session
+   * has no entry for this frame. Ignored when `frame` is not set.
+   *
+   * Accepts a full URL, a pathname, or a search string. Normalized
+   * against the page's origin.
+   */
+  frameUrl?: string;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -218,6 +253,65 @@ function resolveEffectiveId(
   return `__anon:${[...tags].sort().join(",")}`;
 }
 
+/**
+ * Resolve a frame's Request object. Lookup order:
+ *   1. Server session entry for this frame (source of truth).
+ *   2. `frameUrl` prop (author-provided initial URL).
+ *   3. Page request (frame and page agree — no-op frame).
+ *
+ * Request headers are copied from the page so cookie reads inside
+ * the frame still work (cookies live on the response, not per-frame).
+ */
+function resolveFrameRequest(
+  frameName: string,
+  initialUrl: string | undefined,
+): Request {
+  const pageRequest = getRequest();
+  const sessionUrl = getSessionFrameUrl(frameName);
+  const effective = sessionUrl ?? initialUrl;
+  if (effective == null) return pageRequest;
+  const resolved = new URL(effective, pageRequest.url).toString();
+  return new Request(resolved, {
+    headers: pageRequest.headers,
+    method: "GET",
+  });
+}
+
+/**
+ * Async server component that opens a frame ALS scope and renders
+ * children through a Flight round-trip so descendant async renders
+ * execute inside the scope. Defers the framing from the Partial's
+ * synchronous body to a proper render-time step, so the snapshot
+ * captures the wrapper (re-renderable) instead of the bake.
+ */
+function FrameWrapper({
+  name,
+  request,
+  children,
+}: {
+  name: string;
+  request: Request;
+  children: ReactNode;
+}): ReactNode {
+  // Mutate the per-request frame-scope cell BEFORE React walks our
+  // children, so descendants that read tracked accessors (at the
+  // top of their body, before any `await`) see this frame's URL.
+  //
+  // React.cache-backed mutation — the library pattern at
+  // https://github.com/zhangyu1818/react-server-only-context. Cheap,
+  // streams naturally (no Flight round-trip), subject to the same
+  // "read before await" discipline as the cache manifest
+  // accessors (which this extends).
+  setCurrentFrameScope({ name, request });
+  const url = new URL(request.url);
+  const initialUrl = url.pathname + url.search;
+  return (
+    <FrameNameProvider name={name} initialUrl={initialUrl}>
+      {children}
+    </FrameNameProvider>
+  );
+}
+
 function placeholderFor(id: string): ReactElement {
   // `data-partial-id` is the authoritative source for the id on the
   // client walks. Flight sometimes composites the outer .map() key
@@ -248,6 +342,8 @@ export function Partial({
   tags,
   defer,
   cache,
+  frame,
+  frameUrl,
 }: PartialProps): ReactNode {
   const state = requirePartialState();
 
@@ -272,7 +368,34 @@ export function Partial({
   // Apply __inputs override (if any) for both the rendered content
   // and the registered snapshot, so a later refetch replays with the
   // already-applied props.
-  const content = override ? applyInputs(children, override) : children;
+  const rawContent = override ? applyInputs(children, override) : children;
+
+  // Frame scope: if `frame` is set, wrap the children in a
+  // `<FrameWrapper>` component that does the Flight round-trip when
+  // it renders. That way:
+  //
+  //   1. The registry snapshot carries the UNFRAMED children (the
+  //      wrapper JSX) — cache-mode refetches can replay them through
+  //      a fresh frame scope with the current session URL, instead
+  //      of reusing the baked content from the original render.
+  //   2. The frame's Request is passed as a prop to FrameWrapper, so
+  //      it's computed per-render against (session → frameUrl prop
+  //      → page URL).
+  //
+  // See `notes/FRAME_SCOPING.md` — RSC rules out React Context (no
+  // `createContext` in the react-server build), so the nested scope
+  // has to be ALS-with-containment (Flight round-trip keeps the
+  // scope from leaking to siblings).
+  const frameRequest =
+    frame != null ? resolveFrameRequest(frame, frameUrl) : null;
+  const content: ReactNode =
+    frame != null && frameRequest != null ? (
+      <FrameWrapper name={frame} request={frameRequest}>
+        {rawContent}
+      </FrameWrapper>
+    ) : (
+      rawContent
+    );
 
   // Fingerprint captures the structural shape of the content tree —
   // used both for the client→server "did this change?" handshake and
@@ -286,28 +409,58 @@ export function Partial({
   // rendered content has different prop values — causing the Cache to
   // return the previous request's bytes. This replaces the need for
   // the old `refreshRegistry` static walker.
-  const fp = hashFingerprint(fingerprintElement(content));
+  //
+  // Frame URL is folded in: a framed Partial whose frame URL changes
+  // produces a distinct fingerprint, so the client-reported fp no
+  // longer matches and the server re-renders with the new scope.
+  const frameKey =
+    frame != null && frameRequest != null
+      ? `|frame=${frame}:${frameRequest.url}`
+      : "";
+  const fp = hashFingerprint(fingerprintElement(rawContent) + frameKey);
 
   // ── Skip decisions ─────────────────────────────────────────────────
+  //
+  // Skip when the client already has content the server would
+  // re-produce. That's determined per-Partial by the fingerprint
+  // handshake: `?cached=id:fp,…` lists what the client has; we skip
+  // (emit a placeholder) when fp matches or when the partial wasn't
+  // requested and the client reports a cache for it.
+  //
+  // The OLD logic skipped every non-explicit partial in a refetch
+  // (`isPartialRefetch ? true : fingerprintMatches`) on the
+  // assumption that a refetch only happens after a streaming render
+  // primed the client cache. That breaks when a refetch exposes a
+  // NEW nested partial (e.g., navigating a frame to a URL whose
+  // subtree introduces a `<Partial id="menu-slow-inner">` the client
+  // has never seen). Without a matching cached fingerprint, skipping
+  // emits a placeholder the client can't fill — the user sees a gap.
+  // Skip only on an actual fingerprint match.
   const cachedFp = state.cachedFingerprints.get(id);
+  const clientHasCache = state.cachedFingerprints.has(id);
   const fingerprintMatches = cachedFp != null && cachedFp === fp;
 
   const shouldSkip = isExplicit
     ? false
     : state.isPartialRefetch
-      ? true
+      ? clientHasCache
       : fingerprintMatches;
 
   if (shouldSkip) {
     // Register so tag refetches / subsequent lookups still find the
-    // partial, even though we didn't render it this pass.
+    // partial, even though we didn't render it this pass. Store the
+    // unframed children (`rawContent`), not the wrapped content — on
+    // refetch the wrapper re-renders fresh with the current frame
+    // URL from session.
     const route = new URL(getRequest().url).pathname;
     registerPartial(route, id, {
-      content,
+      content: rawContent,
       fallback: effectiveFallback,
       errorWith,
       tags: effectiveTags,
       cache,
+      frame,
+      frameUrl,
     });
     return placeholderFor(id);
   }
@@ -328,11 +481,13 @@ export function Partial({
     return (
       <PartialBoundary
         id={id}
-        content={content}
+        content={rawContent}
         fallback={effectiveFallback}
         errorWith={errorWith}
         tags={effectiveTags}
         cache={cache}
+        frame={frame}
+        frameUrl={frameUrl}
       >
         <PartialErrorBoundary
           key={id}
@@ -408,11 +563,13 @@ export function Partial({
   return (
     <PartialBoundary
       id={id}
-      content={content}
+      content={rawContent}
       fallback={effectiveFallback}
       errorWith={errorWith}
       tags={effectiveTags}
       cache={cache}
+      frame={frame}
+      frameUrl={frameUrl}
     >
       {rendered}
     </PartialBoundary>

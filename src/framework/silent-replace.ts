@@ -17,6 +17,17 @@ export function silentReplace(url: URL | string): void {
   history.replaceState(history.state, "", url.toString());
 }
 
+/**
+ * Mark that the next navigate event should be skipped by the page-
+ * level intercept (same mechanism as `silentReplace`). Used by
+ * frame navigation, which does its own `history.pushState` + frame
+ * refetch — the resulting navigate event would otherwise trigger a
+ * redundant page-level refetch.
+ */
+export function markSilentNextNavigate(): void {
+  _silentUntil = performance.now() + 50;
+}
+
 export function consumeSilentFlag(): boolean {
   if (performance.now() <= _silentUntil) {
     _silentUntil = 0;

@@ -62,6 +62,7 @@ import { djb2 } from "./hash.ts";
 import { Partial, PartialBoundary } from "./partial-component.tsx";
 import {
   getCurrentCacheManifest,
+  getCurrentFrameScope,
   getRequest,
   resolveManifest,
   runWithCacheManifest,
@@ -561,6 +562,13 @@ export async function Cache({
   options,
   children,
 }: CacheProps): Promise<ReactNode> {
+  // Cache can run inside a frame scope (set by
+  // `<Partial frame="name">`'s Flight round-trip). When it does,
+  // cache keys for any url/pathname manifest entries should resolve
+  // against the FRAME's URL, not the page's. ALS is populated by the
+  // enclosing `runInFrameScope` if we're in a frame.
+  const frameRequest = getCurrentFrameScope()?.request;
+
   if (options.bypass) return children;
 
   // Pre-compute the stored manifest so accessor calls can throw
@@ -581,7 +589,7 @@ export async function Cache({
   if (prior) scope.stored = prior;
 
   return runWithCacheManifest(scope, async () =>
-    cacheImpl(id, fingerprint, options, children, scope),
+    cacheImpl(id, fingerprint, options, children, scope, frameRequest),
   );
 }
 
@@ -598,6 +606,7 @@ async function cacheImpl(
   options: CacheOptions,
   children: ReactNode,
   scope: ManifestScope,
+  frameRequest: Request | undefined,
 ): Promise<ReactNode> {
   const manifest = scope.current;
   // Strip statically-visible partials. Placeholders go into the cached
@@ -625,7 +634,7 @@ async function cacheImpl(
   // can't look anything up. First render of a Partial is always a
   // miss in this sense.
   if (storedManifest) {
-    const values = resolveManifest(storedManifest);
+    const values = resolveManifest(storedManifest, frameRequest);
     const key = `${baseKey}:${hashParts(values, options.vary ?? null)}`;
 
     const existing = await store.get(key);
@@ -642,6 +651,7 @@ async function cacheImpl(
             ids,
             options,
             id,
+            frameRequest,
           )
             .catch((err) =>
               console.error(`[cache] SWR refresh failed for ${key}:`, err),
@@ -681,6 +691,7 @@ async function cacheImpl(
       options,
       manifest,
       storedManifest,
+      frameRequest,
     ).finally(() => inFlightMiss.delete(baseKey));
     inFlightMiss.set(baseKey, pending);
   }
@@ -707,6 +718,7 @@ async function renderMissAndStore(
   options: CacheOptions,
   manifest: Set<string>,
   storedManifest: Set<string> | undefined,
+  frameRequest: Request | undefined,
 ): Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }> {
   // Render to Flight ONCE, then tee:
   //   • user branch → decoded immediately, returned to outer render.
@@ -754,7 +766,7 @@ async function renderMissAndStore(
     const cleanBytes = await renderAndBuffer(holeTree);
 
     // Derive the entry key from the (now verified) manifest.
-    const values = resolveManifest(manifest);
+    const values = resolveManifest(manifest, frameRequest);
     const key = `${baseKey}:${hashParts(values, options.vary ?? null)}`;
 
     manifestStore.set(baseKey, new Set(manifest));
@@ -784,6 +796,7 @@ async function refreshEntry(
   ids: string[],
   options: CacheOptions,
   partialId: string,
+  frameRequest: Request | undefined,
 ): Promise<void> {
   // SWR refresh runs in a separate async chain; open its own manifest
   // scope so accessor calls during re-render go into the right bucket.
@@ -822,7 +835,7 @@ async function refreshEntry(
     );
     const cleanBytes = await renderAndBuffer(holeTree);
 
-    const values = resolveManifest(manifest);
+    const values = resolveManifest(manifest, frameRequest);
     const key = `${baseKey}:${hashParts(values, options.vary ?? null)}`;
 
     manifestStore.set(baseKey, new Set(manifest));

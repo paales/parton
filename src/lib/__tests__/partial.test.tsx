@@ -84,7 +84,7 @@ vi.mock("../partial-error-boundary.tsx", () => ({
 // Cache depends on `@vitejs/plugin-rsc/rsc` which resolves to a
 // virtual: URL only Vite can handle. In unit tests we mock it to
 // a bypass: return children as-is. End-to-end Cache behavior is
-// covered by e2e tests.
+// covered by e2e playwright tests.
 vi.mock("../cache.tsx", () => ({
 	Cache: ({ children }: { children: React.ReactNode }) => children,
 	_cacheStats: async () => ({ size: 0, keys: [] }),
@@ -246,7 +246,16 @@ describe("PartialRoot architecture", () => {
 				<Partial id="stats"><Stats /></Partial>
 			</PartialRoot>
 		);
-		const result = await warmThenRender({ partials: "header" }, tree);
+		// The client always sends `cached=id:fp,…` alongside a partial
+		// refetch (see `fetchRscPayload` in entry.browser.tsx). Here we
+		// spell the cache presence explicitly so the server knows cart
+		// is safe to skip (client has it) — without this, the fix for
+		// "frames introducing new inner partials" would render cart
+		// freshly. Production refetches always include this param.
+		const result = await warmThenRender(
+			{ partials: "header", cached: "cart:x,stats:y" },
+			tree,
+		);
 		const str = JSON.stringify(result);
 		expect(str).toContain("Timestamp");
 		expect(str).not.toContain("cart-content");

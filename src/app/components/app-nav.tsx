@@ -30,6 +30,8 @@ export function AppNav() {
         <a href="/selector-demo">Selector Demo</a>
         {" · "}
         <a href="/sentinels-demo">Sentinels Demo</a>
+        {" · "}
+        <a href="/frames-demo">Frames Demo</a>
       </nav>
     </Partial>
   );

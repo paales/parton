@@ -1,0 +1,106 @@
+# Frame scoping — what holds the scope
+
+**Status:** `React.cache` mutation cell (current).
+**History:** tried Context → ALS + Flight → ALS-only → `React.cache`.
+**Regression gate:** the `/frames-demo` playwright suite.
+
+## TL;DR (2026-04-21)
+
+Per-frame URL/request scoping uses a `React.cache()`-backed mutable
+cell, following the pattern of
+https://github.com/zhangyu1818/react-server-only-context. The cell
+is a per-request singleton; `FrameWrapper` mutates it before
+rendering children; tracked accessors read it.
+
+```ts
+const frameScopeCell = cache(() => ({ current: null }));
+function setCurrentFrameScope(scope) { frameScopeCell().current = scope; }
+function getCurrentFrameScope() { return frameScopeCell().current; }
+```
+
+This preserves **progressive streaming inside framed subtrees** —
+which is non-negotiable. Earlier iterations using AsyncLocalStorage
+required a Flight render+decode round-trip to contain the scope,
+which buffered the whole subtree before the frame's body could
+return. With `React.cache` we just mutate the cell and hand off
+children synchronously.
+
+**The discipline** is the same as the cache manifest's
+`HoistingViolationError`: read accessors at the top of an async
+server component body, BEFORE any `await`. After an `await` the
+cell may have been mutated by a sibling frame.
+
+## Why not the other options
+
+### React Context
+
+Would be ideal — `use(FrameContext)` in server components, provider
+wraps children, React walks descendents with the context active. It
+works under `react-dom/server.edge` (eight-test spike passed).
+
+**Blocker:** React's RSC build (`react.react-server.js`) does not
+export `createContext`. Server components can't create provider
+trees. Verified:
+
+```bash
+$ node -e "const r = require('./node_modules/react/cjs/react.react-server.development.js'); console.log(Object.keys(r).filter(k=>k.match(/context/i)))"
+[]
+```
+
+If a future React RSC build adds `createContext`, switching to
+that is pure simplification.
+
+### `AsyncLocalStorage.run`
+
+Classic Node ALS. Does not propagate to children: `als.run(s, () =>
+JSX)` closes before React walks the returned JSX. Descendants see
+no store. Spike proved it.
+
+### `AsyncLocalStorage.enterWith`
+
+Propagates to descendants (one-way set on current async context)
+but LEAKS to siblings and to everything rendered after a nested
+frame returns. Not isolatable. Spike proved it.
+
+### ALS + Flight render+decode
+
+Open an ALS scope, render children through
+`renderToReadableStream`, decode, return the tree. The async walk
+happens inside the scope so descendants inherit. Correct, but the
+Flight round-trip buffers the whole subtree before returning — a
+slow async component inside a framed subtree blocks the outer
+render.
+
+We shipped this briefly and rolled it back when we hit the
+streaming regression.
+
+### `React.cache` mutation (current)
+
+Works because:
+
+1. `React.cache(fn)` returns the same object reference for a given
+   function + identity during one request. So
+   `frameScopeCell()` is the shared cell every reader sees.
+2. `FrameWrapper` mutates the cell synchronously before React
+   walks its children. Depth-first rendering gives descendants the
+   frame's scope at their moment of render.
+3. No Flight round-trip, no ALS context threading — streams fine.
+
+Caveat documented by the library's author and confirmed in our
+spike: **nested/sibling providers can race** if a descendant reads
+the cell AFTER an `await` — another frame's mutation may have
+replaced the value. The "read before await" discipline handles
+this. Our existing `HoistingViolationError` already enforces the
+discipline for cache manifest keys; framed accessors ride on the
+same rule.
+
+## Rules of thumb
+
+1. Scope lives with the tree and the render walk? `React.cache`.
+2. Scope lives with the async chain AND is set once, top-level?
+   ALS (what `runWithRequestAsync` does).
+3. Reading a scope value across an `await` in a server component?
+   Read at the top, assign to a local, then await.
+4. Sibling / nested frames? They share the cell; read before await
+   and everything resolves. If a component awaits and then reads,
+   the cell may have drifted — hoist the read.

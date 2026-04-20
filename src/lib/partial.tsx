@@ -62,6 +62,7 @@ import {
   enterPartialState,
   type PartialRequestState,
 } from "./partial-request-state.ts";
+import { setSessionFrameUrl } from "../framework/session.ts";
 
 export { Partial, type PartialProps };
 
@@ -131,6 +132,8 @@ function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
       errorWith: snap.errorWith,
       tags: snap.tags,
       cache: snap.cache,
+      frame: snap.frame,
+      frameUrl: snap.frameUrl,
     },
     snap.content,
   );
@@ -145,6 +148,18 @@ export async function PartialRoot({ children }: PartialRootProps) {
   const cachedParam = requestUrl.searchParams.get("cached");
   const inputsParam = requestUrl.searchParams.get("__inputs");
   const populateCache = requestUrl.searchParams.has("__populateCache");
+
+  // Frame navigation: `?__frame=name&__frameUrl=/path` carries the
+  // next URL for a named frame. Write it to the session before any
+  // `<Partial frame=…>` runs — its `resolveFrameRequest` will pick
+  // up the new URL from the session.
+  const frameNames = requestUrl.searchParams.getAll("__frame");
+  const frameUrls = requestUrl.searchParams.getAll("__frameUrl");
+  if (frameNames.length > 0 && frameNames.length === frameUrls.length) {
+    for (let i = 0; i < frameNames.length; i++) {
+      setSessionFrameUrl(frameNames[i], frameUrls[i]);
+    }
+  }
 
   let partialInputs: Record<string, Record<string, unknown>> = {};
   if (inputsParam) {

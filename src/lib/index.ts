@@ -13,6 +13,10 @@ export {
   usePartial,
   usePartialParams,
   useActivate,
+  frame,
+  useNavigation,
+  type NavigationHandle,
+  type NavigateOptions,
   type PartialDebugEntry,
   type PartialRefetchOptions,
 } from "./partial-client.tsx";

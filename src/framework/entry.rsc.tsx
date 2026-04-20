@@ -33,15 +33,21 @@ async function handler(request: Request): Promise<Response> {
   if (import.meta.env?.DEV) {
     const pathname = new URL(request.url).pathname;
     if (pathname === "/__test/clear-caches") {
-      const [{ _clearCache }, { clearCache }, { clearRegistry }] =
-        await Promise.all([
-          import("../lib/cache.tsx"),
-          import("../lib/partial-cache.ts"),
-          import("../lib/partial-registry.ts"),
-        ]);
+      const [
+        { _clearCache },
+        { clearCache },
+        { clearRegistry },
+        { _clearAllSessions },
+      ] = await Promise.all([
+        import("../lib/cache.tsx"),
+        import("../lib/partial-cache.ts"),
+        import("../lib/partial-registry.ts"),
+        import("./session.ts"),
+      ]);
       await _clearCache();
       clearCache();
       clearRegistry();
+      _clearAllSessions();
       return new Response("ok", { status: 200 });
     }
   }

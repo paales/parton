@@ -27,3 +27,9 @@
 
 - Later: GraphQL @defer support in combination with Suspense.
 - Later: GraphQL response cache and query caching. Add a product to the cart and dont need to refetch the cart because the same normalized cache is shared between the two requests, creating a faster roundtrip.
+
+- In a client information first scenario we could send much more information to the server based on the browser context they are in; So for example we'd build a MediaQuery component that shows content conditionally based on the browsers viewport we could upgrade this component on the next fetch to not even return it.
+
+- In a multiplayer game what is actually send to the server and what state is returned, the DOM can be thought of the positions of other entities in a game, streamed over the network. Client components are the local bit. This loop is quick and streaming both directions simultaneously we should dig into multiple streams happening at the same time.
+
+- Move away from all history pushState or replaceState etc. and use the navigation API everywhere.

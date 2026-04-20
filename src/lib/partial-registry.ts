@@ -47,6 +47,13 @@ export interface PartialSnapshot {
   /** Cache options if the Partial declared `cache={…}`. Stored so
    *  cache-mode refetches re-apply the same cache semantics. */
   cache?: CacheOptions;
+  /** Frame name if the Partial declared `frame="…"`. Stored so
+   *  cache-mode refetches re-open the frame scope with the current
+   *  session URL (not the URL baked on first render). */
+  frame?: string;
+  /** The author-provided `frameUrl` fallback. Session overrides it
+   *  when present; kept here as the cold-session default. */
+  frameUrl?: string;
 }
 
 // CATEGORY C (notes/SERVER_ISOLATION.md) — route-scoped snapshot store
