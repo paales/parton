@@ -12,18 +12,19 @@ what's left).
 ## The goal, in one paragraph
 
 The Partial system is a uniform, fully dynamic rendering primitive:
-`<Partial id="…">` can be declared anywhere in the JSX tree — at the
-root, nested inside another Partial, or produced deep inside a `.map()`
-or any opaque server component — and every declaration is treated
-identically, with no structural invariants and no static analysis.
-Each Partial discovers itself by running: the moment its body
-executes, it registers its content, fingerprint, and tags into a
-route-scoped registry. A full request renders the tree once and
-streams it to the client, which in a single walk populates a per-id
-cache and derives the structural template it will reconcile against
-on subsequent refetches. A targeted refetch — triggered by
-`useNavigation().reload({ids|tags})`, `useNavigation().navigate(url,
-{ids|tags})`, or a server-action invalidation directive — renders
+`<Partial selector="…">` can be declared anywhere in the JSX tree — at
+the root, nested inside another Partial, or produced deep inside a
+`.map()` or any opaque server component — and every declaration is
+treated identically, with no structural invariants and no static
+analysis. Each Partial discovers itself by running: the moment its
+body executes, it registers its content, fingerprint, and selector
+tokens (`#unique` and `.shared`) into a route-scoped registry. A
+full request renders the tree once and streams it to the client,
+which in a single walk populates a per-id cache and derives the
+structural template it will reconcile against on subsequent
+refetches. A targeted refetch — triggered by
+`useNavigation().reload({selector})`, `useNavigation().navigate(url,
+{selector})`, or a server-action invalidation directive — renders
 only the requested Partials directly from their registered
 snapshots, skipping every ancestor; the client merges the fresh
 entries into its cache and re-renders against its persisted
@@ -119,7 +120,7 @@ consulted on refetch.
    the requested Partials from their snapshots, skipping all
    ancestors. Client merges into `_cache` and re-renders against
    the persisted `_template`. Dispatched client-side by
-   `useNavigation().reload()` / `.navigate(url, {ids|tags})` —
+   `useNavigation().reload({selector})` / `.navigate(url, {selector})` —
    see `NAVIGATE_UNIFIED.md`.
 3. **Server action with `{invalidate}`** — server rewrites the URL
    with `?partials=` / `?tags=` and runs the refetch path. If the

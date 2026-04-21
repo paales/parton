@@ -1,4 +1,10 @@
-import { Suspense, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
+import {
+  Suspense,
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 // `cloneElement` is still used for the defer-activator injection path
 // below (cloning `<WhenVisible/>` with `{partialId}`). The Partial body
 // itself never clones content with prop overrides — there is no
@@ -33,7 +39,8 @@ export function PartialBoundary({
   content,
   fallback,
   errorWith,
-  tags,
+  uniqueTokens,
+  sharedTokens,
   cache,
   frame,
   frameUrl,
@@ -45,7 +52,8 @@ export function PartialBoundary({
   content: ReactNode;
   fallback: ReactNode;
   errorWith: ReactNode | undefined;
-  tags: string[];
+  uniqueTokens: string[];
+  sharedTokens: string[];
   cache?: CacheOptions;
   frame?: string;
   frameUrl?: string;
@@ -56,7 +64,8 @@ export function PartialBoundary({
     content,
     fallback,
     errorWith,
-    tags,
+    uniqueTokens,
+    sharedTokens,
     cache,
     frame,
     frameUrl,
@@ -68,7 +77,7 @@ export function PartialBoundary({
  * Defer specification for `<Partial defer=…>`.
  *
  * - `true` — server emits fallback only; Partial is dormant until
- *   something in the app calls `useNavigation().reload({ids: [id]})`
+ *   something in the app calls `useNavigation().reload({selector: "#id"})`
  *   (or uses `useActivate` with a custom subscriber). The framework
  *   does not install any trigger; the caller owns wiring.
  * - `ReactElement` — an activator component. The framework clones it
@@ -94,25 +103,34 @@ export interface ActivatorProps {
   children?: ReactNode;
 }
 
+export type SelectorToken = `${"#" | "."}${string}`;
+
 export interface PartialProps {
   /**
-   * Unique-per-page identifier. Addressable via
-   * `useNavigation().reload({ids: ["id"]})`. Optional when `tags` is
-   * provided — an id-less Partial synthesizes `__anon:<sorted-tags>`
-   * internally and can only be refetched via a tag refresh
-   * (`useNavigation().reload({tags: ["…"]})`).
+   * CSS-style selector identifying this Partial. A space-separated list
+   * (or array) of tokens, each prefixed:
+   *
+   *   - `#foo` — unique token; must appear on exactly one Partial per
+   *     page. Second occurrence throws synchronously during render.
+   *   - `.foo` — shared label; any number of Partials may carry it.
+   *
+   * Examples:
+   *   <Partial selector="#cart">                   // unique
+   *   <Partial selector=".price .product">         // shared labels only
+   *   <Partial selector="#page-3 .pagination">     // both
+   *   <Partial selector=".ad-slot">                // anonymous (addressable only via .ad-slot)
+   *
+   * Addressable via `useNavigation().reload({selector: "#cart"})` for a
+   * single Partial (`#`-token lookup), or `.price` for a union across
+   * every Partial carrying the label.
+   *
+   * A Partial without any `#`-token is internally keyed on its sorted
+   * `.class` tokens (`__anon:.class1,.class2`) so it still has a stable
+   * registry id; two id-less Partials with the same sorted classes
+   * collide and throw — give them a distinguishing class or a `#`-token.
    */
-  id?: string;
+  selector: SelectorToken | SelectorToken[];
   children?: ReactNode;
-  /**
-   * Non-unique labels. Accepts an array or a whitespace-separated
-   * string (`"price product"` ≡ `["price", "product"]`), same shape as
-   * DOM `className`. Used for family-wide refetch/invalidation:
-   * `useNavigation().reload({tags: ["price"]})` refetches every
-   * Partial with the `price` tag; passing multiple tags refetches
-   * their union.
-   */
-  tags?: string | string[];
   /**
    * Server-side render-output caching. Shape follows HTTP
    * `Cache-Control`: `{maxAge, staleWhileRevalidate, vary?, bypass?}`.
@@ -215,40 +233,92 @@ function fingerprintElement(node: ReactNode): string {
 }
 
 /**
- * Normalize a `tags` prop (array OR whitespace-separated string) into a
- * deduplicated string array. Empty / all-whitespace input yields `[]`.
+ * Parsed form of a `selector` prop.
+ *
+ *   uniqueTokens — `#`-token names, without the `#` prefix
+ *   sharedTokens — `.`-token names, without the `.` prefix
+ *
+ * Both arrays are de-duplicated and preserve first-seen order.
  */
-export function normalizeTags(input: string | string[] | undefined): string[] {
-  if (input == null) return [];
-  const raw = Array.isArray(input) ? input : input.split(/\s+/);
-  const out: string[] = [];
-  for (const t of raw) {
-    const trimmed = t.trim();
-    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
-  }
-  return out;
+export interface ParsedSelector {
+  uniqueTokens: string[];
+  sharedTokens: string[];
 }
 
 /**
- * Resolve the effective id for a Partial. If the author passed an `id`
- * prop, use it. Otherwise synthesize one from sorted tags — lets
- * anonymous Partials still register / skip / cache under a stable key.
- * Throws if neither id nor tags is usable (there's no way to address
- * the Partial at all).
+ * Parse a `selector` prop value into unique (`#`) and shared (`.`)
+ * token lists. Accepts a space-separated string OR an array (items
+ * are space-joined internally, matching the `clsx` pattern).
+ *
+ * Every token MUST start with `#` or `.` — bare words throw. Empty /
+ * all-whitespace input throws.
  */
-function resolveEffectiveId(
-  rawId: string | undefined,
-  tags: string[],
-): string {
-  if (rawId) return rawId;
-  if (tags.length === 0) {
+export function parseSelector(input: string | string[]): ParsedSelector {
+  if (input == null) {
     throw new Error(
-      "<Partial> requires either `id` or `tags`. An id-less Partial needs " +
-        "at least one tag so it can be addressed via " +
-        "`useNavigation().reload({tags: [\"...\"]})`.",
+      "<Partial> requires a `selector` prop with at least one `#` or `.` token.",
     );
   }
-  return `__anon:${[...tags].sort().join(",")}`;
+  // String form splits on whitespace (className-style).
+  // Array form treats each element as one token (values with spaces
+  // survive — useful for SKUs, slugs, etc.). Individual elements are
+  // still trimmed of leading/trailing whitespace.
+  const tokens = Array.isArray(input)
+    ? input.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean)
+    : input
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter(Boolean);
+  if (tokens.length === 0) {
+    throw new Error(
+      "<Partial selector> is empty. Provide at least one `#foo` or `.foo` token.",
+    );
+  }
+  const uniqueTokens: string[] = [];
+  const sharedTokens: string[] = [];
+  for (const tok of tokens) {
+    if (tok.startsWith("#")) {
+      const name = tok.slice(1);
+      if (!name) {
+        throw new Error(
+          `Empty "#" token in <Partial selector>. Tokens must name something after the prefix.`,
+        );
+      }
+      if (!uniqueTokens.includes(name)) uniqueTokens.push(name);
+    } else if (tok.startsWith(".")) {
+      const name = tok.slice(1);
+      if (!name) {
+        throw new Error(
+          `Empty "." token in <Partial selector>. Tokens must name something after the prefix.`,
+        );
+      }
+      if (!sharedTokens.includes(name)) sharedTokens.push(name);
+    } else {
+      throw new Error(
+        `Unprefixed token "${tok}" in <Partial selector>. Tokens must start ` +
+          `with "#" (unique) or "." (shared). Did you mean "#${tok}" or ".${tok}"?`,
+      );
+    }
+  }
+  return { uniqueTokens, sharedTokens };
+}
+
+/**
+ * Resolve the effective id for a Partial given its parsed selector.
+ *
+ *   - exactly one `#`-token → that token's name (canonical case)
+ *   - multiple `#`-tokens    → sorted names joined with "," (multi-# keying)
+ *   - zero `#`-tokens        → `__anon:<sorted-.class-tokens>`
+ *
+ * The effective id is what indexes the registry, the client cache,
+ * and the cache-key prefix. `#`-token lookup at refetch time is a
+ * scan over snapshot `uniqueTokens`, not a direct lookup on this id.
+ */
+function resolveEffectiveId(parsed: ParsedSelector): string {
+  const { uniqueTokens, sharedTokens } = parsed;
+  if (uniqueTokens.length === 1) return uniqueTokens[0];
+  if (uniqueTokens.length > 1) return [...uniqueTokens].sort().join(",");
+  return `__anon:${[...sharedTokens].sort().join(",")}`;
 }
 
 /**
@@ -316,9 +386,7 @@ function placeholderFor(id: string): ReactElement {
   // with the element's own key into `"outer,inner"`, which would
   // break id-lookup by `String(node.key)` for placeholders emitted
   // inside a `.map()`-produced Partial.
-  return (
-    <i key={id} hidden data-partial data-partial-id={id} />
-  );
+  return <i key={id} hidden data-partial data-partial-id={id} />;
 }
 
 // ─── The Partial component ──────────────────────────────────────────────
@@ -333,11 +401,10 @@ function placeholderFor(id: string): ReactElement {
  * miss them.
  */
 export function Partial({
-  id: rawId,
+  selector,
   children,
   fallback,
   errorWith,
-  tags,
   defer,
   cache,
   frame,
@@ -345,16 +412,34 @@ export function Partial({
 }: PartialProps): ReactNode {
   const state = requirePartialState();
 
-  const effectiveTags = normalizeTags(tags);
-  const id = resolveEffectiveId(rawId, effectiveTags);
+  const parsed = parseSelector(selector);
+  const { uniqueTokens, sharedTokens } = parsed;
+  const id = resolveEffectiveId(parsed);
 
+  // Cross-Partial `#`-token uniqueness. A `#cart` on two Partials is an
+  // error even if their full selectors differ — the whole point of `#`
+  // is opt-in uniqueness, and a repeat is a naming collision regardless
+  // of which Partial's effective id wins.
+  for (const tok of uniqueTokens) {
+    if (state.seenUniqueTokens.has(tok)) {
+      throw new Error(
+        `Duplicate "#${tok}" selector. Tokens starting with "#" must be unique per page.`,
+      );
+    }
+    state.seenUniqueTokens.add(tok);
+  }
+
+  // Effective-id duplicate — only reachable for anonymous Partials
+  // whose `__anon:<sorted-classes>` collides. Two explicit `#`-token
+  // sets can't collide here without the per-token check above firing
+  // first.
   if (state.seenIds.has(id)) {
     throw new Error(
-      rawId
-        ? `Duplicate partial id "${id}". Partial ids must be unique per page.`
-        : `Duplicate anonymous <Partial> with tags [${effectiveTags.join(", ")}]. ` +
-          `Two id-less Partials synthesized the same internal id — add an explicit ` +
-          `id to at least one, or give them distinguishing tags.`,
+      uniqueTokens.length > 0
+        ? `Duplicate partial effective id "${id}". This should be unreachable — please file a bug.`
+        : `Duplicate anonymous <Partial> with selector ".${sharedTokens.join(" .")}". ` +
+            `Two id-less Partials synthesized the same internal id — add a distinguishing ` +
+            `class token or a "#" token to at least one.`,
     );
   }
   state.seenIds.add(id);
@@ -453,7 +538,8 @@ export function Partial({
       content: rawContent,
       fallback: effectiveFallback,
       errorWith,
-      tags: effectiveTags,
+      uniqueTokens,
+      sharedTokens,
       cache,
       frame,
       frameUrl,
@@ -480,7 +566,8 @@ export function Partial({
         content={rawContent}
         fallback={effectiveFallback}
         errorWith={errorWith}
-        tags={effectiveTags}
+        uniqueTokens={uniqueTokens}
+        sharedTokens={sharedTokens}
         cache={cache}
         frame={frame}
         frameUrl={frameUrl}
@@ -527,7 +614,7 @@ export function Partial({
           <PartialErrorBoundary
             partialId={id}
             partialFingerprint={fp}
-              fallback={errorWith}
+            fallback={errorWith}
           >
             {effectiveFallback}
           </PartialErrorBoundary>
@@ -558,7 +645,8 @@ export function Partial({
       content={rawContent}
       fallback={effectiveFallback}
       errorWith={errorWith}
-      tags={effectiveTags}
+      uniqueTokens={uniqueTokens}
+      sharedTokens={sharedTokens}
       cache={cache}
       frame={frame}
       frameUrl={frameUrl}

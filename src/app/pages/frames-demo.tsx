@@ -255,7 +255,7 @@ function MenuSlowView() {
     >
       <h3 style={{ marginTop: 0 }}>Slow menu view (streaming)</h3>
       <Partial
-        id="menu-slow-inner"
+        selector="#menu-slow-inner"
         fallback={
           <div data-testid="menu-slow-fallback" style={{ color: "#888" }}>
             Loading slow content…
@@ -279,7 +279,7 @@ export function FramesDemoPage() {
   return (
     <PartialRoot>
       <html lang="en">
-        <Partial id="head">
+        <Partial selector="#head">
           <head>
             <meta charSet="UTF-8" />
             <meta
@@ -320,7 +320,7 @@ export function FramesDemoPage() {
 
             <section className="card">
               <h2>Cart frame</h2>
-              <Partial id="cart" frame="cart" frameUrl="/cart/closed">
+              <Partial selector="#cart" frame="cart" frameUrl="/cart/closed">
                 <FrameNavigationBar />
                 <CartFrameContent />
               </Partial>
@@ -328,7 +328,7 @@ export function FramesDemoPage() {
 
             <section className="card">
               <h2>Menu frame</h2>
-              <Partial id="menu" frame="menu" frameUrl="/menu/closed">
+              <Partial selector="#menu" frame="menu" frameUrl="/menu/closed">
                 <FrameNavigationBar />
                 <MenuFrameContent />
               </Partial>

@@ -16,12 +16,12 @@ Two things, taken together:
 
 ```tsx
 // Before (PARTIAL_CACHE_DESIGN proposal):
-<Partial id="products" cache={{ search }} ttl={60} staleWhileRevalidate={300}>
+<Partial selector="#products" cache={{ search }} ttl={60} staleWhileRevalidate={300}>
   <ProductGrid />
 </Partial>
 
 // After:
-<Partial id="products" cache={{ maxAge: 60, staleWhileRevalidate: 300 }}>
+<Partial selector="#products" cache={{ maxAge: 60, staleWhileRevalidate: 300 }}>
   <ProductGrid />
 </Partial>
 
@@ -202,7 +202,7 @@ Cache-Control directives (`maxAge`, `staleWhileRevalidate`) do **not** participa
 Common case — Partial reads request state directly:
 
 ```tsx
-<Partial id="products" cache={{ maxAge: 60, staleWhileRevalidate: 300 }}>
+<Partial selector="#products" cache={{ maxAge: 60, staleWhileRevalidate: 300 }}>
   <ProductGrid />
 </Partial>
 
@@ -221,7 +221,7 @@ With a route-param input the tracker can't see:
 // On /product/[sku]
 function ProductPage({ sku }: { sku: string }) {
   return (
-    <Partial id="product" cache={{ maxAge: 300, vary: { sku } }}>
+    <Partial selector="#product" cache={{ maxAge: 300, vary: { sku } }}>
       <ProductDetails sku={sku} />
     </Partial>
   );
@@ -270,4 +270,4 @@ Tests:
 - **Manifest persistence.** Today's snapshotIndex is process-local; the manifest store has the same property. If we add a distributed entry store later, we either (a) ship manifests alongside entries (small, easy) or (b) accept first-render miss per process (acceptable, see the `existingSnapshots` check in `cache.tsx`).
 - **What counts as the Partial's "body" for ALS scope.** Currently `Partial({...})` is sync and the user's content is rendered as children inside `<Cache>`. The manifest needs to span the user's component execution, not just the `Partial` function call. The cleanest scope is around the _content_ render — open at the top of the cache miss path, close after content resolves. On a cache hit, no manifest open (we already have one stored).
 - **Nested Partials and manifest scope.** A Partial inside another Partial gets its own manifest (its own id). The outer Partial's manifest does **not** include accessor calls made inside the inner Partial. Mechanically: the inner Partial opens its own ALS scope that shadows the outer one for the duration of its body. Need to validate this lines up with how AsyncLocalStorage nests in practice (it does — `als.run` creates a new context, returns to the outer on exit).
-- **Server actions.** A server action that reads request state and returns `invalidate: { tags: [...] }` doesn't need a manifest — actions don't participate in caching directly. But if a future API ever caches action responses, the same model applies.
+- **Server actions.** A server action that reads request state and returns `invalidate: { selector: ".cart" }` doesn't need a manifest — actions don't participate in caching directly. But if a future API ever caches action responses, the same model applies.

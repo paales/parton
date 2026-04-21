@@ -2,7 +2,7 @@
 
 ### Lazy partials — SHIPPED as `<Partial defer>` (2026-04-18)
 
-`defer={true}` emits fallback only; app calls `useNavigation().reload({ids: [id]})` whenever. `defer={<Activator/>}` wires a client-side trigger automatically. Companion hook `useActivate(partialId, subscribe)` is the primitive every activator is built on. See `DEFER_ACTIVATORS.md`.
+`defer={true}` emits fallback only; app calls `useNavigation().reload({selector: "#id"})` whenever. `defer={<Activator/>}` wires a client-side trigger automatically. Companion hook `useActivate(partialId, subscribe)` is the primitive every activator is built on. See `DEFER_ACTIVATORS.md`.
 
 ### Refetch-trigger pattern — SHIPPED as `useActivate`
 
@@ -14,7 +14,7 @@
 
 ### Rich refetch event hooks + per-partial progress
 
-`useNavigation().reload()` returns a Promise that resolves on commit, and callers track pending state via their own `useState`. Inertia emits `start / progress / success / error / finish` on every visit. Adding an options bag (`reload({ids, tags}, { onSuccess, onError, onProgress })`) or an event emitter keyed per-partial would let apps build NProgress-style top bars, per-partial progress affordances, and analytics without forking the framework.
+`useNavigation().reload()` returns a Promise that resolves on commit, and callers track pending state via their own `useState`. Inertia emits `start / progress / success / error / finish` on every visit. Adding an options bag (`reload({ selector }, { onSuccess, onError, onProgress })`) or an event emitter keyed per-partial would let apps build NProgress-style top bars, per-partial progress affordances, and analytics without forking the framework.
 
 Deliberately skipped (Inertia has these, we don't need them): Deferred Props (Suspense is better), useForm (RSC actions cover it), stacked modals (too specific), full Visit API surface.
 
@@ -54,7 +54,7 @@ Follow-ups worth considering:
 
 1. **Widen the match.** Today the fingerprint is purely structural
    (component name + scalar props + recursion). Two refetches of
-   `<Partial id="cart">` from different carts hash the same because
+   `<Partial selector="#cart">` from different carts hash the same because
    they carry no discriminating prop. In practice that's fine because
    carts render via `getRequest()` context, not props — but it means
    the server still has to execute the partial to know the output
@@ -124,18 +124,19 @@ Open tails:
 - `".price"` — every Partial tagged `price`.
 - `".price.featured"` — every Partial tagged both `price` AND `featured` (AND intersection).
 
-**Superseded 2026-04-21.** `usePartial` is gone along with the selector parser. Same addressing, cleaner shape: `useNavigation().reload({ ids: ["hero"] })` and `useNavigation().reload({ tags: ["price"] })`. Multi-tag is UNION now, not intersection — server-side resolution in `resolveTagsToIds` matches any listed tag. For intersection semantics: give the intersection its own tag (`tags="price featured-price"`). See `NAVIGATE_UNIFIED.md` for the full rationale and `/archive/USE_PARTIAL_AND_INPUTS.md` for the historical `usePartial` surface.
+**Superseded 2026-04-21 (first pass).** `usePartial` replaced by `useNavigation().reload({ ids })` / `{ tags }`.
+
+**Superseded again 2026-04-21 (second pass — selector API).** The `id` + `tags` prop pair on `<Partial>` and the `{ ids, tags }` shape on `reload` / `navigate` / action `invalidate` are gone. Collapsed into one CSS-style `selector` prop / option: `#foo` unique (hard-enforced per page), `.foo` shared (unions on refetch). `reload({ selector: "#cart .price" })`. Union still applies; for intersection, give the intersection its own label. The "codegen union types" follow-up below is now ergonomic-only (catch `#`-tokens statically) — the grammar grew the prefix instead. See `SELECTOR_API.md`.
 
 **Deferred from the original sketch:**
 
-- **Attribute selectors (`.price[data-sku="ABC"]`).** Skipped — dynamic Partial families keep using explicit ids (`price-${sku}`) + a shared tag. Attribute selectors would eliminate id-family plumbing entirely but require `data-*` attribute tracking in `PartialSnapshot`; saved for later if the pain shows up.
-- **Collapsing `id` into "tag with uniqueness constraint".** Rejected — ids still show up in `?partials=` URLs, debug logs, and grep. Keeping id as a distinct primitive for unique addressing paid more than it cost.
-- **Codegen union types for ids.** Separate cheap stepping-stone; would be a pure type-level improvement (scan for `<Partial id>` literals, emit `type PartialId = "hero" | …`) and doesn't conflict with anything shipped above.
+- **Attribute selectors (`.price[data-sku="ABC"]`).** Skipped — dynamic Partial families keep using explicit `#`-tokens (`#price-${sku}`) + a shared label. Attribute selectors would eliminate id-family plumbing entirely but require `data-*` attribute tracking in `PartialSnapshot`; saved for later if the pain shows up.
+- **Codegen union types for selectors.** Cheap stepping-stone: scan for `selector="#…"` literals, emit `type PartialSelector = "#hero" | …`. Would catch typos at the call site. Template-literal-type variant covered in `SELECTOR_API.md` §Open questions.
 
 **Growth vectors still open:**
 
 - **Pseudo-selectors** (`.price:cached`, `.price:visible`) — not needed yet, but the `parseSelector` grammar has room.
-- **Tag-first refetch policy** as the default DX for most invalidation flows — mostly a docs/convention call now that the runtime supports it.
+- **Shared-token-first refetch policy** as the default DX for most invalidation flows — mostly a docs/convention call now that the runtime supports it.
 
 ---
 

@@ -5,9 +5,9 @@ import { useNavigation } from "../../lib/partial-client.tsx";
 
 /**
  * Manual activator: a plain button that calls
- * `useNavigation().reload({ids: [id]})`. Demonstrates `defer={true}`
- * — the framework isn't wired to any trigger; the app decides when
- * to activate.
+ * `useNavigation().reload({selector: "#" + id})`. Demonstrates
+ * `defer={true}` — the framework isn't wired to any trigger; the
+ * app decides when to activate.
  */
 export function ActivateButton({
   partialId,
@@ -31,7 +31,7 @@ export function ActivateButton({
   const activate = async () => {
     setIsPending(true);
     try {
-      await nav.reload({ ids: [partialId], disableTransition }).finished;
+      await nav.reload({ selector: `#${partialId}`, disableTransition }).finished;
     } finally {
       setIsPending(false);
     }

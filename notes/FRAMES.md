@@ -12,7 +12,7 @@ page URL. Frames have their own navigation, preserved in a server
 session, their state is scoped via a `React.cache`-backed cell.
 
 ```tsx
-<Partial id="cart" frame="cart" frameUrl="/cart/closed">
+<Partial selector="#cart" frame="cart" frameUrl="/cart/closed">
   <CartSection /> {/* getSearchParam("q") reads the cart frame's ?q= */}
 </Partial>
 ```
@@ -155,9 +155,12 @@ give it a real page URL.
   `resolveManifest(manifest, frameRequest)` path. A cached framed
   Partial has per-(id, fp, frame-URL) entries.
 - **Server actions** don't automatically know about frames. If an
-  action's `invalidate: ["cart"]` refers to the cart frame's Partial
-  id (convention: frame name = Partial id), the existing invalidation
-  path works unchanged.
+  action's `invalidate: { selector: "#cart" }` refers to a Partial
+  whose selector contains `#cart` AND which declared `frame="cart"`,
+  the refetch targets it like any other `#`-token. Convention: the
+  frame's root Partial should carry `#<frameName>` so the client's
+  `partials=<frameName>` hint from `_dispatchFrameRefetch` lands on
+  the right effective id. See `notes/SELECTOR_API.md` §Frames.
 
 ## Known sharp edges
 

@@ -21,7 +21,7 @@ export interface WhenVisibleProps extends ActivatorProps {
  * Activator: fires the enclosing Partial's refetch when the fallback
  * enters the viewport.
  *
- *   <Partial id="feed" fallback={<Skel/>} defer={<WhenVisible rootMargin="200px"/>}>
+ *   <Partial selector="#feed" fallback={<Skel/>} defer={<WhenVisible rootMargin="200px"/>}>
  *     <Feed/>
  *   </Partial>
  *

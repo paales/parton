@@ -477,13 +477,20 @@ function reinjectDynamic(
     if (id) {
       const snap = snapshots.get(id);
       if (snap) {
+        // Reconstruct the selector in array form — each element is a
+        // single token that the parser won't split on whitespace. A
+        // `#`-token like `#Province Flag Socks (Dropdown Test)` (Magento
+        // SKU with spaces) survives the round-trip intact.
+        const selector: string[] = [
+          ...snap.uniqueTokens.map((t) => `#${t}`),
+          ...snap.sharedTokens.map((t) => `.${t}`),
+        ];
         return createElement(
           Partial,
           {
-            id,
+            selector,
             fallback: snap.fallback ?? undefined,
             errorWith: snap.errorWith,
-            tags: snap.tags,
             cache: snap.cache,
           },
           snap.content,

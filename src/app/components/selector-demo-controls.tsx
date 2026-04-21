@@ -5,24 +5,22 @@ import { useNavigation } from "../../lib/partial-client.tsx";
 
 /**
  * Button that fires a targeted reload via `useNavigation().reload()`.
- * Supports three shapes:
- *   - `{ids: ["hero"]}`   — by id
- *   - `{tags: ["price"]}` — by tag (any partial carrying the tag)
- *   - `{tags: ["a","b"]}` — multi-tag union (server-side resolution)
+ * The selector string follows CSS grammar:
+ *   - `#foo`           — unique token; single Partial
+ *   - `.foo`           — shared label; union across every Partial with it
+ *   - `#hero .price`   — mix: refetches `#hero` AND every `.price`
  *
- * Tag → id resolution runs server-side against the route-scoped
- * registry (`partial.tsx:resolveTagsToIds`), so dynamic partials
+ * Selector tokens resolve server-side against the route-scoped
+ * registry (`partial.tsx:resolveSelectorToIds`), so dynamic Partials
  * that only exist after a render (prices inside `.map()`, etc.) are
  * addressable the same as static ones.
  */
 export function SelectorRefetchButton({
-  ids,
-  tags,
+  selector,
   label,
   testId,
 }: {
-  ids?: string[];
-  tags?: string[];
+  selector: string;
   label: string;
   testId: string;
 }) {
@@ -32,7 +30,7 @@ export function SelectorRefetchButton({
   async function fire() {
     setIsPending(true);
     try {
-      await nav.reload({ ids, tags }).finished;
+      await nav.reload({ selector }).finished;
     } finally {
       setIsPending(false);
     }

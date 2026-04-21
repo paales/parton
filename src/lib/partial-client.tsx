@@ -19,9 +19,10 @@
  * Client API surface: `useNavigation()` returns a handle whose
  * `navigate(url, opts)` / `reload(opts)` methods drive every
  * refetch on the page. Targeted refetches are expressed through the
- * `ids` / `tags` options — see {@link NavigateOptions}. There is no
- * `usePartial` or `__inputs`: state must land in a URL (page URL or
- * frame URL), and the client never sends prop overrides.
+ * `selector` option (CSS-style `#id` / `.class` tokens) — see
+ * {@link FrameworkNavigateOptions}. There is no `usePartial` or
+ * `__inputs`: state must land in a URL (page URL or frame URL), and
+ * the client never sends prop overrides.
  */
 
 import React, {
@@ -515,16 +516,54 @@ export function isFrameworkSilentInfo(
   );
 }
 
+// ─── Selector parsing (client-side, mirrors partial-component.tsx) ───
+//
+// The server-side parser lives in `partial-component.tsx` and runs on
+// `<Partial selector>`. Authors also pass selector strings on
+// `reload({ selector })` / `navigate(url, { selector })` — we parse
+// them here before splitting into the wire params the server expects.
+
+function parseSelectorClient(
+  input: string | string[] | undefined,
+): { uniqueTokens: string[]; sharedTokens: string[] } {
+  if (input == null) return { uniqueTokens: [], sharedTokens: [] };
+  // Mirror the server parser: string form splits on whitespace;
+  // array form keeps each element as one token (so values with
+  // spaces — SKUs, slugs — survive intact).
+  const tokens = Array.isArray(input)
+    ? input.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean)
+    : input.split(/\s+/).map((t) => t.trim()).filter(Boolean);
+  const uniqueTokens: string[] = [];
+  const sharedTokens: string[] = [];
+  for (const tok of tokens) {
+    if (tok.startsWith("#")) {
+      const name = tok.slice(1);
+      if (name && !uniqueTokens.includes(name)) uniqueTokens.push(name);
+    } else if (tok.startsWith(".")) {
+      const name = tok.slice(1);
+      if (name && !sharedTokens.includes(name)) sharedTokens.push(name);
+    } else {
+      throw new Error(
+        `Unprefixed token "${tok}" in selector. Tokens must start with ` +
+          `"#" (unique) or "." (shared). Did you mean "#${tok}" or ".${tok}"?`,
+      );
+    }
+  }
+  return { uniqueTokens, sharedTokens };
+}
+
 // ─── Microtask-batched targeted-refetch dispatcher ────────────────
 //
-// Multiple `reload` / `navigate({ids, tags})` calls in the same tick
+// Multiple `reload` / `navigate({ selector })` calls in the same tick
 // coalesce into one refetch request. Keeps tag-fanout and multi-id
 // event handlers cheap: three buttons clicked in the same frame
 // produce one request with `?partials=a,b,c`.
 
 interface RefetchBatchEntry {
-  ids: string[];
-  tags: string[];
+  /** `#`-token names (sans `#`) — become `?partials=…` on the wire. */
+  uniqueTokens: string[];
+  /** `.`-token names (sans `.`) — become `?tags=…` on the wire. */
+  sharedTokens: string[];
   disableTransition: boolean;
 }
 
@@ -540,24 +579,29 @@ async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
   ).__rsc_partial_refetch;
   if (!handler) return;
 
-  const ids = new Set<string>();
-  const tags = new Set<string>();
+  const uniques = new Set<string>();
+  const shareds = new Set<string>();
   let disableTransition = false;
   for (const entry of batch) {
-    for (const id of entry.ids) ids.add(id);
-    for (const tag of entry.tags) tags.add(tag);
+    for (const u of entry.uniqueTokens) uniques.add(u);
+    for (const s of entry.sharedTokens) shareds.add(s);
     if (entry.disableTransition) disableTransition = true;
   }
 
   const url = new URL(window.location.href);
-  if (ids.size > 0) url.searchParams.set("partials", [...ids].join(","));
-  if (tags.size > 0) url.searchParams.set("tags", [...tags].join(","));
+  if (uniques.size > 0) url.searchParams.set("partials", [...uniques].join(","));
+  if (shareds.size > 0) url.searchParams.set("tags", [...shareds].join(","));
   if (disableTransition) url.searchParams.set("disableTransition", "1");
 
   // Send cached fingerprints for the non-target set so the server can
-  // skip the unchanged ones via fingerprint-match placeholders.
-  if (ids.size > 0) {
-    const targetPrefixes = [...ids].map((id) => `${id}:`);
+  // skip the unchanged ones via fingerprint-match placeholders. We
+  // don't know the server-side effective-id→`#`-token mapping from
+  // here (a multi-`#` Partial's effective id is a sorted-join), but
+  // the common case is effective id == single `#`-token, so a prefix
+  // filter on the effective id works. For the rare multi-`#` case
+  // we'd send the fingerprint anyway and the server would match it.
+  if (uniques.size > 0) {
+    const targetPrefixes = [...uniques].map((u) => `${u}:`);
     const cached = getCachedPartialIds().filter(
       (t) => !targetPrefixes.some((p) => t.startsWith(p)),
     );
@@ -701,6 +745,14 @@ export async function _dispatchFrameRefetch(
   const refetchUrl = new URL(window.location.href);
   refetchUrl.searchParams.set("__frame", name);
   refetchUrl.searchParams.set("__frameUrl", url);
+  // Convention: the frame name matches the root Partial's `#`-token.
+  // Sending `partials=<name>` narrows the server render to the frame
+  // Partial's subtree, skipping unrelated page content. The server's
+  // direct-lookup on effective id hits `#<name>` selectors. Frame
+  // refetches invoked from the urlChanged path in `entry.browser.tsx`
+  // deliberately DO NOT set `partials=` — they want a full render so
+  // URL-dependent content (e.g. main listing switching on `?product=`)
+  // rerenders while `__frame` still updates the session.
   refetchUrl.searchParams.set("partials", name);
   if (options?.disableTransition) {
     refetchUrl.searchParams.set("disableTransition", "1");
@@ -865,11 +917,18 @@ function composeResult(
   return { committed, finished };
 }
 
+function parseOptionsSelector(
+  options: FrameworkNavigateOptions | FrameworkReloadOptions | undefined,
+): { uniqueTokens: string[]; sharedTokens: string[] } {
+  if (!options?.selector) return { uniqueTokens: [], sharedTokens: [] };
+  return parseSelectorClient(options.selector);
+}
+
 function hasRefetchFilter(
   options: FrameworkNavigateOptions | FrameworkReloadOptions | undefined,
 ): boolean {
-  if (!options) return false;
-  return (options.ids?.length ?? 0) > 0 || (options.tags?.length ?? 0) > 0;
+  const parsed = parseOptionsSelector(options);
+  return parsed.uniqueTokens.length > 0 || parsed.sharedTokens.length > 0;
 }
 
 // ─── Frame entry projection ───────────────────────────────────────
@@ -954,9 +1013,9 @@ function nullNavigation(name: string | null): FrameworkNavigation {
 /**
  * Window-scoped handle — a Proxy over `window.navigation` with
  * `name: null`, an extended `navigate()` (updater callback, targeted
- * refetch via `ids`/`tags`, `silent` URL-only updates) and an
- * extended `reload()` (targeted refetch without a URL change).
- * Everything else passes straight through to the browser.
+ * refetch via `selector`, `silent` URL-only updates) and an extended
+ * `reload()` (targeted refetch without a URL change). Everything
+ * else passes straight through to the browser.
  */
 function buildWindowNavigationHandle(): FrameworkNavigation {
   const nav = getNavigation();
@@ -967,12 +1026,14 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
     options?: FrameworkNavigateOptions,
   ): FrameworkNavigationResult => {
     const url = resolveWindowTarget(target);
-    const filtered = hasRefetchFilter(options);
+    const parsed = parseOptionsSelector(options);
+    const filtered =
+      parsed.uniqueTokens.length > 0 || parsed.sharedTokens.length > 0;
     const silent = options?.silent === true;
     if (filtered || silent) {
       // URL-only update — the page-level listener sees the branded
       // info and declines to intercept, so no refetch fires from its
-      // side. If we have id/tag filters, dispatch the targeted
+      // side. If we have a selector filter, dispatch the targeted
       // refetch ourselves after commit.
       const result = nav.navigate(url, {
         history: options?.history ?? "push",
@@ -985,8 +1046,8 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
         () => nav.currentEntry!,
         () =>
           enqueueRefetch({
-            ids: options?.ids ?? [],
-            tags: options?.tags ?? [],
+            uniqueTokens: parsed.uniqueTokens,
+            sharedTokens: parsed.sharedTokens,
             disableTransition: options?.disableTransition ?? false,
           }),
       );
@@ -1004,12 +1065,13 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
   const windowReload = (
     options?: FrameworkReloadOptions,
   ): FrameworkNavigationResult => {
-    if (hasRefetchFilter(options)) {
+    const parsed = parseOptionsSelector(options);
+    if (parsed.uniqueTokens.length > 0 || parsed.sharedTokens.length > 0) {
       return syntheticResult(
         nav,
         enqueueRefetch({
-          ids: options?.ids ?? [],
-          tags: options?.tags ?? [],
+          uniqueTokens: parsed.uniqueTokens,
+          sharedTokens: parsed.sharedTokens,
           disableTransition: options?.disableTransition ?? false,
         }),
       );
@@ -1257,10 +1319,12 @@ export function useNavigation(name?: string): FrameworkNavigation {
  *     return () => obs.disconnect();
  *   });
  *
- * `fire()` triggers a targeted reload for `partialId` via
- * `useNavigation().reload({ ids: [partialId] })`. Calling `fire` more
- * than once is a no-op by default (one-shot activation). Pass
- * `{once: false}` if you need an activator that can fire repeatedly.
+ * `fire()` triggers a targeted reload by sending the Partial's
+ * effective id as a `#`-token — server-side, the direct-lookup pass
+ * on `resolveSelectorToIds` hits the effective id even for anonymous
+ * Partials (`__anon:.foo`) or multi-`#` compound ids (`a,b`). Calling
+ * `fire` more than once is a no-op by default (one-shot activation).
+ * Pass `{once: false}` if you need an activator that can fire repeatedly.
  *
  * `subscribe` is registered once per mount and is captured via ref, so
  * the latest closure is used when the subscription fires. The effect
@@ -1289,8 +1353,8 @@ export function useActivate(
       if (once && firedRef.current) return;
       firedRef.current = true;
       void enqueueRefetch({
-        ids: [partialId],
-        tags: [],
+        uniqueTokens: [partialId],
+        sharedTokens: [],
         disableTransition: false,
       });
     });

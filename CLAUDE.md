@@ -55,7 +55,7 @@ const data = await client.request(CartQuery, { cartId });
 
 Pages are composed of independently re-renderable partials (inspired by Shopify's section rendering). The framework exposes one primitive — `<Partial>` — wrapped by a single framework-owned `<PartialRoot>` at the top of the RSC entry. Page authors never see `<PartialRoot>`; they just use `<Partial>` anywhere in the JSX tree.
 
-A Partial is addressable by `id` (unique per page), by `tags` (non-unique labels, like DOM `className`), or both. Filter with `?partials=<id>` or `?tags=<tag>`. Refetch with `useNavigation().reload({ ids })` or `.reload({ tags })` — see the **Client navigation** section below.
+A Partial is addressable via a CSS-style `selector` prop — `#foo` for unique tokens (one per page, hard-enforced), `.foo` for shared labels (any number, unions on refetch). Filter with `?partials=<name>` (unique tokens, sans `#`) or `?tags=<name>` (shared tokens, sans `.`). Refetch with `useNavigation().reload({ selector: "#cart .price" })` — see the **Client navigation** section below, and `notes/SELECTOR_API.md` for the full design.
 
 ### Partials must be server components
 
@@ -64,34 +64,35 @@ All `<Partial>` content must render in the RSC environment. Client components ar
 ### Authoring
 
 ```tsx
-<Partial id="header">
+<Partial selector="#header">
   <header>
     {new Date().toLocaleString()}
-    <Partial id="cart" tags="cart header" fallback={<CartBadge quantity={"?"} />}>
+    <Partial selector="#cart .cart .header" fallback={<CartBadge quantity={"?"} />}>
       <CartPartial />
     </Partial>
   </header>
 </Partial>
 
-<Partial id="products" cache={{ maxAge: 60 }}>
+<Partial selector="#products" cache={{ maxAge: 60 }}>
   <ProductGrid search={search} />
 </Partial>
 
-{/* id-less — addressable only via .ad-slot */}
-<Partial tags="ad-slot">
+{/* anonymous — addressable only via .ad-slot */}
+<Partial selector=".ad-slot">
   <HouseAd />
 </Partial>
 ```
 
 No namespace. No `<Partials>` wrapper. No `key`.
 
-- **`id`** is optional; when provided, it must be unique per page (duplicates throw). Addressable via `reload({ ids: ["id"] })`.
-- **`tags`** is optional; accepts an array OR a whitespace-separated string (`"price product"`) mirroring DOM `className`. Addressable via `reload({ tags: ["price"] })`; passing multiple tags matches their UNION server-side.
-- A Partial must have at least one of the two. An id-less Partial synthesizes `__anon:<sorted-tags>` internally and can only be addressed via a tag refetch.
+- **`selector`** is required. A space-separated list (or array) of CSS-style tokens. Each token starts with `#` (unique per page; duplicates throw) or `.` (shared label; repeats allowed).
+- **`#foo`** — unique token. Addressable via `reload({ selector: "#foo" })`. Multiple `#`-tokens on one Partial are allowed; each must still be unique page-wide.
+- **`.foo`** — shared label. Addressable via `reload({ selector: ".foo" })` — refetches the union of every Partial carrying the label.
+- A Partial with only `.`-tokens is **anonymous**: it synthesizes `__anon:<sorted-classes>` internally and is addressable only through its shared tokens. Two anonymous Partials with the same sorted `.`-token set collide and throw.
 
 ### Dynamic Partials (inside `.map()`)
 
-A Partial produced inside an async component's return value (e.g. per-row in a product grid) is picked up the same as a statically-placed one. Each `<Partial>` render calls `<PartialBoundary>` which side-effects into a **route-scoped registry** (`src/lib/partial-registry.ts`); subsequent refetches consult the registry to resolve ids/tags without re-running ancestors. See `notes/DYNAMIC_PARTIAL_REGISTRY.md`.
+A Partial produced inside an async component's return value (e.g. per-row in a product grid) is picked up the same as a statically-placed one. Each `<Partial>` render calls `<PartialBoundary>` which side-effects into a **route-scoped registry** (`src/lib/partial-registry.ts`); subsequent refetches consult the registry to resolve selector tokens without re-running ancestors. See `notes/DYNAMIC_PARTIAL_REGISTRY.md`.
 
 ### Fingerprints
 
@@ -108,10 +109,11 @@ const cart = useNavigation("cart");   // explicit: the cart frame
 nav.navigate("/products?sort=price", { history: "push" });                // full page nav, string URL
 nav.navigate(new URL("/checkout", location.href));                        // URL instance
 nav.navigate(u => { u.searchParams.set("q", q); return u },               // updater callback
-             { history: "replace", tags: ["search-results"] });
+             { history: "replace", selector: ".search-results" });
 nav.navigate(url,   { history: "replace", silent: true });                // URL update only, no refetch
-nav.reload({ ids: ["cart"] });                                             // targeted refetch, no URL change
-nav.reload({ tags: ["price"] });                                           // tag-resolved refetch
+nav.reload({ selector: "#cart" });                                         // targeted refetch (single Partial), no URL change
+nav.reload({ selector: ".price" });                                        // shared-token refetch (union)
+nav.reload({ selector: "#cart .price" });                                  // mix: refreshes #cart AND every .price
 nav.back(); nav.forward(); nav.reload();                                   // inherited from Navigation
 
 await nav.navigate(...).finished;                                          // wait for refetch to settle
@@ -128,8 +130,7 @@ await nav.navigate(...).finished;                                          // wa
 | `history` | `"push"` (default), `"replace"`, or `"auto"`. From `NavigationNavigateOptions`. |
 | `state` | State to write onto the resulting entry. From `NavigationNavigateOptions`. |
 | `info` | Forwarded to navigate events. From `NavigationNavigateOptions`. Window handle only — frame handles stamp their own framework-internal `info` to suppress the page-level intercept. |
-| `ids` | Explicit partial ids to refetch. Page handle only; ignored by frame handles (frames refetch their whole subtree). |
-| `tags` | Tags to refetch. Resolved server-side against the route-scoped registry; union semantics for multiple tags. Page handle only. |
+| `selector` | CSS-style selector string (or array). `#foo` tokens target single Partials; `.foo` tokens union across every Partial with the label. Resolved server-side against the route-scoped registry. Page handle only; ignored by frame handles (frames refetch their whole subtree). |
 | `silent` | Update the URL only. No refetch. Useful for bookmarkability-only URL sync (infinite scroll's `?pages=`). |
 | `disableTransition` | Commit without wrapping in `startTransition` — fallbacks flash, chunks stream. Default `false` (atomic swap, no fallback). |
 
@@ -144,7 +145,7 @@ Multiple `navigate` / `reload` calls in the same tick coalesce into one microtas
 `cache` opts a Partial into server-side render-output caching. The shape mirrors HTTP `Cache-Control`:
 
 ```tsx
-<Partial id="products" cache={{ maxAge: 60, staleWhileRevalidate: 300 }}>
+<Partial selector="#products" cache={{ maxAge: 60, staleWhileRevalidate: 300 }}>
   <ProductGrid />
 </Partial>
 ```
@@ -171,12 +172,12 @@ Dynamic Partials inside a cached region stay live via strip-on-store / reinject-
 Server actions return invalidation instructions:
 
 ```ts
-return { invalidate: { tags: ["cart"] } };   // by tag (preferred)
-return { invalidate: ["cart"] };              // by id
-return { invalidate: { ids: ["nav"], tags: ["cart"] } };
+return { invalidate: { selector: ".cart" } };        // shared-token: everything with .cart
+return { invalidate: { selector: "#cart" } };        // unique token: just #cart
+return { invalidate: { selector: "#nav .cart" } };   // mix: #nav plus every .cart
 ```
 
-Ids are global — no prefix — and match 1:1 against `<Partial id>`.
+Tokens follow the `<Partial selector>` grammar. `#foo` matches a Partial whose selector contains that `#`-token; `.foo` matches every Partial whose selector contains that `.`-token (union).
 
 ### notFound + redirect
 
@@ -221,7 +222,7 @@ sync catch isn't what drives the RSC response path.
 The client wraps refetches in `React.startTransition` by default: preserve UI, atomic swap, no fallback flash. Opt into per-chunk streaming (fallback + per-boundary reveal as each chunk arrives) per call:
 
 ```ts
-nav.reload({ ids: ["stage-1", "stage-2", "stage-3"], disableTransition: true });
+nav.reload({ selector: "#stage-1 #stage-2 #stage-3", disableTransition: true });
 ```
 
 `disableTransition` has a second use: concurrent refetches across disjoint ids. Transitions can collapse overlapping refetches — a newer pending transition can supersede an older one whose bytes have arrived but haven't committed yet. For same-id rapid-fire (search-as-you-type), the transition wrapper is the right default (no stale-data flash). For disjoint-id fan-outs (refresh cart + live price + next page from independent event handlers), pass `disableTransition: true` on each so every response commits on arrival. See `e2e/defer-concurrent-refetches.spec.ts` and `archive/BARE_KEY_REFETCH.md`.

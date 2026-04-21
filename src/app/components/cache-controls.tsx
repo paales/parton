@@ -26,7 +26,7 @@ export function CacheControls() {
         type="button"
         onClick={() =>
           startTransition(() => {
-            void nav.reload({ ids: ["slow"] });
+            void nav.reload({ selector: "#slow" });
           })
         }
         data-testid="refetch-slow"
@@ -37,7 +37,7 @@ export function CacheControls() {
         type="button"
         onClick={() =>
           startTransition(() => {
-            void nav.reload({ ids: ["clock"] });
+            void nav.reload({ selector: "#clock" });
           })
         }
         data-testid="refetch-clock"
@@ -54,7 +54,7 @@ export function CacheControls() {
           startTransition(() => {
             void nav.navigate(url.toString(), {
               history: "push",
-              ids: ["slow"],
+              selector: "#slow",
             });
           });
         }}

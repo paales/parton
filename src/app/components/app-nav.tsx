@@ -2,14 +2,14 @@ import { Partial } from "../../lib";
 
 /**
  * Shared cross-page nav. Self-contained — wraps its own content in
- * `<Partial id="nav">` so every page gets a fingerprint-skippable
+ * `<Partial selector="#nav">` so every page gets a fingerprint-skippable
  * nav just by rendering `<AppNav/>`. Works anywhere in the JSX
  * tree (no "must be a direct child of `<PartialRoot>`" constraint,
  * because the runtime discovers Partials by executing them).
  */
 export function AppNav() {
   return (
-    <Partial id="nav">
+    <Partial selector="#nav">
       <nav
         style={{
           marginBottom: "1.5rem",

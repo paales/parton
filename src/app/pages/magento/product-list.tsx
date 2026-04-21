@@ -50,12 +50,11 @@ export function MagentoPage() {
 
   return (
     <>
-      <Partial id="header">
+      <Partial selector="#header">
         <header>
           {new Date().toLocaleString()}
           <Partial
-            id="cart"
-            tags={"cart"}
+            selector="#cart .cart"
             fallback={<CartBadge quantity={"?"} />}
           >
             <CartPartial />
@@ -64,7 +63,7 @@ export function MagentoPage() {
       </Partial>
       <main>
         <RefreshAllPricesButton />
-        <Partial id="products" cache={{ maxAge: 12 }}>
+        <Partial selector="#products" cache={{ maxAge: 12 }}>
           <ProductGrid search={search} />
         </Partial>
       </main>
@@ -143,18 +142,17 @@ function ProductCard({ product }: { product: ProductItem }) {
         <code>{sku}</code>
       </div>
       {sku && (
-        // Dynamic Partial: id is built from the product sku, produced
-        // inside the `.map()` in `ProductGrid`. Invisible to the
-        // bootstrap JSX walk in `PartialRoot`, but each Partial
-        // self-registers in the route-scoped registry on render so
-        // refreshing one live price doesn't require re-running the
-        // product list query. The `price` tag lets
-        // `RefreshAllPricesButton` pull every price partial in a single
-        // tag-based refetch. `fallback` shows the base price in gray
-        // while the refreshed LivePrice is resolving.
+        // Dynamic Partial: selector builds a `#price-<sku>` unique
+        // token and a shared `.price` label. Produced inside the
+        // `.map()` in `ProductGrid` — invisible to the bootstrap JSX
+        // walk in `PartialRoot`, but each Partial self-registers in
+        // the route-scoped registry on render so refreshing one live
+        // price doesn't require re-running the product list query.
+        // The `.price` label lets `RefreshAllPricesButton` pull every
+        // price Partial in a single refetch. `fallback` shows the
+        // base price in gray while the refreshed LivePrice is resolving.
         <Partial
-          id={`price-${sku}`}
-          tags={"price"}
+          selector={[`#price-${sku}`, ".price"]}
           fallback={
             <LivePriceFallback
               sku={sku}

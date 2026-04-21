@@ -44,7 +44,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
           url.searchParams.set("search", "1");
           return url;
         },
-        { history: "push", ids: ["search-page"] },
+        { history: "push", selector: "#search-page" },
       );
     });
   }
@@ -57,7 +57,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
           url.searchParams.delete("q");
           return url;
         },
-        { history: "push", ids: ["search-page"] },
+        { history: "push", selector: "#search-page" },
       );
     });
   }
@@ -186,7 +186,7 @@ export function SearchDialog({
         history: "push",
         // Page scope: refetch the SearchArea holder. Frame scope: ignored
         // (frame nav refetches its whole subtree).
-        ids: nav.name === null ? ["search-page"] : undefined,
+        selector: nav.name === null ? "#search-page" : undefined,
       },
     );
   }
@@ -225,10 +225,10 @@ export function SearchDialog({
  * enclosing frame when there is one (frame mode) and to the window
  * otherwise (URL mode). `nav.currentUrl` is the URL it should modify
  * (page URL in URL mode, frame URL in frame mode). Navigate options
- * pass `tags: ["search-results"]` — the server resolves the tag
- * against the route registry to the three stage ids (page scope) and
- * refetches them; frame handles ignore the tag filter and refetch
- * the whole frame subtree (same resulting content).
+ * pass `selector: ".search-results"` — the server resolves it
+ * against the route registry to the container Partial (page scope)
+ * and refetches it; frame handles ignore the selector filter and
+ * refetch the whole frame subtree (same resulting content).
  *
  * Same serial-dispatch guard for both modes: fire on first change,
  * wait for the response, fire again with the latest typed value.
@@ -272,11 +272,11 @@ export function SearchInput({ query }: { query: string }) {
       {
         history: "replace",
         disableTransition: disableTransitionRef.current,
-        // Tag-based refetch: resolves server-side to whichever stage
-        // Partials are registered on this route. Frame handles ignore
-        // the tag filter (the frame refetches its own subtree, which
-        // already contains the tagged stages).
-        tags: ["search-results"],
+        // Selector-based refetch: resolves server-side to whichever
+        // container Partial is registered on this route. Frame handles
+        // ignore the selector filter (the frame refetches its own
+        // subtree, which already contains the tagged stages).
+        selector: ".search-results",
       },
     ).finished;
 

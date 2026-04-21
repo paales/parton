@@ -15,9 +15,9 @@ Answers the questions: *"is the cache global or route-specific"*, *"what's a rou
 
 ## Same Partial on `/shop` and `/checkout` — works
 
-- **Render-output cache**: can share bytes. If `<Partial id="cart" cache>` hashes to the same fingerprint + manifest on both pages, one entry serves both. Nothing route-specific in the key.
+- **Render-output cache**: can share bytes. If `<Partial selector="#cart" cache>` hashes to the same fingerprint + manifest on both pages, one entry serves both. Nothing route-specific in the key.
 - **Registry**: separate snapshots per pathname. `/shop`'s cart snapshot holds whatever JSX `/shop`'s ancestor captured; `/checkout`'s holds its own. Refetches for the cart on `/checkout` replay `/checkout`'s snapshot (which has the right ancestor closure context).
-- **Duplicate-id check**: per-page (`seenIds` per-request), so `<Partial id="cart">` can appear on both pages without collision.
+- **Duplicate-`#`-token check**: per-page (`seenUniqueTokens` per-request), so `<Partial selector="#cart">` can appear on both pages without collision.
 
 No conflicts. The separation is right: registry isolation keeps refetch semantics correct per page, cache-store sharing keeps bytes cheap.
 

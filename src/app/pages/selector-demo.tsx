@@ -3,18 +3,19 @@ import { AppNav } from "../components/app-nav.tsx";
 import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx";
 
 /**
- * `/selector-demo` — exercises tag-based refetch.
+ * `/selector-demo` — exercises selector-based refetch.
  *
- *   <Partial tags="product">            // id-less; addressable only via tag
- *   <Partial id="price-a" tags="price"> // price family; each member has an id
- *   <Partial id="price-b" tags="price featured"> // same family, extra "featured" tag
+ *   <Partial selector=".product">                    // anonymous; addressable only via .product
+ *   <Partial selector="#price-a .price">             // price family; each member has a `#`-token
+ *   <Partial selector="#price-b .price .featured">   // same family, extra `.featured` label
  *
- * Buttons call `useNavigation().reload({tags: [...]})` or
- * `reload({ids: [...]})`. Tags are resolved server-side against the
- * route-scoped partial registry, so dynamic partials (produced inside
- * opaque components, `.map()` loops, etc.) are addressable the same
- * as static ones. Every Partial renders a fresh server timestamp so
- * visible refresh maps 1-to-1 with the target set.
+ * Buttons call `useNavigation().reload({selector: "..."})`. The selector
+ * string uses CSS grammar: `#foo` (unique) and `.foo` (shared), space
+ * separated. Tokens are resolved server-side against the route-scoped
+ * partial registry, so dynamic partials (produced inside opaque
+ * components, `.map()` loops, etc.) are addressable the same as static
+ * ones. Every Partial renders a fresh server timestamp so a visible
+ * refresh maps 1-to-1 with the target set.
  */
 
 function ServerTime({ label }: { label: string }) {
@@ -29,7 +30,7 @@ export function SelectorDemoPage() {
   return (
     <PartialRoot>
       <html lang="en">
-        <Partial id="head">
+        <Partial selector="#head">
           <head>
             <meta charSet="UTF-8" />
             <meta
@@ -58,42 +59,45 @@ export function SelectorDemoPage() {
               Selector-based refetch
             </h1>
             <p style={{ color: "#888", marginBottom: "2rem" }}>
-              <code>useNavigation().reload({"{tags: ['price']}"})</code>{" "}
-              refetches every Partial carrying that tag. Multiple tags
-              union (<code>{"{tags: ['price', 'featured']}"}</code> hits
-              any partial carrying either tag). Ids target a single
-              partial.
+              <code>useNavigation().reload({'{selector: ".price"}'})</code>{" "}
+              refetches every Partial carrying that class token. Multiple
+              tokens union:{" "}
+              <code>{'{selector: ".price .featured"}'}</code> hits any
+              Partial with either label. <code>#foo</code> targets a
+              single Partial.
             </p>
 
             <section className="card" style={{ marginBottom: "1.5rem" }}>
               <h2>
-                <code>&lt;Partial tags="product"&gt;</code> — id-less
+                <code>&lt;Partial selector=".product"&gt;</code> —
+                anonymous
               </h2>
               <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                No explicit id. Synthesizes <code>__anon:product</code>{" "}
-                internally. Only addressable via <code>.product</code>.
+                No <code>#</code>-token. Synthesizes{" "}
+                <code>__anon:.product</code> internally. Only addressable
+                via <code>.product</code>.
               </p>
-              <Partial tags="product">
+              <Partial selector=".product">
                 <ServerTime label="product" />
               </Partial>
             </section>
 
             <section className="card" style={{ marginBottom: "1.5rem" }}>
               <h2>
-                <code>&lt;Partial tags="price"&gt;</code> family
+                <code>&lt;Partial selector=".price"&gt;</code> family
               </h2>
               <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                Three siblings sharing <code>price</code>; two also carry{" "}
-                <code>featured</code>. Tag-intersection lets you refresh a
+                Three siblings sharing <code>.price</code>; two also carry{" "}
+                <code>.featured</code>. Selector unions let you refresh a
                 subset without plumbing ids through props.
               </p>
-              <Partial id="price-a" tags="price">
+              <Partial selector="#price-a .price">
                 <ServerTime label="price-a" />
               </Partial>
-              <Partial id="price-b" tags="price featured">
+              <Partial selector="#price-b .price .featured">
                 <ServerTime label="price-b" />
               </Partial>
-              <Partial id="price-c" tags="price featured">
+              <Partial selector="#price-c .price .featured">
                 <ServerTime label="price-c" />
               </Partial>
             </section>
@@ -102,22 +106,22 @@ export function SelectorDemoPage() {
               <h2>Refetch controls</h2>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                 <SelectorRefetchButton
-                  tags={["product"]}
+                  selector=".product"
                   label="refetch .product"
                   testId="refresh-product"
                 />
                 <SelectorRefetchButton
-                  tags={["price"]}
+                  selector=".price"
                   label="refetch .price (3 partials)"
                   testId="refresh-price"
                 />
                 <SelectorRefetchButton
-                  tags={["featured"]}
+                  selector=".featured"
                   label="refetch .featured (2 partials)"
                   testId="refresh-price-featured"
                 />
                 <SelectorRefetchButton
-                  ids={["price-a"]}
+                  selector="#price-a"
                   label="refetch #price-a"
                   testId="refresh-price-a"
                 />

@@ -42,7 +42,7 @@ export function LivePriceFallback({
 /**
  * Server-rendered "live price" for a product, fluctuating every render
  * so manual refetches produce visibly different output. Used as a
- * **dynamic Partial** (wrapped in `<Partial id={"price-" + sku}>` inside
+ * **dynamic Partial** (wrapped in `<Partial selector={[`#price-${sku}`, ".price"]}>` inside
  * a `.map()` in `ProductGrid`) to exercise the route-scoped partial
  * registry: the bootstrap walk in `PartialRoot` can't see through
  * `ProductGrid`, but each Partial self-registers on render, so each

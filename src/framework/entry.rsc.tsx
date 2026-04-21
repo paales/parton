@@ -105,20 +105,20 @@ async function handleRequest(
     }
   }
 
-  // If the action returned a directive to refresh partials (by id or
-  // tag), filter the re-render so the server only renders those.
-  // PartialsClient on the browser merges the fresh partials with its
-  // cache. Both `invalidate` and `revalidate` are accepted and treated
-  // identically — the distinction was only load-bearing back when the
-  // server version-stamped Suspense keys; with bare keys everywhere,
-  // the client's commit behavior (startTransition for actions) is what
-  // controls "preserve old UI vs show fallback", not a server flag.
+  // If the action returned a directive to refresh Partials, filter the
+  // re-render so the server only renders the matched ones. PartialsClient
+  // on the browser merges the fresh Partials with its cache. Both
+  // `invalidate` and `revalidate` are accepted and treated identically.
   //
-  // Supported shapes:
-  //   { invalidate: ["cart", "header"] }                   — ids
-  //   { invalidate: { tags: ["cart"] } }                   — tags
-  //   { invalidate: { ids: ["header"], tags: ["cart"] } }  — mixed
-  //   { revalidate: ... }                                  — alias
+  // Shape:
+  //   return { invalidate: { selector: "#cart .price" } };
+  //   return { revalidate: { selector: "#cart" } };    // alias
+  //
+  // The selector follows the same grammar as `<Partial selector>` —
+  // space-separated `#`-tokens (unique) and `.`-tokens (shared). The
+  // server parses it into `?partials=` (`#`-token names) and `?tags=`
+  // (`.`-token names) and feeds them into the existing `PartialRoot`
+  // resolver.
   //
   // Apply filters only when the client reports cached partials via
   // `?cached=`. After a streaming render, the client's cache is empty;
@@ -131,30 +131,50 @@ async function handleRequest(
 
   let needsUpdate = false;
 
-  if (directive) {
-    const setPartialIds = (ids: string[]) => {
-      const existing = renderRequest.url.searchParams.get("partials");
-      const merged = existing ? `${existing},${ids.join(",")}` : ids.join(",");
-      renderRequest.url.searchParams.set("partials", merged);
-      needsUpdate = true;
-    };
-
-    if (Array.isArray(directive)) {
-      if (directive.length > 0) setPartialIds(directive);
-    } else if (typeof directive === "object") {
-      const { tags, ids } = directive as { tags?: string[]; ids?: string[] };
-      if (tags?.length) {
-        const { invalidateByTags } = await import("../lib/partial-cache.ts");
-        invalidateByTags(tags);
-        renderRequest.url.searchParams.set("tags", tags.join(","));
+  if (directive && typeof directive === "object" && !Array.isArray(directive)) {
+    const { selector } = directive as { selector?: string | string[] };
+    if (selector) {
+      const raw = Array.isArray(selector) ? selector.join(" ") : selector;
+      const tokens = raw.split(/\s+/).map((t) => t.trim()).filter(Boolean);
+      const uniqueNames: string[] = [];
+      const sharedNames: string[] = [];
+      for (const tok of tokens) {
+        if (tok.startsWith("#")) {
+          const n = tok.slice(1);
+          if (n && !uniqueNames.includes(n)) uniqueNames.push(n);
+        } else if (tok.startsWith(".")) {
+          const n = tok.slice(1);
+          if (n && !sharedNames.includes(n)) sharedNames.push(n);
+        } else {
+          throw new Error(
+            `Unprefixed token "${tok}" in action invalidate selector. ` +
+              `Tokens must start with "#" or ".".`,
+          );
+        }
+      }
+      if (uniqueNames.length > 0) {
+        const existing = renderRequest.url.searchParams.get("partials");
+        const merged = existing
+          ? `${existing},${uniqueNames.join(",")}`
+          : uniqueNames.join(",");
+        renderRequest.url.searchParams.set("partials", merged);
         needsUpdate = true;
       }
-      if (ids?.length) setPartialIds(ids);
-    }
+      if (sharedNames.length > 0) {
+        const { invalidateByTags } = await import("../lib/partial-cache.ts");
+        invalidateByTags(sharedNames);
+        const existing = renderRequest.url.searchParams.get("tags");
+        const merged = existing
+          ? `${existing},${sharedNames.join(",")}`
+          : sharedNames.join(",");
+        renderRequest.url.searchParams.set("tags", merged);
+        needsUpdate = true;
+      }
 
-    if (!clientHasCache) {
-      renderRequest.url.searchParams.set("__populateCache", "1");
-      needsUpdate = true;
+      if (!clientHasCache) {
+        renderRequest.url.searchParams.set("__populateCache", "1");
+        needsUpdate = true;
+      }
     }
   }
 

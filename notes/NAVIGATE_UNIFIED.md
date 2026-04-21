@@ -17,11 +17,11 @@ const nav = useNavigation();          // page scope (or ambient frame)
 const cart = useNavigation("cart");   // explicit frame by name
 
 nav.navigate("/products?sort=price", { history: "push" });            // full page nav
-nav.navigate(url,    { history: "replace", tags: ["search-results"] }); // URL update + targeted refetch
+nav.navigate(url,    { history: "replace", selector: ".search-results" }); // URL update + targeted refetch
 nav.navigate(url,    { history: "replace", silent: true });             // URL update only, no refetch
 nav.navigate(u => { u.searchParams.set("q", q); return u });            // updater form — mutate + return
-nav.reload({ ids: ["cart"] });                                           // targeted refetch, no URL change
-nav.reload({ tags: ["price"] });                                         // tag-resolved refetch
+nav.reload({ selector: "#cart" });                                       // targeted refetch (single Partial)
+nav.reload({ selector: ".price" });                                      // shared-token refetch (union)
 nav.back(); nav.forward(); nav.reload();                                 // everything else you'd expect
 ```
 
@@ -64,9 +64,8 @@ interface FrameworkNavigateOptions extends NavigationNavigateOptions {
   // history, state, info inherited from the browser's NavigationNavigateOptions
   disableTransition?: boolean;  // bypass startTransition on commit
 
-  ids?: string[];    // targeted refetch by id
-  tags?: string[];   // targeted refetch by tag (server-side resolution)
-  silent?: boolean;  // update URL only, skip refetch entirely
+  selector?: string | string[];  // CSS-style: `#foo` unique, `.foo` shared
+  silent?: boolean;              // update URL only, skip refetch entirely
 }
 ```
 
@@ -74,7 +73,7 @@ interface FrameworkNavigateOptions extends NavigationNavigateOptions {
 
 Decision matrix on `navigate(url, opts)` for the window handle:
 
-| `silent` | `ids` / `tags` | Behavior |
+| `silent` | `selector` | Behavior |
 |---|---|---|
 | `true` | — | `navigation.navigate(url, { info: silent-marker })`, no refetch. Bookmarkability-only URL sync. |
 | `false` (default) | set | `navigation.navigate(url, { info: silent-marker })` + targeted refetch (microtask-batched). Page-level intercept is bypassed. |
@@ -82,12 +81,12 @@ Decision matrix on `navigate(url, opts)` for the window handle:
 
 For `reload(opts)`:
 
-| `ids` / `tags` | Behavior |
+| `selector` | Behavior |
 |---|---|
 | set | Targeted refetch of current URL. No history mutation. |
 | unset | `window.navigation.reload()` → full-page refetch. |
 
-Frame handles (`useNavigation("name")`) ignore `ids` / `tags` / `silent` on `navigate`: frame navigation refetches the frame Partial, which re-runs its subtree with the new frame URL. A frame `reload()` just redispatches the current frame URL.
+Frame handles (`useNavigation("name")`) ignore `selector` / `silent` on `navigate`: frame navigation refetches the frame Partial, which re-runs its subtree with the new frame URL. A frame `reload()` just redispatches the current frame URL.
 
 ### Dispatch
 
@@ -99,41 +98,42 @@ A targeted refetch URL looks like:
 
 Built by the module-level dispatcher in `partial-client.tsx`:
 
-- **Microtask-batched.** Two `reload({ids: ["a"]})` + `reload({tags: ["b"]})` calls in the same tick coalesce into one request with `?partials=a&tags=b`.
+- **Client-side selector parse.** The selector string is parsed once client-side into unique and shared tokens, then split onto the wire as `?partials=` (unique, sans `#`) + `?tags=` (shared, sans `.`). Server-side parsers (`parseCsvTokens` in `partial.tsx`) stay simple — no percent-encoded `#` in devtools. See `SELECTOR_API.md` §Wire format.
+- **Microtask-batched.** Two `reload({selector: "#a"})` + `reload({selector: ".b"})` calls in the same tick coalesce into one request with `?partials=a&tags=b`.
 - **`?cached=id:fp,…`** is appended with every fingerprint the client has EXCEPT the ones being targeted (the server would skip them as unchanged otherwise).
 - **Silent info marker.** When the dispatcher calls `navigation.navigate(url, ...)` for a URL-only update (silent / targeted-refetch), it stamps a branded `info` payload (`{__framework: "silent-navigate", mode: "window" | "frame"}`). The navigate listener reads `event.info`, calls `event.intercept()` with no handler (declaring same-document), and returns — no refetch. The classic History API is out of the picture.
 
 ### Frame navigation
 
-Frame `navigate()` also goes through `navigation.navigate` — same-URL push/replace carrying the updated frames snapshot in `state`, stamped with an `info` marker (`{mode: "frame", name}`) so the page-level listener doesn't also refetch. After commit, the frame refetch runs (`?__frame=name&__frameUrl=…&partials=name`). `ids` / `tags` / `silent` options are accepted but ignored (frame refetch is coarse by design).
+Frame `navigate()` also goes through `navigation.navigate` — same-URL push/replace carrying the updated frames snapshot in `state`, stamped with an `info` marker (`{mode: "frame", name}`) so the page-level listener doesn't also refetch. After commit, the frame refetch runs (`?__frame=name&__frameUrl=…`); the server resolves the frame name to its root Partial's effective id via a registry scan (it no longer assumes `frameName === partialId`). `selector` / `silent` options are accepted but ignored (frame refetch is coarse by design).
 
-### Tag-based refetch
+### Selector-based refetch
 
-Tags are resolved **server-side** against the route-scoped partial registry (`partial.tsx:resolveTagsToIds`). The client never maintains a tag index.
+Selectors are resolved **server-side** against the route-scoped partial registry (`partial.tsx:resolveSelectorToIds`). The client never maintains a selector index.
 
 ```ts
-nav.reload({ tags: ["price"] });
+nav.reload({ selector: ".price" });
 // → GET /foo?tags=price&cached=…
-// server: match "price" against registered snapshots → {price-abc, price-def, price-ghi}
+// server: match ".price" against registered snapshots' sharedTokens → {price-abc, price-def, price-ghi}
 // server: render those three from their snapshots
 ```
 
-**Union semantics on multiple tags.** `{tags: ["a", "b"]}` matches any partial carrying tag `a` OR tag `b`. Intersection (the old `.tag1.tag2` grammar) is gone; if you need it, give the intersection its own tag (e.g. `tags="price featured-price"`).
+**Union semantics across tokens.** `{selector: "#a .b"}` matches any partial whose `#`-token is `a` OR whose `.`-token set includes `b`. Intersection (the old `.tag1.tag2` grammar) is gone; if you need it, give the intersection its own label.
 
 ## How app code patterns map
 
 | Old | New |
 |---|---|
-| `usePartial("cart").refetch()` | `useNavigation().reload({ids: ["cart"]})` |
-| `usePartial(".price").refetch()` | `useNavigation().reload({tags: ["price"]})` |
-| `usePartial("search").refetch({query: q})` | Put `q` in a URL: `nav.navigate(urlWithQ, {tags: ["search-results"]})`. Server reads `getSearchParam("q")`. |
+| `usePartial("cart").refetch()` | `useNavigation().reload({selector: "#cart"})` |
+| `usePartial(".price").refetch()` | `useNavigation().reload({selector: ".price"})` |
+| `usePartial("search").refetch({query: q})` | Put `q` in a URL: `nav.navigate(urlWithQ, {selector: ".search-results"})`. Server reads `getSearchParam("q")`. |
 | `silentReplace(url)` | `nav.navigate(url, {history: "replace", silent: true})` |
-| `silentReplace(url); dispatchStage1(); dispatchStage2();` | `nav.navigate(url, {history: "replace", ids: ["stage-1", "stage-2"]})` |
+| `silentReplace(url); dispatchStage1(); dispatchStage2();` | `nav.navigate(url, {history: "replace", selector: "#stage-1 #stage-2"})` |
 | `frame("cart").navigate("/checkout")` | `useNavigation("cart").navigate("/checkout")` — the plain-function `frame()` is now framework-internal (`_frame()`, not exported from `src/lib/index.ts`). |
 
 ## Activators
 
-`useActivate(partialId, subscribe)` still exists; `subscribe` receives a zero-arg `fire()` that dispatches `reload({ids: [partialId]})`. If an activator needs to pass dynamic state to the server, it writes that state to a URL before firing (see `src/app/components/when-stored.tsx` for the canonical pattern: the component calls `useNavigation()` in render and closes over the handle in the subscribe callback, which writes `?<as>=<value>` via `nav.navigate(url, {history: "replace", silent: true})` and then fires).
+`useActivate(partialId, subscribe)` still exists; `subscribe` receives a zero-arg `fire()` that dispatches the refetch by sending the Partial's effective id as a `#`-token (server-side `resolveSelectorToIds` does a direct-lookup first so even anonymous Partials with `__anon:…` effective ids resolve). If an activator needs to pass dynamic state to the server, it writes that state to a URL before firing (see `src/app/components/when-stored.tsx` for the canonical pattern: the component calls `useNavigation()` in render and closes over the handle in the subscribe callback, which writes `?<as>=<value>` via `nav.navigate(url, {history: "replace", silent: true})` and then fires).
 
 ## Trade-offs
 
@@ -147,7 +147,7 @@ nav.reload({ tags: ["price"] });
 
 1. **Stages inside `<Partial cache>` inside a frame can't read frame scope from their body.** Cache's inner render uses `renderToReadableStream` which opens a new React internal context — the `React.cache`-backed frame scope cell doesn't propagate. Workaround: have the PARENT of the cached Partial read the scope accessor and pass the value as a scalar prop. The fingerprint includes the scalar prop, so cache keys remain URL-correct. Pattern in pokemon.tsx: `SearchArea` reads `getSearchParam("q")` and passes `<SearchStageN query={q}/>`. See `src/lib/cache.tsx:570` for where the frame request is captured.
 
-2. **Tag refetch needs the registry warm.** `resolveTagsToIds` works off `getRouteSnapshots(route)`. If a conditional Partial has never rendered, it's not in the registry and the tag filter misses it. Two options: (a) render the Partial unconditionally, let its body short-circuit when there's nothing to do (the `SearchStage2`/`3` pattern); (b) tag the enclosing container instead of the stages — the refetch rebuilds the container, which re-creates the stages on each refetch. The pokemon-page search demo uses (b) because stages are cache-wrapped and the stage snapshots would otherwise bake a stale `query` prop.
+2. **Selector refetch needs the registry warm.** `resolveSelectorToIds` works off `getRouteSnapshots(route)`. If a conditional Partial has never rendered, it's not in the registry and the selector filter misses it. Two options: (a) render the Partial unconditionally, let its body short-circuit when there's nothing to do (the `SearchStage2`/`3` pattern); (b) put a shared label on the enclosing container instead of the stages — the refetch rebuilds the container, which re-creates the stages on each refetch. The pokemon-page search demo uses (b) because stages are cache-wrapped and the stage snapshots would otherwise bake a stale `query` prop.
 
 3. **`nav.currentEntry?.url` is always an absolute URL** (post-FrameworkNavigation cutover). On the window handle it's `window.location.href`; on a frame handle it's the frame's path synthesized against `window.location.origin`. Callers that want `pathname + search` extract them with `new URL(entry.url)`. For the common case of "patch one param and navigate," prefer the updater callback form — `nav.navigate(u => { u.searchParams.set(...); return u })` — which hands you a mutable absolute URL directly, no base-URL gymnastics.
 
@@ -156,11 +156,11 @@ nav.reload({ tags: ["price"] });
 | Piece | File | What it does |
 |---|---|---|
 | `useNavigation()` hook | `src/lib/partial-client.tsx` | Returns a `FrameworkNavigation`-shaped handle. Subscribes to `navigate` events for reactive `currentEntry` / `canGoBack` / `canGoForward`. |
-| `buildWindowNavigationHandle()` | `src/lib/partial-client.tsx` | Page-scoped handle. `Proxy` over `window.navigation` with `name: null` and overridden `navigate` / `reload` (updater callback, `ids` / `tags` / `silent` / `disableTransition`). Everything else passes straight through to the browser. |
+| `buildWindowNavigationHandle()` | `src/lib/partial-client.tsx` | Page-scoped handle. `Proxy` over `window.navigation` with `name: null` and overridden `navigate` / `reload` (updater callback, `selector` / `silent` / `disableTransition`). Everything else passes straight through to the browser. |
 | `buildFrameHandle()` | `src/lib/partial-client.tsx` | Frame-scoped handle. `Proxy` over `window.navigation` with frame-scoped overrides: `currentEntry` / `entries()` project the frame URL + state, `canGoBack` / `canGoForward` scan per-frame URL diffs across entries, `navigate` writes a new frames snapshot + dispatches a refetch, `reload` dispatches a refetch at the current frame URL, `updateCurrentEntry` merges under `__frameState[name]`. |
 | `enqueueRefetch()` + `flushRefetchBatch()` | `src/lib/partial-client.tsx` | Microtask-batched dispatcher. Reads `_fingerprints` for `?cached=`. |
 | `makeSilentInfo()` / `isFrameworkSilentInfo()` | `src/lib/partial-client.tsx` | Branded `info` payload stamped on internal `navigation.navigate` calls. The listener in `entry.browser.tsx` reads `event.info` and short-circuits with `event.intercept()` (no handler) so no refetch runs. |
-| Server-side tag → id resolution | `src/lib/partial.tsx:resolveTagsToIds` | Unchanged from pre-migration. |
+| Server-side selector → id resolution | `src/lib/partial.tsx:resolveSelectorToIds` | Three-pass scan: direct effective-id lookup, `#`-token scan, `.`-token scan. Union across passes. |
 | Ambient frame URL folded into fp | `src/lib/partial-component.tsx` | For Partials inside a frame subtree — their structural fp alone doesn't capture URL-derived state; folding the ambient URL keeps fingerprint-skip decisions honest. |
 
 ## Navigation API migration (follow-up, 2026-04-21 later)

@@ -82,7 +82,7 @@ export async function CacheDemoPage() {
   return (
     <PartialRoot>
       <html lang="en">
-        <Partial id="head">
+        <Partial selector="#head">
           <head>
             <meta charSet="UTF-8" />
             <title>Cache Demo</title>
@@ -106,14 +106,14 @@ export async function CacheDemoPage() {
           <CacheControls />
 
           <Partial
-            id="slow"
+            selector="#slow"
             cache={{ maxAge: 60 }}
             fallback={<div data-testid="slow-fallback">Loading slow…</div>}
           >
             <SlowContent />
           </Partial>
 
-          <Partial id="clock" fallback={<div>Loading clock…</div>}>
+          <Partial selector="#clock" fallback={<div>Loading clock…</div>}>
             <Clock />
           </Partial>
 

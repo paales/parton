@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 /**
- * /bare — infinite scroll via the singleton-`<Partial id="next">` slot.
+ * /bare — infinite scroll via the singleton-`<Partial selector="#next">` slot.
  *
  * Validates the design we landed on after the renderOn=visible
  * exploration: rather than declaring N partials up-front, we declare

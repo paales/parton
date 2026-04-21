@@ -1,15 +1,15 @@
 import { test, expect, request } from "@playwright/test";
 
 /**
- * /selector-demo — verify tag-based refetch semantics.
+ * /selector-demo — verify selector-based refetch semantics.
  *
- *   {tags: ["product"]}  → one id-less Partial
- *   {tags: ["price"]}    → three ids (price-a, price-b, price-c)
- *   {tags: ["featured"]} → two ids (price-b, price-c)
- *   {ids: ["price-a"]}   → single id
+ *   {selector: ".product"}  → one anonymous Partial (.product label)
+ *   {selector: ".price"}    → three (#price-a, #price-b, #price-c)
+ *   {selector: ".featured"} → two (#price-b, #price-c)
+ *   {selector: "#price-a"}  → single Partial
  *
- * Tag → id resolution runs server-side against the route-scoped
- * partial registry (`partial.tsx:resolveTagsToIds`). Each Partial
+ * Selector → id resolution runs server-side against the route-scoped
+ * partial registry (`partial.tsx:resolveSelectorToIds`). Each Partial
  * renders a server timestamp. After refetch, only the targeted
  * timestamps should change; untargeted ones stay pinned.
  */

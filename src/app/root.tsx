@@ -56,7 +56,7 @@ function renderRoute() {
   return (
     <PartialRoot>
       <html lang="en">
-        <Partial id="head">
+        <Partial selector="#head">
           <head>
             <meta charSet="UTF-8" />
             <meta

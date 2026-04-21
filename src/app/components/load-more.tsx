@@ -74,9 +74,9 @@ export function PageSentinel({ page }: { page: number }) {
  *
  * Updates the URL and dispatches a targeted refetch for the new
  * page partial and the load-more sentinel itself in one call:
- * `navigate(url, { history: "replace", ids: [...] })`. Previously
- * rendered page partials stay in the client cache — and so does any
- * other unrelated partial (e.g. an open search overlay).
+ * `navigate(url, { history: "replace", selector: "#page-N #load-more" })`.
+ * Previously rendered page partials stay in the client cache — and so
+ * does any other unrelated partial (e.g. an open search overlay).
  */
 export function LoadMore({ nextPage }: { nextPage: number }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -109,7 +109,7 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
           nav
             .navigate(url.toString(), {
               history: "replace",
-              ids: [`page-${nextPage}`, "load-more"],
+              selector: `#page-${nextPage} #load-more`,
             })
             .finished.finally(() => setIsPending(false));
         }

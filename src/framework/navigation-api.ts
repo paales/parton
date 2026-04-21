@@ -86,24 +86,25 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    */
   disableTransition?: boolean;
   /**
-   * Explicit partial ids to refetch. When set alongside a navigate,
-   * the URL is updated but only these partials are re-rendered — the
-   * page-level intercept is skipped. Stacks with `tags`: both lists
-   * land on the refetch URL as `?partials=…&tags=…`, and the server
-   * resolves their union. Ignored on frame handles.
+   * CSS-style selector naming the Partials to refetch. Space-separated
+   * (or array) list of tokens; each token starts with `#` (unique) or
+   * `.` (shared). Union semantics across all tokens:
+   *
+   *   selector: "#cart"            — just #cart
+   *   selector: ".price"           — every Partial with .price
+   *   selector: "#cart .price"     — #cart AND every .price
+   *   selector: ["#cart", ".price"] — array form, same meaning
+   *
+   * When set alongside a navigate, the URL is updated but only the
+   * matching Partials are re-rendered — the page-level intercept is
+   * skipped. Ignored on frame handles (frame navigation always
+   * refetches the whole frame subtree).
    */
-  ids?: string[];
-  /**
-   * Tags to refetch. Resolved server-side against the route-scoped
-   * partial registry — matching partials are re-rendered, everything
-   * else is served from the client cache via fingerprint-match
-   * placeholders. Ignored on frame handles.
-   */
-  tags?: string[];
+  selector?: string | string[];
   /**
    * Update the URL without triggering ANY refetch. Useful for
    * bookmarkability-only URL sync (infinite scroll's `?pages=`) where
-   * no server work needs to happen. If `ids` / `tags` are also set,
+   * no server work needs to happen. If `selector` is also set,
    * `silent` wins and the refetch is skipped. Ignored on frame
    * handles (frame navigation always refetches the frame).
    */
@@ -112,12 +113,12 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
 
 /**
  * Superset of the browser's `NavigationReloadOptions` with the
- * framework's targeted-refetch knobs. `reload({ ids })` / `reload({ tags })`
- * refetches just those partials without changing the URL.
+ * framework's targeted-refetch knobs. `reload({ selector: "#cart" })`
+ * refetches a single Partial; `reload({ selector: ".price" })` refetches
+ * every Partial carrying the `.price` label.
  */
 export interface FrameworkReloadOptions extends NavigationReloadOptions {
-  ids?: string[];
-  tags?: string[];
+  selector?: string | string[];
   disableTransition?: boolean;
 }
 
@@ -147,8 +148,8 @@ export interface FrameworkNavigationResult {
  *     not on the browser `Navigation` interface.
  *   - `navigate(target, options)` accepts a URL-updater callback as
  *     well as the usual `string | URL`, and the options include
- *     `ids`/`tags`/`silent`/`disableTransition` for targeted refetch.
- *   - `reload(options)` accepts `ids`/`tags` for targeted refetch
+ *     `selector`/`silent`/`disableTransition` for targeted refetch.
+ *   - `reload(options)` accepts `selector` for targeted refetch
  *     without a URL change.
  *
  * `useNavigation()` returns a `FrameworkNavigation`. The window handle

@@ -7,7 +7,7 @@ import type { ActivatorProps } from "../../lib/partial-component.tsx";
 /**
  * Activator: fires immediately when the enclosing Partial mounts.
  *
- *   <Partial id="live" defer={<WhenMounted/>}>
+ *   <Partial selector="#live" defer={<WhenMounted/>}>
  *     <LiveData/>
  *   </Partial>
  *

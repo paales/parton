@@ -50,7 +50,7 @@ export async function getOrCreateCart(): Promise<string> {
 export async function addToCart(
   sku: string,
   quantity: number,
-): Promise<{ revalidate: { tags: string[] } }> {
+): Promise<{ revalidate: { selector: string } }> {
   const cartId = await getOrCreateCart();
 
   const data = await client.request(AddToCart, { cartId, sku, quantity });
@@ -62,7 +62,7 @@ export async function addToCart(
     throw new Error(errors.map((e) => e.message).join("; "));
   }
 
-  return { revalidate: { tags: ["cart"] } };
+  return { revalidate: { selector: ".cart" } };
 }
 
 /**

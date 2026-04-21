@@ -15,7 +15,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export interface PartialRequestState {
-  /** Ids explicitly requested via `?partials=` + `?tags=` (union). Null = no filter. */
+  /** Effective ids explicitly requested via `?partials=` + `?tags=` (union, resolved from selector tokens). Null = no filter. */
   requestedIds: Set<string> | null;
   /** Whether the request is a partial-refetch (cache mode) vs a full render (streaming mode). */
   isPartialRefetch: boolean;
@@ -23,10 +23,12 @@ export interface PartialRequestState {
   populateCache: boolean;
   /** `?cached=id:fp,…` — fingerprints the client already has in `_cache`. */
   cachedFingerprints: Map<string, string | null>;
-  /** Ids explicitly targeted this request (`?partials=`). Never skipped. */
+  /** Effective ids explicitly targeted this request (resolved from `?partials=`+`?tags=`). Never skipped. */
   explicitIds: Set<string>;
-  /** Partials seen this request (for duplicate-id detection and debug). */
+  /** Effective ids seen this request (catches duplicate anonymous Partials via `__anon:` collision and debug). */
   seenIds: Set<string>;
+  /** `#`-token names seen this request (for cross-Partial uniqueness enforcement). */
+  seenUniqueTokens: Set<string>;
 }
 
 const als = new AsyncLocalStorage<PartialRequestState>();

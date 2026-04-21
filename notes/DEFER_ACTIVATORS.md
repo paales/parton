@@ -34,7 +34,7 @@ Three modes for `defer`:
 | Value           | Semantics                                                                                                             |
 | --------------- | --------------------------------------------------------------------------------------------------------------------- |
 | unset / `false` | Eager render (existing behavior).                                                                                     |
-| `true`          | Emit fallback; no automatic trigger. App calls `useNavigation().reload({ids: [id]})` from anywhere.                   |
+| `true`          | Emit fallback; no automatic trigger. App calls `useNavigation().reload({selector: "#id"})` from anywhere.              |
 | `ReactElement`  | Framework clones with `{partialId, children: fallback}`. Activator renders fallback + installs trigger.               |
 
 Composition across activators is not a framework primitive. If an author wants "fire when visible OR when a key appears in storage," they write a single activator that subscribes to both sources and calls `fire()` from the first one to arrive.
@@ -65,7 +65,7 @@ useActivate(partialId, (fire) => {
 });
 ```
 
-`fire()` dispatches `useNavigation().reload({ ids: [partialId] })` — a targeted refetch, microtask-batched with any other in-tick reloads. Default is one-shot (subsequent `fire` calls are no-ops). Opt into repeat-firing with `{once: false}` — useful for Partials that can become dormant again (§ Re-defer on stale below).
+`fire()` dispatches a targeted refetch for `partialId`, microtask-batched with any other in-tick reloads. The effective id travels as a `#`-token on the wire (`?partials=<effectiveId>`); the server's `resolveSelectorToIds` does a direct-lookup first, so anonymous (`__anon:…`) and multi-`#` effective ids also resolve. Default is one-shot (subsequent `fire` calls are no-ops). Opt into repeat-firing with `{once: false}` — useful for Partials that can become dormant again (§ Re-defer on stale below).
 
 `subscribe` is captured via ref, so the latest closure is used when the subscription fires. The effect doesn't re-run when `subscribe` changes — if re-subscription on prop change is needed, remount the activator by setting `key`.
 

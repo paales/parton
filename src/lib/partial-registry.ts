@@ -41,15 +41,21 @@ export interface PartialSnapshot {
   fallback: ReactNode;
   /** The errorWith prop on the Partial (for ErrorBoundary fallback). */
   errorWith: ReactNode | undefined;
-  /** Tags declared on the Partial — used to resolve `?tags=X` refetches
-   *  against dynamic partials that the bootstrap walk can't see. */
-  tags: string[];
+  /** `#`-token names from the Partial's selector (without the `#` prefix).
+   *  Used to resolve `?partials=X` refetches against dynamic Partials
+   *  that the bootstrap walk can't see. A Partial's effective id is
+   *  derived from these (single token → that name; multiple → sorted-join). */
+  uniqueTokens: string[];
+  /** `.`-token names from the Partial's selector (without the `.` prefix).
+   *  Used to resolve `?tags=X` refetches with union semantics. */
+  sharedTokens: string[];
   /** Cache options if the Partial declared `cache={…}`. Stored so
    *  cache-mode refetches re-apply the same cache semantics. */
   cache?: CacheOptions;
   /** Frame name if the Partial declared `frame="…"`. Stored so
    *  cache-mode refetches re-open the frame scope with the current
-   *  session URL (not the URL baked on first render). */
+   *  session URL (not the URL baked on first render), and so the
+   *  server can resolve `?__frame=X` back to this snapshot. */
   frame?: string;
   /** The author-provided `frameUrl` fallback. Session overrides it
    *  when present; kept here as the cold-session default. */

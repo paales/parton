@@ -6,11 +6,10 @@ import { useNavigation } from "../../../lib/partial-client.tsx";
 /**
  * Refreshes every product's live-price partial in a single request.
  *
- * Works via tag-based refetch: each `<Partial id={"price-" + sku}
- * tags={["price"]}>…</Partial>` registers its tag on the server, so
- * `reload({tags: ["price"]})` resolves (through the route registry)
- * to the full set of currently-known price partial ids — one
- * roundtrip, one cache-mode render.
+ * Works via shared-token refetch: each `<Partial selector={[`#price-${sku}`, ".price"]}>…</Partial>`
+ * registers its tokens on the server, so `reload({selector: ".price"})`
+ * resolves (through the route registry) to the full set of currently-
+ * known price Partials — one roundtrip, one cache-mode render.
  */
 export function RefreshAllPricesButton() {
   const nav = useNavigation();
@@ -19,7 +18,7 @@ export function RefreshAllPricesButton() {
   async function refreshAll() {
     setIsPending(true);
     try {
-      await nav.reload({ tags: ["price"] }).finished;
+      await nav.reload({ selector: ".price" }).finished;
     } finally {
       setIsPending(false);
     }

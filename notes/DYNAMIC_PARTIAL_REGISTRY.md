@@ -21,7 +21,7 @@ async function ProductList() {
       // ↓ Partial is produced inside ProductList's *return value*,
       //   not passed as ProductList's children prop.
       price={
-        <Partial id={`price-${p.sku}`}>
+        <Partial selector={`#price-${p.sku}`}>
           <GoldPrice sku={p.sku} />
         </Partial>
       }
@@ -231,7 +231,7 @@ To additionally skip ancestor execution on full renders, wrap the
 producer in `<Cache>`:
 
 ```tsx
-<Partial id="products">
+<Partial selector="#products">
   <Cache id="products" dep={{ search }}>
     <ProductList />
   </Cache>

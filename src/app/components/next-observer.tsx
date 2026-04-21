@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { useNavigation } from "../../lib/partial-client.tsx";
 
 /**
- * Sentinel rendered as the content of the singleton `<Partial id="next">`
+ * Sentinel rendered as the content of the singleton `<Partial selector="#next">`
  * at the bottom of the infinite-scroll list.
  *
  * On intersection it widens the active range by one: bumps `?end=N+1`
@@ -39,7 +39,7 @@ export function NextObserver({ currentEnd }: { currentEnd: number }) {
       url.searchParams.set("end", String(nextEnd));
       void nav.navigate(url.toString(), {
         history: "replace",
-        ids: [`page-${nextEnd}`, "next"],
+        selector: `#page-${nextEnd} #next`,
       });
     });
     observer.observe(el);

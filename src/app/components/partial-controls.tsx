@@ -6,9 +6,9 @@ import { useNavigation } from "../../lib/partial-client.tsx";
 /**
  * Client component demonstrating partial-level re-fetching.
  *
- * Each button calls `useNavigation().reload({ids: ["…"]})` — a targeted
- * refetch of one partial. Multiple reloads in the same tick are
- * batched into one RSC request by the navigation dispatcher.
+ * Each button calls `useNavigation().reload({selector: "#…"})` — a
+ * targeted refetch of one Partial. Multiple reloads in the same tick
+ * are batched into one RSC request by the navigation dispatcher.
  */
 export function PartialControls() {
   const nav = useNavigation();
@@ -17,7 +17,7 @@ export function PartialControls() {
   async function refresh(id: string) {
     setPending(id);
     try {
-      await nav.reload({ ids: [id] }).finished;
+      await nav.reload({ selector: `#${id}` }).finished;
     } finally {
       setPending(null);
     }
@@ -26,7 +26,7 @@ export function PartialControls() {
   return (
     <div className="partial-controls">
       <span style={{ color: "#888", fontSize: "0.8rem", alignSelf: "center" }}>
-        reload({'{'}ids{'}'}):
+        reload({'{'}selector{'}'}):
       </span>
       <button
         type="button"

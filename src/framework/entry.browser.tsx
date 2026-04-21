@@ -43,7 +43,7 @@ async function main() {
   async function fetchRscPayload(overrideUrl?: string) {
     // Tell the server which partials are already cached so it can skip them.
     // If the caller already set ?cached= (e.g. a targeted refetch built by
-    // `useNavigation().reload({ids})`), respect that instead of overwriting
+    // `useNavigation().reload({selector})`), respect that instead of overwriting
     // with the full list.
     const url = new URL(overrideUrl ?? window.location.href);
     if (!url.searchParams.has("cached")) {
@@ -161,8 +161,8 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
     //
     // `focusReset: "manual"` opts out of the Navigation API's default
     // post-commit focus reset to <body>. Without it, any input driving
-    // a live refetch (the search input typing into `tags: [...]`, a
-    // filter that updates a frame URL, etc.) loses focus on every
+    // a live refetch (the search input typing into `selector: ".…"`,
+    // a filter that updates a frame URL, etc.) loses focus on every
     // keystroke.
     if (isFrameworkSilentInfo(event.info)) {
       event.intercept({ focusReset: "manual" });

@@ -13,7 +13,7 @@ import { getSearchParam } from "../../framework/context.ts";
  * `/defer-demo` — exercises the three shapes of `<Partial defer>`:
  *
  *   1. `defer={true}` — bare defer. No framework-installed trigger; an
- *      app-level button calls `useNavigation().reload({ids: [id]})` to
+ *      app-level button calls `useNavigation().reload({selector: "#" + id})` to
  *      activate.
  *   2. `defer={<WhenStored .../>}` — activator reads localStorage on
  *      mount and on `storage` events; writes the value to the page URL
@@ -93,7 +93,7 @@ export function DeferDemoPage() {
   return (
     <PartialRoot>
       <html lang="en">
-        <Partial id="head">
+        <Partial selector="#head">
           <head>
             <meta charSet="UTF-8" />
             <meta
@@ -137,10 +137,10 @@ export function DeferDemoPage() {
               </h2>
               <p style={{ color: "#888", marginBottom: "0.75rem" }}>
                 No automatic trigger. Click the button to call{" "}
-                <code>useNavigation().reload({'{ids: ["manual"]}'})</code>.
+                <code>useNavigation().reload({'{selector: "#manual"}'})</code>.
               </p>
               <Partial
-                id="manual"
+                selector="#manual"
                 defer
                 fallback={
                   <div
@@ -178,7 +178,7 @@ export function DeferDemoPage() {
                 back via <code>getSearchParam("stored")</code>.
               </p>
               <Partial
-                id="stored"
+                selector="#stored"
                 defer={<WhenStored storageKey="demo-stored" as="stored" />}
                 fallback={
                   <div
@@ -214,7 +214,7 @@ export function DeferDemoPage() {
                 <code>?partials=</code>.
               </p>
               <Partial
-                id="batch-a"
+                selector="#batch-a"
                 defer={<WhenStored storageKey="batch-a-key" as="batch-a" />}
                 fallback={
                   <div
@@ -230,7 +230,7 @@ export function DeferDemoPage() {
               </Partial>
               <div style={{ height: "0.5rem" }} />
               <Partial
-                id="batch-b"
+                selector="#batch-b"
                 defer={<WhenStored storageKey="batch-b-key" as="batch-b" />}
                 fallback={
                   <div
@@ -273,7 +273,7 @@ export function DeferDemoPage() {
                 serialize.
               </p>
               <Partial
-                id="slow-stream"
+                selector="#slow-stream"
                 fallback={
                   <div
                     data-testid="slow-fallback"
@@ -287,7 +287,7 @@ export function DeferDemoPage() {
               </Partial>
               <div style={{ height: "0.5rem" }} />
               <Partial
-                id="race-defer"
+                selector="#race-defer"
                 defer={<WhenMounted />}
                 fallback={
                   <div
@@ -332,8 +332,7 @@ export function DeferDemoPage() {
                 disjoint-id parallelism like this.
               </p>
               <Partial
-                id="concurrent-a"
-                tags="concurrent"
+                selector="#concurrent-a .concurrent"
                 fallback={
                   <div
                     data-testid="concurrent-a-fallback"
@@ -347,8 +346,7 @@ export function DeferDemoPage() {
               </Partial>
               <div style={{ height: "0.5rem" }} />
               <Partial
-                id="concurrent-b"
-                tags="concurrent"
+                selector="#concurrent-b .concurrent"
                 fallback={
                   <div
                     data-testid="concurrent-b-fallback"
@@ -362,8 +360,7 @@ export function DeferDemoPage() {
               </Partial>
               <div style={{ height: "0.5rem" }} />
               <Partial
-                id="concurrent-c"
-                tags="concurrent"
+                selector="#concurrent-c .concurrent"
                 fallback={
                   <div
                     data-testid="concurrent-c-fallback"
@@ -425,7 +422,7 @@ export function DeferDemoPage() {
                 aria-hidden="true"
               />
               <Partial
-                id="any"
+                selector="#any"
                 defer={<WhenVisible />}
                 fallback={
                   <div

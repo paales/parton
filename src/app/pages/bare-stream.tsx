@@ -3,8 +3,8 @@
  * pattern.
  *
  * URL state: `?end=N` is the last page index in the active range
- * (default 1). The server renders pages 1..N each as `<Partial id="page-i">`,
- * then a singleton `<Partial id="next">` whose content is the
+ * (default 1). The server renders pages 1..N each as `<Partial selector="#page-i">`,
+ * then a singleton `<Partial selector="#next">` whose content is the
  * NextObserver client component. When that observer enters the viewport
  * it bumps `?end=` and refetches `page-{N+1}` + `next`. The new `next`
  * mounts with `currentEnd={N+1}` and re-arms.
@@ -64,7 +64,7 @@ export function BarePage() {
   const pages = Array.from({ length: end }, (_, i) => {
     const page = i + 1;
     return (
-      <Partial key={`page-${page}`} id={`page-${page}`}>
+      <Partial key={`page-${page}`} selector={`#page-${page}`}>
         <PageBlock page={page} />
       </Partial>
     );
@@ -73,7 +73,7 @@ export function BarePage() {
   return (
     <PartialRoot>
       <html lang="en">
-        <Partial id="head">
+        <Partial selector="#head">
           <head>
             <meta charSet="UTF-8" />
             <title>Infinite Scroll Test</title>
@@ -95,7 +95,7 @@ export function BarePage() {
             <span data-testid="end-readout">end={end}</span>
           </p>
           {pages}
-          <Partial id="next">
+          <Partial selector="#next">
             <NextObserver currentEnd={end} />
           </Partial>
         </body>

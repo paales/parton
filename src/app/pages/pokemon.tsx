@@ -144,7 +144,7 @@ export function PokemonPage() {
   const pagePartials =
     pokemonId == null
       ? Array.from({ length: pages }, (_, i) => (
-          <Partial key={`page-${i + 1}`} id={`page-${i + 1}`}>
+          <Partial key={`page-${i + 1}`} selector={`#page-${i + 1}`}>
             <PokemonListPage offset={i * PAGE_SIZE} isFirst={i === 0} />
           </Partial>
         ))
@@ -152,7 +152,7 @@ export function PokemonPage() {
 
   return (
     <>
-      <Partial id="header">
+      <Partial selector="#header">
         <header>
           <div
             style={{
@@ -188,33 +188,37 @@ export function PokemonPage() {
         scope around it decides which URL it sees.
       */}
       {/* The container Partials are what the typing input refetches
-          via `tags: ["search-results"]`. Page scope: tag resolves to
-          `search-page` and its body re-runs — `<SearchArea/>` reads a
-          fresh `?q=` from the page URL and builds fresh stage
-          elements with the new prop. Frame scope: tag filter is
-          ignored by frame navigation (frame nav always refetches its
-          own subtree), so the behavior is symmetric either way. */}
-      <Partial id="search-page" tags="search-results">
+          via `selector: ".search-results"`. Page scope: the selector
+          resolves to `search-page` and its body re-runs — `<SearchArea/>`
+          reads a fresh `?q=` from the page URL and builds fresh stage
+          elements with the new prop. Frame scope: the selector filter
+          is ignored by frame navigation (frame nav always refetches
+          its own subtree), so the behavior is symmetric either way. */}
+      <Partial selector="#search-page .search-results">
         <SearchArea scope="page" />
       </Partial>
-      <Partial id="search" tags="search-results" frame="search" frameUrl="/">
+      <Partial
+        selector="#search .search-results"
+        frame="search"
+        frameUrl="/"
+      >
         <SearchArea scope="frame" />
       </Partial>
 
       {pokemonId != null ? (
         <>
-          <Partial id="hero">
+          <Partial selector="#hero">
             <HeroPartial pokemonId={pokemonId} />
           </Partial>
-          <Partial id="stats">
+          <Partial selector="#stats">
             <StatsPartial pokemonId={pokemonId} />
           </Partial>
-          <Partial id="species">
+          <Partial selector="#species">
             <SpeciesPartial pokemonId={pokemonId} />
           </Partial>
           <div style={{ height: "80vh" }} data-testid="lazy-spacer" />
           <Partial
-            id="trivia"
+            selector="#trivia"
             defer={<WhenVisible />}
             fallback={
               <div
@@ -232,7 +236,7 @@ export function PokemonPage() {
       ) : (
         <>
           {pagePartials}
-          <Partial id="load-more">
+          <Partial selector="#load-more">
             <LoadMore nextPage={pages + 1} />
           </Partial>
         </>
@@ -246,16 +250,16 @@ export function PokemonPage() {
  * AMBIENT request (page URL or frame URL depending on what wraps us).
  *
  * Rendered twice in the pokemon page:
- *   - page-scoped:  <Partial id="search-page"><SearchArea scope="page"/></Partial>
- *   - frame-scoped: <Partial frame="search"><SearchArea scope="frame"/></Partial>
+ *   - page-scoped:  <Partial selector="#search-page .search-results"><SearchArea scope="page"/></Partial>
+ *   - frame-scoped: <Partial selector="#search .search-results" frame="search"><SearchArea scope="frame"/></Partial>
  *
  * The `scope` prop is purely a namespace for the stage Partial ids
  * (to avoid colliding when both instances happen to render at the
  * same time) — it does NOT change behavior.
  *
- * Every stage carries `tags="search-results"` so `useNavigation()
- * .navigate(url, {tags: ["search-results"]})` from inside the input
- * refetches them together. Tag → id resolution runs server-side
+ * Both container Partials carry `.search-results` so `useNavigation()
+ * .navigate(url, {selector: ".search-results"})` from inside the input
+ * refetches them together. Selector resolution runs server-side
  * against the route-scoped registry; dynamic / conditional Partials
  * resolve as long as they've rendered on a prior pass.
  */
@@ -276,11 +280,11 @@ function SearchArea({ scope }: { scope: "page" | "frame" }) {
         per-chunk streaming — appropriate for a fast "always-on"
         slice that sits at the top of the dialog.
       */}
-      <Partial id={`${scope}-stage-1`} cache={{}}>
+      <Partial selector={`#${scope}-stage-1`} cache={{}}>
         <SearchStage1 query={q} />
       </Partial>
       <Partial
-        id={`${scope}-stage-2`}
+        selector={`#${scope}-stage-2`}
         cache={{}}
         fallback={
           <div
@@ -294,7 +298,7 @@ function SearchArea({ scope }: { scope: "page" | "frame" }) {
         <SearchStage2 query={q} />
       </Partial>
       <Partial
-        id={`${scope}-stage-3`}
+        selector={`#${scope}-stage-3`}
         cache={{}}
         fallback={
           <div
