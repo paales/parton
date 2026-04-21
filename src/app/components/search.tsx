@@ -10,23 +10,6 @@ import {
 import { useNavigation } from "../../lib/partial-client.tsx";
 
 /**
- * Utility: append / set / delete a search param on a relative URL
- * string (no `window.location` dependency). The base parameter is
- * only used to parse; `new URL` needs some origin. We throw the
- * origin away and return pathname+search.
- */
-function withParam(
-  base: string,
-  key: string,
-  value: string | null,
-): string {
-  const u = new URL(base, "http://_");
-  if (value == null) u.searchParams.delete(key);
-  else u.searchParams.set(key, value);
-  return u.pathname + u.search;
-}
-
-/**
  * Search toggle buttons for the header.
  *
  * Two variants:
@@ -45,28 +28,37 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   const [isPending, startTransition] = useTransition();
   const pageNav = useNavigation();
   const frameNav = useNavigation("search");
-  // Frame state lives purely client-side (frame URL in `_frameUrls`).
-  // Computed reactively — `useNavigation()` subscribes to `navigate`
-  // events so this re-evaluates when the frame URL changes.
-  const frameOpen = (() => {
-    const cur = frameNav.currentUrl;
-    if (!cur) return false;
-    return new URL(cur, "http://_").searchParams.has("search");
-  })();
+  // Frame state lives purely client-side (frame URL snapshot on the
+  // current navigation entry). `currentEntry.url` is the frame's URL
+  // synthesized against the page origin; reactive because
+  // `useNavigation()` subscribes to `navigate` events.
+  const frameEntryUrl = frameNav.currentEntry?.url;
+  const frameOpen = frameEntryUrl
+    ? new URL(frameEntryUrl).searchParams.has("search")
+    : false;
 
   function openUrl() {
-    const target = withParam(pageNav.currentUrl ?? "/", "search", "1");
     startTransition(() => {
-      void pageNav.navigate(target, { history: "push", ids: ["search-page"] });
+      void pageNav.navigate(
+        (url) => {
+          url.searchParams.set("search", "1");
+          return url;
+        },
+        { history: "push", ids: ["search-page"] },
+      );
     });
   }
 
   function closeUrl() {
-    let target = pageNav.currentUrl ?? "/";
-    target = withParam(target, "search", null);
-    target = withParam(target, "q", null);
     startTransition(() => {
-      void pageNav.navigate(target, { history: "push", ids: ["search-page"] });
+      void pageNav.navigate(
+        (url) => {
+          url.searchParams.delete("search");
+          url.searchParams.delete("q");
+          return url;
+        },
+        { history: "push", ids: ["search-page"] },
+      );
     });
   }
 
@@ -184,15 +176,19 @@ export function SearchDialog({
   }, [open]);
 
   function handleClose() {
-    let target = nav.currentUrl ?? "/";
-    target = withParam(target, "search", null);
-    target = withParam(target, "q", null);
-    void nav.navigate(target, {
-      history: "push",
-      // Page scope: refetch the SearchArea holder. Frame scope: ignored
-      // (frame nav refetches its whole subtree).
-      ids: nav.name === null ? ["search-page"] : undefined,
-    });
+    void nav.navigate(
+      (url) => {
+        url.searchParams.delete("search");
+        url.searchParams.delete("q");
+        return url;
+      },
+      {
+        history: "push",
+        // Page scope: refetch the SearchArea holder. Frame scope: ignored
+        // (frame nav refetches its whole subtree).
+        ids: nav.name === null ? ["search-page"] : undefined,
+      },
+    );
   }
 
   return (
@@ -264,20 +260,25 @@ export function SearchInput({ query }: { query: string }) {
     inFlightRef.current = true;
     dispatchedRef.current = q;
 
-    // `nav.currentUrl` is the scope-appropriate URL: page URL for the
-    // window handle, frame URL for a frame handle. Mutate it and hand
-    // the whole thing back to `nav.navigate`.
-    const target = withParam(nav.currentUrl ?? "/", "q", q || null);
-
-    await nav.navigate(target, {
-      history: "replace",
-      disableTransition: disableTransitionRef.current,
-      // Tag-based refetch: resolves server-side to whichever stage
-      // Partials are registered on this route. Frame handles ignore
-      // the tag filter (the frame refetches its own subtree, which
-      // already contains the tagged stages).
-      tags: ["search-results"],
-    });
+    // URL-updater callback: receives the scope-appropriate URL (page
+    // URL for the window handle, frame URL synthesized against the
+    // page origin for a frame handle), mutated in place.
+    await nav.navigate(
+      (url) => {
+        if (q) url.searchParams.set("q", q);
+        else url.searchParams.delete("q");
+        return url;
+      },
+      {
+        history: "replace",
+        disableTransition: disableTransitionRef.current,
+        // Tag-based refetch: resolves server-side to whichever stage
+        // Partials are registered on this route. Frame handles ignore
+        // the tag filter (the frame refetches its own subtree, which
+        // already contains the tagged stages).
+        tags: ["search-results"],
+      },
+    ).finished;
 
     inFlightRef.current = false;
     // Re-check: user may have typed more while request was in flight

@@ -17,10 +17,7 @@ import {
   getCachedPartialIds,
   isFrameworkSilentInfo,
 } from "../lib/partial-client";
-import {
-  getNavigation,
-  type NavigateEvent,
-} from "./navigation-api.ts";
+import { getNavigation } from "./navigation-api.ts";
 
 async function main() {
   let setPayload: (v: RscPayload) => void;
@@ -142,7 +139,10 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
   const handler = (event: NavigateEvent) => {
     if (!event.canIntercept) return;
     if (event.hashChange || event.downloadRequest !== null) return;
-    if (event.formMethod === "POST") return;
+    // `formMethod` isn't on TS 6's NavigateEvent type but is in the
+    // spec (and runtime). Reach it via a narrow cast to avoid a type
+    // error without broadening `event`'s type everywhere else.
+    if ((event as { formMethod?: string | null }).formMethod === "POST") return;
     // `window.location.reload()` fires a navigate event with
     // `navigationType: "reload"` that the browser *can* intercept as
     // same-document. Intercepting defeats the whole point of a reload

@@ -17,7 +17,7 @@ export function PartialControls() {
   async function refresh(id: string) {
     setPending(id);
     try {
-      await nav.reload({ ids: [id] });
+      await nav.reload({ ids: [id] }).finished;
     } finally {
       setPending(null);
     }

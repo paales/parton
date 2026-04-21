@@ -31,7 +31,7 @@ export function ActivateButton({
   const activate = async () => {
     setIsPending(true);
     try {
-      await nav.reload({ ids: [partialId], disableTransition });
+      await nav.reload({ ids: [partialId], disableTransition }).finished;
     } finally {
       setIsPending(false);
     }

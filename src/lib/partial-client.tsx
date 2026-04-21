@@ -40,7 +40,12 @@ import React, {
 import {
   getNavigation,
   type FrameEntryState,
-  type NavigateEvent,
+  type FrameNavigationHistoryEntry,
+  type FrameworkNavigateOptions,
+  type FrameworkNavigation,
+  type FrameworkNavigationResult,
+  type FrameworkReloadOptions,
+  type NavigateTarget,
 } from "../framework/navigation-api.ts";
 
 /**
@@ -675,134 +680,6 @@ export function FrameNameProvider({
 }
 
 /**
- * Options for `navigate()` / `reload()` on a `NavigationHandle`.
- * Superset of the Navigation API's `navigate()` options — see
- * https://developer.mozilla.org/en-US/docs/Web/API/Navigation/navigate —
- * plus app-level flags that drive our targeted-refetch + commit
- * behavior.
- */
-export interface NavigateOptions {
-  /**
-   * Bypass the React transition wrapper on commit.
-   *
-   * Default (`false`): the client wraps the response commit in
-   * `startTransition`, so React keeps the current UI visible until
-   * the new content is fully ready. No Suspense fallback flash, no
-   * per-chunk streaming — the whole refetch appears as one atomic
-   * swap. Good for "just swap values" UX (cart badge, prices).
-   *
-   * `true`: commit without a transition. React shows Suspense
-   * fallbacks for pending children and commits Flight chunks as
-   * they arrive, giving per-row progressive streaming. Good for
-   * search / filter results where per-row reveal improves perceived
-   * latency.
-   */
-  disableTransition?: boolean;
-  /**
-   * `"push"` (default) creates a new history entry. `"replace"`
-   * overwrites the current entry in place. `"auto"` picks based on
-   * whether the URL changes (same as the Navigation API default).
-   */
-  history?: "auto" | "push" | "replace";
-  /**
-   * State to write onto the resulting entry. For frame handles the
-   * value is merged ALONGSIDE the `__frames` snapshot — don't put
-   * your state under a key starting with `__frame` or it'll collide.
-   */
-  state?: unknown;
-  /**
-   * Forwarded to Navigation API `navigate` events as `event.info`.
-   * One-shot — not persisted on the history entry (unlike `state`).
-   * Only meaningful on the window-scoped handle: frame handles stamp
-   * their own framework-internal `info` to suppress the page-level
-   * intercept, so any user-provided value would be overwritten.
-   */
-  info?: unknown;
-  /**
-   * Explicit partial ids to refetch. When set alongside `navigate(url)`,
-   * the URL is updated but only these partials are re-rendered — the
-   * page-level intercept is skipped. Stacks with `tags`: both lists
-   * land on the refetch URL as `?partials=…&tags=…`, and the server
-   * resolves their union. Ignored on frame handles.
-   */
-  ids?: string[];
-  /**
-   * Tags to refetch. Resolved server-side against the route-scoped
-   * partial registry — matching partials are re-rendered, everything
-   * else is served from the client cache via fingerprint-match
-   * placeholders. Ignored on frame handles.
-   */
-  tags?: string[];
-  /**
-   * Update the URL without triggering ANY refetch. Useful for
-   * bookmarkability-only URL sync (infinite scroll's `?pages=`) where
-   * no server work needs to happen. If `ids` / `tags` are also set,
-   * `silent` wins and the refetch is skipped. Ignored on frame
-   * handles (frame navigation always refetches the frame).
-   */
-  silent?: boolean;
-}
-
-/**
- * Handle returned by `useNavigation()`. When bound to a frame
- * (`name` non-null) it writes per-frame state onto new Navigation
- * entries via `navigation.navigate(sameUrl, { state, info })`. When
- * window-scoped (`name === null`) it proxies to `window.navigation`
- * directly — so the same API works inside and outside framed
- * subtrees.
- */
-export interface NavigationHandle {
-  /**
-   * Frame name this handle is bound to, or `null` for the
-   * window-scoped handle (proxies to `window.navigation`).
-   */
-  readonly name: string | null;
-  /**
-   * Current URL as seen by this handle. For a frame: the frame's
-   * URL (client cache). For window: `location.pathname + search`.
-   */
-  readonly currentUrl: string | null;
-  /**
-   * Whether there's an earlier navigable entry. For a frame: some
-   * prior entry's `__frames[name].url` differs from current. For
-   * window: `navigation.canGoBack`.
-   */
-  readonly canGoBack: boolean;
-  /** Mirror of `canGoBack` for forward. */
-  readonly canGoForward: boolean;
-  /**
-   * Navigate to `url`. See {@link NavigateOptions}.
-   */
-  navigate(url: string, options?: NavigateOptions): Promise<void>;
-  /**
-   * Traverse to the nearest earlier entry for this handle. No-op if
-   * none exists.
-   */
-  back(): Promise<void>;
-  /** Mirror of `back` for forward. */
-  forward(): Promise<void>;
-  /**
-   * Re-dispatch the current URL. For a frame: forces a fresh server
-   * render of the frame subtree. For window: full-page refetch, or —
-   * when `options.ids` / `options.tags` are set — a targeted refetch
-   * of just the named partials. Page URL does not change.
-   */
-  reload(options?: NavigateOptions): Promise<void>;
-  /**
-   * Merge `state` into the current entry's state. For frames the
-   * user state lives alongside the `__frames` snapshot, so it
-   * survives traversal. For window: `navigation.updateCurrentEntry`.
-   */
-  updateCurrentEntry(state: Record<string, unknown>): void;
-  /**
-   * Read the current entry's user state. For frames: the
-   * frame-scoped bucket (not the `__frames` snapshot). For window:
-   * the whole entry state.
-   */
-  readonly entryState: Record<string, unknown> | null;
-}
-
-/**
  * Runs a frame refetch end-to-end: writes the cached URL, builds the
  * refetch URL with `__frame` + `__frameUrl`, dispatches to the RSC
  * refetch handler. Shared between `frame.navigate()` and the browser-
@@ -812,7 +689,7 @@ export interface NavigationHandle {
 export async function _dispatchFrameRefetch(
   name: string,
   url: string,
-  options?: NavigateOptions,
+  options?: FrameworkNavigateOptions,
 ): Promise<void> {
   _frameUrls.set(name, url);
   const handler = (
@@ -839,29 +716,16 @@ export async function _dispatchFrameRefetch(
  */
 const FRAME_STATE_KEY = "__frameState";
 
-function readFrameEntryState(
-  state: unknown,
-  name: string,
-): Record<string, unknown> | null {
-  if (state == null || typeof state !== "object") return null;
-  const bucket = (state as Record<string, unknown>)[FRAME_STATE_KEY];
-  if (bucket == null || typeof bucket !== "object") return null;
-  const entry = (bucket as Record<string, unknown>)[name];
-  if (entry == null || typeof entry !== "object") return null;
-  return entry as Record<string, unknown>;
-}
-
 /**
  * True when some earlier / later entry's frames-snapshot has a
  * different URL for `name` than the current entry does. The user
  * can traverse there to restore that URL.
  */
 function computeCanTraverse(
+  nav: Navigation,
   name: string,
   direction: "back" | "forward",
 ): boolean {
-  const nav = getNavigation();
-  if (!nav) return false;
   const entries = nav.entries();
   const currentIdx = nav.currentEntry?.index ?? -1;
   if (currentIdx < 0) return false;
@@ -881,11 +745,10 @@ function computeCanTraverse(
 }
 
 function findFrameEntry(
+  nav: Navigation,
   name: string,
   direction: "back" | "forward",
 ): NavigationHistoryEntry | null {
-  const nav = getNavigation();
-  if (!nav) return null;
   const entries = nav.entries();
   const currentIdx = nav.currentEntry?.index ?? -1;
   if (currentIdx < 0) return null;
@@ -903,214 +766,392 @@ function findFrameEntry(
   return null;
 }
 
-async function frameNavigateImpl(
-  name: string,
-  url: string,
-  options?: NavigateOptions,
-): Promise<void> {
-  const nav = getNavigation();
-  if (!nav) {
-    await _dispatchFrameRefetch(name, url, options);
-    return;
+// ─── NavigateTarget resolution ────────────────────────────────────
+//
+// `FrameworkNavigation.navigate(target, ...)` accepts a URL string, a
+// URL instance, or an updater function `(current: URL) => URL | string`.
+// Both handle scopes synthesize an absolute URL for the updater so
+// authors write the same code regardless of whether they hold a page
+// or frame handle. For frames, the origin is the page origin (frame
+// URLs are same-origin by construction) and a cross-origin result
+// from the updater throws a hard error — frame refetches have no
+// meaning outside the page's origin.
+
+/** Resolve a `NavigateTarget` against a base URL. */
+function applyTarget(target: NavigateTarget, base: URL): URL {
+  if (typeof target === "function") {
+    const result = target(new URL(base.href));
+    return typeof result === "string" ? new URL(result, base) : result;
   }
-  // Carry forward all other frames' URLs from the current entry's
-  // snapshot, then overwrite this frame's URL. User `state` merges
-  // next to the snapshot, not inside it.
-  const priorState =
-    (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
-  const priorSnap = readFramesSnapshot(priorState);
-  const nextSnap: FramesSnapshot = { ...priorSnap, [name]: { url } };
-  const userState = (options?.state as Record<string, unknown> | null) ?? null;
-  const nextState = writeFramesSnapshot(
-    { ...priorState, ...(userState ?? {}) },
-    nextSnap,
+  if (target instanceof URL) return new URL(target.href);
+  return new URL(target, base);
+}
+
+function resolveWindowTarget(target: NavigateTarget): string {
+  const base = new URL(window.location.href);
+  return applyTarget(target, base).href;
+}
+
+function resolveFrameTarget(target: NavigateTarget, frameName: string): string {
+  const base = new URL(
+    _frameUrls.get(frameName) ?? "/",
+    window.location.origin,
   );
-  // Seed the client-side frame-URL cache BEFORE we call
-  // `nav.navigate` — that call fires the `navigate` event
-  // synchronously, which bumps reactive consumers. If we waited until
-  // after `committed`, the re-render would read a stale URL from
-  // `_frameUrls`.
-  _frameUrls.set(name, url);
-  // Push/replace a new entry at the same URL carrying the updated
-  // frame snapshot. The page-level listener sees the branded
-  // `silent-navigate` info and declines to intercept with a handler —
-  // we run the frame refetch ourselves right after commit so the
-  // session update and RSC render are coalesced into one request.
-  const result = nav.navigate(window.location.href, {
-    history: options?.history ?? "push",
-    state: nextState,
-    info: makeSilentInfo("frame", name),
-  });
-  await result.committed.catch(() => {});
-  await _dispatchFrameRefetch(name, url, options);
+  const next = applyTarget(target, base);
+  if (next.origin !== base.origin) {
+    throw new Error(
+      `frame "${frameName}" cannot navigate cross-origin (got ${next.origin})`,
+    );
+  }
+  return next.pathname + next.search + next.hash;
 }
 
-async function frameTraverseImpl(
-  name: string,
-  direction: "back" | "forward",
-): Promise<void> {
-  const nav = getNavigation();
-  if (!nav) return;
-  const target = findFrameEntry(name, direction);
-  if (!target) return;
-  const result = nav.traverseTo(target.key);
-  await result.finished.catch(() => {});
-}
+// ─── FrameworkNavigationResult plumbing ───────────────────────────
 
-function buildFrameHandle(name: string): NavigationHandle {
+/**
+ * Tighten TS 6's optional `committed` / `finished` by supplying a
+ * fallback resolution. Our handle always fills both — so the
+ * `NavigationHistoryEntry | null` union collapses to a non-null entry
+ * by the time the caller awaits.
+ */
+function tightenResult(
+  result: NavigationResult,
+  fallbackEntry: () => NavigationHistoryEntry,
+): FrameworkNavigationResult {
   return {
-    name,
-    get currentUrl(): string | null {
-      return _frameUrls.get(name) ?? null;
-    },
-    get canGoBack(): boolean {
-      return computeCanTraverse(name, "back");
-    },
-    get canGoForward(): boolean {
-      return computeCanTraverse(name, "forward");
-    },
-    get entryState(): Record<string, unknown> | null {
-      const nav = getNavigation();
-      if (!nav) return null;
-      return readFrameEntryState(nav.currentEntry?.getState() ?? null, name);
-    },
-    navigate(url: string, options?: NavigateOptions): Promise<void> {
-      return frameNavigateImpl(name, url, options);
-    },
-    back(): Promise<void> {
-      return frameTraverseImpl(name, "back");
-    },
-    forward(): Promise<void> {
-      return frameTraverseImpl(name, "forward");
-    },
-    async reload(options?: NavigateOptions): Promise<void> {
-      const url = _frameUrls.get(name);
-      if (!url) return;
-      await _dispatchFrameRefetch(name, url, options);
-    },
-    updateCurrentEntry(state: Record<string, unknown>): void {
-      const nav = getNavigation();
-      if (!nav) return;
-      const current =
-        (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
-      const bucket =
-        (current[FRAME_STATE_KEY] as Record<string, unknown> | null) ?? {};
-      const merged = {
-        ...current,
-        [FRAME_STATE_KEY]: {
-          ...bucket,
-          [name]: { ...(bucket[name] as object | undefined), ...state },
-        },
-      };
-      nav.updateCurrentEntry({ state: merged });
-    },
+    committed: result.committed ?? Promise.resolve(fallbackEntry()),
+    finished: result.finished ?? Promise.resolve(fallbackEntry()),
   };
 }
 
 /**
- * True when `options` asks for a filtered refetch (either an id list
- * or a tag list). Used to decide whether the window-scoped navigate
- * should bypass the page-level intercept and dispatch a targeted
- * refetch, vs delegating to `window.navigation.navigate`.
+ * Synthesize a `FrameworkNavigationResult` when the framework is
+ * doing work that the browser `Navigation` object doesn't cover
+ * (targeted refetch without a URL change, frame reload). `commit`
+ * resolves immediately with the current entry; `finished` resolves
+ * after the supplied work completes.
  */
-function hasRefetchFilter(options: NavigateOptions | undefined): boolean {
-  if (!options) return false;
-  const ids = options.ids ?? [];
-  const tags = options.tags ?? [];
-  return ids.length > 0 || tags.length > 0;
+function syntheticResult(
+  nav: Navigation,
+  work: Promise<unknown>,
+): FrameworkNavigationResult {
+  const entry = () => {
+    const e = nav.currentEntry;
+    if (!e) throw new Error("navigation has no current entry");
+    return e;
+  };
+  const committed = Promise.resolve().then(entry);
+  const finished = work.then(entry);
+  return { committed, finished };
 }
 
 /**
- * Window-scoped handle — used when `useNavigation()` runs outside a
- * framed subtree. Delegates to `window.navigation` directly: the
- * browser handles history, URL, back/forward. No server-side
- * session involvement.
+ * Compose a browser `NavigationResult` with extra framework work
+ * (refetch dispatch). `committed` passes through; `finished` waits
+ * for both the browser commit and the framework work.
  */
-function buildWindowNavigationHandle(): NavigationHandle {
-  return {
-    name: null,
-    get currentUrl(): string | null {
-      if (!("location" in globalThis)) return null;
-      return window.location.pathname + window.location.search;
-    },
-    get canGoBack(): boolean {
-      return getNavigation()?.canGoBack ?? false;
-    },
-    get canGoForward(): boolean {
-      return getNavigation()?.canGoForward ?? false;
-    },
-    get entryState(): Record<string, unknown> | null {
-      const nav = getNavigation();
-      if (!nav) return null;
-      const s = nav.currentEntry?.getState();
-      return (s as Record<string, unknown> | null) ?? null;
-    },
-    async navigate(url: string, options?: NavigateOptions): Promise<void> {
-      const nav = getNavigation();
-      if (!nav) return;
-      const filtered = hasRefetchFilter(options);
-      const silent = options?.silent === true;
-      if (filtered || silent) {
-        // URL-only update — listener sees the branded info and
-        // declines to intercept with a handler, so the page doesn't
-        // refetch. If we have id/tag filters, dispatch the targeted
-        // refetch ourselves after commit.
-        const result = nav.navigate(url, {
-          history: options?.history ?? "push",
-          state: options?.state ?? null,
-          info: makeSilentInfo("window"),
-        });
-        await result.committed.catch(() => {});
-        if (silent) return;
-        await enqueueRefetch({
-          ids: options?.ids ?? [],
-          tags: options?.tags ?? [],
-          disableTransition: options?.disableTransition ?? false,
-        });
-        return;
+function composeResult(
+  result: NavigationResult,
+  fallbackEntry: () => NavigationHistoryEntry,
+  extraWork: () => Promise<unknown>,
+): FrameworkNavigationResult {
+  const committed = result.committed ?? Promise.resolve(fallbackEntry());
+  const baseFinished = result.finished ?? Promise.resolve(fallbackEntry());
+  const finished = (async () => {
+    const entry = await baseFinished;
+    await extraWork();
+    return entry;
+  })();
+  return { committed, finished };
+}
+
+function hasRefetchFilter(
+  options: FrameworkNavigateOptions | FrameworkReloadOptions | undefined,
+): boolean {
+  if (!options) return false;
+  return (options.ids?.length ?? 0) > 0 || (options.tags?.length ?? 0) > 0;
+}
+
+// ─── Frame entry projection ───────────────────────────────────────
+
+/**
+ * Project a window `NavigationHistoryEntry` into a frame-scoped
+ * `FrameNavigationHistoryEntry`: `url` reports the frame's URL
+ * (absolute, against the page origin); `getState()` returns just the
+ * `__frameState[name]` bucket, not the whole window state.
+ */
+function projectEntryForFrame(
+  entry: NavigationHistoryEntry | null,
+  frameName: string,
+): FrameNavigationHistoryEntry | null {
+  if (!entry) return null;
+  const snap = readFramesSnapshot(entry.getState());
+  const framePath = snap[frameName]?.url ?? _frameUrls.get(frameName) ?? "/";
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "http://_";
+  const absoluteUrl = new URL(framePath, origin).href;
+  return new Proxy(entry, {
+    get(target, prop, receiver) {
+      if (prop === "url") return absoluteUrl;
+      if (prop === "getState") {
+        return function getState(): FrameEntryState | null {
+          const state = target.getState();
+          if (state == null || typeof state !== "object") return null;
+          const bucket = (state as Record<string, unknown>)[FRAME_STATE_KEY];
+          if (bucket == null || typeof bucket !== "object") return null;
+          const forName = (bucket as Record<string, unknown>)[frameName];
+          if (forName == null || typeof forName !== "object") return null;
+          return forName as FrameEntryState;
+        };
       }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as FrameNavigationHistoryEntry;
+}
+
+// ─── SSR / no-Navigation stub ─────────────────────────────────────
+//
+// `useNavigation()` is a hook that must run in React's render phase,
+// but RSC renders happen server-side where `globalThis.navigation` is
+// undefined. Return a stub that type-checks as `FrameworkNavigation`
+// with no-op behavior — any actual invocation only happens on the
+// client after hydration.
+
+function nullNavigation(name: string | null): FrameworkNavigation {
+  const stubEntry = null as unknown as NavigationHistoryEntry;
+  const stubResult: FrameworkNavigationResult = {
+    committed: Promise.resolve(stubEntry),
+    finished: Promise.resolve(stubEntry),
+  };
+  const stubNavResult = stubResult as unknown as NavigationResult;
+  return {
+    name,
+    currentEntry: null,
+    canGoBack: false,
+    canGoForward: false,
+    transition: null,
+    activation: null,
+    entries: () => [],
+    navigate: () => stubResult,
+    reload: () => stubResult,
+    back: () => stubNavResult,
+    forward: () => stubNavResult,
+    traverseTo: () => stubNavResult,
+    updateCurrentEntry: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => true,
+    oncurrententrychange: null,
+    onnavigate: null,
+    onnavigateerror: null,
+    onnavigatesuccess: null,
+  } as unknown as FrameworkNavigation;
+}
+
+// ─── Handle builders ──────────────────────────────────────────────
+
+/**
+ * Window-scoped handle — a Proxy over `window.navigation` with
+ * `name: null`, an extended `navigate()` (updater callback, targeted
+ * refetch via `ids`/`tags`, `silent` URL-only updates) and an
+ * extended `reload()` (targeted refetch without a URL change).
+ * Everything else passes straight through to the browser.
+ */
+function buildWindowNavigationHandle(): FrameworkNavigation {
+  const nav = getNavigation();
+  if (!nav) return nullNavigation(null);
+
+  const windowNavigate = (
+    target: NavigateTarget,
+    options?: FrameworkNavigateOptions,
+  ): FrameworkNavigationResult => {
+    const url = resolveWindowTarget(target);
+    const filtered = hasRefetchFilter(options);
+    const silent = options?.silent === true;
+    if (filtered || silent) {
+      // URL-only update — the page-level listener sees the branded
+      // info and declines to intercept, so no refetch fires from its
+      // side. If we have id/tag filters, dispatch the targeted
+      // refetch ourselves after commit.
       const result = nav.navigate(url, {
+        history: options?.history ?? "push",
+        state: options?.state ?? null,
+        info: makeSilentInfo("window"),
+      });
+      if (silent) return tightenResult(result, () => nav.currentEntry!);
+      return composeResult(
+        result,
+        () => nav.currentEntry!,
+        () =>
+          enqueueRefetch({
+            ids: options?.ids ?? [],
+            tags: options?.tags ?? [],
+            disableTransition: options?.disableTransition ?? false,
+          }),
+      );
+    }
+    return tightenResult(
+      nav.navigate(url, {
         history: options?.history,
         state: options?.state,
         info: options?.info,
-      });
-      await result.finished.catch(() => {});
-    },
-    async back(): Promise<void> {
-      const nav = getNavigation();
-      if (!nav || !nav.canGoBack) return;
-      await nav.back().finished.catch(() => {});
-    },
-    async forward(): Promise<void> {
-      const nav = getNavigation();
-      if (!nav || !nav.canGoForward) return;
-      await nav.forward().finished.catch(() => {});
-    },
-    async reload(options?: NavigateOptions): Promise<void> {
-      if (hasRefetchFilter(options)) {
-        await enqueueRefetch({
+      }),
+      () => nav.currentEntry!,
+    );
+  };
+
+  const windowReload = (
+    options?: FrameworkReloadOptions,
+  ): FrameworkNavigationResult => {
+    if (hasRefetchFilter(options)) {
+      return syntheticResult(
+        nav,
+        enqueueRefetch({
           ids: options?.ids ?? [],
           tags: options?.tags ?? [],
           disableTransition: options?.disableTransition ?? false,
-        });
-        return;
-      }
-      const nav = getNavigation();
-      if (!nav) return;
-      const result = nav.reload({
-        state: options?.state,
-        info: options?.info,
-      });
-      await result.finished.catch(() => {});
-    },
-    updateCurrentEntry(state: Record<string, unknown>): void {
-      const nav = getNavigation();
-      if (!nav) return;
-      const prior =
-        (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
-      nav.updateCurrentEntry({ state: { ...prior, ...state } });
-    },
+        }),
+      );
+    }
+    return tightenResult(
+      nav.reload({ state: options?.state, info: options?.info }),
+      () => nav.currentEntry!,
+    );
   };
+
+  return new Proxy(nav, {
+    get(target, prop, receiver) {
+      if (prop === "name") return null;
+      if (prop === "navigate") return windowNavigate;
+      if (prop === "reload") return windowReload;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as unknown as FrameworkNavigation;
+}
+
+/**
+ * Frame-scoped handle — a Proxy over `window.navigation` with
+ * frame-scoped overrides: `currentEntry` / `entries()` project the
+ * frame URL and state, `canGoBack` / `canGoForward` scan for
+ * per-frame URL diffs across entries, `back` / `forward` traverse to
+ * the nearest differing entry, `navigate` writes a new frames
+ * snapshot and dispatches a refetch, `reload` dispatches a refetch
+ * at the current frame URL, `updateCurrentEntry` merges under
+ * `__frameState[name]`.
+ */
+function buildFrameHandle(frameName: string): FrameworkNavigation {
+  const nav = getNavigation();
+  if (!nav) return nullNavigation(frameName);
+
+  const frameNavigate = (
+    target: NavigateTarget,
+    options?: FrameworkNavigateOptions,
+  ): FrameworkNavigationResult => {
+    const url = resolveFrameTarget(target, frameName);
+    // Carry forward other frames' URLs; overwrite this frame's.
+    // User `state` merges next to the snapshot, not inside it.
+    const priorState =
+      (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
+    const priorSnap = readFramesSnapshot(priorState);
+    const nextSnap: FramesSnapshot = {
+      ...priorSnap,
+      [frameName]: { url },
+    };
+    const userState =
+      (options?.state as Record<string, unknown> | null) ?? null;
+    const nextState = writeFramesSnapshot(
+      { ...priorState, ...(userState ?? {}) },
+      nextSnap,
+    );
+    // Seed the client-side frame-URL cache BEFORE `nav.navigate` —
+    // the call fires the `navigate` event synchronously, which bumps
+    // reactive consumers; waiting until `committed` would have them
+    // read a stale URL.
+    _frameUrls.set(frameName, url);
+    const result = nav.navigate(window.location.href, {
+      history: options?.history ?? "push",
+      state: nextState,
+      info: makeSilentInfo("frame", frameName),
+    });
+    return composeResult(
+      result,
+      () => nav.currentEntry!,
+      () => _dispatchFrameRefetch(frameName, url, options),
+    );
+  };
+
+  const frameReload = (
+    options?: FrameworkReloadOptions,
+  ): FrameworkNavigationResult => {
+    const url = _frameUrls.get(frameName);
+    if (!url) return syntheticResult(nav, Promise.resolve());
+    return syntheticResult(
+      nav,
+      _dispatchFrameRefetch(frameName, url, options),
+    );
+  };
+
+  const frameTraverse = (
+    direction: "back" | "forward",
+  ): NavigationResult => {
+    const dest = findFrameEntry(nav, frameName, direction);
+    if (!dest) {
+      const stub = null as unknown as NavigationHistoryEntry;
+      return {
+        committed: Promise.resolve(stub),
+        finished: Promise.resolve(stub),
+      };
+    }
+    return nav.traverseTo(dest.key);
+  };
+
+  const frameUpdateCurrentEntry = (
+    options: NavigationUpdateCurrentEntryOptions,
+  ): void => {
+    const current =
+      (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
+    const bucket =
+      (current[FRAME_STATE_KEY] as Record<string, unknown> | null) ?? {};
+    const patch = options.state as Record<string, unknown> | null;
+    const merged = {
+      ...current,
+      [FRAME_STATE_KEY]: {
+        ...bucket,
+        [frameName]: {
+          ...((bucket[frameName] as object | undefined) ?? {}),
+          ...(patch ?? {}),
+        },
+      },
+    };
+    nav.updateCurrentEntry({ state: merged });
+  };
+
+  return new Proxy(nav, {
+    get(target, prop, receiver) {
+      if (prop === "name") return frameName;
+      if (prop === "navigate") return frameNavigate;
+      if (prop === "reload") return frameReload;
+      if (prop === "back") return () => frameTraverse("back");
+      if (prop === "forward") return () => frameTraverse("forward");
+      if (prop === "canGoBack") return computeCanTraverse(target, frameName, "back");
+      if (prop === "canGoForward")
+        return computeCanTraverse(target, frameName, "forward");
+      if (prop === "currentEntry")
+        return projectEntryForFrame(target.currentEntry, frameName);
+      if (prop === "entries") {
+        return () =>
+          target
+            .entries()
+            .map((e) => projectEntryForFrame(e, frameName))
+            .filter((e): e is FrameNavigationHistoryEntry => e !== null);
+      }
+      if (prop === "updateCurrentEntry") return frameUpdateCurrentEntry;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as unknown as FrameworkNavigation;
 }
 
 /**
@@ -1123,7 +1164,7 @@ function buildWindowNavigationHandle(): NavigationHandle {
  * component methods, module scope, callbacks invoked from
  * `useActivate` subscriptions — where the hook can't reach).
  */
-export function _frame(name: string): NavigationHandle {
+export function _frame(name: string): FrameworkNavigation {
   return buildFrameHandle(name);
 }
 
@@ -1143,26 +1184,27 @@ export function _frame(name: string): NavigationHandle {
  * it respects the framework's silent-info convention so internal URL
  * syncs don't trigger a full page refetch.
  */
-export function _windowNav(): NavigationHandle {
+export function _windowNav(): FrameworkNavigation {
   return buildWindowNavigationHandle();
 }
 
 /**
- * React hook returning a {@link NavigationHandle} for navigation.
+ * React hook returning a {@link FrameworkNavigation} handle.
  *
  *   useNavigation()          // no name + inside <Partial frame=X> → X
  *   useNavigation()          // no name + outside any frame → window
  *   useNavigation("cart")    // explicit name → cart frame
  *
- * The handle's computed getters (`canGoBack`, `canGoForward`,
- * `currentUrl`, `entryState`) subscribe to `navigation` events, so
- * they stay reactive across any navigation on the page.
+ * The handle's live getters (`currentEntry`, `canGoBack`, `canGoForward`)
+ * subscribe to `navigation` events, so they stay reactive across any
+ * navigation on the page.
  *
- * Always returns a handle — never throws. Outside a frame it maps
- * onto `window.navigation` directly, so the same code (a "back"
- * button, a "reload" icon) works at the page level and per-frame.
+ * Always returns a handle — never throws. Outside a frame it's a
+ * small Proxy over `window.navigation`; inside a frame it's a Proxy
+ * with frame-scoped overrides. The same code (a "back" button, a
+ * "reload" icon) works at the page level and per-frame.
  */
-export function useNavigation(name?: string): NavigationHandle {
+export function useNavigation(name?: string): FrameworkNavigation {
   const ambient = useContext(FrameNameContext);
   const resolved = name ?? ambient;
   // Bump on any navigation so computed getters (`currentUrl`,

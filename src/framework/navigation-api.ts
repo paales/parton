@@ -1,129 +1,18 @@
 /**
- * Navigation API types for the pieces TypeScript 5.9's `lib.dom.d.ts`
- * doesn't ship yet, plus framework-specific refinements.
+ * Navigation API types — framework refinements on top of `lib.dom.d.ts`.
  *
- * Already in lib.dom.d.ts, re-used from there (don't redeclare):
- *   - `NavigationType`
- *   - `NavigationHistoryEntry` + `NavigationHistoryEntryEventMap`
- *   - `NavigationActivation`
+ * lib.dom.d.ts already ships: `Navigation`, `NavigationResult`,
+ * `NavigationNavigateOptions`, `NavigationReloadOptions`,
+ * `NavigationHistoryEntry`, `NavigationType`, `NavigateEvent`, etc.
+ * This module adds the framework-specific layer: the targeted-refetch
+ * options, the URL-updater callback form, the per-frame state shape,
+ * and a typed view of the global (`FrameworkNavigation`) that
+ * `useNavigation()` returns.
  *
- * Missing (declared here): `Navigation`, `NavigateEvent`,
- * `NavigationDestination`, `NavigationTransition`,
- * `NavigationCurrentEntryChangeEvent`.
- *
- * Everything is a regular module export — no ambient declarations,
- * no global pollution. Access the browser's `navigation` global via
- * `getNavigation()`.
+ * Access the browser's `navigation` global via `getNavigation()`.
  */
 
-export interface NavigationResult {
-  readonly committed: Promise<NavigationHistoryEntry>;
-  readonly finished: Promise<NavigationHistoryEntry>;
-}
-
-export interface NavigationNavigateOptions {
-  state?: unknown;
-  info?: unknown;
-  history?: "auto" | "push" | "replace";
-}
-
-export interface NavigationReloadOptions {
-  state?: unknown;
-  info?: unknown;
-}
-
-export interface NavigationUpdateCurrentEntryOptions {
-  state: unknown;
-}
-
-export interface NavigationInterceptOptions {
-  handler?: () => Promise<void> | void;
-  focusReset?: "after-transition" | "manual";
-  scroll?: "after-transition" | "manual";
-}
-
-export interface NavigationDestination {
-  readonly url: string;
-  readonly key: string | null;
-  readonly id: string | null;
-  readonly index: number;
-  readonly sameDocument: boolean;
-  getState(): unknown;
-}
-
-export interface NavigationTransition {
-  readonly navigationType: NavigationType;
-  readonly from: NavigationHistoryEntry;
-  readonly finished: Promise<void>;
-}
-
-export interface NavigationCurrentEntryChangeEvent extends Event {
-  readonly navigationType: NavigationType | null;
-  readonly from: NavigationHistoryEntry;
-}
-
-export interface NavigateEvent extends Event {
-  readonly navigationType: NavigationType;
-  readonly destination: NavigationDestination;
-  readonly canIntercept: boolean;
-  readonly userInitiated: boolean;
-  readonly hashChange: boolean;
-  readonly signal: AbortSignal;
-  readonly formData: FormData | null;
-  readonly formMethod: string | null;
-  readonly downloadRequest: string | null;
-  readonly info: unknown;
-  readonly hasUAVisualTransition: boolean;
-  readonly sourceElement: Element | null;
-  intercept(options?: NavigationInterceptOptions): void;
-  scroll(): void;
-}
-
-export interface NavigationEventMap {
-  navigate: NavigateEvent;
-  navigatesuccess: Event;
-  navigateerror: ErrorEvent;
-  currententrychange: NavigationCurrentEntryChangeEvent;
-}
-
-export interface Navigation extends EventTarget {
-  readonly activation: NavigationActivation | null;
-  readonly currentEntry: NavigationHistoryEntry | null;
-  readonly transition: NavigationTransition | null;
-  readonly canGoBack: boolean;
-  readonly canGoForward: boolean;
-
-  entries(): NavigationHistoryEntry[];
-  navigate(url: string, options?: NavigationNavigateOptions): NavigationResult;
-  reload(options?: NavigationReloadOptions): NavigationResult;
-  traverseTo(key: string): NavigationResult;
-  back(options?: { info?: unknown }): NavigationResult;
-  forward(options?: { info?: unknown }): NavigationResult;
-  updateCurrentEntry(options: NavigationUpdateCurrentEntryOptions): void;
-
-  addEventListener<K extends keyof NavigationEventMap>(
-    type: K,
-    listener: (this: Navigation, ev: NavigationEventMap[K]) => unknown,
-    options?: boolean | AddEventListenerOptions,
-  ): void;
-  addEventListener(
-    type: string,
-    listener: EventListenerOrEventListenerObject,
-    options?: boolean | AddEventListenerOptions,
-  ): void;
-  removeEventListener<K extends keyof NavigationEventMap>(
-    type: K,
-    listener: (this: Navigation, ev: NavigationEventMap[K]) => unknown,
-    options?: boolean | EventListenerOptions,
-  ): void;
-  removeEventListener(
-    type: string,
-    listener: EventListenerOrEventListenerObject,
-    options?: boolean | EventListenerOptions,
-  ): void;
-}
-
-// ─── Framework refinements ────────────────────────────────────────
+// ─── Framework state shapes ───────────────────────────────────────
 
 /**
  * State shape the framework persists on each navigation entry.
@@ -146,19 +35,143 @@ export interface FrameEntryState {
  * `NavigationHistoryEntry` with a narrower `getState()` return type.
  * Lets consumers read frame snapshots without `as` casts.
  */
-export interface FrameNavigationHistoryEntry
-  extends Omit<NavigationHistoryEntry, "getState"> {
+export interface FrameNavigationHistoryEntry extends Omit<
+  NavigationHistoryEntry,
+  "getState"
+> {
   getState(): FrameEntryState | null;
 }
 
+// ─── Framework navigate/reload extensions ─────────────────────────
+
 /**
- * Typed view of the `Navigation` global: same shape, but `currentEntry`
- * / `entries()` return `FrameNavigationHistoryEntry`.
+ * Input accepted by `FrameworkNavigation.navigate()`.
+ *
+ *   nav.navigate("/products")                       // string
+ *   nav.navigate(new URL(...))                      // URL instance
+ *   nav.navigate(url => { url.searchParams.set("q", q); return url })  // updater
+ *
+ * The updater receives an absolute `URL` — `new URL(window.location.href)`
+ * for the window handle, or the frame URL synthesized against
+ * `window.location.origin` for a frame handle. Mutate in place and
+ * return the same instance, construct a new one, or return a string
+ * (resolved against the same base). Returning a cross-origin URL
+ * from a frame handle throws; from the window handle it goes through
+ * the browser's normal cross-origin navigation behavior.
  */
-export interface FrameworkNavigation
-  extends Omit<Navigation, "currentEntry" | "entries"> {
+export type NavigateTarget =
+  | string
+  | URL
+  | ((current: URL) => URL | string);
+
+/**
+ * Superset of the browser's `NavigationNavigateOptions` with the
+ * framework's targeted-refetch + commit knobs.
+ */
+export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
+  /**
+   * Bypass the React transition wrapper on commit.
+   *
+   * Default (`false`): the client wraps the response commit in
+   * `startTransition`, so React keeps the current UI visible until
+   * the new content is fully ready. No Suspense fallback flash, no
+   * per-chunk streaming — the whole refetch appears as one atomic
+   * swap. Good for "just swap values" UX (cart badge, prices).
+   *
+   * `true`: commit without a transition. React shows Suspense
+   * fallbacks for pending children and commits Flight chunks as
+   * they arrive, giving per-row progressive streaming. Good for
+   * search / filter results where per-row reveal improves perceived
+   * latency.
+   */
+  disableTransition?: boolean;
+  /**
+   * Explicit partial ids to refetch. When set alongside a navigate,
+   * the URL is updated but only these partials are re-rendered — the
+   * page-level intercept is skipped. Stacks with `tags`: both lists
+   * land on the refetch URL as `?partials=…&tags=…`, and the server
+   * resolves their union. Ignored on frame handles.
+   */
+  ids?: string[];
+  /**
+   * Tags to refetch. Resolved server-side against the route-scoped
+   * partial registry — matching partials are re-rendered, everything
+   * else is served from the client cache via fingerprint-match
+   * placeholders. Ignored on frame handles.
+   */
+  tags?: string[];
+  /**
+   * Update the URL without triggering ANY refetch. Useful for
+   * bookmarkability-only URL sync (infinite scroll's `?pages=`) where
+   * no server work needs to happen. If `ids` / `tags` are also set,
+   * `silent` wins and the refetch is skipped. Ignored on frame
+   * handles (frame navigation always refetches the frame).
+   */
+  silent?: boolean;
+}
+
+/**
+ * Superset of the browser's `NavigationReloadOptions` with the
+ * framework's targeted-refetch knobs. `reload({ ids })` / `reload({ tags })`
+ * refetches just those partials without changing the URL.
+ */
+export interface FrameworkReloadOptions extends NavigationReloadOptions {
+  ids?: string[];
+  tags?: string[];
+  disableTransition?: boolean;
+}
+
+/**
+ * Handle-boundary `NavigationResult` with non-optional `committed` /
+ * `finished`. TS 6's `lib.dom.d.ts` declares these optional (weaker
+ * than the WHATWG spec), which would force every caller to null-check.
+ * Our handle always fills both — composed from the underlying
+ * browser result plus any framework-side work (targeted refetch,
+ * frame dispatch) so callers can `await result.finished` unconditionally.
+ */
+export interface FrameworkNavigationResult {
+  readonly committed: Promise<NavigationHistoryEntry>;
+  readonly finished: Promise<NavigationHistoryEntry>;
+}
+
+// ─── FrameworkNavigation ──────────────────────────────────────────
+
+/**
+ * Typed view of the `Navigation` global with the framework's
+ * extensions:
+ *
+ *   - `currentEntry` / `entries()` return `FrameNavigationHistoryEntry`
+ *     so callers can read `__frames` / user state without casts.
+ *   - `name` identifies the handle's scope (`null` for the window
+ *     handle, the frame name for a frame handle). Framework-only —
+ *     not on the browser `Navigation` interface.
+ *   - `navigate(target, options)` accepts a URL-updater callback as
+ *     well as the usual `string | URL`, and the options include
+ *     `ids`/`tags`/`silent`/`disableTransition` for targeted refetch.
+ *   - `reload(options)` accepts `ids`/`tags` for targeted refetch
+ *     without a URL change.
+ *
+ * `useNavigation()` returns a `FrameworkNavigation`. The window handle
+ * is a small proxy over `window.navigation`; a frame handle is a
+ * proxy with frame-scoped overrides (per-frame URL, per-frame
+ * `canGoBack`, refetch on `navigate`).
+ */
+export interface FrameworkNavigation extends Omit<
+  Navigation,
+  "currentEntry" | "entries" | "navigate" | "reload"
+> {
   readonly currentEntry: FrameNavigationHistoryEntry | null;
   entries(): FrameNavigationHistoryEntry[];
+  /**
+   * Frame name this handle is bound to, or `null` for the
+   * window-scoped handle. Framework-only — not on `Navigation`.
+   */
+  readonly name: string | null;
+  navigate(
+    target: NavigateTarget,
+    options?: FrameworkNavigateOptions,
+  ): FrameworkNavigationResult;
+  reload(options?: FrameworkReloadOptions): FrameworkNavigationResult;
 }
 
 /**
@@ -170,7 +183,7 @@ export interface FrameworkNavigation
  *   if (!nav) return;
  *   nav.navigate("/foo", { info: { reason: "prefetch" } });
  */
-export function getNavigation(): FrameworkNavigation | null {
+export function getNavigation(): Navigation | null {
   const nav = (globalThis as { navigation?: Navigation }).navigation;
-  return (nav as FrameworkNavigation | undefined) ?? null;
+  return nav ?? null;
 }

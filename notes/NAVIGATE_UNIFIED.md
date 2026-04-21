@@ -1,7 +1,7 @@
 # Unified navigation surface — design note
 
 **Added:** 2026-04-21
-**Updated:** 2026-04-21 (Navigation API cutover — see "Navigation API migration" below).
+**Updated:** 2026-04-21 (three cutovers: Navigation API dispatcher, FrameworkNavigation handle shape, URL-updater callback — see "Navigation API migration" and "FrameworkNavigation cutover" below).
 **Status:** implemented.
 **Files:** `src/lib/partial-client.tsx`, `src/lib/partial.tsx`, `src/lib/partial-component.tsx`, `src/framework/entry.browser.tsx`, `src/framework/navigation-api.ts`.
 **Supersedes:** `usePartial`, `usePartialParams`, `__inputs`, `silent-replace.ts`, classic `history.pushState` / `replaceState` in app-path code (all removed). See `../archive/USE_PARTIAL_AND_INPUTS.md` for the old model.
@@ -10,7 +10,7 @@
 
 ## One-liner
 
-Every client-initiated render is a navigation. `useNavigation()` returns a single handle that drives the page URL, a frame URL, or a targeted partial refetch — the only thing that changes is the options.
+Every client-initiated render is a navigation. `useNavigation()` returns a single handle that drives the page URL, a frame URL, or a targeted partial refetch — the only thing that changes is the options. The handle **is** a `FrameworkNavigation` (typed superset of the browser's `Navigation`), so shape-level it matches what `window.navigation` already gives you.
 
 ```ts
 const nav = useNavigation();          // page scope (or ambient frame)
@@ -19,10 +19,13 @@ const cart = useNavigation("cart");   // explicit frame by name
 nav.navigate("/products?sort=price", { history: "push" });            // full page nav
 nav.navigate(url,    { history: "replace", tags: ["search-results"] }); // URL update + targeted refetch
 nav.navigate(url,    { history: "replace", silent: true });             // URL update only, no refetch
+nav.navigate(u => { u.searchParams.set("q", q); return u });            // updater form — mutate + return
 nav.reload({ ids: ["cart"] });                                           // targeted refetch, no URL change
 nav.reload({ tags: ["price"] });                                         // tag-resolved refetch
 nav.back(); nav.forward(); nav.reload();                                 // everything else you'd expect
 ```
+
+`navigate` / `reload` return `FrameworkNavigationResult` (tightened `{ committed, finished }` — no optional fields). `await nav.navigate(...).finished` when you need to wait for the refetch; `void nav.navigate(...)` for fire-and-forget.
 
 No `usePartial`, no `__inputs`, no `silentReplace`. State lives in **some URL** (page or frame); the server reads it through the existing tracked accessors (`getSearchParam` / `getPathname` / `getCookie` / `getHeader`).
 
@@ -43,13 +46,22 @@ Reasons to collapse them:
 
 ## Surface
 
-### `NavigateOptions`
+### `NavigateTarget` (first arg to `navigate`)
 
 ```ts
-interface NavigateOptions {
-  history?: "auto" | "push" | "replace";  // Navigation API
-  state?: unknown;
-  info?: unknown;
+type NavigateTarget =
+  | string                                   // relative or absolute URL
+  | URL                                      // URL instance
+  | ((current: URL) => URL | string);        // updater callback
+```
+
+The updater receives an absolute `URL` — `new URL(window.location.href)` on the window handle, or the frame URL synthesized against `window.location.origin` on a frame handle. Mutate in place and return the same instance, construct a new one, or return a string (resolved against the same base). Returning a cross-origin result from a frame handle **throws**; from the window handle it goes through the browser's normal cross-origin behavior.
+
+### `FrameworkNavigateOptions`
+
+```ts
+interface FrameworkNavigateOptions extends NavigationNavigateOptions {
+  // history, state, info inherited from the browser's NavigationNavigateOptions
   disableTransition?: boolean;  // bypass startTransition on commit
 
   ids?: string[];    // targeted refetch by id
@@ -57,6 +69,8 @@ interface NavigateOptions {
   silent?: boolean;  // update URL only, skip refetch entirely
 }
 ```
+
+`FrameworkReloadOptions` is the same without `silent` (reload has no URL change to be silent about).
 
 Decision matrix on `navigate(url, opts)` for the window handle:
 
@@ -127,7 +141,7 @@ nav.reload({ tags: ["price"] });
 
 **Lost: client-side tag intersection (`.a.b`).** Move to either a composite tag or to an id list. Server-side resolution does union only.
 
-**Won:** one API surface, one place for URL mutation (`navigate`), one silent mechanism, one dispatcher. State discovery is uniform: every client-side state source flows through `nav.currentUrl` (page or frame), is written via `nav.navigate(newUrl, opts)`, and is read server-side via tracked accessors.
+**Won:** one API surface, one place for URL mutation (`navigate`), one silent mechanism, one dispatcher. State discovery is uniform: every client-side state source flows through the updater's `URL` (page URL on the window handle, frame URL synthesized against the page origin on a frame handle), is written via `nav.navigate(updater, opts)`, and is read server-side via tracked accessors.
 
 ## Sharp edges
 
@@ -135,15 +149,15 @@ nav.reload({ tags: ["price"] });
 
 2. **Tag refetch needs the registry warm.** `resolveTagsToIds` works off `getRouteSnapshots(route)`. If a conditional Partial has never rendered, it's not in the registry and the tag filter misses it. Two options: (a) render the Partial unconditionally, let its body short-circuit when there's nothing to do (the `SearchStage2`/`3` pattern); (b) tag the enclosing container instead of the stages — the refetch rebuilds the container, which re-creates the stages on each refetch. The pokemon-page search demo uses (b) because stages are cache-wrapped and the stage snapshots would otherwise bake a stale `query` prop.
 
-3. **`nav.currentUrl` for the window handle is `pathname + search`, not the full URL.** Callers that want to construct a new URL with `new URL(...)` need to supply a base — either `location.origin` or a throwaway `http://_`. This is deliberate: the throwaway base keeps the code free of `window.location` references so the same helper (`withParam(base, key, value)` in search.tsx) works for page AND frame URLs without branching.
+3. **`nav.currentEntry?.url` is always an absolute URL** (post-FrameworkNavigation cutover). On the window handle it's `window.location.href`; on a frame handle it's the frame's path synthesized against `window.location.origin`. Callers that want `pathname + search` extract them with `new URL(entry.url)`. For the common case of "patch one param and navigate," prefer the updater callback form — `nav.navigate(u => { u.searchParams.set(...); return u })` — which hands you a mutable absolute URL directly, no base-URL gymnastics.
 
 ## Implementation pointers
 
 | Piece | File | What it does |
 |---|---|---|
-| `useNavigation()` hook | `src/lib/partial-client.tsx` | Returns scope-bound handle. Subscribes to `navigate` events for reactive getters. |
-| `buildWindowNavigationHandle()` | `src/lib/partial-client.tsx` | Page-scoped handle. Decides between Navigation API and direct dispatch based on `ids` / `tags` / `silent`. |
-| `buildFrameHandle()` | `src/lib/partial-client.tsx` | Frame-scoped handle. Writes frame state via `navigation.navigate(sameUrl, { state, info })` + session-backed frame URL. |
+| `useNavigation()` hook | `src/lib/partial-client.tsx` | Returns a `FrameworkNavigation`-shaped handle. Subscribes to `navigate` events for reactive `currentEntry` / `canGoBack` / `canGoForward`. |
+| `buildWindowNavigationHandle()` | `src/lib/partial-client.tsx` | Page-scoped handle. `Proxy` over `window.navigation` with `name: null` and overridden `navigate` / `reload` (updater callback, `ids` / `tags` / `silent` / `disableTransition`). Everything else passes straight through to the browser. |
+| `buildFrameHandle()` | `src/lib/partial-client.tsx` | Frame-scoped handle. `Proxy` over `window.navigation` with frame-scoped overrides: `currentEntry` / `entries()` project the frame URL + state, `canGoBack` / `canGoForward` scan per-frame URL diffs across entries, `navigate` writes a new frames snapshot + dispatches a refetch, `reload` dispatches a refetch at the current frame URL, `updateCurrentEntry` merges under `__frameState[name]`. |
 | `enqueueRefetch()` + `flushRefetchBatch()` | `src/lib/partial-client.tsx` | Microtask-batched dispatcher. Reads `_fingerprints` for `?cached=`. |
 | `makeSilentInfo()` / `isFrameworkSilentInfo()` | `src/lib/partial-client.tsx` | Branded `info` payload stamped on internal `navigation.navigate` calls. The listener in `entry.browser.tsx` reads `event.info` and short-circuits with `event.intercept()` (no handler) so no refetch runs. |
 | Server-side tag → id resolution | `src/lib/partial.tsx:resolveTagsToIds` | Unchanged from pre-migration. |
@@ -178,12 +192,17 @@ no race, no second URL writer.
   The single accessor `getNavigation()` (in `src/framework/navigation-api.ts`) returns
   `FrameworkNavigation | null` by reading `globalThis.navigation`.
 - **Types moved off ambient.** `src/framework/navigation-api.d.ts` is
-  deleted. `src/framework/navigation-api.ts` is a regular module that
-  exports only the pieces TS 5.9's `lib.dom.d.ts` doesn't ship
-  (`Navigation`, `NavigateEvent`, `NavigationDestination`,
-  `NavigationTransition`, `NavigationCurrentEntryChangeEvent`), plus a
-  framework-refined `FrameEntryState` / `FrameNavigationHistoryEntry`.
-  No global pollution.
+  deleted. After the TS 6 upgrade, `lib.dom.d.ts` ships the full
+  Navigation API (`Navigation`, `NavigateEvent`, `NavigationResult`,
+  `NavigationNavigateOptions`, `NavigationReloadOptions`,
+  `NavigationDestination`, `NavigationTransition`,
+  `NavigationCurrentEntryChangeEvent`, etc.) — so
+  `src/framework/navigation-api.ts` is now a thin module that only
+  declares the framework's extensions (`FrameEntryState`,
+  `FrameNavigationHistoryEntry`, `NavigateTarget`,
+  `FrameworkNavigateOptions`, `FrameworkReloadOptions`,
+  `FrameworkNavigationResult`, `FrameworkNavigation`) plus
+  `getNavigation()`. No global pollution.
 - **`frame()` / `windowNav()` renamed to `_frame()` / `_windowNav()`**
   and removed from `src/lib/index.ts`. App code uses `useNavigation()`
   for everything. The underscore-prefixed escape hatches exist for
@@ -209,3 +228,73 @@ no race, no second URL writer.
   is skipped in the test config (`isTest ? [react()] : [rsc(), react()]`)
   — its `"use client"` transform otherwise wraps modules in
   client-reference proxies that break hook rendering in jsdom.
+
+## FrameworkNavigation cutover (follow-up, 2026-04-21 later)
+
+After the Navigation API migration above collapsed the dispatcher down
+to one URL writer, the `useNavigation()` *handle* was still a bespoke
+`NavigationHandle` interface with `currentUrl` / `entryState` /
+`navigate(url: string): Promise<void>` — shape-adjacent to
+`Navigation`, but not actually *it*. This follow-up closes that gap.
+
+### What changed
+
+- **`useNavigation(): FrameworkNavigation`.** The return type is now
+  a typed view of the browser's `Navigation` global, extended with
+  the framework's `name` and widened `navigate` / `reload`. The window
+  handle is a `Proxy` over `window.navigation` with `name: null` and
+  overridden `navigate` / `reload`; the frame handle is a `Proxy` with
+  more overrides (projected `currentEntry` / `entries()`, frame-scoped
+  `canGoBack` / `canGoForward` / `back` / `forward`, refetch on
+  `navigate`). Both pass every other method straight through to
+  `window.navigation`.
+- **URL-updater callback.** `navigate(target, options)`'s first arg is
+  `string | URL | ((current: URL) => URL | string)`. The updater
+  receives an absolute `URL` (synthesized against `window.location.origin`
+  for frames) so authors write the same code regardless of which
+  handle they're holding. Replaces the `withParam(base, key, value)`
+  helper that previously lived in `search.tsx`.
+- **Cross-origin policy.** On the window handle, a cross-origin URL
+  from the updater (or a string/URL arg) goes through the browser's
+  normal cross-origin behavior. On a frame handle, cross-origin
+  throws — frame URLs are same-origin by construction, and a
+  cross-origin frame URL has no meaning in the refetch protocol.
+- **`navigate` / `reload` return `FrameworkNavigationResult`.** TS 6
+  declared `NavigationResult.committed` / `finished` as optional
+  (weaker than the WHATWG spec); `FrameworkNavigationResult` tightens
+  them back to non-optional. Callers `await result.finished` without
+  null checks. For the targeted-refetch path, `finished` composes the
+  browser's commit with the `enqueueRefetch` promise so "done" means
+  "server response applied," not just "history entry written."
+- **Removed from the public API:** `NavigationHandle` / `NavigateOptions`
+  (replaced by `FrameworkNavigation` / `FrameworkNavigateOptions`),
+  `nav.currentUrl` (use `nav.currentEntry?.url` — absolute URL),
+  `nav.entryState` (use `nav.currentEntry?.getState()` — frame handles
+  project to `__frameState[name]`). `nav.name` stays as a framework
+  addition (no Navigation equivalent, used by frame-aware components
+  that render the same way bound to either scope).
+
+### Why a Proxy (over a plain object)
+
+The `Navigation` surface is wide — event handlers, `traverseTo`,
+`updateCurrentEntry`, `addEventListener` overloads, `activation`,
+`transition`, etc. A `Proxy` over `window.navigation` means we only
+author the overrides; everything else delegates for free. `Reflect.get`
+in the trap binds methods to the raw `target` so `this`-checks in the
+browser's C++ bindings don't trip `Illegal invocation`.
+
+For the window handle, the override set is minimal: `name`, `navigate`,
+`reload`. For frame handles we also override `currentEntry` / `entries`
+(projection), `canGoBack` / `canGoForward` / `back` / `forward`
+(frame-scoped), and `updateCurrentEntry` (frame-scoped state bucket).
+
+### Call-site migration
+
+| Old | New |
+|---|---|
+| `await nav.navigate(url, opts)` | `await nav.navigate(url, opts).finished` |
+| `await nav.reload(opts)` | `await nav.reload(opts).finished` |
+| `nav.currentUrl` | `nav.currentEntry?.url` (now absolute) |
+| `nav.entryState` | `nav.currentEntry?.getState()` |
+| `withParam(nav.currentUrl ?? "/", "q", q)` + `nav.navigate(target, ...)` | `nav.navigate(u => { u.searchParams.set("q", q); return u }, ...)` |
+| `nav.updateCurrentEntry(patch)` | `nav.updateCurrentEntry({ state: patch })` (matches the browser's `NavigationUpdateCurrentEntryOptions`) |

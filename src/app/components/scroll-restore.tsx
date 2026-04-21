@@ -1,10 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import {
-  getNavigation,
-  type NavigateEvent,
-} from "../../framework/navigation-api.ts";
+import { getNavigation } from "../../framework/navigation-api.ts";
 
 /**
  * Save and restore window.scrollY across navigations using the

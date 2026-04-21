@@ -19,7 +19,7 @@ export function RefreshAllPricesButton() {
   async function refreshAll() {
     setIsPending(true);
     try {
-      await nav.reload({ tags: ["price"] });
+      await nav.reload({ tags: ["price"] }).finished;
     } finally {
       setIsPending(false);
     }

@@ -12,9 +12,14 @@ export {
   getCachedPartialIds,
   useActivate,
   useNavigation,
-  type NavigationHandle,
-  type NavigateOptions,
   type PartialDebugEntry,
 } from "./partial-client.tsx";
+export type {
+  FrameworkNavigation,
+  FrameworkNavigateOptions,
+  FrameworkReloadOptions,
+  FrameworkNavigationResult,
+  NavigateTarget,
+} from "../framework/navigation-api.ts";
 export { PartialErrorBoundary } from "./partial-error-boundary.tsx";
 export { invalidateByTags, clearCache, getCacheStats } from "./partial-cache.ts";

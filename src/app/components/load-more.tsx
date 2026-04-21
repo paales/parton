@@ -111,7 +111,7 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
               history: "replace",
               ids: [`page-${nextPage}`, "load-more"],
             })
-            .finally(() => setIsPending(false));
+            .finished.finally(() => setIsPending(false));
         }
       },
       { rootMargin: "200px" },

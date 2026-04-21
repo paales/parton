@@ -81,6 +81,26 @@ test("closing the dialog (Escape) navigates the frame back to /", async ({
   await expect(page.getByTestId("search-frame-open")).toBeVisible();
 });
 
+test("search input keeps focus across live refetches", async ({ page }) => {
+  await page.goto("/");
+  await awaitHydrated(page);
+  await page.getByTestId("search-frame-open").click();
+  await expect(page.locator("dialog")).toBeVisible();
+
+  const input = page.locator("dialog input[type=text]");
+  await input.focus();
+  await input.pressSequentially("pika", { delay: 80 });
+
+  // After the typing + ensuing tag-refetch, the dialog's <input> is
+  // still the document's active element. If PartialsClient was
+  // reconciling the search-page subtree incorrectly (missing keys on
+  // cache-mode snapshot elements), the input would have been remounted
+  // and focus would have fallen back to <body>.
+  const isFocused = await input.evaluate((el) => el === document.activeElement);
+  expect(isFocused).toBe(true);
+  await expect(input).toHaveValue("pika");
+});
+
 test("frame search refetch uses ?__frame=search, not ?q= on the page", async ({
   page,
 }) => {

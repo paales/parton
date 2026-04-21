@@ -32,4 +32,9 @@
 
 - In a multiplayer game what is actually send to the server and what state is returned, the DOM can be thought of the positions of other entities in a game, streamed over the network. Client components are the local bit. This loop is quick and streaming both directions simultaneously we should dig into multiple streams happening at the same time.
 
-- Move away from all history pushState or replaceState etc. and use the navigation API everywhere.
+- I was thinking how to implement continuously streaming content and how to implement this. The fake way is to do continous polling but push is another paradigm not fully expored. Lets say we're building an AI chat where the responses trickle in. The chat window clearlly is an InfiniteScroll situation, now dissimilar from a infinitely scrolling product listing, the difference is that it can be continuously appended with new information. I think a Vercel AI chat does a recursive <Piece/> where the <Piece/> renders the <Suspense><Piece /></Suspense> and it unifies this with some form of generator function or something? What are options here. I thouhgt about doing a redirect at the end of the render and let the GET request be a multipart stream so we split the stream into multiple streams? Altough that isn't really a push stream on the server, it is from a client perspective?
+
+- Sharp edge: By default I dont want the frame's navigation to always influence the page's history state. So by default a navigate should be a replace on the window instead of a push? So NavigationHistoryBehavior auto should be replace for a frame and the browsers default for the window. The frame's navigation state should be push on auto. Does that make sense?
+
+- Don't care but I'm unsure: Should cache be directly rolled into Partial, would that offer any benefit?
+- Don't care but I'm unsure: Should all Partial always be cached once that only serves as a template so we can very quickly traverse to the Partial? It's not clear to me how the ProductPrice now gets accessed in a performant way.

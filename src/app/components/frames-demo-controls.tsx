@@ -51,7 +51,7 @@ export function UpdateEntryStateButton({
     <button
       type="button"
       data-testid={testId ?? `update-entry-${nav.name ?? "window"}`}
-      onClick={() => nav.updateCurrentEntry(patch)}
+      onClick={() => nav.updateCurrentEntry({ state: patch })}
     >
       {label}
     </button>

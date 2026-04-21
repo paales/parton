@@ -15,7 +15,7 @@ export function RefreshPriceButton({ sku }: { sku: string }) {
   async function refresh() {
     setIsPending(true);
     try {
-      await nav.reload({ ids: [`price-${sku}`] });
+      await nav.reload({ ids: [`price-${sku}`] }).finished;
     } finally {
       setIsPending(false);
     }

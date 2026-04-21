@@ -125,6 +125,7 @@ function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
   return React.createElement(
     Partial,
     {
+      key: id,
       id,
       fallback: snap.fallback ?? undefined,
       errorWith: snap.errorWith,

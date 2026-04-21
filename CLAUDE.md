@@ -99,31 +99,41 @@ Each Partial computes a structural fingerprint (hash of component types + scalar
 
 ### Client navigation — `useNavigation()`
 
-The single client-side handle. Returned by `useNavigation()` (or `useNavigation(name)` for an explicit frame); drives page navigation, frame navigation, and targeted partial refetches.
+The single client-side handle. Returned by `useNavigation()` (or `useNavigation(name)` for an explicit frame); drives page navigation, frame navigation, and targeted partial refetches. The handle **is** a `FrameworkNavigation` — a typed superset of the browser's `Navigation` — so everything you'd expect from `window.navigation` works, plus our extensions.
 
 ```tsx
 const nav = useNavigation();          // page-scoped (or ambient frame if inside one)
 const cart = useNavigation("cart");   // explicit: the cart frame
 
-nav.navigate("/products?sort=price", { history: "push" });              // full page nav
-nav.navigate(url,   { history: "replace", tags: ["search-results"] }); // URL update + targeted refetch
-nav.navigate(url,   { history: "replace", silent: true });              // URL update only, no refetch
-nav.reload({ ids: ["cart"] });                                           // targeted refetch, no URL change
-nav.reload({ tags: ["price"] });                                         // tag-resolved refetch, no URL change
-nav.back(); nav.forward(); nav.reload();                                  // unfiltered reload = full page refetch
+nav.navigate("/products?sort=price", { history: "push" });                // full page nav, string URL
+nav.navigate(new URL("/checkout", location.href));                        // URL instance
+nav.navigate(u => { u.searchParams.set("q", q); return u },               // updater callback
+             { history: "replace", tags: ["search-results"] });
+nav.navigate(url,   { history: "replace", silent: true });                // URL update only, no refetch
+nav.reload({ ids: ["cart"] });                                             // targeted refetch, no URL change
+nav.reload({ tags: ["price"] });                                           // tag-resolved refetch
+nav.back(); nav.forward(); nav.reload();                                   // inherited from Navigation
+
+await nav.navigate(...).finished;                                          // wait for refetch to settle
 ```
 
-`NavigateOptions`:
+`navigate`'s first arg (`NavigateTarget`) is `string | URL | ((current: URL) => URL | string)`. The updater receives an absolute `URL` — `window.location.href` for the window handle, or the frame URL synthesized against `window.location.origin` for a frame handle — so authors write the same code regardless of scope. Returning a cross-origin URL from a frame handle throws; from the window handle it goes through the browser's normal cross-origin behavior.
+
+`navigate` / `reload` return `FrameworkNavigationResult` (`{ committed, finished }`, both non-optional). Use `.finished` when you need to wait on the refetch; `void nav.navigate(...)` for fire-and-forget.
+
+`FrameworkNavigateOptions` extends the browser's `NavigationNavigateOptions`:
 
 | Field | Meaning |
 |---|---|
-| `history` | `"push"` (default), `"replace"`, or `"auto"`. Mirrors the Navigation API. |
-| `state` | State to write onto the resulting entry. |
-| `info` | Forwarded to navigate events (window handle only). |
+| `history` | `"push"` (default), `"replace"`, or `"auto"`. From `NavigationNavigateOptions`. |
+| `state` | State to write onto the resulting entry. From `NavigationNavigateOptions`. |
+| `info` | Forwarded to navigate events. From `NavigationNavigateOptions`. Window handle only — frame handles stamp their own framework-internal `info` to suppress the page-level intercept. |
 | `ids` | Explicit partial ids to refetch. Page handle only; ignored by frame handles (frames refetch their whole subtree). |
 | `tags` | Tags to refetch. Resolved server-side against the route-scoped registry; union semantics for multiple tags. Page handle only. |
 | `silent` | Update the URL only. No refetch. Useful for bookmarkability-only URL sync (infinite scroll's `?pages=`). |
 | `disableTransition` | Commit without wrapping in `startTransition` — fallbacks flash, chunks stream. Default `false` (atomic swap, no fallback). |
+
+`nav.name` (framework-only, not on `Navigation`) is `null` for the window handle, the frame name for a frame handle. Lets a component render identically whether it's bound to the page or a frame. Read scope-aware state via `nav.currentEntry?.url` (absolute) and `nav.currentEntry?.getState()` (frame handles project to the frame's `__frameState[name]` bucket).
 
 Multiple `navigate` / `reload` calls in the same tick coalesce into one microtask-batched refetch request. Frame `navigate(url)` is unchanged — it refetches the frame Partial, which re-renders its whole subtree. See `notes/NAVIGATE_UNIFIED.md` for the full surface and `notes/FRAMES.md` for frame mechanics.
 

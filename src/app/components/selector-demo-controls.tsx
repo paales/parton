@@ -32,7 +32,7 @@ export function SelectorRefetchButton({
   async function fire() {
     setIsPending(true);
     try {
-      await nav.reload({ ids, tags });
+      await nav.reload({ ids, tags }).finished;
     } finally {
       setIsPending(false);
     }

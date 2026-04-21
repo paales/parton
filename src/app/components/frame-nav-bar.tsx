@@ -16,7 +16,16 @@ import { useNavigation } from "../../lib/partial-client.tsx";
  */
 export function FrameNavigationBar() {
   const f = useNavigation();
-  const state = f.entryState;
+  const state = f.currentEntry?.getState() ?? null;
+  // `currentEntry.url` is always an absolute URL (synthesized against
+  // the page origin for frames); trim to pathname+search for display.
+  const entryUrl = f.currentEntry?.url;
+  const displayUrl = entryUrl
+    ? (() => {
+        const u = new URL(entryUrl);
+        return u.pathname + u.search;
+      })()
+    : null;
 
   const style = {
     display: "flex",
@@ -84,7 +93,7 @@ export function FrameNavigationBar() {
         data-testid={`navbar-${f.name ?? "window"}-url`}
         style={{ color: "#ededed", flex: 1 }}
       >
-        {f.currentUrl ?? "—"}
+        {displayUrl ?? "—"}
       </code>
       <code
         data-testid={`navbar-${f.name ?? "window"}-state`}
