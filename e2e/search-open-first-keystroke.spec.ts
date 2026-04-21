@@ -168,7 +168,7 @@ test("URL mode: first keystroke streams stages 2/3 progressively", async ({
   // Wait for hydration: click+focus the input before the keypress so the
   // React onChange handler is attached. Without this, the first keystroke
   // sometimes lands before hydration completes and the handler's
-  // replaceState → dispatch flow never runs, leaving the URL without ?q=.
+  // navigate → dispatch flow never runs, leaving the URL without ?q=.
   await input.click();
   await input.focus();
   await page.waitForTimeout(100);

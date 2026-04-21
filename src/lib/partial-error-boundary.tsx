@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { registerClientPartial } from "./partial-client.tsx";
+import { _windowNav, registerClientPartial } from "./partial-client.tsx";
 
 interface Props {
   partialId: string;
@@ -52,8 +52,7 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
   retry = () => {
     React.startTransition(() => {
       this.setState({ error: null });
-      // Trigger a re-render from the server by replaying the current URL
-      history.replaceState(null, "", window.location.href);
+      void _windowNav().reload();
     });
   };
 

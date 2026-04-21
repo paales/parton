@@ -127,7 +127,7 @@ test("back navigation from another route restores ?end and renders the full rang
   await page.goBack();
   await page.waitForURL((u) => u.pathname === "/bare");
 
-  // URL state preserved by the silentReplace bumps during scroll.
+  // URL state preserved by the silent nav bumps during scroll.
   expect(new URL(page.url()).searchParams.get("end")).toBe("3");
 
   // All three pages render up-front (server saw ?end=3 and walked the

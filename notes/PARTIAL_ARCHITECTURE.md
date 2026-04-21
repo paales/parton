@@ -167,6 +167,7 @@ instead of rendering. The client keeps its existing entry.
 | `refreshRegistry` static walker removed; stale-snapshot correctness driven by fingerprint-after-applyInputs | ✅ shipped (2026-04-19) |
 | `usePartial` / `__inputs` / `silentReplace` / `usePartialParams` all removed; single `useNavigation()` surface with `ids`/`tags`/`silent` on `navigate` and `reload` | ✅ shipped (2026-04-21) |
 | Stale-snapshot correctness now driven by ambient-frame-URL fold into fingerprint (applyInputs is gone) | ✅ shipped (2026-04-21) |
+| Classic `history.pushState`/`replaceState` removed from app-path code; framework silent URL writes use `navigation.navigate` + branded `info` marker. Navigation API types extracted to `src/framework/navigation-api.ts`; `frame()`/`windowNav()` made framework-internal (`_frame`/`_windowNav`) | ✅ shipped (2026-04-21) |
 
 The architecture in this doc matches the code as of 2026-04-21.
 Mode-selection inside `PartialsClient` (`mode="streaming"` vs

@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
-import { useActivate } from "../../lib/partial-client.tsx";
+import { useActivate, useNavigation } from "../../lib/partial-client.tsx";
 import type { ActivatorProps } from "../../lib/partial-component.tsx";
 
 export interface WhenStoredProps extends ActivatorProps {
@@ -15,53 +14,6 @@ export interface WhenStoredProps extends ActivatorProps {
    * on re-render. Default `"value"`.
    */
   as?: string;
-}
-
-/**
- * Build the `subscribe` callback `<WhenStored>` passes into
- * `useActivate`. Factored out so unit tests can exercise the storage /
- * event wiring directly without rendering a component.
- *
- * On activation:
- *   1. Write the stored value to the current URL's `?<as>=<value>`
- *      via `history.replaceState` (no navigate event — marked silent
- *      by the navigation layer's pushState/replaceState bookkeeping
- *      through the targeted refetch path).
- *   2. Fire the activator so the framework dispatches a targeted
- *      reload for this partial id. The server reads the fresh URL
- *      via tracked accessors.
- */
-export function makeStoredSubscribe(opts: {
-  storageKey: string;
-  store?: "local" | "session";
-  as?: string;
-}) {
-  const storageKey = opts.storageKey;
-  const useSession = opts.store === "session";
-  const as = opts.as ?? "value";
-
-  return (fire: () => void) => {
-    const storage = useSession ? sessionStorage : localStorage;
-    const tryActivate = () => {
-      const v = storage.getItem(storageKey);
-      if (v == null) return;
-      if (typeof window !== "undefined") {
-        const url = new URL(window.location.href);
-        if (url.searchParams.get(as) !== v) {
-          url.searchParams.set(as, v);
-          history.replaceState(history.state, "", url.toString());
-        }
-      }
-      fire();
-    };
-    tryActivate();
-    const onStorage = (e: StorageEvent) => {
-      if (e.storageArea !== storage) return;
-      if (e.key === storageKey && e.newValue != null) tryActivate();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  };
 }
 
 /**
@@ -84,6 +36,11 @@ export function makeStoredSubscribe(opts: {
  *  - Otherwise: subscribes to the `storage` event and activates when
  *    the key transitions to non-null.
  *
+ * The URL write uses `nav.navigate(url, { history: "replace", silent })`
+ * — stamped with a framework silent-info marker, so the page-level
+ * navigate interceptor declines to refetch. Only the activator's own
+ * targeted reload (via `useActivate`) hits the server.
+ *
  * Storage events only fire on OTHER tabs — a same-tab write won't
  * notify. If the author expects same-tab activation, they should set
  * the value *before* mounting the Partial (e.g. on a preceding page)
@@ -101,10 +58,35 @@ export function WhenStored({
       "<WhenStored> requires `partialId`. Use it as the `defer` prop of a <Partial>.",
     );
   }
-  const subscribe = useMemo(
-    () => makeStoredSubscribe({ storageKey, store, as }),
-    [storageKey, store, as],
-  );
-  useActivate(partialId, subscribe);
+  const nav = useNavigation();
+
+  // `useActivate` captures `subscribe` via a ref, so returning a new
+  // closure each render is fine — the ref holds the latest and the
+  // underlying effect only re-registers on `[partialId, once]`.
+  useActivate(partialId, (fire) => {
+    const storage = store === "session" ? sessionStorage : localStorage;
+    const tryActivate = () => {
+      const v = storage.getItem(storageKey);
+      if (v == null) return;
+      if ("location" in globalThis) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get(as ?? "value") !== v) {
+          url.searchParams.set(as ?? "value", v);
+          void nav.navigate(url.toString(), {
+            history: "replace",
+            silent: true,
+          });
+        }
+      }
+      fire();
+    };
+    tryActivate();
+    const onStorage = (e: StorageEvent) => {
+      if (e.storageArea !== storage) return;
+      if (e.key === storageKey && e.newValue != null) tryActivate();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  });
   return <>{children}</>;
 }

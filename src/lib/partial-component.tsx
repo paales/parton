@@ -152,7 +152,7 @@ export interface PartialProps {
    * `getHeader`) against the FRAME's URL instead of the page URL.
    *
    * The `frame` value names the frame for session lookup and client-
-   * side navigation (`frame("cart").navigate(…)` — see task 4). The
+   * side navigation (`useNavigation("cart").navigate(…)` — see task 4). The
    * URL the accessors resolve against is picked in this order:
    *
    *   1. The server session's entry for this frame name (task 3).
@@ -432,7 +432,7 @@ export function Partial({
   // DIFFERENT nested-partial props — the nested partial's new
   // fingerprint differs from the cached one, but the old logic
   // skipped anyway and the client held the stale body. Frame
-  // navigation trips this: `frame("search").navigate("/search/open?q=pika")`
+  // navigation trips this: `useNavigation("search").navigate("/search/open?q=pika")`
   // refetches id="search" and inside that the `frame-stage-1` body
   // goes from `<SearchStage1 query="">` (A) to `<SearchStage1
   // query="pika">` (B) — fingerprint changes, content must not skip.

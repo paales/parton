@@ -12,11 +12,15 @@ import type { RscPayload } from "./entry.rsc";
 import { GlobalErrorBoundary } from "./error-boundary";
 import { createRscRenderRequest } from "./request";
 import {
-  _consumeSilentFlag,
   _dispatchFrameRefetch,
   _readFramesSnapshot,
   getCachedPartialIds,
+  isFrameworkSilentInfo,
 } from "../lib/partial-client";
+import {
+  getNavigation,
+  type NavigateEvent,
+} from "./navigation-api.ts";
 
 async function main() {
   let setPayload: (v: RscPayload) => void;
@@ -133,6 +137,8 @@ async function main() {
 }
 
 function listenNavigation(onNavigation: (url: string) => Promise<void>) {
+  const nav = getNavigation();
+  if (!nav) return () => {};
   const handler = (event: NavigateEvent) => {
     if (!event.canIntercept) return;
     if (event.hashChange || event.downloadRequest !== null) return;
@@ -144,17 +150,19 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
     // so the browser does a real cross-document reload.
     if (event.navigationType === "reload") return;
 
-    // Frame navigation via `frame(name).navigate()`. The imperative
-    // call does `history.pushState` + `_dispatchFrameRefetch`
-    // itself, so we only intercept here on TRAVERSAL (browser back/
-    // forward on a frame-state entry) — that's when the listener is
-    // the only place that knows to re-run the refetch.
-    //
-    // For the initial push of a frame nav, skip this branch (let
-    // the default fall through to page-nav logic, which no-ops
-    // because `frame.navigate` called `history.pushState` with the
-    // same URL — canIntercept stays true, so we need to also skip
-    // the page-level intercept below via a silent flag).
+    // Framework-internal URL syncs stamp a branded `info` payload on
+    // their `navigation.navigate(...)` call. Two variants:
+    //   - window-silent: caller updated the URL only (or will dispatch
+    //     its own targeted refetch).
+    //   - frame:         caller pushed a frame-state entry; the frame
+    //     subtree refetch runs in `frameNavigateImpl` after commit.
+    // In both cases we call `event.intercept()` with no handler to
+    // declare the navigation as same-document and avoid a page load.
+    if (isFrameworkSilentInfo(event.info)) {
+      event.intercept();
+      return;
+    }
+
     // Browser back/forward. Two axes need handling on a traverse:
     //   1. Page URL changed (e.g. /frames-demo?product=beta → /frames-demo)
     //      — the main page content needs a full refetch.
@@ -174,9 +182,7 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
     if (event.navigationType === "traverse") {
       const destSnap = _readFramesSnapshot(event.destination.getState?.());
       const currentSnap = _readFramesSnapshot(
-        typeof navigation !== "undefined"
-          ? navigation.currentEntry?.getState() ?? null
-          : null,
+        nav.currentEntry?.getState() ?? null,
       );
       const names = new Set([
         ...Object.keys(destSnap),
@@ -217,22 +223,13 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
       }
     }
 
-    // Silent URL updates (`useNavigation().navigate(url, { silent: true })`
-    // or `{ ids: [...] }` / `{ tags: [...] }`) flip a short-lived
-    // flag in `partial-client`. When set, we skip the intercept so the
-    // URL updates for bookmarkability — any refetch is either skipped
-    // entirely (silent) or dispatched directly by the navigate call.
-    // Same mechanism is used by frame navigation after its
-    // `history.pushState`.
-    if (_consumeSilentFlag()) return;
-
     event.intercept({
       handler: () => onNavigation(event.destination.url),
     });
   };
 
-  navigation.addEventListener("navigate", handler);
-  return () => navigation.removeEventListener("navigate", handler);
+  nav.addEventListener("navigate", handler);
+  return () => nav.removeEventListener("navigate", handler);
 }
 
 main();

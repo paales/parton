@@ -78,10 +78,12 @@ Activators split on what the server can / cannot read:
 
 **Activators that need to pass state to the server write it to a URL before firing.** The server then reads it through tracked accessors on re-render. Two shapes:
 
-- Page URL: `history.replaceState(history.state, "", urlWithParam)` then `fire()`. Partial body reads `getSearchParam("...")`.
-- Frame URL: `frame("name").navigate(urlWithParam)` without a separate `fire` — the frame-navigate call is itself the refetch.
+- Page URL: `nav.navigate(urlWithParam, { history: "replace", silent: true })` then `fire()`, where `nav = useNavigation()` in the activator component's render. Partial body reads `getSearchParam("...")`.
+- Frame URL: `nav.navigate(urlWithParam)` with `nav = useNavigation("name")` — no separate `fire`, the frame-navigate call is itself the refetch.
 
-`<WhenStored>` uses the first pattern: reads `localStorage[key]`, writes `?<as>=<value>` to the page URL via `history.replaceState`, then fires. See `src/app/components/when-stored.tsx` for the implementation. A hypothetical `<WhenMediaQuery>` would do the same with a query param.
+`<WhenStored>` uses the first pattern: the component calls `useNavigation()` in render and closes over it in the subscribe callback. The subscribe reads `localStorage[key]`, writes `?<as>=<value>` to the page URL via `nav.navigate(..., { history: "replace", silent: true })`, then fires. See `src/app/components/when-stored.tsx` for the implementation. A hypothetical `<WhenMediaQuery>` would do the same with a query param.
+
+(The `useActivate` subscribe callback runs inside an effect, so it can't call `useNavigation()` itself — thread the handle in from the surrounding component's render.)
 
 There is no longer a `__inputs` / prop-override channel — state either lives in a URL (page or frame), in a cookie, in a header, or in client-only React state. See `NAVIGATE_UNIFIED.md` for the rationale.
 

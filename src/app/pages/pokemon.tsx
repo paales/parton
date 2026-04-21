@@ -180,7 +180,7 @@ export function PokemonPage() {
         URL. Its open/close is driven by `useNavigation().navigate(...)`.
 
         Frame mode (frame-scoped): reads `?search=` / `?q=` from the
-        FRAME URL. Its open/close is driven by `frame("search")
+        FRAME URL. Its open/close is driven by `useNavigation("search")
         .navigate(...)`. The wrapping `<Partial frame="search">` swaps
         the ambient request before descendants read accessors.
 

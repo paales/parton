@@ -2,8 +2,14 @@ import react from "@vitejs/plugin-react";
 import rsc from "@vitejs/plugin-rsc";
 import { defineConfig } from "vite";
 
+// Skip `@vitejs/plugin-rsc` when vitest is running: its `"use client"`
+// transform wraps modules in client-reference proxies, which breaks
+// hook rendering in jsdom because the wrapper pulls in its own React
+// copy. For dev / build we still want the plugin active.
+const isTest = process.env.VITEST === "true";
+
 export default defineConfig({
-	plugins: [rsc(), react()],
+	plugins: isTest ? [react()] : [rsc(), react()],
 	environments: {
 		rsc: {
 			build: {
@@ -26,5 +32,11 @@ export default defineConfig({
 				},
 			},
 		},
+	},
+	test: {
+		setupFiles: ["./vitest.setup.ts"],
+	},
+	resolve: {
+		dedupe: ["react", "react-dom"],
 	},
 });

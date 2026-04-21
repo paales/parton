@@ -11,7 +11,6 @@ export {
   PartialsClient,
   getCachedPartialIds,
   useActivate,
-  frame,
   useNavigation,
   type NavigationHandle,
   type NavigateOptions,

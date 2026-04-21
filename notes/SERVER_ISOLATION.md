@@ -23,7 +23,6 @@ File carries `"use client"` or is only loaded by the browser entry. Module state
 | `src/lib/partial-client.tsx:433` | `let _template: ReactNode` |
 | `src/lib/partial-client.tsx:434` | `let _templateRoute: string \| null` |
 | `src/lib/partial-client.tsx:458` | `let _transientParams: Record<string, …> \| null` |
-| `src/framework/silent-replace.ts:13` | `let _silentUntil: number` |
 | `src/app/components/load-more.tsx:12` | `visiblePages: Set<number>` |
 
 ### C — Intentional server shared (safe, atomic Map/Set ops)

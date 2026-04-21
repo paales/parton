@@ -34,7 +34,7 @@ function withParam(
  *   `useNavigation().navigate(...)`. The page-level SearchArea
  *   reads the page URL and renders its dialog open.
  * - "Search (Frame)": navigates the `search` frame to `/?search=1` via
- *   `frame("search").navigate(...)`. The framed SearchArea reads the
+ *   `useNavigation("search").navigate(...)`. The framed SearchArea reads the
  *   FRAME URL — no page-URL mutation at all.
  *
  * `<SearchArea/>` is the same component in both modes; its scope

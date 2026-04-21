@@ -1,12 +1,69 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { makeStoredSubscribe, WhenStored } from "../when-stored.tsx";
+import { WhenStored } from "../when-stored.tsx";
+
+// ──────────────────────────────────────────────────────────────
+// Harness: render <WhenStored>, spy on the server-refetch handler.
+//
+// `useActivate` routes `fire()` through `enqueueRefetch` → the window-
+// scoped `__rsc_partial_refetch` handler (installed by
+// `entry.browser.tsx` at runtime). Stubbing it here lets the tests
+// assert activation without booting the real RSC machinery, and the
+// microtask-batched dispatcher means a single `Promise.resolve()`
+// flush is enough to observe whether it fired.
+// ──────────────────────────────────────────────────────────────
+
+let container: HTMLElement;
+let root: Root | null = null;
+let refetchSpy: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
 	localStorage.clear();
 	sessionStorage.clear();
+	container = document.createElement("div");
+	document.body.appendChild(container);
+	refetchSpy = vi.fn(() => Promise.resolve());
+	(window as Window & { __rsc_partial_refetch?: unknown })
+		.__rsc_partial_refetch = refetchSpy;
 });
+
+afterEach(() => {
+	act(() => {
+		root?.unmount();
+	});
+	root = null;
+	container.remove();
+	delete (window as Window & { __rsc_partial_refetch?: unknown })
+		.__rsc_partial_refetch;
+});
+
+async function render(props: {
+	partialId: string;
+	storageKey: string;
+	store?: "local" | "session";
+	as?: string;
+}) {
+	await act(async () => {
+		root = createRoot(container);
+		root.render(
+			<WhenStored {...props}>
+				<span>child</span>
+			</WhenStored>,
+		);
+	});
+	// Flush the microtask-batched refetch dispatcher.
+	await Promise.resolve();
+}
+
+async function unmount() {
+	await act(async () => {
+		root?.unmount();
+		root = null;
+	});
+}
 
 describe("<WhenStored>", () => {
 	it("throws when partialId is missing", () => {
@@ -14,117 +71,120 @@ describe("<WhenStored>", () => {
 			WhenStored({ storageKey: "greeting" } as never),
 		).toThrowError(/partialId/);
 	});
-});
 
-describe("makeStoredSubscribe (the `<WhenStored>` subscribe builder)", () => {
-	it("fires immediately when the key is already present on mount and writes the value to the URL", () => {
+	it("fires immediately when the key is already present on mount and writes the value to the URL", async () => {
 		localStorage.setItem("greeting", "hi");
 		history.replaceState(null, "", "/defer-demo");
-		const subscribe = makeStoredSubscribe({ storageKey: "greeting" });
-		const fire = vi.fn();
-		subscribe(fire);
-		expect(fire).toHaveBeenCalledTimes(1);
+
+		await render({ partialId: "t", storageKey: "greeting" });
+
 		expect(new URL(window.location.href).searchParams.get("value")).toBe("hi");
+		expect(refetchSpy).toHaveBeenCalled();
 	});
 
-	it("does not fire when the key is absent on mount", () => {
-		const subscribe = makeStoredSubscribe({ storageKey: "greeting" });
-		const fire = vi.fn();
-		subscribe(fire);
-		expect(fire).not.toHaveBeenCalled();
+	it("does not fire when the key is absent on mount", async () => {
+		await render({ partialId: "t", storageKey: "greeting" });
+		expect(refetchSpy).not.toHaveBeenCalled();
 	});
 
-	it("fires when a matching storage event arrives and writes the value to the URL", () => {
+	it("fires when a matching storage event arrives and writes the value to the URL", async () => {
 		history.replaceState(null, "", "/defer-demo");
-		const subscribe = makeStoredSubscribe({ storageKey: "greeting" });
-		const fire = vi.fn();
-		const cleanup = subscribe(fire);
+		await render({ partialId: "t", storageKey: "greeting" });
+		expect(refetchSpy).not.toHaveBeenCalled();
 
-		localStorage.setItem("greeting", "hello");
-		window.dispatchEvent(
-			new StorageEvent("storage", {
-				key: "greeting",
-				newValue: "hello",
-				storageArea: localStorage,
-			}),
-		);
-		expect(fire).toHaveBeenCalled();
+		await act(async () => {
+			localStorage.setItem("greeting", "hello");
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					key: "greeting",
+					newValue: "hello",
+					storageArea: localStorage,
+				}),
+			);
+		});
+		await Promise.resolve();
+
 		expect(new URL(window.location.href).searchParams.get("value")).toBe(
 			"hello",
 		);
-		if (typeof cleanup === "function") cleanup();
+		expect(refetchSpy).toHaveBeenCalled();
 	});
 
-	it("ignores storage events for other keys", () => {
-		const subscribe = makeStoredSubscribe({ storageKey: "greeting" });
-		const fire = vi.fn();
-		subscribe(fire);
-		window.dispatchEvent(
-			new StorageEvent("storage", {
-				key: "OTHER",
-				newValue: "val",
-				storageArea: localStorage,
-			}),
-		);
-		expect(fire).not.toHaveBeenCalled();
+	it("ignores storage events for other keys", async () => {
+		await render({ partialId: "t", storageKey: "greeting" });
+		refetchSpy.mockClear();
+
+		await act(async () => {
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					key: "OTHER",
+					newValue: "val",
+					storageArea: localStorage,
+				}),
+			);
+		});
+		await Promise.resolve();
+
+		expect(refetchSpy).not.toHaveBeenCalled();
 	});
 
-	it("ignores storage events from a different storage area", () => {
-		const subscribe = makeStoredSubscribe({ storageKey: "greeting" });
-		const fire = vi.fn();
-		subscribe(fire);
-		window.dispatchEvent(
-			new StorageEvent("storage", {
-				key: "greeting",
-				newValue: "hi",
-				storageArea: sessionStorage,
-			}),
-		);
-		expect(fire).not.toHaveBeenCalled();
+	it("ignores storage events from a different storage area", async () => {
+		await render({ partialId: "t", storageKey: "greeting" });
+		refetchSpy.mockClear();
+
+		await act(async () => {
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					key: "greeting",
+					newValue: "hi",
+					storageArea: sessionStorage,
+				}),
+			);
+		});
+		await Promise.resolve();
+
+		expect(refetchSpy).not.toHaveBeenCalled();
 	});
 
-	it("uses the `as` prop as the URL param name", () => {
+	it("uses the `as` prop as the URL param name", async () => {
 		localStorage.setItem("greeting", "hi");
 		history.replaceState(null, "", "/defer-demo");
-		const subscribe = makeStoredSubscribe({
-			storageKey: "greeting",
-			as: "draftId",
-		});
-		const fire = vi.fn();
-		subscribe(fire);
-		expect(fire).toHaveBeenCalled();
+
+		await render({ partialId: "t", storageKey: "greeting", as: "draftId" });
+
 		expect(new URL(window.location.href).searchParams.get("draftId")).toBe(
 			"hi",
 		);
+		expect(refetchSpy).toHaveBeenCalled();
 	});
 
-	it("reads sessionStorage when store='session'", () => {
+	it("reads sessionStorage when store='session'", async () => {
 		sessionStorage.setItem("greeting", "hi");
 		history.replaceState(null, "", "/defer-demo");
-		const subscribe = makeStoredSubscribe({
-			storageKey: "greeting",
-			store: "session",
-		});
-		const fire = vi.fn();
-		subscribe(fire);
-		expect(fire).toHaveBeenCalled();
+
+		await render({ partialId: "t", storageKey: "greeting", store: "session" });
+
 		expect(new URL(window.location.href).searchParams.get("value")).toBe("hi");
+		expect(refetchSpy).toHaveBeenCalled();
 	});
 
-	it("cleanup removes the storage listener", () => {
-		const subscribe = makeStoredSubscribe({ storageKey: "greeting" });
-		const fire = vi.fn();
-		const cleanup = subscribe(fire);
-		expect(typeof cleanup).toBe("function");
-		(cleanup as () => void)();
+	it("cleanup removes the storage listener", async () => {
+		await render({ partialId: "t", storageKey: "greeting" });
+		refetchSpy.mockClear();
+		await unmount();
 
-		window.dispatchEvent(
-			new StorageEvent("storage", {
-				key: "greeting",
-				newValue: "hi",
-				storageArea: localStorage,
-			}),
-		);
-		expect(fire).not.toHaveBeenCalled();
+		await act(async () => {
+			localStorage.setItem("greeting", "hi");
+			window.dispatchEvent(
+				new StorageEvent("storage", {
+					key: "greeting",
+					newValue: "hi",
+					storageArea: localStorage,
+				}),
+			);
+		});
+		await Promise.resolve();
+
+		expect(refetchSpy).not.toHaveBeenCalled();
 	});
 });

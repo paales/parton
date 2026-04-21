@@ -32,10 +32,16 @@ import React, {
   Suspense,
   useContext,
   useEffect,
+  useMemo,
   useState,
   useRef,
   type ReactNode,
 } from "react";
+import {
+  getNavigation,
+  type FrameEntryState,
+  type NavigateEvent,
+} from "../framework/navigation-api.ts";
 
 /**
  * Return true if the node looks like the outermost wrapper a
@@ -460,29 +466,48 @@ export function getCachedPartialIds(): string[] {
   return out;
 }
 
-// ─── Silent-navigate flag (internal) ──────────────────────────────
+// ─── Framework-internal navigation info ───────────────────────────
 //
-// `navigate(url, { silent: true })` and the frame-navigate pathway
-// both need to update the URL without triggering the page-level
-// intercept (they either don't want a refetch, or do their own).
-// The intercept listener in `entry.browser.tsx` reads
-// `_consumeSilentFlag()` at the top of each navigate event and
-// bails out if set. Same time-windowed approach as the old
-// `silent-replace.ts` module, now lives here so the navigation
-// surface owns its own silent behavior.
+// The Navigation API's `info` option is a one-shot payload delivered
+// on the resulting `navigate` event. Unlike `state` it is not
+// persisted on the history entry, so it's a natural channel for
+// signalling intent from initiator to listener.
+//
+// Two framework-internal navigations need the page-level intercept to
+// stand down:
+//   - window-scoped silent nav (URL-only update, or caller dispatches
+//     its own targeted refetch via `enqueueRefetch`)
+//   - frame nav (caller dispatches `_dispatchFrameRefetch` itself)
+//
+// Both stamp a branded info payload. The listener in
+// `entry.browser.tsx` calls `event.intercept()` to declare
+// same-document and returns — no refetch.
+//
+// Any non-framework-branded `info` (user-provided via
+// `navigate(url, { info })`) passes straight through as a normal
+// page-level navigation.
 
-let _silentUntil = 0;
-
-function markSilentNextNavigate(): void {
-  _silentUntil = performance.now() + 50;
+interface FrameworkSilentInfo {
+  __framework: "silent-navigate";
+  mode: "window" | "frame";
+  name?: string;
 }
 
-export function _consumeSilentFlag(): boolean {
-  if (performance.now() <= _silentUntil) {
-    _silentUntil = 0;
-    return true;
-  }
-  return false;
+function makeSilentInfo(
+  mode: "window" | "frame",
+  name?: string,
+): FrameworkSilentInfo {
+  return { __framework: "silent-navigate", mode, name };
+}
+
+export function isFrameworkSilentInfo(
+  info: unknown,
+): info is FrameworkSilentInfo {
+  return (
+    info != null &&
+    typeof info === "object" &&
+    (info as { __framework?: unknown }).__framework === "silent-navigate"
+  );
 }
 
 // ─── Microtask-batched targeted-refetch dispatcher ────────────────
@@ -499,12 +524,15 @@ interface RefetchBatchEntry {
 }
 
 let _batchRef: RefetchBatchEntry[] = [];
-let _batchPromise: { promise: Promise<void>; resolve: () => void } | null = null;
+let _batchPromise: { promise: Promise<void>; resolve: () => void } | null =
+  null;
 
 async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
-  const handler = (window as Window & {
-    __rsc_partial_refetch?: (url: string) => Promise<void>;
-  }).__rsc_partial_refetch;
+  const handler = (
+    window as Window & {
+      __rsc_partial_refetch?: (url: string) => Promise<void>;
+    }
+  ).__rsc_partial_refetch;
   if (!handler) return;
 
   const ids = new Set<string>();
@@ -562,7 +590,7 @@ function enqueueRefetch(entry: RefetchBatchEntry): Promise<void> {
 
 /**
  * Cached frame URLs on the client, keyed by frame name. Updated on
- * each `frame(name).navigate(url)` call so `frame(name).currentUrl`
+ * each `useNavigation(name).navigate(url)` call so `.currentUrl`
  * can return a synchronous value without a server round-trip. The
  * server session is authoritative — this is a cache for UX.
  */
@@ -626,15 +654,16 @@ export function FrameNameProvider({
   children: ReactNode;
 }) {
   useEffect(() => {
-    // Client cache: so `frame().currentUrl` is non-null on cold load.
+    // Client cache: so `useNavigation(name).currentUrl` is non-null on cold load.
     if (!_frameUrls.has(name)) {
       _frameUrls.set(name, initialUrl);
     }
-    if (typeof navigation === "undefined") return;
-    const current = navigation.currentEntry?.getState() ?? null;
+    const nav = getNavigation();
+    if (!nav) return;
+    const current = nav.currentEntry?.getState() ?? null;
     const snap = readFramesSnapshot(current);
     if (!snap[name]) {
-      navigation.updateCurrentEntry({
+      nav.updateCurrentEntry({
         state: writeFramesSnapshot(current, {
           ...snap,
           [name]: { url: initialUrl },
@@ -682,9 +711,11 @@ export interface NavigateOptions {
    */
   state?: unknown;
   /**
-   * Forwarded to Navigation API `navigate` events. Only meaningful
-   * for the window-scoped handle; frame handles ignore it (their
-   * push uses `history.pushState`, which has no info channel).
+   * Forwarded to Navigation API `navigate` events as `event.info`.
+   * One-shot — not persisted on the history entry (unlike `state`).
+   * Only meaningful on the window-scoped handle: frame handles stamp
+   * their own framework-internal `info` to suppress the page-level
+   * intercept, so any user-provided value would be overwritten.
    */
   info?: unknown;
   /**
@@ -714,8 +745,8 @@ export interface NavigateOptions {
 
 /**
  * Handle returned by `useNavigation()`. When bound to a frame
- * (`name` non-null) it drives per-frame history via
- * `history.pushState` + `navigation.updateCurrentEntry`. When
+ * (`name` non-null) it writes per-frame state onto new Navigation
+ * entries via `navigation.navigate(sameUrl, { state, info })`. When
  * window-scoped (`name === null`) it proxies to `window.navigation`
  * directly — so the same API works inside and outside framed
  * subtrees.
@@ -771,7 +802,6 @@ export interface NavigationHandle {
   readonly entryState: Record<string, unknown> | null;
 }
 
-
 /**
  * Runs a frame refetch end-to-end: writes the cached URL, builds the
  * refetch URL with `__frame` + `__frameUrl`, dispatches to the RSC
@@ -785,9 +815,11 @@ export async function _dispatchFrameRefetch(
   options?: NavigateOptions,
 ): Promise<void> {
   _frameUrls.set(name, url);
-  const handler = (window as Window & {
-    __rsc_partial_refetch?: (url: string) => Promise<void>;
-  }).__rsc_partial_refetch;
+  const handler = (
+    window as Window & {
+      __rsc_partial_refetch?: (url: string) => Promise<void>;
+    }
+  ).__rsc_partial_refetch;
   if (!handler) return;
   const refetchUrl = new URL(window.location.href);
   refetchUrl.searchParams.set("__frame", name);
@@ -824,15 +856,21 @@ function readFrameEntryState(
  * different URL for `name` than the current entry does. The user
  * can traverse there to restore that URL.
  */
-function computeCanTraverse(name: string, direction: "back" | "forward"): boolean {
-  if (typeof navigation === "undefined") return false;
-  const entries = navigation.entries();
-  const currentIdx = navigation.currentEntry?.index ?? -1;
+function computeCanTraverse(
+  name: string,
+  direction: "back" | "forward",
+): boolean {
+  const nav = getNavigation();
+  if (!nav) return false;
+  const entries = nav.entries();
+  const currentIdx = nav.currentEntry?.index ?? -1;
   if (currentIdx < 0) return false;
-  const currentUrl = readFramesSnapshot(entries[currentIdx].getState())[name]?.url;
-  const walk = direction === "back"
-    ? (i: number) => i >= 0 && i < currentIdx
-    : (i: number) => i > currentIdx && i < entries.length;
+  const currentUrl = readFramesSnapshot(entries[currentIdx].getState())[name]
+    ?.url;
+  const walk =
+    direction === "back"
+      ? (i: number) => i >= 0 && i < currentIdx
+      : (i: number) => i > currentIdx && i < entries.length;
   const step = direction === "back" ? -1 : 1;
   const start = currentIdx + step;
   for (let i = start; walk(i); i += step) {
@@ -846,15 +884,18 @@ function findFrameEntry(
   name: string,
   direction: "back" | "forward",
 ): NavigationHistoryEntry | null {
-  if (typeof navigation === "undefined") return null;
-  const entries = navigation.entries();
-  const currentIdx = navigation.currentEntry?.index ?? -1;
+  const nav = getNavigation();
+  if (!nav) return null;
+  const entries = nav.entries();
+  const currentIdx = nav.currentEntry?.index ?? -1;
   if (currentIdx < 0) return null;
-  const currentUrl = readFramesSnapshot(entries[currentIdx].getState())[name]?.url;
+  const currentUrl = readFramesSnapshot(entries[currentIdx].getState())[name]
+    ?.url;
   const step = direction === "back" ? -1 : 1;
-  const inBounds = direction === "back"
-    ? (i: number) => i >= 0
-    : (i: number) => i < entries.length;
+  const inBounds =
+    direction === "back"
+      ? (i: number) => i >= 0
+      : (i: number) => i < entries.length;
   for (let i = currentIdx + step; inBounds(i); i += step) {
     const url = readFramesSnapshot(entries[i].getState())[name]?.url;
     if (url && url !== currentUrl) return entries[i];
@@ -867,41 +908,40 @@ async function frameNavigateImpl(
   url: string,
   options?: NavigateOptions,
 ): Promise<void> {
-  if (typeof history === "undefined") {
+  const nav = getNavigation();
+  if (!nav) {
     await _dispatchFrameRefetch(name, url, options);
     return;
   }
-  // Silent flag suppresses the page-level intercept when
-  // `history.pushState` fires its navigate event — we're doing the
-  // frame refetch ourselves, a page refetch would be redundant (and
-  // would clobber the in-flight commit).
-  markSilentNextNavigate();
   // Carry forward all other frames' URLs from the current entry's
-  // snapshot, then overwrite this frame's URL.
-  const priorHistoryState =
-    (history.state as Record<string, unknown> | null) ?? {};
-  const priorSnap = readFramesSnapshot(
-    typeof navigation !== "undefined"
-      ? navigation.currentEntry?.getState() ?? priorHistoryState
-      : priorHistoryState,
-  );
+  // snapshot, then overwrite this frame's URL. User `state` merges
+  // next to the snapshot, not inside it.
+  const priorState =
+    (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
+  const priorSnap = readFramesSnapshot(priorState);
   const nextSnap: FramesSnapshot = { ...priorSnap, [name]: { url } };
-  // User `state` merges next to the snapshot, not inside it.
   const userState = (options?.state as Record<string, unknown> | null) ?? null;
-  const historyMode = options?.history ?? "push";
-  const shouldReplace = historyMode === "replace";
   const nextState = writeFramesSnapshot(
-    { ...priorHistoryState, ...(userState ?? {}) },
+    { ...priorState, ...(userState ?? {}) },
     nextSnap,
   );
-  if (shouldReplace) {
-    history.replaceState(nextState, "", window.location.href);
-  } else {
-    history.pushState(nextState, "", window.location.href);
-  }
-  if (typeof navigation !== "undefined") {
-    navigation.updateCurrentEntry({ state: nextState });
-  }
+  // Seed the client-side frame-URL cache BEFORE we call
+  // `nav.navigate` — that call fires the `navigate` event
+  // synchronously, which bumps reactive consumers. If we waited until
+  // after `committed`, the re-render would read a stale URL from
+  // `_frameUrls`.
+  _frameUrls.set(name, url);
+  // Push/replace a new entry at the same URL carrying the updated
+  // frame snapshot. The page-level listener sees the branded
+  // `silent-navigate` info and declines to intercept with a handler —
+  // we run the frame refetch ourselves right after commit so the
+  // session update and RSC render are coalesced into one request.
+  const result = nav.navigate(window.location.href, {
+    history: options?.history ?? "push",
+    state: nextState,
+    info: makeSilentInfo("frame", name),
+  });
+  await result.committed.catch(() => {});
   await _dispatchFrameRefetch(name, url, options);
 }
 
@@ -909,10 +949,11 @@ async function frameTraverseImpl(
   name: string,
   direction: "back" | "forward",
 ): Promise<void> {
-  if (typeof navigation === "undefined") return;
+  const nav = getNavigation();
+  if (!nav) return;
   const target = findFrameEntry(name, direction);
   if (!target) return;
-  const result = navigation.traverseTo(target.key);
+  const result = nav.traverseTo(target.key);
   await result.finished.catch(() => {});
 }
 
@@ -929,11 +970,9 @@ function buildFrameHandle(name: string): NavigationHandle {
       return computeCanTraverse(name, "forward");
     },
     get entryState(): Record<string, unknown> | null {
-      if (typeof navigation === "undefined") return null;
-      return readFrameEntryState(
-        navigation.currentEntry?.getState() ?? null,
-        name,
-      );
+      const nav = getNavigation();
+      if (!nav) return null;
+      return readFrameEntryState(nav.currentEntry?.getState() ?? null, name);
     },
     navigate(url: string, options?: NavigateOptions): Promise<void> {
       return frameNavigateImpl(name, url, options);
@@ -950,10 +989,10 @@ function buildFrameHandle(name: string): NavigationHandle {
       await _dispatchFrameRefetch(name, url, options);
     },
     updateCurrentEntry(state: Record<string, unknown>): void {
-      if (typeof navigation === "undefined") return;
+      const nav = getNavigation();
+      if (!nav) return;
       const current =
-        (navigation.currentEntry?.getState() as Record<string, unknown> | null) ??
-        {};
+        (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
       const bucket =
         (current[FRAME_STATE_KEY] as Record<string, unknown> | null) ?? {};
       const merged = {
@@ -963,7 +1002,7 @@ function buildFrameHandle(name: string): NavigationHandle {
           [name]: { ...(bucket[name] as object | undefined), ...state },
         },
       };
-      navigation.updateCurrentEntry({ state: merged });
+      nav.updateCurrentEntry({ state: merged });
     },
   };
 }
@@ -991,39 +1030,37 @@ function buildWindowNavigationHandle(): NavigationHandle {
   return {
     name: null,
     get currentUrl(): string | null {
-      if (typeof window === "undefined") return null;
+      if (!("location" in globalThis)) return null;
       return window.location.pathname + window.location.search;
     },
     get canGoBack(): boolean {
-      return typeof navigation !== "undefined" ? navigation.canGoBack : false;
+      return getNavigation()?.canGoBack ?? false;
     },
     get canGoForward(): boolean {
-      return typeof navigation !== "undefined"
-        ? navigation.canGoForward
-        : false;
+      return getNavigation()?.canGoForward ?? false;
     },
     get entryState(): Record<string, unknown> | null {
-      if (typeof navigation === "undefined") return null;
-      const s = navigation.currentEntry?.getState();
+      const nav = getNavigation();
+      if (!nav) return null;
+      const s = nav.currentEntry?.getState();
       return (s as Record<string, unknown> | null) ?? null;
     },
     async navigate(url: string, options?: NavigateOptions): Promise<void> {
+      const nav = getNavigation();
+      if (!nav) return;
       const filtered = hasRefetchFilter(options);
       const silent = options?.silent === true;
       if (filtered || silent) {
-        // Update the URL without letting the page-level intercept
-        // fire a full refetch — we'll do the targeted one ourselves
-        // (or nothing at all, if silent).
-        if (typeof history !== "undefined") {
-          markSilentNextNavigate();
-          const historyMode = options?.history ?? "push";
-          const state = options?.state ?? null;
-          if (historyMode === "replace") {
-            history.replaceState(state, "", url);
-          } else {
-            history.pushState(state, "", url);
-          }
-        }
+        // URL-only update — listener sees the branded info and
+        // declines to intercept with a handler, so the page doesn't
+        // refetch. If we have id/tag filters, dispatch the targeted
+        // refetch ourselves after commit.
+        const result = nav.navigate(url, {
+          history: options?.history ?? "push",
+          state: options?.state ?? null,
+          info: makeSilentInfo("window"),
+        });
+        await result.committed.catch(() => {});
         if (silent) return;
         await enqueueRefetch({
           ids: options?.ids ?? [],
@@ -1032,11 +1069,7 @@ function buildWindowNavigationHandle(): NavigationHandle {
         });
         return;
       }
-      if (typeof navigation === "undefined") {
-        if (typeof window !== "undefined") window.location.assign(url);
-        return;
-      }
-      const result = navigation.navigate(url, {
+      const result = nav.navigate(url, {
         history: options?.history,
         state: options?.state,
         info: options?.info,
@@ -1044,12 +1077,14 @@ function buildWindowNavigationHandle(): NavigationHandle {
       await result.finished.catch(() => {});
     },
     async back(): Promise<void> {
-      if (typeof navigation === "undefined" || !navigation.canGoBack) return;
-      await navigation.back().finished.catch(() => {});
+      const nav = getNavigation();
+      if (!nav || !nav.canGoBack) return;
+      await nav.back().finished.catch(() => {});
     },
     async forward(): Promise<void> {
-      if (typeof navigation === "undefined" || !navigation.canGoForward) return;
-      await navigation.forward().finished.catch(() => {});
+      const nav = getNavigation();
+      if (!nav || !nav.canGoForward) return;
+      await nav.forward().finished.catch(() => {});
     },
     async reload(options?: NavigateOptions): Promise<void> {
       if (hasRefetchFilter(options)) {
@@ -1060,30 +1095,56 @@ function buildWindowNavigationHandle(): NavigationHandle {
         });
         return;
       }
-      if (typeof navigation === "undefined") return;
-      const result = navigation.reload({
+      const nav = getNavigation();
+      if (!nav) return;
+      const result = nav.reload({
         state: options?.state,
         info: options?.info,
       });
       await result.finished.catch(() => {});
     },
     updateCurrentEntry(state: Record<string, unknown>): void {
-      if (typeof navigation === "undefined") return;
+      const nav = getNavigation();
+      if (!nav) return;
       const prior =
-        (navigation.currentEntry?.getState() as Record<string, unknown> | null) ??
-        {};
-      navigation.updateCurrentEntry({ state: { ...prior, ...state } });
+        (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
+      nav.updateCurrentEntry({ state: { ...prior, ...state } });
     },
   };
 }
 
 /**
- * Plain-function handle for a frame (`<Partial frame="name">`).
- * Works anywhere — event handlers, effects, module scope. For hook-
- * shaped reactive access prefer {@link useNavigation}.
+ * Framework-internal plain-function handle for a frame.
+ *
+ * @internal Not part of the public API. App code should always use
+ * {@link useNavigation} — it's reactive, participates in React's
+ * render lifecycle, and subscribes to navigation events. `_frame()`
+ * exists only for framework code that runs outside a render (class-
+ * component methods, module scope, callbacks invoked from
+ * `useActivate` subscriptions — where the hook can't reach).
  */
-export function frame(name: string): NavigationHandle {
+export function _frame(name: string): NavigationHandle {
   return buildFrameHandle(name);
+}
+
+/**
+ * Framework-internal plain-function handle for the window.
+ *
+ * @internal Not part of the public API. App code should always use
+ * {@link useNavigation} — it's reactive, participates in React's
+ * render lifecycle, and subscribes to navigation events. `_windowNav()`
+ * exists only for framework code that runs outside a render (class-
+ * component methods, module scope, callbacks invoked from
+ * `useActivate` subscriptions — where the hook can't reach). A
+ * subscribe callback needs the handle threaded in as a parameter
+ * from the component's render, not fetched here.
+ *
+ * Always pick this over reaching into `window.navigation` directly:
+ * it respects the framework's silent-info convention so internal URL
+ * syncs don't trigger a full page refetch.
+ */
+export function _windowNav(): NavigationHandle {
+  return buildWindowNavigationHandle();
 }
 
 /**
@@ -1104,23 +1165,40 @@ export function frame(name: string): NavigationHandle {
 export function useNavigation(name?: string): NavigationHandle {
   const ambient = useContext(FrameNameContext);
   const resolved = name ?? ambient;
-  // Bump on any navigation so computed getters re-read.
+  // Bump on any navigation so computed getters (`currentUrl`,
+  // `canGoBack`, `entryState`) re-read after a commit. Runs for all
+  // navigation types — framework-silent window navs and frame navs
+  // alike — because both surface new client-side state that reactive
+  // consumers (e.g. a header button reading `frameNav.currentUrl`)
+  // need to pick up.
   const [, tick] = useState(0);
   useEffect(() => {
-    if (typeof navigation === "undefined") return;
+    const nav = getNavigation();
+    if (!nav) return;
     const bump = () => tick((n) => n + 1);
-    navigation.addEventListener("currententrychange", bump);
-    navigation.addEventListener("navigate", bump);
+    nav.addEventListener("currententrychange", bump);
+    nav.addEventListener("navigate", bump);
     return () => {
-      navigation.removeEventListener("currententrychange", bump);
-      navigation.removeEventListener("navigate", bump);
+      nav.removeEventListener("currententrychange", bump);
+      nav.removeEventListener("navigate", bump);
     };
   }, []);
-  return resolved
-    ? buildFrameHandle(resolved)
-    : buildWindowNavigationHandle();
+  // Memoize the handle so a consumer effect that depends on it
+  // doesn't re-run on every render. The handle's getters read live
+  // state, so memoizing doesn't stale the values — and keeping the
+  // reference stable means effects whose dep array includes the
+  // handle only re-run when the bound name changes, not on every
+  // navigation commit. (Pre-memoization, a targeted-refetch activator
+  // could fire twice: the first nav's commit would bump React, the
+  // handle would become a new object, the effect would re-run and
+  // re-register its trigger before the server response had propagated
+  // fresh props.)
+  return useMemo(
+    () =>
+      resolved ? buildFrameHandle(resolved) : buildWindowNavigationHandle(),
+    [resolved],
+  );
 }
-
 
 /**
  * Activator building block. Subscribe a client-side trigger to a
@@ -1151,7 +1229,7 @@ export function useNavigation(name?: string): NavigationHandle {
  * Note: activators no longer pass prop overrides to the Partial.
  * If the activated content needs dynamic data, the activator should
  * write that data to a URL (page URL via `useNavigation().navigate`
- * or a frame URL via `frame("name").navigate`) so the server reads
+ * or a frame URL via `useNavigation("name").navigate`) so the server reads
  * it via tracked accessors on re-render.
  */
 export function useActivate(
@@ -1269,7 +1347,9 @@ function PartialDebugPanel({
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const freshCount = entries.filter((e) => e.status === "fresh").length;
-  const dataCachedCount = entries.filter((e) => e.status === "data-cached").length;
+  const dataCachedCount = entries.filter(
+    (e) => e.status === "data-cached",
+  ).length;
   const cachedCount = entries.filter((e) => e.status === "cached").length;
   const queryCount = entries.filter((e) => e.query).length;
 
@@ -1349,7 +1429,13 @@ function PartialDebugPanel({
               <span style={{ color: "#666", fontSize: "0.75rem" }}>
                 {entry.status}
               </span>
-              <span style={{ color: "#444", fontSize: "0.7rem", marginLeft: "auto" }}>
+              <span
+                style={{
+                  color: "#444",
+                  fontSize: "0.7rem",
+                  marginLeft: "auto",
+                }}
+              >
                 fp:{entry.fingerprint}
               </span>
               {entry.query && (

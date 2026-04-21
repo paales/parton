@@ -20,14 +20,11 @@ session, their state is scoped via a `React.cache`-backed cell.
 Navigating the frame from the client:
 
 ```ts
-// Explicit — works anywhere (event handlers, effects, modules).
-import { frame } from "../lib";
-frame("cart").navigate("/cart/checkout");
-
 // Hook — default-binds to the ambient frame inside a
 // `<Partial frame="cart">` subtree, or to `window.navigation` when
-// called outside one. Reactive: canGoBack, canGoForward,
-// currentUrl, entryState update on navigation.
+// called outside one. Pass a name to bind to a specific frame from
+// outside. Reactive: canGoBack, canGoForward, currentUrl,
+// entryState update on navigation.
 import { useNavigation } from "../lib";
 function CartControls() {
   const cart = useNavigation();                      // ambient = "cart"
@@ -47,7 +44,7 @@ scoped handles have the same shape:
 | `name` | Frame name | `null` |
 | `currentUrl` | Frame's URL (client cache) | `location.pathname + search` |
 | `canGoBack` / `canGoForward` | An earlier/later entry's `__frames[name].url` differs | `navigation.canGoBack` / `canGoForward` |
-| `navigate(url, opts?)` | pushState + session update + frame refetch | `navigation.navigate` |
+| `navigate(url, opts?)` | `navigation.navigate(sameUrl, { state, info })` + session update + frame refetch | `navigation.navigate` |
 | `back()` / `forward()` | `navigation.traverseTo()` to a matching entry | `navigation.back()` / `forward()` |
 | `reload(opts?)` | Re-dispatch the current frame URL | `navigation.reload()` |
 | `updateCurrentEntry(state)` | Merge under `__frameState[name]` | `navigation.updateCurrentEntry({state})` |
@@ -92,7 +89,7 @@ custom element, and no new transport.
 | Session store | `src/framework/session.ts` | Cookie-ID → `{frames: {name: {url}}}`. In-memory today. |
 | `<Partial frame="name" frameUrl="/…">` | `src/lib/partial-component.tsx` | `FrameWrapper` mutates the scope cell + wraps in `<FrameNameProvider>`. Sync, no Flight round-trip — streaming preserved. |
 | Server-side `__frame`/`__frameUrl` parsing | `src/lib/partial.tsx` (in `PartialRoot`) | Refetch URL params update the session before any framed Partial renders. |
-| Client-side `useNavigation()` / `frame(name)` | `src/lib/partial-client.tsx` | `navigate(url, opts?)`, `currentUrl`, etc. Pushes a history entry carrying a full `__frames` snapshot. |
+| Client-side `useNavigation(name?)` | `src/lib/partial-client.tsx` | `navigate(url, opts?)`, `currentUrl`, etc. Writes a new entry via `navigation.navigate(sameUrl, { state, info })` carrying the full `__frames` snapshot. Framework-internal escape hatch `_frame(name)` exists for non-render call sites. |
 | Browser navigation listener | `src/framework/entry.browser.tsx` | On traversal: diffs destination vs current snapshots, dispatches refetches for changed frames, and carries them on the refetch URL if the page URL also changed. |
 
 ## Streaming

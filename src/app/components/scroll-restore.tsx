@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect } from "react";
+import {
+  getNavigation,
+  type NavigateEvent,
+} from "../../framework/navigation-api.ts";
 
 /**
  * Save and restore window.scrollY across navigations using the
@@ -35,11 +39,13 @@ import { useEffect } from "react";
  */
 export function ScrollRestore() {
   useEffect(() => {
+    const nav = getNavigation();
+    if (!nav) return;
     if ("scrollRestoration" in history) {
       history.scrollRestoration = "manual";
     }
 
-    const state = navigation.currentEntry?.getState() as
+    const state = nav.currentEntry?.getState() as
       | { scrollY?: number }
       | null;
     if (state && typeof state.scrollY === "number") {
@@ -70,10 +76,10 @@ export function ScrollRestore() {
     let lastScrollY = window.scrollY;
 
     const save = () => {
-      const entry = navigation.currentEntry;
+      const entry = nav.currentEntry;
       if (!entry) return;
       const prev = (entry.getState() as Record<string, unknown> | null) ?? {};
-      navigation.updateCurrentEntry({
+      nav.updateCurrentEntry({
         state: { ...prev, scrollY: lastScrollY },
       });
     };
@@ -106,13 +112,13 @@ export function ScrollRestore() {
     const onVis = () => {
       if (document.visibilityState === "hidden") save();
     };
-    navigation.addEventListener("navigate", onNavigate);
-    navigation.addEventListener("navigatesuccess", onSuccess);
+    nav.addEventListener("navigate", onNavigate);
+    nav.addEventListener("navigatesuccess", onSuccess);
     window.addEventListener("pagehide", save);
     document.addEventListener("visibilitychange", onVis);
     return () => {
-      navigation.removeEventListener("navigate", onNavigate);
-      navigation.removeEventListener("navigatesuccess", onSuccess);
+      nav.removeEventListener("navigate", onNavigate);
+      nav.removeEventListener("navigatesuccess", onSuccess);
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("pagehide", save);
       document.removeEventListener("visibilitychange", onVis);

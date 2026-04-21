@@ -1,9 +1,10 @@
 # Unified navigation surface — design note
 
 **Added:** 2026-04-21
+**Updated:** 2026-04-21 (Navigation API cutover — see "Navigation API migration" below).
 **Status:** implemented.
-**Files:** `src/lib/partial-client.tsx`, `src/lib/partial.tsx`, `src/lib/partial-component.tsx`, `src/framework/entry.browser.tsx`.
-**Supersedes:** `usePartial`, `usePartialParams`, `__inputs`, `silent-replace.ts` (all removed). See `../archive/USE_PARTIAL_AND_INPUTS.md` for the old model.
+**Files:** `src/lib/partial-client.tsx`, `src/lib/partial.tsx`, `src/lib/partial-component.tsx`, `src/framework/entry.browser.tsx`, `src/framework/navigation-api.ts`.
+**Supersedes:** `usePartial`, `usePartialParams`, `__inputs`, `silent-replace.ts`, classic `history.pushState` / `replaceState` in app-path code (all removed). See `../archive/USE_PARTIAL_AND_INPUTS.md` for the old model.
 
 ---
 
@@ -36,7 +37,7 @@ The old model had three semi-overlapping client APIs:
 Reasons to collapse them:
 
 - **`__inputs` is a hidden state channel.** Prop overrides that don't live in any URL break bookmarkability, can't be server-rendered on a cold load, and bake into the registry snapshot (fingerprint-after-applyInputs kept the Cache path honest but added its own complexity).
-- **Three ways to update the URL.** `history.pushState` (direct), `silentReplace` (suppress intercept), `useNavigation().navigate` (via Navigation API) — each with subtly different rules.
+- **Three ways to update the URL.** `history.pushState` (direct), `silentReplace` (suppress intercept), `useNavigation().navigate` (via Navigation API) — each with subtly different rules. The Navigation API cutover (see bottom) finished this: there is now exactly one URL writer.
 - **The selector grammar (`.tag.tag2`)** was a whole client-side index (`_partialTags`) and parser that only served refetch. Tag→id resolution at the server is enough; the client doesn't need the index.
 - **The frame work (2026-04-20) already established the shape.** `useNavigation().navigate` works inside and outside frames. Extending it to carry `ids` / `tags` / `silent` covers the remaining cases.
 
@@ -61,8 +62,8 @@ Decision matrix on `navigate(url, opts)` for the window handle:
 
 | `silent` | `ids` / `tags` | Behavior |
 |---|---|---|
-| `true` | — | `history.pushState` / `replaceState`, no refetch. Bookmarkability-only URL sync. |
-| `false` (default) | set | `history.pushState` / `replaceState` + targeted refetch (microtask-batched). Page-level intercept is bypassed. |
+| `true` | — | `navigation.navigate(url, { info: silent-marker })`, no refetch. Bookmarkability-only URL sync. |
+| `false` (default) | set | `navigation.navigate(url, { info: silent-marker })` + targeted refetch (microtask-batched). Page-level intercept is bypassed. |
 | `false` (default) | unset | Default: `window.navigation.navigate(url)` → intercept fires → full-page refetch. |
 
 For `reload(opts)`:
@@ -72,7 +73,7 @@ For `reload(opts)`:
 | set | Targeted refetch of current URL. No history mutation. |
 | unset | `window.navigation.reload()` → full-page refetch. |
 
-Frame handles (`useNavigation("name")` or `frame(name)`) ignore `ids` / `tags` / `silent` on `navigate`: frame navigation refetches the frame Partial, which re-runs its subtree with the new frame URL. A frame `reload()` just redispatches the current frame URL.
+Frame handles (`useNavigation("name")`) ignore `ids` / `tags` / `silent` on `navigate`: frame navigation refetches the frame Partial, which re-runs its subtree with the new frame URL. A frame `reload()` just redispatches the current frame URL.
 
 ### Dispatch
 
@@ -86,11 +87,11 @@ Built by the module-level dispatcher in `partial-client.tsx`:
 
 - **Microtask-batched.** Two `reload({ids: ["a"]})` + `reload({tags: ["b"]})` calls in the same tick coalesce into one request with `?partials=a&tags=b`.
 - **`?cached=id:fp,…`** is appended with every fingerprint the client has EXCEPT the ones being targeted (the server would skip them as unchanged otherwise).
-- **Silent flag** suppresses the page-level `navigate` intercept when the dispatcher writes `history.pushState` / `replaceState` itself (so the browser doesn't fire an extra full-page refetch).
+- **Silent info marker.** When the dispatcher calls `navigation.navigate(url, ...)` for a URL-only update (silent / targeted-refetch), it stamps a branded `info` payload (`{__framework: "silent-navigate", mode: "window" | "frame"}`). The navigate listener reads `event.info`, calls `event.intercept()` with no handler (declaring same-document), and returns — no refetch. The classic History API is out of the picture.
 
 ### Frame navigation
 
-Frame `navigate()` is unchanged in shape — still does `history.pushState` with a frames snapshot on the entry state, still POSTs `?__frame=name&__frameUrl=…&partials=name`. The only change: `ids` / `tags` / `silent` are accepted but ignored (frame refetch is coarse by design).
+Frame `navigate()` also goes through `navigation.navigate` — same-URL push/replace carrying the updated frames snapshot in `state`, stamped with an `info` marker (`{mode: "frame", name}`) so the page-level listener doesn't also refetch. After commit, the frame refetch runs (`?__frame=name&__frameUrl=…&partials=name`). `ids` / `tags` / `silent` options are accepted but ignored (frame refetch is coarse by design).
 
 ### Tag-based refetch
 
@@ -114,11 +115,11 @@ nav.reload({ tags: ["price"] });
 | `usePartial("search").refetch({query: q})` | Put `q` in a URL: `nav.navigate(urlWithQ, {tags: ["search-results"]})`. Server reads `getSearchParam("q")`. |
 | `silentReplace(url)` | `nav.navigate(url, {history: "replace", silent: true})` |
 | `silentReplace(url); dispatchStage1(); dispatchStage2();` | `nav.navigate(url, {history: "replace", ids: ["stage-1", "stage-2"]})` |
-| `frame("cart").navigate("/checkout")` | Unchanged. |
+| `frame("cart").navigate("/checkout")` | `useNavigation("cart").navigate("/checkout")` — the plain-function `frame()` is now framework-internal (`_frame()`, not exported from `src/lib/index.ts`). |
 
 ## Activators
 
-`useActivate(partialId, subscribe)` still exists; `subscribe` receives a zero-arg `fire()` that dispatches `reload({ids: [partialId]})`. If an activator needs to pass dynamic state to the server, it writes that state to a URL before firing (see `src/app/components/when-stored.tsx` for the canonical pattern: write `?<as>=<value>` to the page URL via `history.replaceState`, then fire).
+`useActivate(partialId, subscribe)` still exists; `subscribe` receives a zero-arg `fire()` that dispatches `reload({ids: [partialId]})`. If an activator needs to pass dynamic state to the server, it writes that state to a URL before firing (see `src/app/components/when-stored.tsx` for the canonical pattern: the component calls `useNavigation()` in render and closes over the handle in the subscribe callback, which writes `?<as>=<value>` via `nav.navigate(url, {history: "replace", silent: true})` and then fires).
 
 ## Trade-offs
 
@@ -142,8 +143,69 @@ nav.reload({ tags: ["price"] });
 |---|---|---|
 | `useNavigation()` hook | `src/lib/partial-client.tsx` | Returns scope-bound handle. Subscribes to `navigate` events for reactive getters. |
 | `buildWindowNavigationHandle()` | `src/lib/partial-client.tsx` | Page-scoped handle. Decides between Navigation API and direct dispatch based on `ids` / `tags` / `silent`. |
-| `buildFrameHandle()` | `src/lib/partial-client.tsx` | Frame-scoped handle. Drives `history.pushState` + session-backed frame URL. |
+| `buildFrameHandle()` | `src/lib/partial-client.tsx` | Frame-scoped handle. Writes frame state via `navigation.navigate(sameUrl, { state, info })` + session-backed frame URL. |
 | `enqueueRefetch()` + `flushRefetchBatch()` | `src/lib/partial-client.tsx` | Microtask-batched dispatcher. Reads `_fingerprints` for `?cached=`. |
-| Silent flag | `src/lib/partial-client.tsx` | In-module, time-windowed. Suppresses the navigate-event intercept in `entry.browser.tsx`. |
+| `makeSilentInfo()` / `isFrameworkSilentInfo()` | `src/lib/partial-client.tsx` | Branded `info` payload stamped on internal `navigation.navigate` calls. The listener in `entry.browser.tsx` reads `event.info` and short-circuits with `event.intercept()` (no handler) so no refetch runs. |
 | Server-side tag → id resolution | `src/lib/partial.tsx:resolveTagsToIds` | Unchanged from pre-migration. |
 | Ambient frame URL folded into fp | `src/lib/partial-component.tsx` | For Partials inside a frame subtree — their structural fp alone doesn't capture URL-derived state; folding the ambient URL keeps fingerprint-skip decisions honest. |
+
+## Navigation API migration (follow-up, 2026-04-21 later)
+
+The initial unification left two URL-writing paths in the internal
+dispatcher: `useNavigation().navigate` for user-initiated nav, and
+`history.pushState` / `replaceState` for silent URL syncs (targeted
+refetches, frame state pushes, activator URL writes). The latter was
+coordinated with a 50 ms `performance.now()` window
+(`markSilentNextNavigate` / `_consumeSilentFlag`) that the navigate
+listener consumed to skip the intercept.
+
+That mechanism is gone. The dispatcher now calls `navigation.navigate`
+for those paths too and stamps a branded `info` payload
+(`{__framework: "silent-navigate", mode: "window" | "frame", name?}`)
+via `makeSilentInfo`. The listener reads `event.info`, matches via
+`isFrameworkSilentInfo`, and calls `event.intercept()` with no handler
+— declaring same-document without running a refetch. No time window,
+no race, no second URL writer.
+
+### Consequences
+
+- **No classic History API in active framework code.** The remaining
+  `history.*` reference is `history.scrollRestoration = "manual"` in
+  `src/app/components/scroll-restore.tsx` (not replaced by Navigation
+  API). Test files still use `history.replaceState` to seed jsdom's
+  URL — those are test-env setup, not production.
+- **No `typeof window === "undefined"` / `typeof navigation === "undefined"` checks** in the framework.
+  The single accessor `getNavigation()` (in `src/framework/navigation-api.ts`) returns
+  `FrameworkNavigation | null` by reading `globalThis.navigation`.
+- **Types moved off ambient.** `src/framework/navigation-api.d.ts` is
+  deleted. `src/framework/navigation-api.ts` is a regular module that
+  exports only the pieces TS 5.9's `lib.dom.d.ts` doesn't ship
+  (`Navigation`, `NavigateEvent`, `NavigationDestination`,
+  `NavigationTransition`, `NavigationCurrentEntryChangeEvent`), plus a
+  framework-refined `FrameEntryState` / `FrameNavigationHistoryEntry`.
+  No global pollution.
+- **`frame()` / `windowNav()` renamed to `_frame()` / `_windowNav()`**
+  and removed from `src/lib/index.ts`. App code uses `useNavigation()`
+  for everything. The underscore-prefixed escape hatches exist for
+  code that can't call hooks (class-component methods like
+  `PartialErrorBoundary.retry`).
+- **`useNavigation()` memoizes the handle.** Pre-migration, the handle
+  was a fresh object each render; post-migration the `navigate` event
+  fires on silent navs too (it didn't pre-migration — `pushState`
+  doesn't fire `navigate`), so a consumer effect with `[nav]` in its
+  dep list would re-run on every commit. `useMemo(..., [resolved])`
+  stabilizes the reference so only the bound name changing triggers a
+  re-subscribe. Live values still come through the getters.
+- **`_frameUrls.set(name, url)` moved before `navigation.navigate`**
+  in the frame path. The navigate event fires synchronously from
+  `nav.navigate(...)` and bumps reactive consumers via the
+  `useNavigation`-internal tick; waiting until after `await committed`
+  to update the cache would render the bump against stale data (visible
+  as a stuck "Close" button on frame-scoped dialogs after Escape).
+- **vitest needs a Navigation API shim.** jsdom doesn't implement it.
+  `vitest.setup.ts` installs a minimal shim that delegates
+  `navigate` / `back` / `forward` to `history.*`, plus sets
+  `IS_REACT_ACT_ENVIRONMENT = true`. The `@vitejs/plugin-rsc` plugin
+  is skipped in the test config (`isTest ? [react()] : [rsc(), react()]`)
+  — its `"use client"` transform otherwise wraps modules in
+  client-reference proxies that break hook rendering in jsdom.
