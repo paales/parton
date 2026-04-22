@@ -21,7 +21,12 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const CHUNK_DELAY_MS = 100;
-const CHUNK_CHAR_SIZE = 100;
+const CHUNK_CHAR_SIZE = 25;
+// Total time budget per stream. At 25 char / 100 ms that's ~100 chunks
+// and ~2.5 KB of content before the producer stops and emits done.
+// Keeps the demo feeling like a slow trickle without producing walls of
+// text for long notes files.
+const STREAM_BUDGET_MS = 10_000;
 const NOTES_DIR = resolve(process.cwd(), "notes");
 
 interface MessageLog {
@@ -29,6 +34,7 @@ interface MessageLog {
   done: boolean;
   error: Error | null;
   waiters: Set<() => void>;
+  aborted: boolean;
 }
 
 const logs = new Map<string, MessageLog>();
@@ -36,13 +42,20 @@ const logs = new Map<string, MessageLog>();
 function ensureLog(fileId: string): MessageLog {
   let log = logs.get(fileId);
   if (log) return log;
-  log = { chunks: [], done: false, error: null, waiters: new Set() };
+  log = {
+    chunks: [],
+    done: false,
+    error: null,
+    waiters: new Set(),
+    aborted: false,
+  };
   logs.set(fileId, log);
   void runProducer(fileId, log);
   return log;
 }
 
 async function runProducer(fileId: string, log: MessageLog): Promise<void> {
+  const start = Date.now();
   try {
     const text = await readFile(resolve(NOTES_DIR, `${fileId}.md`), "utf8");
     // Hard-slice into fixed-length chunks so the stream feels like
@@ -50,7 +63,10 @@ async function runProducer(fileId: string, log: MessageLog): Promise<void> {
     // splitter would look nicer but variable chunk sizes make compaction
     // timing unpredictable; fixed-size keeps the seam easy to reason about.
     for (let i = 0; i < text.length; i += CHUNK_CHAR_SIZE) {
+      if (log.aborted) return;
+      if (Date.now() - start >= STREAM_BUDGET_MS) break;
       await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
+      if (log.aborted) return;
       log.chunks.push(text.slice(i, i + CHUNK_CHAR_SIZE));
       wakeAll(log);
     }
@@ -109,5 +125,12 @@ export function readLogPrefix(fileId: string, cursor: number): string[] {
 
 /** Test-only: wipe every log (used by dev cache-clear + test isolation). */
 export function _clearLogs(): void {
+  // Mark live producers aborted so they exit their loop instead of
+  // continuing to burn CPU / setTimeout scheduling in the background
+  // after a test has moved on.
+  for (const log of logs.values()) {
+    log.aborted = true;
+    wakeAll(log);
+  }
   logs.clear();
 }

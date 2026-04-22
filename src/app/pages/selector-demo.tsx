@@ -1,5 +1,6 @@
 import { Partial, PartialRoot } from "../../lib/partial.tsx";
 import { AppNav } from "../components/app-nav.tsx";
+import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx";
 
 /**
@@ -128,6 +129,7 @@ export function SelectorDemoPage() {
               </div>
             </section>
           </main>
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>

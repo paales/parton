@@ -38,7 +38,7 @@ export function DebugToolbar() {
       style={{
         position: "fixed",
         bottom: "1rem",
-        right: "1rem",
+        left: "1rem",
         zIndex: 9999,
         display: "flex",
         alignItems: "center",

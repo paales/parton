@@ -16,6 +16,7 @@ import { _cacheStats } from "../../lib/cache.tsx";
 import { CacheControls } from "../components/cache-controls.tsx";
 import { ClickCounter } from "../components/click-counter.tsx";
 import { AppNav } from "../components/app-nav.tsx";
+import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { getSearchParam } from "../../framework/context.ts";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -123,6 +124,7 @@ export async function CacheDemoPage() {
             <br />
             Try: change <code>?flavor=</code>, refetch the slow partial, reload.
           </div>
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>

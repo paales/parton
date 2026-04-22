@@ -1,5 +1,6 @@
 import { PartialRoot, Partial } from "../../lib/partial.tsx";
 import { AppNav } from "../components/app-nav.tsx";
+import { ChatOverlay } from "../chat/chat-overlay.tsx";
 
 /**
  * `/sentinels-demo` — click-through page for the `notFound()` +
@@ -127,6 +128,7 @@ export function SentinelsDemoPage() {
               </a>
             </section>
           </main>
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>

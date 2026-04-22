@@ -1,8 +1,9 @@
 # Streaming chat — bounded `<Piece>` + compaction — design note
 
 **Added:** 2026-04-22
-**Status:** implemented as a demo at `/chat-notes`.
-**Files:** `src/app/chat/log.ts`, `src/app/chat/piece.tsx`, `src/app/chat/resume-tail.tsx`, `src/app/chat/chat-controls.tsx`, `src/app/pages/chat-notes.tsx`, `e2e/chat-notes.spec.ts`.
+**Updated:** 2026-04-22 (overlay extracted, wrapped in its own `"chat-overlay"` frame so the state doesn't pollute host-page URLs; mounted globally so the demo streams on every page).
+**Status:** implemented as a global overlay; documentation page at `/chat-notes`.
+**Files:** `src/app/chat/log.ts`, `src/app/chat/piece.tsx`, `src/app/chat/resume-tail.tsx`, `src/app/chat/chat-controls.tsx`, `src/app/chat/chat-overlay.tsx`, `src/app/pages/chat-notes.tsx`, `notes/AA_CHAT_STREAMING.md` (default intro message), `e2e/chat-notes.spec.ts`.
 **Origin:** `user-ideas.md:35` — "continuously streaming content, AI chat trickle, recursive `<Piece>`".
 
 ---
@@ -38,7 +39,9 @@ interface MessageLog {
 }
 ```
 
-`ensureLog(fileId)` lazily spawns a producer (`runProducer`) that reads `notes/<fileId>.md`, slices into 100-char chunks with a 100 ms delay per chunk, and pushes into `log.chunks`. Every push wakes any readers parked in `waiters`.
+`ensureLog(fileId)` lazily spawns a producer (`runProducer`) that reads `notes/<fileId>.md`, slices into 25-character chunks with a 100 ms delay per chunk, and pushes into `log.chunks`. Every push wakes any readers parked in `waiters`. A 10-second wall-clock budget bounds each stream — even a long file stops after ~100 chunks so the demo has a visible "done" state instead of running for minutes.
+
+Producers honour an abort flag set by `_clearLogs()` — test cleanup kills in-flight setTimeout loops instead of letting orphaned producers keep pushing into a map the test harness has already wiped.
 
 `readLog(fileId, cursor)` is the reader entrypoint. It returns `{ text, done }` for the chunk at `cursor`, or awaits a waiter promise if the producer hasn't caught up. When the producer drains the file, subsequent reads return `{ text: "", done: true }`.
 
@@ -151,15 +154,27 @@ A log that outlives requests makes the source stream cheap to rejoin, but also m
 
 In production you'd replace the in-memory log with Redis + a TTL and drop the reset button.
 
-## Demo — `/chat-notes`
+## Overlay — mounted on every page
 
-`?msgs=README,IDEAS,FRAMES` — comma-separated list of notes files to stream, in order. Each file is one message.
+The streaming UI lives in `<ChatOverlay>` and is rendered inside every host page's `<body>`. The overlay itself is a `<Partial selector="#chat-overlay" frame="chat-overlay">` — a frame Partial — so all of its state (`?chat=open|closed`, `?msgs=`, `?cursor-<fileId>=`) lives in the overlay's private frame URL, not on the window URL of the host page. That's load-bearing: without the frame, every `<ResumeTail>` compaction would write a cursor param onto the window URL, polluting `/pokemon`, `/magento`, and every other page the overlay appears on, and would change URL assertions in unrelated e2e tests.
 
-`?cursor-<fileId>=N` — the compaction cursor for that message. Zero on initial load; bumped by `MAX_DEPTH` each time the Piece chain hits its bound.
+The overlay is collapsed by default. In the collapsed state the only thing rendered is a small "💬 notes stream" pill at bottom-right. Clicking the pill fires `nav.navigate({ selector: "#chat-overlay" })` with `?chat=open`, which refetches just the frame — the full aside slides in and the default `AA_CHAT_STREAMING.md` note starts streaming. Nothing on the host page re-renders.
 
-The page is a `<PartialRoot>` with a fixed-position aside. The list is `<Partial selector="#chat-list">`; each message is `<Partial selector="#chat-msg-<fileId>">`. `AutoScrollToBottom` runs a `MutationObserver` on the list and sticks `scrollTop` to `scrollHeight` while the user hasn't scrolled away (80 px threshold).
+`/chat-notes` is the one page that starts with the overlay open (`<ChatOverlay defaultOpen />`) and projects its own window URL's `?msgs=` / `?chat=` onto the frame URL at first render — so `page.goto("/chat-notes?msgs=IDEAS")` still drives the overlay, and bookmarkable links to specific stream configurations still work for the demo page. On other host pages there's no projection: the overlay is collapsed until the user clicks the pill, and state is driven by frame-scoped navigation only.
 
-Seven e2e specs in `e2e/chat-notes.spec.ts` pin the invariants:
+Inside the open aside, the list is `<Partial selector="#chat-list">`; each message is `<Partial selector="#chat-msg-<fileId>">`. `AutoScrollToBottom` runs a `MutationObserver` on the list and sticks `scrollTop` to `scrollHeight` while the user hasn't scrolled away (80 px threshold).
+
+## URL state
+
+`?chat=open|closed` — overlay visibility toggle on the frame URL.
+
+`?msgs=AA_CHAT_STREAMING,README,IDEAS` — comma-separated list of notes files currently streaming, in render order. When unset, the overlay seeds with `AA_CHAT_STREAMING` (the intro message at `notes/AA_CHAT_STREAMING.md` — prefixed `AA_` so it sorts first in the available-files pool).
+
+`?cursor-<fileId>=N` — per-message compaction cursor. Zero on initial load; bumped by `MAX_DEPTH` each time the Piece chain hits its bound.
+
+All of these live on the `chat-overlay` frame URL, not the window URL.
+
+Seven e2e specs in `e2e/chat-notes.spec.ts` pin the invariants. Because the overlay is framed, cursor/msgs assertions read `data-cursor` and DOM presence rather than the window URL — the frame URL isn't projected onto the window URL by design (see `FRAMES.md` §No URL projection):
 
 - Initial render stops at `MAX_DEPTH` with a `<ResumeTail>` carrying `cursor = k * MAX_DEPTH`.
 - After compaction, the `data-cursor` on the message and the URL param both advance in `MAX_DEPTH` strides.
@@ -171,6 +186,8 @@ Seven e2e specs in `e2e/chat-notes.spec.ts` pin the invariants:
 
 ## Known sharp edges
 
+- **Pre-hydration click on the pill.** The `<a href="?chat=open">` fallback works on `/chat-notes` (window URL drives the projection to the frame URL on re-render) but not on other host pages — there the pre-hydration click lands on the window URL, which the framed overlay doesn't read. Post-hydration, `nav.navigate` updates the frame URL correctly. In practice hydration is sub-100 ms and the pill is small, so this is a paper cut.
+- **`search-open-first-keystroke.spec.ts` regression.** This timing-sensitive test passes in isolation but fails after `chat-notes.spec.ts` has run. The mechanism is unclear — adding the overlay `<Partial>` to `/pokemon*` shifts something subtle in the hydration / refetch pipeline. 70/71 e2e pass; flagged for investigation.
 - **In-memory log** — process-wide, unbounded. Fine for a demo; production wants Redis + TTL + a max-size eviction.
 - **Producer can't be cancelled** — once `runProducer` kicks off, it drains the file even if every client has disconnected. For a demo that's the point (reconnect is cheap). For a real chat, wire an abort signal keyed on "no waiters and no active subscribers for N seconds."
 - **Compaction seam race** — if the producer gets ahead of the client between when the `ResumeTail` fires and when the refetch payload lands, the new depth-0 Piece chain may have more than `MAX_DEPTH` chunks immediately available. That's harmless — the chain just streams faster. But it means `MAX_DEPTH` is a minimum between compactions, not a maximum.

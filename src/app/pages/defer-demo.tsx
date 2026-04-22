@@ -7,6 +7,7 @@ import {
   StorageKeyEditor,
 } from "../components/defer-demo-controls.tsx";
 import { AppNav } from "../components/app-nav.tsx";
+import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { getSearchParam } from "../../framework/context.ts";
 
 /**
@@ -439,6 +440,7 @@ export function DeferDemoPage() {
               </Partial>
             </section>
           </main>
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, request, type Page } from "@playwright/test";
 
 /**
  * /chat-notes — bounded-recursion streaming with server-side compaction.
@@ -47,8 +47,19 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/__test/clear-caches");
 });
 
-test("empty state renders when no messages are active", async ({ page }) => {
-  await page.goto("/chat-notes");
+test.afterAll(async ({ baseURL }) => {
+  // After the whole spec finishes, kill any producer that the final
+  // test left running (the 10-second budget may not have elapsed) and
+  // wipe sessions / logs so downstream specs inherit a clean server.
+  const ctx = await request.newContext();
+  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`);
+  await ctx.dispose();
+});
+
+test("empty state renders when ?msgs= is explicitly empty", async ({ page }) => {
+  // No ?msgs= defaults to streaming AA_CHAT_STREAMING; pass an empty
+  // value to force the empty state.
+  await page.goto("/chat-notes?msgs=");
   await expect(page.locator('[data-testid="chat-box"]')).toBeVisible();
   await expect(page.locator('[data-testid="chat-empty"]')).toBeVisible();
   expect(await page.locator("[data-chunk]").count()).toBe(0);
@@ -143,11 +154,14 @@ test("compaction: cursor advances and chunk count grows monotonically", async ({
     .poll(() => readCursor(page, "IDEAS"), { timeout: 10000, intervals: [100] })
     .toBeGreaterThanOrEqual(MAX_DEPTH * 2);
 
-  // The URL reflects the compaction — cursor lives in ?cursor-IDEAS.
-  const urlCursor = Number(
-    new URL(page.url()).searchParams.get("cursor-IDEAS") ?? "0",
+  // The cursor is also reflected on the message element's data-cursor —
+  // the overlay frame's URL carries ?cursor-IDEAS, but the frame URL
+  // isn't projected onto the window URL, so reading the window URL
+  // would always show 0. The data-cursor attribute is the canonical
+  // source.
+  expect(await readCursor(page, "IDEAS")).toBeGreaterThanOrEqual(
+    MAX_DEPTH * 2,
   );
-  expect(urlCursor).toBeGreaterThanOrEqual(MAX_DEPTH * 2);
 });
 
 test("compaction preserves rendered chunks — never regresses across the seam", async ({
@@ -203,27 +217,26 @@ test("new message link appends a fileId to ?msgs= and a second stream starts", a
 
   // Link is an <a href> so it works pre-hydration — server-computed
   // `nextHref` walks the available-files pool and picks the first one
-  // that isn't already in `?msgs=`. `PARTIAL_ARCHITECTURE` is second in
-  // the pool after `README`.
+  // that isn't already in `?msgs=`. `AA_CHAT_STREAMING` is first in the
+  // pool. `chat=open` is preserved so the overlay stays expanded across
+  // the navigation on non-chat-notes host pages.
   await expect(page.locator('[data-testid="new-message-btn"]')).toHaveAttribute(
     "href",
-    "/chat-notes?msgs=README%2CPARTIAL_ARCHITECTURE",
+    "?msgs=README%2CAA_CHAT_STREAMING&chat=open",
   );
   await page.locator('[data-testid="new-message-btn"]').click();
 
-  // The button walks the available-files list and picks the first that
-  // isn't already in `?msgs=`. `PARTIAL_ARCHITECTURE` is second in the
-  // pool after `README`.
-  await expect
-    .poll(() => new URL(page.url()).searchParams.get("msgs"))
-    .toBe("README,PARTIAL_ARCHITECTURE");
-
+  // The click updates the overlay frame's URL, not the window URL —
+  // the frame keeps its state out of the window URL by design. The
+  // fact that AA_CHAT_STREAMING's message element appears (and its
+  // body starts emitting chunks) is the observable proof that the
+  // frame URL took effect.
   await expect(
-    page.locator('[data-testid="chat-msg-PARTIAL_ARCHITECTURE"]'),
+    page.locator('[data-testid="chat-msg-AA_CHAT_STREAMING"]'),
   ).toBeAttached({ timeout: 5000 });
   await expect(
     page
-      .locator('[data-testid="chat-body-PARTIAL_ARCHITECTURE"] [data-chunk]')
+      .locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]')
       .first(),
   ).toBeAttached({ timeout: 5000 });
 });

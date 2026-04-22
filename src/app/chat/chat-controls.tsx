@@ -123,9 +123,97 @@ export function AutoScrollToBottom({
  * dev-only cache-clear endpoint. Useful for manual testing; in production
  * you'd just drop the `?msgs=` param.
  */
-export function ResetChatButton() {
+/**
+ * Collapsed-state pill at bottom-right. Sets `?chat=open` and triggers a
+ * targeted refetch of `#chat-overlay` so the full overlay expands in
+ * place without re-rendering the host page.
+ */
+export function ChatOpenPill() {
   const nav = useNavigation();
 
+  const onClick = (ev: MouseEvent<HTMLAnchorElement>) => {
+    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+    ev.preventDefault();
+    void nav.navigate(
+      (url) => {
+        url.searchParams.set("chat", "open");
+        return url;
+      },
+      { history: "replace", selector: "#chat-overlay" },
+    );
+  };
+
+  // Server-rendered href so a pre-hydration click still opens the chat.
+  return (
+    <a
+      href="?chat=open"
+      data-testid="chat-open-pill"
+      onClick={onClick}
+      style={{
+        position: "fixed",
+        right: "1rem",
+        bottom: "1rem",
+        zIndex: 100,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.4rem",
+        padding: "0.45rem 0.8rem",
+        background: "#0f0f1a",
+        color: "#ededed",
+        border: "1px solid #2d3748",
+        borderRadius: 999,
+        boxShadow: "0 6px 20px rgba(0,0,0,0.4)",
+        fontSize: "0.8rem",
+        textDecoration: "none",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      <span aria-hidden>💬</span>
+      <span>notes stream</span>
+    </a>
+  );
+}
+
+/**
+ * Collapses the overlay — inverse of `ChatOpenPill`. Targeted refetch of
+ * `#chat-overlay` with `?chat=closed` so the host page is untouched.
+ */
+export function ChatClosePill() {
+  const nav = useNavigation();
+
+  const onClick = () => {
+    void nav.navigate(
+      (url) => {
+        url.searchParams.set("chat", "closed");
+        return url;
+      },
+      { history: "replace", selector: "#chat-overlay" },
+    );
+  };
+
+  return (
+    <button
+      type="button"
+      data-testid="chat-close-pill"
+      onClick={onClick}
+      aria-label="Collapse chat"
+      style={{
+        background: "transparent",
+        color: "#888",
+        border: "1px solid #4a5568",
+        padding: "0.3rem 0.55rem",
+        borderRadius: 6,
+        cursor: "pointer",
+        fontSize: "0.75rem",
+        lineHeight: 1,
+      }}
+    >
+      ×
+    </button>
+  );
+}
+
+export function ResetChatButton() {
   const onClick = async () => {
     await fetch("/__test/clear-caches", { method: "POST" });
     const url = new URL(window.location.href);

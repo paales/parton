@@ -1,5 +1,6 @@
 import { Partial, PartialRoot } from "../../lib/partial.tsx";
 import { AppNav } from "../components/app-nav.tsx";
+import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { getPathname, getSearchParam } from "../../framework/context.ts";
 import {
   FrameNavigateButton,
@@ -334,6 +335,7 @@ export function FramesDemoPage() {
               </Partial>
             </section>
           </main>
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>

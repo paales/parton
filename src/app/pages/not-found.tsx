@@ -1,5 +1,6 @@
 import { PartialRoot, Partial } from "../../lib/partial.tsx";
 import { AppNav } from "../components/app-nav.tsx";
+import { ChatOverlay } from "../chat/chat-overlay.tsx";
 
 /**
  * Default 404 page. Rendered by `Root` when a page component throws
@@ -38,6 +39,7 @@ export function NotFoundPage() {
               <div className="muted">This URL doesn't match any known route.</div>
             </section>
           </main>
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>

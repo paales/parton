@@ -18,6 +18,7 @@ import { PartialRoot, Partial } from "../../lib/partial.tsx";
 import { NextObserver } from "../components/next-observer.tsx";
 import { ScrollRestore } from "../components/scroll-restore.tsx";
 import { AppNav } from "../components/app-nav.tsx";
+import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { getSearchParam } from "../../framework/context.ts";
 
 const ITEMS_PER_PAGE = 10;
@@ -98,6 +99,7 @@ export function BarePage() {
           <Partial selector="#next">
             <NextObserver currentEnd={end} />
           </Partial>
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>

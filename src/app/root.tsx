@@ -20,6 +20,7 @@ import { setFrameworkControl } from "../framework/context.ts";
 import { Redirect } from "../framework/redirect-client.tsx";
 import { DebugToolbar } from "./components/debug-toolbar.tsx";
 import { AppNav } from "./components/app-nav.tsx";
+import { ChatOverlay } from "./chat/chat-overlay.tsx";
 
 export function Root() {
   try {
@@ -106,6 +107,7 @@ function renderRoute() {
             ["/*", () => PokemonPage()],
           ])}
           {import.meta.env.DEV && <DebugToolbar />}
+          <ChatOverlay />
         </body>
       </html>
     </PartialRoot>
