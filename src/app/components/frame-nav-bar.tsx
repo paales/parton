@@ -1,24 +1,15 @@
 "use client";
 
 import { useNavigation } from "../../lib/partial-client.tsx";
+import { Button } from "@/components/ui/button";
 
 /**
  * Per-frame navigation bar — Back / Forward / Reload buttons +
- * current URL readout + entry-state preview. Uses `useNavigation()`
- * without an argument, so the bar binds to whichever frame wraps it
- * in the server tree. Drop it inside any `<Partial frame="X">` and
- * it just works.
- *
- *   <Partial frame="cart" frameUrl="/cart/closed">
- *     <FrameNavigationBar />
- *     <CartContent />
- *   </Partial>
+ * current URL readout + entry-state preview.
  */
 export function FrameNavigationBar() {
   const f = useNavigation();
   const state = f.currentEntry?.getState() ?? null;
-  // `currentEntry.url` is always an absolute URL (synthesized against
-  // the page origin for frames); trim to pathname+search for display.
   const entryUrl = f.currentEntry?.url;
   const displayUrl = entryUrl
     ? (() => {
@@ -27,77 +18,53 @@ export function FrameNavigationBar() {
       })()
     : null;
 
-  const style = {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    padding: "0.4rem 0.6rem",
-    background: "#111118",
-    border: "1px solid #2d3748",
-    borderRadius: 6,
-    fontSize: "0.75rem",
-    fontFamily: "ui-monospace, monospace",
-    marginBottom: "0.75rem",
-  } as const;
-
-  const btn = {
-    background: "#1a1a2e",
-    color: "#ededed",
-    border: "1px solid #2d3748",
-    borderRadius: 4,
-    padding: "0.2rem 0.5rem",
-    cursor: "pointer",
-    fontSize: "0.8rem",
-  } as const;
-
-  const disabledBtn = {
-    ...btn,
-    opacity: 0.35,
-    cursor: "default",
-  };
+  const name = f.name ?? "window";
 
   return (
     <div
-      data-testid={`frame-navbar-${f.name ?? "window"}`}
-      data-frame={f.name ?? "window"}
-      style={style}
+      data-testid={`frame-navbar-${name}`}
+      data-frame={name}
+      className="mb-3 flex items-center gap-2 rounded-lg border bg-muted/40 px-2 py-1.5 font-mono text-xs"
     >
-      <span style={{ color: "#8bd", fontWeight: 600 }}>{f.name ?? "window"}</span>
-      <button
+      <span className="font-semibold text-sky-400">{name}</span>
+      <Button
         type="button"
-        data-testid={`navbar-${f.name ?? "window"}-back`}
+        size="xs"
+        variant="outline"
+        data-testid={`navbar-${name}-back`}
         onClick={() => void f.back()}
         disabled={!f.canGoBack}
-        style={f.canGoBack ? btn : disabledBtn}
       >
         ← Back
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        data-testid={`navbar-${f.name ?? "window"}-forward`}
+        size="xs"
+        variant="outline"
+        data-testid={`navbar-${name}-forward`}
         onClick={() => void f.forward()}
         disabled={!f.canGoForward}
-        style={f.canGoForward ? btn : disabledBtn}
       >
         Forward →
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        data-testid={`navbar-${f.name ?? "window"}-reload`}
+        size="xs"
+        variant="outline"
+        data-testid={`navbar-${name}-reload`}
         onClick={() => void f.reload()}
-        style={btn}
       >
         ↻ Reload
-      </button>
+      </Button>
       <code
-        data-testid={`navbar-${f.name ?? "window"}-url`}
-        style={{ color: "#ededed", flex: 1 }}
+        data-testid={`navbar-${name}-url`}
+        className="flex-1 truncate text-foreground"
       >
         {displayUrl ?? "—"}
       </code>
       <code
-        data-testid={`navbar-${f.name ?? "window"}-state`}
-        style={{ color: "#888", fontSize: "0.7rem" }}
+        data-testid={`navbar-${name}-state`}
+        className="truncate text-[0.7rem] text-muted-foreground"
       >
         state: {state ? JSON.stringify(state) : "∅"}
       </code>

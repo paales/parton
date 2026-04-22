@@ -1,39 +1,36 @@
 import { Partial } from "../../lib";
+import { buttonVariants } from "@/components/ui/button";
+
+const LINKS: Array<[href: string, label: string]> = [
+  ["/", "Pokemon"],
+  ["/magento", "Magento Store"],
+  ["/bare", "Bare Stream"],
+  ["/cache-demo", "Cache Demo"],
+  ["/defer-demo", "Defer Demo"],
+  ["/selector-demo", "Selector Demo"],
+  ["/sentinels-demo", "Sentinels Demo"],
+  ["/frames-demo", "Frames Demo"],
+  ["/chat-notes", "Chat Notes"],
+];
 
 /**
  * Shared cross-page nav. Self-contained — wraps its own content in
  * `<Partial selector="#nav">` so every page gets a fingerprint-skippable
- * nav just by rendering `<AppNav/>`. Works anywhere in the JSX
- * tree (no "must be a direct child of `<PartialRoot>`" constraint,
- * because the runtime discovers Partials by executing them).
+ * nav just by rendering `<AppNav/>`.
  */
 export function AppNav() {
   return (
     <Partial selector="#nav">
-      <nav
-        style={{
-          marginBottom: "1.5rem",
-          paddingBottom: "1rem",
-          borderBottom: "1px solid #2d3748",
-        }}
-      >
-        <a href="/">Pokemon</a>
-        {" · "}
-        <a href="/magento">Magento Store</a>
-        {" · "}
-        <a href="/bare">Bare Stream</a>
-        {" · "}
-        <a href="/cache-demo">Cache Demo</a>
-        {" · "}
-        <a href="/defer-demo">Defer Demo</a>
-        {" · "}
-        <a href="/selector-demo">Selector Demo</a>
-        {" · "}
-        <a href="/sentinels-demo">Sentinels Demo</a>
-        {" · "}
-        <a href="/frames-demo">Frames Demo</a>
-        {" · "}
-        <a href="/chat-notes">Chat Notes</a>
+      <nav className="mb-6 flex flex-wrap gap-1 border-b pb-3">
+        {LINKS.map(([href, label]) => (
+          <a
+            key={href}
+            href={href}
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            {label}
+          </a>
+        ))}
       </nav>
     </Partial>
   );

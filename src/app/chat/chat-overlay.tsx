@@ -10,9 +10,7 @@ import {
 } from "./chat-controls.tsx";
 
 /**
- * Ordered pool of notes files streamable into the chat. `AA_CHAT_STREAMING`
- * is first so it's the default initial stream (when `?msgs=` is unset) and
- * the first candidate appended by the "stream next note" link.
+ * Ordered pool of notes files streamable into the chat.
  */
 export const AVAILABLE_FILES = [
   "AA_CHAT_STREAMING",
@@ -44,8 +42,6 @@ function parseMsgs(param: string | null): string[] {
 function computeNextHref(msgIds: string[]): string | null {
   const next = AVAILABLE_FILES.find((f) => !msgIds.includes(f));
   if (!next) return null;
-  // Query-only — resolves against the current pathname so the overlay
-  // works unchanged on any host page.
   const params = new URLSearchParams();
   params.set("msgs", [...msgIds, next].join(","));
   params.set("chat", "open");
@@ -53,42 +49,12 @@ function computeNextHref(msgIds: string[]): string | null {
 }
 
 /**
- * Global chat overlay. Mounted inside every page's `<body>`.
- *
- * Collapsed by default — renders a small "💬 notes stream" pill at
- * bottom-right. Clicking the pill sets `?chat=open` and the full box
- * expands, seeded with `AA_CHAT_STREAMING` when no `?msgs=` is present.
- *
- * `defaultOpen` (used on `/chat-notes`) flips the default so the full
- * box is the zero-config state on the dedicated demo page. The user's
- * `?chat=` preference always wins when set.
- *
- * Wiring the streaming machinery behind the open/closed gate is load-
- * bearing: when collapsed, no `<ChatMessage>` renders, no log producer
- * starts, no `<ResumeTail>` writes cursor params to the URL. That
- * keeps the overlay from interfering with other pages' interactions
- * and URL state until the user asks for it.
+ * Global chat overlay. Mounted inside every page's layout.
  */
-export function ChatOverlay({
-  defaultOpen = false,
-  frameUrl,
-}: {
-  defaultOpen?: boolean;
-  /**
-   * Initial URL for the overlay's "chat-overlay" frame. Only applied
-   * before the session has state for the frame. Used by /chat-notes to
-   * project its own `?msgs=` + `?chat=` onto the frame at first render
-   * so `page.goto("/chat-notes?msgs=IDEAS")` still drives the overlay.
-   */
-  frameUrl?: string;
-}) {
+export function ChatOverlay() {
   return (
-    <Partial
-      selector="#chat-overlay"
-      frame="chat-overlay"
-      frameUrl={frameUrl ?? "/"}
-    >
-      <ChatOverlayBody defaultOpen={defaultOpen} />
+    <Partial selector="#chat-overlay" frame="chat-overlay">
+      <ChatOverlayBody defaultOpen={false} />
     </Partial>
   );
 }
@@ -106,33 +72,11 @@ function ChatOverlayBody({ defaultOpen }: { defaultOpen: boolean }) {
   return (
     <aside
       data-testid="chat-box"
-      style={{
-        position: "fixed",
-        right: "1rem",
-        bottom: "1rem",
-        width: 600,
-        maxHeight: "70vh",
-        background: "#0f0f1a",
-        border: "1px solid #2d3748",
-        borderRadius: 12,
-        boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
-        display: "flex",
-        flexDirection: "column",
-        zIndex: 100,
-      }}
+      className="fixed right-4 bottom-4 z-100 flex max-h-[70vh] w-150 flex-col rounded-xl border bg-card text-card-foreground shadow-2xl"
     >
-      <header
-        style={{
-          padding: "0.6rem 0.75rem",
-          borderBottom: "1px solid #2d3748",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "0.5rem",
-        }}
-      >
-        <strong style={{ fontSize: "0.85rem" }}>notes stream</strong>
-        <div style={{ display: "flex", gap: "0.4rem" }}>
+      <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
+        <strong className="text-sm">notes stream</strong>
+        <div className="flex gap-1.5">
           <ResetChatButton />
           <ChatClosePill />
         </div>
@@ -141,17 +85,12 @@ function ChatOverlayBody({ defaultOpen }: { defaultOpen: boolean }) {
       <Partial selector="#chat-list">
         <div
           data-testid="chat-list"
-          style={{
-            padding: "0.6rem 0.75rem",
-            overflowY: "auto",
-            flex: 1,
-            minHeight: 120,
-          }}
+          className="min-h-30 flex-1 overflow-y-auto px-3 py-2"
         >
           {msgIds.length === 0 ? (
             <div
               data-testid="chat-empty"
-              style={{ color: "#666", fontSize: "0.8rem", fontStyle: "italic" }}
+              className="text-xs italic text-muted-foreground"
             >
               No messages. Click “stream next note” to start.
             </div>
@@ -167,12 +106,7 @@ function ChatOverlayBody({ defaultOpen }: { defaultOpen: boolean }) {
           )}
         </div>
       </Partial>
-      <footer
-        style={{
-          padding: "0.6rem 0.75rem",
-          borderTop: "1px solid #2d3748",
-        }}
-      >
+      <footer className="border-t px-3 py-2">
         <NewMessageLink nextHref={nextHref} />
       </footer>
     </aside>

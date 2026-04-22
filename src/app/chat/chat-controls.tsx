@@ -2,17 +2,14 @@
 
 import { useEffect, useRef, type MouseEvent } from "react";
 import { useNavigation } from "../../lib/partial-client.tsx";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * "New message" link. Rendered as an anchor so a click before the client JS
  * bundle has hydrated still works (browser follows the href for a full
  * page nav). After hydration the `onClick` preempts and fires
  * `nav.navigate` for a client-side transition.
- *
- * `nextHref` is computed on the server (from the current `?msgs=` and the
- * available pool) so the `href` is always up-to-date with the current URL
- * state. No `window.location` reads on the client; no pre-hydration stale
- * reads from a captured prop.
  */
 export function NewMessageLink({ nextHref }: { nextHref: string | null }) {
   const nav = useNavigation();
@@ -21,13 +18,7 @@ export function NewMessageLink({ nextHref }: { nextHref: string | null }) {
     return (
       <span
         data-testid="new-message-disabled"
-        style={{
-          display: "block",
-          color: "#555",
-          fontSize: "0.8rem",
-          textAlign: "center",
-          padding: "0.4rem",
-        }}
+        className="block p-1.5 text-center text-xs text-muted-foreground"
       >
         (all notes streaming)
       </span>
@@ -46,18 +37,10 @@ export function NewMessageLink({ nextHref }: { nextHref: string | null }) {
       href={nextHref}
       data-testid="new-message-btn"
       onClick={onClick}
-      style={{
-        display: "block",
-        textAlign: "center",
-        background: "#2d3748",
-        color: "#ededed",
-        border: "1px solid #4a5568",
-        padding: "0.4rem 0.8rem",
-        borderRadius: 6,
-        cursor: "pointer",
-        fontSize: "0.8rem",
-        textDecoration: "none",
-      }}
+      className={cn(
+        buttonVariants({ variant: "outline", size: "sm" }),
+        "w-full",
+      )}
     >
       + Stream next note
     </a>
@@ -69,10 +52,6 @@ export function NewMessageLink({ nextHref }: { nextHref: string | null }) {
  * MutationObserver on the scrollable container: any DOM mutation inside
  * (new chunk, FlatPrefix reflow after compaction) sticks the scroll to
  * the bottom unless the user has scrolled away.
- *
- * Stickiness: if the user scrolls up by more than STICKY_THRESHOLD from
- * the bottom, auto-follow disengages. Scrolling back within the
- * threshold re-engages it. Standard terminal/chat behavior.
  */
 const STICKY_THRESHOLD = 80;
 
@@ -104,9 +83,12 @@ export function AutoScrollToBottom({
     });
 
     container.addEventListener("scroll", onScroll, { passive: true });
-    mo.observe(container, { childList: true, subtree: true, characterData: true });
+    mo.observe(container, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
 
-    // Initial pin to the bottom.
     container.scrollTop = container.scrollHeight;
 
     return () => {
@@ -118,11 +100,6 @@ export function AutoScrollToBottom({
   return null;
 }
 
-/**
- * "Reset" button — clears all messages and the server-side logs via the
- * dev-only cache-clear endpoint. Useful for manual testing; in production
- * you'd just drop the `?msgs=` param.
- */
 /**
  * Collapsed-state pill at bottom-right. Sets `?chat=open` and triggers a
  * targeted refetch of `#chat-overlay` so the full overlay expands in
@@ -143,30 +120,15 @@ export function ChatOpenPill() {
     );
   };
 
-  // Server-rendered href so a pre-hydration click still opens the chat.
   return (
     <a
       href="?chat=open"
       data-testid="chat-open-pill"
       onClick={onClick}
-      style={{
-        position: "fixed",
-        right: "1rem",
-        bottom: "1rem",
-        zIndex: 100,
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "0.4rem",
-        padding: "0.45rem 0.8rem",
-        background: "#0f0f1a",
-        color: "#ededed",
-        border: "1px solid #2d3748",
-        borderRadius: 999,
-        boxShadow: "0 6px 20px rgba(0,0,0,0.4)",
-        fontSize: "0.8rem",
-        textDecoration: "none",
-        fontFamily: "system-ui, sans-serif",
-      }}
+      className={cn(
+        buttonVariants({ variant: "outline", size: "sm" }),
+        "fixed right-4 bottom-4 z-[100] rounded-full shadow-lg",
+      )}
     >
       <span aria-hidden>💬</span>
       <span>notes stream</span>
@@ -192,24 +154,16 @@ export function ChatClosePill() {
   };
 
   return (
-    <button
+    <Button
       type="button"
       data-testid="chat-close-pill"
       onClick={onClick}
       aria-label="Collapse chat"
-      style={{
-        background: "transparent",
-        color: "#888",
-        border: "1px solid #4a5568",
-        padding: "0.3rem 0.55rem",
-        borderRadius: 6,
-        cursor: "pointer",
-        fontSize: "0.75rem",
-        lineHeight: 1,
-      }}
+      variant="ghost"
+      size="icon-xs"
     >
       ×
-    </button>
+    </Button>
   );
 }
 
@@ -222,21 +176,14 @@ export function ResetChatButton() {
   };
 
   return (
-    <button
+    <Button
       type="button"
       data-testid="reset-chat-btn"
       onClick={onClick}
-      style={{
-        background: "transparent",
-        color: "#888",
-        border: "1px solid #4a5568",
-        padding: "0.3rem 0.6rem",
-        borderRadius: 6,
-        cursor: "pointer",
-        fontSize: "0.75rem",
-      }}
+      variant="ghost"
+      size="xs"
     >
       reset
-    </button>
+    </Button>
   );
 }

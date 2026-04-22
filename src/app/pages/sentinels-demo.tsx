@@ -1,136 +1,160 @@
-import { PartialRoot, Partial } from "../../lib/partial.tsx";
-import { AppNav } from "../components/app-nav.tsx";
-import { ChatOverlay } from "../chat/chat-overlay.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 
 /**
  * `/sentinels-demo` — click-through page for the `notFound()` +
  * `redirect()` framework sentinels. Each link triggers a different
  * path through the mechanism; check devtools Network for status codes.
  */
+
+function InlineCode({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+      {children}
+    </code>
+  );
+}
+
+function StatusBadge({ status }: { status: 404 | 302 | 200 }) {
+  const variant =
+    status === 404
+      ? "destructive"
+      : status === 302
+        ? "secondary"
+        : "outline";
+  return (
+    <Badge variant={variant} className="ml-2">
+      HTTP {status}
+    </Badge>
+  );
+}
+
 export function SentinelsDemoPage() {
   return (
-    <PartialRoot>
-      <html lang="en">
-        <Partial selector="#head">
-          <head>
-            <meta charSet="UTF-8" />
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1.0"
-            />
-            <title>Sentinels Demo</title>
-            <style>{`
-              * { box-sizing: border-box; margin: 0; padding: 0; }
-              body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem; max-width: 900px; margin: 0 auto; }
-              a { color: #58a6ff; text-decoration: none; }
-              a:hover { text-decoration: underline; }
-              h1 { font-size: 1.75rem; margin-bottom: 1rem; }
-              h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
-              code { background: #2d3748; padding: 0.1rem 0.3rem; border-radius: 4px; font-size: 0.85rem; }
-              .card { background: #1a1a2e; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
-              .muted { color: #888; margin-bottom: 0.75rem; font-size: 0.9rem; }
-              .demo-link { display: inline-block; background: #2d3748; color: #ededed; border: 1px solid #4a5568; padding: 0.5rem 0.9rem; border-radius: 6px; font-size: 0.9rem; margin-right: 0.5rem; margin-top: 0.5rem; }
-              .demo-link:hover { background: #4a5568; text-decoration: none; }
-              .status { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 0.5rem; }
-              .status-404 { background: #742a2a; color: #feb2b2; }
-              .status-302 { background: #553c6b; color: #d6bcfa; }
-              .status-200 { background: #22543d; color: #9ae6b4; }
-            `}</style>
-          </head>
-        </Partial>
-        <body>
-          <AppNav />
-          <main style={{ padding: "1rem 0" }}>
-            <h1>notFound() + redirect() — the sentinels</h1>
-            <p className="muted">
-              Two framework helpers (<code>src/framework/errors.ts</code>)
-              mutate a request-scoped control channel and throw. The
-              entry handler picks them up and adjusts the HTTP response.
-              Click any link, then check the Network panel for the
-              status code.
-            </p>
+    <main className="py-4">
+      <title>Sentinels Demo</title>
+      <h1 className="mb-4 text-2xl font-semibold">
+        notFound() + redirect() — the sentinels
+      </h1>
+      <p className="mb-6 text-sm text-muted-foreground">
+        Two framework helpers (<InlineCode>src/framework/errors.ts</InlineCode>)
+        mutate a request-scoped control channel and throw. The entry
+        handler picks them up and adjusts the HTTP response. Click any
+        link, then check the Network panel for the status code.
+      </p>
 
-            <section className="card">
-              <h2>
-                1. <code>notFound()</code> — sync throw from a page
-                function
-                <span className="status status-404">HTTP 404</span>
-              </h2>
-              <p className="muted">
-                <code>/not-found-demo</code>'s route handler calls{" "}
-                <code>notFound()</code> synchronously from{" "}
-                <code>Root</code>. The try/catch at the top of{" "}
-                <code>Root</code> routes it to the control channel;
-                handler returns 404 + the default{" "}
-                <code>&lt;NotFoundPage/&gt;</code> body.
-              </p>
-              <a href="/not-found-demo" className="demo-link" data-testid="link-not-found-sync">
-                /not-found-demo →
-              </a>
-            </section>
+      <Card className="mb-4 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="flex flex-wrap items-center gap-1 text-base">
+            1. <InlineCode>notFound()</InlineCode> — sync throw from a page
+            function
+            <StatusBadge status={404} />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-start gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            <InlineCode>/not-found-demo</InlineCode>'s route handler calls{" "}
+            <InlineCode>notFound()</InlineCode> synchronously from{" "}
+            <InlineCode>Root</InlineCode>. The try/catch at the top of{" "}
+            <InlineCode>Root</InlineCode> routes it to the control channel;
+            handler returns 404 + the default{" "}
+            <InlineCode>&lt;NotFoundPage/&gt;</InlineCode> body.
+          </p>
+          <a
+            href="/not-found-demo"
+            data-testid="link-not-found-sync"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            /not-found-demo →
+          </a>
+        </CardContent>
+      </Card>
 
-            <section className="card">
-              <h2>
-                2. <code>notFound()</code> — deep async throw
-                <span className="status status-404">HTTP 404</span>
-              </h2>
-              <p className="muted">
-                <code>/pokemon/9999999</code> hits the live PokeAPI. The{" "}
-                <code>HeroPartial</code> awaits the GraphQL query; the
-                result is empty, so it calls <code>notFound()</code>. The
-                throw happens during async rendering — <em>after</em>{" "}
-                Root's sync catch has already returned. Because{" "}
-                <code>notFound()</code> flags the control channel before
-                throwing, the entry handler still sees the decision after{" "}
-                <code>renderHTML</code> awaits, and re-renders with{" "}
-                <code>&lt;NotFoundPage/&gt;</code> cleanly.
-              </p>
-              <a href="/pokemon/9999999" className="demo-link" data-testid="link-not-found-async">
-                /pokemon/9999999 →
-              </a>
-            </section>
+      <Card className="mb-4 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="flex flex-wrap items-center gap-1 text-base">
+            2. <InlineCode>notFound()</InlineCode> — deep async throw
+            <StatusBadge status={404} />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-start gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            <InlineCode>/pokemon/9999999</InlineCode> hits the live
+            PokeAPI. The <InlineCode>HeroPartial</InlineCode> awaits the
+            GraphQL query; the result is empty, so it calls{" "}
+            <InlineCode>notFound()</InlineCode>. The throw happens during
+            async rendering — <em>after</em> Root's sync catch has already
+            returned. Because <InlineCode>notFound()</InlineCode> flags
+            the control channel before throwing, the entry handler still
+            sees the decision after <InlineCode>renderHTML</InlineCode>{" "}
+            awaits, and re-renders with{" "}
+            <InlineCode>&lt;NotFoundPage/&gt;</InlineCode> cleanly.
+          </p>
+          <a
+            href="/pokemon/9999999"
+            data-testid="link-not-found-async"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            /pokemon/9999999 →
+          </a>
+        </CardContent>
+      </Card>
 
-            <section className="card">
-              <h2>
-                3. <code>redirect()</code> — HTML navigation
-                <span className="status status-302">HTTP 302</span>
-              </h2>
-              <p className="muted">
-                <code>/redirect-demo</code> calls{" "}
-                <code>redirect("/cache-demo")</code>. For an HTML
-                request, the handler returns a native 302 +{" "}
-                <code>Location</code> header and the browser follows.
-              </p>
-              <a href="/redirect-demo" className="demo-link" data-testid="link-redirect-html">
-                /redirect-demo →
-              </a>
-            </section>
+      <Card className="mb-4 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="flex flex-wrap items-center gap-1 text-base">
+            3. <InlineCode>redirect()</InlineCode> — HTML navigation
+            <StatusBadge status={302} />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-start gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            <InlineCode>/redirect-demo</InlineCode> calls{" "}
+            <InlineCode>redirect("/cache-demo")</InlineCode>. For an HTML
+            request, the handler returns a native 302 +{" "}
+            <InlineCode>Location</InlineCode> header and the browser follows.
+          </p>
+          <a
+            href="/redirect-demo"
+            data-testid="link-redirect-html"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            /redirect-demo →
+          </a>
+        </CardContent>
+      </Card>
 
-            <section className="card">
-              <h2>
-                4. <code>redirect()</code> — client navigation via{" "}
-                <code>&lt;Redirect&gt;</code>
-                <span className="status status-200">HTTP 200</span>
-              </h2>
-              <p className="muted">
-                If you navigate to <code>/redirect-demo</code> via an RSC
-                refetch (a link click after the app is hydrated, not a
-                direct URL visit), the server can't emit a native 302 —{" "}
-                <code>fetch()</code> would transparently follow and
-                commit the destination's payload for the current route.
-                Instead the server renders a{" "}
-                <code>&lt;Redirect url=…/&gt;</code> client component in
-                the payload; its <code>useEffect</code> calls{" "}
-                <code>navigation.navigate</code> on mount.
-              </p>
-              <a href="/redirect-demo" className="demo-link" data-testid="link-redirect-rsc">
-                /redirect-demo (click from here) →
-              </a>
-            </section>
-          </main>
-          <ChatOverlay />
-        </body>
-      </html>
-    </PartialRoot>
+      <Card className="mb-4 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="flex flex-wrap items-center gap-1 text-base">
+            4. <InlineCode>redirect()</InlineCode> — client navigation via{" "}
+            <InlineCode>&lt;Redirect&gt;</InlineCode>
+            <StatusBadge status={200} />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-start gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            If you navigate to <InlineCode>/redirect-demo</InlineCode> via
+            an RSC refetch (a link click after the app is hydrated, not a
+            direct URL visit), the server can't emit a native 302 —{" "}
+            <InlineCode>fetch()</InlineCode> would transparently follow
+            and commit the destination's payload for the current route.
+            Instead the server renders a{" "}
+            <InlineCode>&lt;Redirect url=…/&gt;</InlineCode> client
+            component in the payload; its{" "}
+            <InlineCode>useEffect</InlineCode> calls{" "}
+            <InlineCode>navigation.navigate</InlineCode> on mount.
+          </p>
+          <a
+            href="/redirect-demo"
+            data-testid="link-redirect-rsc"
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            /redirect-demo (click from here) →
+          </a>
+        </CardContent>
+      </Card>
+    </main>
   );
 }

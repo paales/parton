@@ -6,6 +6,7 @@ import { AddToCartButton } from "./add-to-cart-button.tsx";
 import { CartBadge } from "./cart-badge.tsx";
 import { LivePrice, LivePriceFallback } from "./live-price.tsx";
 import { RefreshAllPricesButton } from "./refresh-all-prices-button.tsx";
+import { Card, CardContent } from "@/components/ui/card";
 
 const CartQuery = graphql(`
   query Cart($cartId: String!) {
@@ -51,10 +52,12 @@ export function MagentoPage() {
   return (
     <>
       <Partial selector="#header">
-        <header>
-          {new Date().toLocaleString()}
+        <header className="mb-4 flex items-center justify-between gap-4">
+          <span className="text-sm text-muted-foreground">
+            {new Date().toLocaleString()}
+          </span>
           <Partial
-            selector="#cart .cart"
+            selector="#cart .cart .header"
             fallback={<CartBadge quantity={"?"} />}
           >
             <CartPartial />
@@ -67,7 +70,6 @@ export function MagentoPage() {
           <ProductGrid search={search} />
         </Partial>
       </main>
-      <footer />
     </>
   );
 }
@@ -92,22 +94,15 @@ async function ProductGrid({ search }: { search?: string }) {
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: "1rem",
-        }}
-      >
-        <h1 style={{ margin: 0 }}>
-          Magento Store {search ? `\u2014 "${search}"` : ""}
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">
+          Magento Store {search ? `— "${search}"` : ""}
         </h1>
       </div>
-      <p style={{ color: "#888", marginBottom: "1.5rem" }}>
+      <p className="mb-6 text-muted-foreground">
         Products loaded from GraphCommerce Magento 2 API.
       </p>
-      <div className="grid">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
         {items.map((product) => (
           <ProductCard key={product.sku ?? product.id} product={product} />
         ))}
@@ -126,47 +121,41 @@ function ProductCard({ product }: { product: ProductItem }) {
   const price = typeof rawPrice === "number" ? rawPrice : 0;
 
   return (
-    <div className="card">
-      {imageUrl && (
-        <img
-          src={imageUrl}
-          alt={imageLabel || name || ""}
-          loading="lazy"
-          style={{ width: 120, height: 120, objectFit: "contain" }}
-        />
-      )}
-      <h2 style={{ fontSize: "1rem", marginTop: "0.5rem" }}>
-        {name} {id}
-      </h2>
-      <div className="meta">
-        <code>{sku}</code>
-      </div>
-      {sku && (
-        // Dynamic Partial: selector builds a `#price-<sku>` unique
-        // token and a shared `.price` label. Produced inside the
-        // `.map()` in `ProductGrid` — invisible to the bootstrap JSX
-        // walk in `PartialRoot`, but each Partial self-registers in
-        // the route-scoped registry on render so refreshing one live
-        // price doesn't require re-running the product list query.
-        // The `.price` label lets `RefreshAllPricesButton` pull every
-        // price Partial in a single refetch. `fallback` shows the
-        // base price in gray while the refreshed LivePrice is resolving.
-        <Partial
-          selector={[`#price-${sku}`, ".price"]}
-          fallback={
-            <LivePriceFallback
-              sku={sku}
-              basePrice={price}
-              currency={currency}
-            />
-          }
-        >
-          <LivePrice sku={sku} basePrice={price} currency={currency} />
-        </Partial>
-      )}
-      <div style={{ marginTop: "0.75rem" }}>
-        {sku && <AddToCartButton sku={sku} />}
-      </div>
-    </div>
+    <Card className="p-5">
+      <CardContent className="flex flex-col gap-2 px-0">
+        {imageUrl && (
+          <img
+            src={imageUrl}
+            alt={imageLabel || name || ""}
+            loading="lazy"
+            className="h-30 w-30 object-contain"
+          />
+        )}
+        <h2 className="mt-2 text-base">
+          {name} {id}
+        </h2>
+        <div className="text-sm text-muted-foreground">
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {sku}
+          </code>
+        </div>
+        {sku && (
+          // Dynamic Partial — see previous comment pool.
+          <Partial
+            selector={[`#price-${sku}`, ".price"]}
+            fallback={
+              <LivePriceFallback
+                sku={sku}
+                basePrice={price}
+                currency={currency}
+              />
+            }
+          >
+            <LivePrice sku={sku} basePrice={price} currency={currency} />
+          </Partial>
+        )}
+        <div className="mt-2">{sku && <AddToCartButton sku={sku} />}</div>
+      </CardContent>
+    </Card>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useNavigation } from "../../lib/partial-client.tsx";
+import { Button } from "@/components/ui/button";
 
 /**
  * Client component demonstrating partial-level re-fetching.
@@ -24,31 +25,24 @@ export function PartialControls() {
   }
 
   return (
-    <div className="partial-controls">
-      <span style={{ color: "#888", fontSize: "0.8rem", alignSelf: "center" }}>
-        reload({'{'}selector{'}'}):
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <span className="text-xs text-muted-foreground">
+        reload({"{"}selector{"}"}):
       </span>
-      <button
-        type="button"
-        onClick={() => refresh("hero")}
-        disabled={pending === "hero"}
-      >
-        {pending === "hero" ? "Refreshing..." : "Refresh Hero"}
-      </button>
-      <button
-        type="button"
-        onClick={() => refresh("stats")}
-        disabled={pending === "stats"}
-      >
-        {pending === "stats" ? "Refreshing..." : "Refresh Stats"}
-      </button>
-      <button
-        type="button"
-        onClick={() => refresh("species")}
-        disabled={pending === "species"}
-      >
-        {pending === "species" ? "Refreshing..." : "Refresh Species"}
-      </button>
+      {(["hero", "stats", "species"] as const).map((id) => (
+        <Button
+          key={id}
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => refresh(id)}
+          disabled={pending === id}
+        >
+          {pending === id
+            ? "Refreshing..."
+            : `Refresh ${id[0].toUpperCase()}${id.slice(1)}`}
+        </Button>
+      ))}
     </div>
   );
 }

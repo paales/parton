@@ -1,4 +1,4 @@
-import { Partial, PartialRoot } from "../../lib/partial.tsx";
+import { Partial } from "../../lib/partial.tsx";
 import { WhenVisible } from "../components/when-visible.tsx";
 import { WhenStored } from "../components/when-stored.tsx";
 import { WhenMounted } from "../components/when-mounted.tsx";
@@ -6,9 +6,8 @@ import {
   ActivateButton,
   StorageKeyEditor,
 } from "../components/defer-demo-controls.tsx";
-import { AppNav } from "../components/app-nav.tsx";
-import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { getSearchParam } from "../../framework/context.ts";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
  * `/defer-demo` — exercises the three shapes of `<Partial defer>`:
@@ -32,14 +31,32 @@ import { getSearchParam } from "../../framework/context.ts";
  *      initial render; a deferred Partial on the same page activates
  *      immediately on mount. The two must not block each other: the
  *      defer refetch lands while the slow Partial is still streaming.
- *
- * `WhenVisible` / `WhenStored` live in `src/app/components/` — they
- * are userspace activators built against the framework's
- * `useActivate` primitive, not library exports.
- *
- * Each activated content renders a server timestamp so the RSC
- * round-trip is visible (and assertable).
  */
+
+function InlineCode({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+      {children}
+    </code>
+  );
+}
+
+function DormantFallback({
+  testId,
+  children,
+}: {
+  testId: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      data-testid={testId}
+      className="italic text-muted-foreground"
+    >
+      {children}
+    </div>
+  );
+}
 
 async function SlowContent() {
   // ~1.5s delay so the Suspense fallback is visibly up while the
@@ -72,6 +89,7 @@ async function DelayedClock({
     </div>
   );
 }
+
 function Timestamp({ prefix }: { prefix: string }) {
   return (
     <span>
@@ -85,364 +103,307 @@ function StoredContent({ paramName }: { paramName: string }) {
   return (
     <div data-testid="stored-content">
       <Timestamp prefix="activated at" /> — value:{" "}
-      <code data-testid="stored-value">{stored ?? "(none)"}</code>
+      <InlineCode>
+        <span data-testid="stored-value">{stored ?? "(none)"}</span>
+      </InlineCode>
     </div>
   );
 }
 
 export function DeferDemoPage() {
   return (
-    <PartialRoot>
-      <html lang="en">
-        <Partial selector="#head">
-          <head>
-            <meta charSet="UTF-8" />
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1.0"
+    <main className="py-4">
+      <title>Defer Demo</title>
+      <h1 className="mb-4 text-2xl font-semibold">
+        Partial defer — feature demo
+      </h1>
+      <p className="mb-8 text-muted-foreground">
+        Three activation shapes for <InlineCode>&lt;Partial defer&gt;</InlineCode>.
+        Each section stays dormant until its trigger fires; the activated
+        content renders a server timestamp so you can confirm the RSC
+        round-trip.
+      </p>
+
+      {/* ── 1. defer={true} — manual activation ─────────────── */}
+      <Card data-testid="section-manual" className="mb-8 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">
+            1. <InlineCode>defer={"{true}"}</InlineCode> — manual activation
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            No automatic trigger. Click the button to call{" "}
+            <InlineCode>useNavigation().reload({'{selector: "#manual"}'})</InlineCode>.
+          </p>
+          <Partial
+            selector="#manual"
+            defer
+            fallback={
+              <DormantFallback testId="manual-fallback">
+                dormant — waiting for manual activation
+              </DormantFallback>
+            }
+          >
+            <div data-testid="manual-content">
+              <Timestamp prefix="activated at" />
+            </div>
+          </Partial>
+          <div>
+            <ActivateButton partialId="manual" label="Activate manually" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── 2. <WhenStored> — storage-triggered ───────────────── */}
+      <Card data-testid="section-stored" className="mb-8 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">
+            2. <InlineCode>&lt;WhenStored&gt;</InlineCode> — activates when
+            localStorage key appears
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            The activator reads{" "}
+            <InlineCode>localStorage["demo-stored"]</InlineCode> on mount
+            and on <InlineCode>storage</InlineCode> events. When present,
+            writes the value to the page URL as{" "}
+            <InlineCode>?stored=…</InlineCode> and activates the Partial.
+            The content reads the value back via{" "}
+            <InlineCode>getSearchParam("stored")</InlineCode>.
+          </p>
+          <Partial
+            selector="#stored"
+            defer={<WhenStored storageKey="demo-stored" as="stored" />}
+            fallback={
+              <DormantFallback testId="stored-fallback">
+                dormant — set <InlineCode>localStorage["demo-stored"]</InlineCode>{" "}
+                to activate
+              </DormantFallback>
+            }
+          >
+            <StoredContent paramName="stored" />
+          </Partial>
+          <StorageKeyEditor storageKey="demo-stored" testId="demo-stored" />
+        </CardContent>
+      </Card>
+
+      {/* ── 4. Batched activation: two WhenStored → one RSC ──── */}
+      <Card data-testid="section-batch" className="mb-8 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">4. Batched activation</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            Two <InlineCode>&lt;Partial defer=&lt;WhenStored/&gt;&gt;</InlineCode>
+            siblings with distinct keys. Pre-set both keys (via{" "}
+            <InlineCode>localStorage.setItem</InlineCode> BEFORE the page
+            loads), and the two activators fire in the same commit pass.
+            The microtask-batched dispatch should coalesce them into a
+            SINGLE RSC request listing both ids in{" "}
+            <InlineCode>?partials=</InlineCode>.
+          </p>
+          <Partial
+            selector="#batch-a"
+            defer={<WhenStored storageKey="batch-a-key" as="batch-a" />}
+            fallback={
+              <DormantFallback testId="batch-a-fallback">
+                dormant — set <InlineCode>localStorage["batch-a-key"]</InlineCode>{" "}
+                before loading to activate
+              </DormantFallback>
+            }
+          >
+            <StoredContent paramName="batch-a" />
+          </Partial>
+          <Partial
+            selector="#batch-b"
+            defer={<WhenStored storageKey="batch-b-key" as="batch-b" />}
+            fallback={
+              <DormantFallback testId="batch-b-fallback">
+                dormant — set <InlineCode>localStorage["batch-b-key"]</InlineCode>{" "}
+                before loading to activate
+              </DormantFallback>
+            }
+          >
+            <StoredContent paramName="batch-b" />
+          </Partial>
+          <div className="flex flex-wrap gap-2">
+            <StorageKeyEditor
+              storageKey="batch-a-key"
+              testId="batch-a-key"
             />
-            <title>Defer Demo</title>
-            <style>{`
-              * { box-sizing: border-box; margin: 0; padding: 0; }
-              body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem; max-width: 900px; margin: 0 auto; }
-              a { color: #58a6ff; text-decoration: none; }
-              a:hover { text-decoration: underline; }
-              h1 { font-size: 1.75rem; margin-bottom: 1rem; }
-              h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
-              code { background: #2d3748; padding: 0.1rem 0.3rem; border-radius: 4px; font-size: 0.85rem; }
-              .card { background: #1a1a2e; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
-            `}</style>
-          </head>
-        </Partial>
-        <body>
-          <AppNav />
-          <main style={{ padding: "1rem 0" }}>
-            <h1 style={{ marginBottom: "1rem" }}>
-              Partial defer — feature demo
-            </h1>
-            <p style={{ color: "#888", marginBottom: "2rem" }}>
-              Three activation shapes for <code>&lt;Partial defer&gt;</code>.
-              Each section stays dormant until its trigger fires; the activated
-              content renders a server timestamp so you can confirm the RSC
-              round-trip.
-            </p>
+            <StorageKeyEditor
+              storageKey="batch-b-key"
+              testId="batch-b-key"
+            />
+          </div>
+        </CardContent>
+      </Card>
 
-            {/* ── 1. defer={true} — manual activation ─────────────── */}
-            <section
-              data-testid="section-manual"
-              className="card"
-              style={{ marginBottom: "2rem" }}
-            >
-              <h2>
-                1. <code>defer={"{true}"}</code> — manual activation
-              </h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                No automatic trigger. Click the button to call{" "}
-                <code>useNavigation().reload({'{selector: "#manual"}'})</code>.
-              </p>
-              <Partial
-                selector="#manual"
-                defer
-                fallback={
-                  <div
-                    data-testid="manual-fallback"
-                    style={{ color: "#888", fontStyle: "italic" }}
-                  >
-                    dormant — waiting for manual activation
-                  </div>
-                }
-              >
-                <div data-testid="manual-content">
-                  <Timestamp prefix="activated at" />
-                </div>
-              </Partial>
-              <div style={{ marginTop: "0.75rem" }}>
-                <ActivateButton partialId="manual" label="Activate manually" />
-              </div>
-            </section>
+      {/* ── 5. Streaming + defer race ──────────────────────────── */}
+      <Card data-testid="section-race" className="mb-8 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">5. Streaming + defer race</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            The <InlineCode>&lt;SlowContent/&gt;</InlineCode> partial
+            suspends for ~1.5s during initial render. A neighboring
+            deferred Partial (<InlineCode>defer=&lt;WhenVisible/&gt;</InlineCode>,
+            fallback already on-screen) activates on mount. Its refetch
+            should land and its content should appear <em>before</em>{" "}
+            the slow partial resolves — proving the two flows don't
+            serialize.
+          </p>
+          <Partial
+            selector="#slow-stream"
+            fallback={
+              <DormantFallback testId="slow-fallback">
+                slow content streaming… (1.5s)
+              </DormantFallback>
+            }
+          >
+            <SlowContent />
+          </Partial>
+          <Partial
+            selector="#race-defer"
+            defer={<WhenMounted />}
+            fallback={
+              <DormantFallback testId="race-defer-fallback">
+                dormant — activates immediately on mount
+              </DormantFallback>
+            }
+          >
+            <div data-testid="race-defer-content">
+              <Timestamp prefix="race defer activated at" />
+            </div>
+          </Partial>
+        </CardContent>
+      </Card>
 
-            {/* ── 2. <WhenStored> — storage-triggered ───────────────── */}
-            <section
-              data-testid="section-stored"
-              className="card"
-              style={{ marginBottom: "2rem" }}
-            >
-              <h2>
-                2. <code>&lt;WhenStored&gt;</code> — activates when localStorage
-                key appears
-              </h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                The activator reads <code>localStorage["demo-stored"]</code> on
-                mount and on <code>storage</code> events. When present,
-                writes the value to the page URL as <code>?stored=…</code>{" "}
-                and activates the Partial. The content reads the value
-                back via <code>getSearchParam("stored")</code>.
-              </p>
-              <Partial
-                selector="#stored"
-                defer={<WhenStored storageKey="demo-stored" as="stored" />}
-                fallback={
-                  <div
-                    data-testid="stored-fallback"
-                    style={{ color: "#888", fontStyle: "italic" }}
-                  >
-                    dormant — set <code>localStorage["demo-stored"]</code> to
-                    activate
-                  </div>
-                }
-              >
-                <StoredContent paramName="stored" />
-              </Partial>
-              <StorageKeyEditor storageKey="demo-stored" testId="demo-stored" />
-            </section>
-
-            {/* ── 4. Batched activation: two WhenStored → one RSC ──── */}
-            <section
-              data-testid="section-batch"
-              className="card"
-              style={{ marginBottom: "2rem" }}
-            >
-              <h2>
-                4. Batched activation
-              </h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                Two <code>&lt;Partial defer=&lt;WhenStored/&gt;&gt;</code>
-                siblings with distinct keys. Pre-set both keys (via
-                <code>localStorage.setItem</code> BEFORE the page loads),
-                and the two activators fire in the same commit pass. The
-                microtask-batched dispatch should coalesce them into a
-                SINGLE RSC request listing both ids in{" "}
-                <code>?partials=</code>.
-              </p>
-              <Partial
-                selector="#batch-a"
-                defer={<WhenStored storageKey="batch-a-key" as="batch-a" />}
-                fallback={
-                  <div
-                    data-testid="batch-a-fallback"
-                    style={{ color: "#888", fontStyle: "italic" }}
-                  >
-                    dormant — set <code>localStorage["batch-a-key"]</code>{" "}
-                    before loading to activate
-                  </div>
-                }
-              >
-                <StoredContent paramName="batch-a" />
-              </Partial>
-              <div style={{ height: "0.5rem" }} />
-              <Partial
-                selector="#batch-b"
-                defer={<WhenStored storageKey="batch-b-key" as="batch-b" />}
-                fallback={
-                  <div
-                    data-testid="batch-b-fallback"
-                    style={{ color: "#888", fontStyle: "italic" }}
-                  >
-                    dormant — set <code>localStorage["batch-b-key"]</code>{" "}
-                    before loading to activate
-                  </div>
-                }
-              >
-                <StoredContent paramName="batch-b" />
-              </Partial>
-              <div style={{ marginTop: "0.75rem" }}>
-                <StorageKeyEditor
-                  storageKey="batch-a-key"
-                  testId="batch-a-key"
-                />
-                <StorageKeyEditor
-                  storageKey="batch-b-key"
-                  testId="batch-b-key"
-                />
-              </div>
-            </section>
-
-            {/* ── 5. Streaming + defer race ──────────────────────────── */}
-            <section
-              data-testid="section-race"
-              className="card"
-              style={{ marginBottom: "2rem" }}
-            >
-              <h2>5. Streaming + defer race</h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                The <code>&lt;SlowContent/&gt;</code> partial suspends for
-                ~1.5s during initial render. A neighboring deferred
-                Partial (<code>defer=&lt;WhenVisible/&gt;</code>, fallback
-                already on-screen) activates on mount. Its refetch should
-                land and its content should appear <em>before</em> the
-                slow partial resolves — proving the two flows don't
-                serialize.
-              </p>
-              <Partial
-                selector="#slow-stream"
-                fallback={
-                  <div
-                    data-testid="slow-fallback"
-                    style={{ color: "#888", fontStyle: "italic" }}
-                  >
-                    slow content streaming… (1.5s)
-                  </div>
-                }
-              >
-                <SlowContent />
-              </Partial>
-              <div style={{ height: "0.5rem" }} />
-              <Partial
-                selector="#race-defer"
-                defer={<WhenMounted />}
-                fallback={
-                  <div
-                    data-testid="race-defer-fallback"
-                    style={{ color: "#888", fontStyle: "italic" }}
-                  >
-                    dormant — activates immediately on mount
-                  </div>
-                }
-              >
-                <div data-testid="race-defer-content">
-                  <Timestamp prefix="race defer activated at" />
-                </div>
-              </Partial>
-            </section>
-
-            {/* ── 6. Concurrent refetches across distinct ids ───────── */}
-            <section
-              data-testid="section-concurrent"
-              className="card"
-              style={{ marginBottom: "2rem" }}
-            >
-              <h2>6. Concurrent refetches — independent ids</h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                Three Partials with staggered artificial delays (400ms,
-                800ms, 1200ms). Clicking the buttons in rapid succession
-                fires three independent RSC requests that run in
-                parallel on the server. Total wall time is{" "}
-                <em>max(delays)</em>, not <em>sum</em>.
-              </p>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                <strong>Behavior notes.</strong> Each click is its own
-                event task → own microtask → own RSC request. Clicking
-                in quick succession (one click at a time) fires three
-                overlapping requests that run in parallel on the server.
-                The buttons pass{" "}
-                <code>disableTransition: true</code> so each response
-                commits on arrival; the default transition-wrapped mode
-                is safest for same-id repeats (suppresses stale
-                flashes) but can collapse intermediate commits under
-                heavy fan-out — use <code>disableTransition</code> for
-                disjoint-id parallelism like this.
-              </p>
-              <Partial
-                selector="#concurrent-a .concurrent"
-                fallback={
-                  <div
-                    data-testid="concurrent-a-fallback"
-                    style={{ color: "#888" }}
-                  >
-                    a (400ms): streaming…
-                  </div>
-                }
-              >
-                <DelayedClock delayMs={400} label="a" />
-              </Partial>
-              <div style={{ height: "0.5rem" }} />
-              <Partial
-                selector="#concurrent-b .concurrent"
-                fallback={
-                  <div
-                    data-testid="concurrent-b-fallback"
-                    style={{ color: "#888" }}
-                  >
-                    b (800ms): streaming…
-                  </div>
-                }
-              >
-                <DelayedClock delayMs={800} label="b" />
-              </Partial>
-              <div style={{ height: "0.5rem" }} />
-              <Partial
-                selector="#concurrent-c .concurrent"
-                fallback={
-                  <div
-                    data-testid="concurrent-c-fallback"
-                    style={{ color: "#888" }}
-                  >
-                    c (1200ms): streaming…
-                  </div>
-                }
-              >
-                <DelayedClock delayMs={1200} label="c" />
-              </Partial>
+      {/* ── 6. Concurrent refetches across distinct ids ───────── */}
+      <Card data-testid="section-concurrent" className="mb-8 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">
+            6. Concurrent refetches — independent ids
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            Three Partials with staggered artificial delays (400ms, 800ms,
+            1200ms). Clicking the buttons in rapid succession fires three
+            independent RSC requests that run in parallel on the server.
+            Total wall time is <em>max(delays)</em>, not <em>sum</em>.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            <strong>Behavior notes.</strong> Each click is its own event
+            task → own microtask → own RSC request. Clicking in quick
+            succession (one click at a time) fires three overlapping
+            requests that run in parallel on the server. The buttons pass{" "}
+            <InlineCode>disableTransition: true</InlineCode> so each
+            response commits on arrival; the default transition-wrapped
+            mode is safest for same-id repeats (suppresses stale flashes)
+            but can collapse intermediate commits under heavy fan-out —
+            use <InlineCode>disableTransition</InlineCode> for disjoint-id
+            parallelism like this.
+          </p>
+          <Partial
+            selector="#concurrent-a .concurrent"
+            fallback={
               <div
-                style={{
-                  marginTop: "0.75rem",
-                  display: "flex",
-                  gap: "0.5rem",
-                  flexWrap: "wrap",
-                }}
+                data-testid="concurrent-a-fallback"
+                className="text-muted-foreground"
               >
-                <ActivateButton
-                  partialId="concurrent-a"
-                  label="refetch a (400ms)"
-                  testId="refresh-concurrent-a"
-                  disableTransition
-                />
-                <ActivateButton
-                  partialId="concurrent-b"
-                  label="refetch b (800ms)"
-                  testId="refresh-concurrent-b"
-                  disableTransition
-                />
-                <ActivateButton
-                  partialId="concurrent-c"
-                  label="refetch c (1200ms)"
-                  testId="refresh-concurrent-c"
-                  disableTransition
-                />
+                a (400ms): streaming…
               </div>
-            </section>
-
-            {/* ── 3. <WhenVisible> — viewport-triggered ─────────────── */}
-            <section
-              data-testid="section-any"
-              className="card"
-              style={{ marginBottom: "2rem" }}
-            >
-              <h2>
-                3. <code>&lt;WhenVisible&gt;</code> — activates when the
-                fallback enters the viewport
-              </h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                Activates when the fallback scrolls into view. Uses an{" "}
-                <code>IntersectionObserver</code> attached to the fallback's
-                DOM range via a Fragment ref.
-              </p>
+            }
+          >
+            <DelayedClock delayMs={400} label="a" />
+          </Partial>
+          <Partial
+            selector="#concurrent-b .concurrent"
+            fallback={
               <div
-                data-testid="any-spacer"
-                style={{ height: "90vh" }}
-                aria-hidden="true"
-              />
-              <Partial
-                selector="#any"
-                defer={<WhenVisible />}
-                fallback={
-                  <div
-                    data-testid="any-fallback"
-                    style={{ color: "#888", fontStyle: "italic" }}
-                  >
-                    dormant — scroll into view to activate
-                  </div>
-                }
+                data-testid="concurrent-b-fallback"
+                className="text-muted-foreground"
               >
-                <div data-testid="any-content">
-                  <Timestamp prefix="activated at" />
-                </div>
-              </Partial>
-            </section>
-          </main>
-          <ChatOverlay />
-        </body>
-      </html>
-    </PartialRoot>
+                b (800ms): streaming…
+              </div>
+            }
+          >
+            <DelayedClock delayMs={800} label="b" />
+          </Partial>
+          <Partial
+            selector="#concurrent-c .concurrent"
+            fallback={
+              <div
+                data-testid="concurrent-c-fallback"
+                className="text-muted-foreground"
+              >
+                c (1200ms): streaming…
+              </div>
+            }
+          >
+            <DelayedClock delayMs={1200} label="c" />
+          </Partial>
+          <div className="flex flex-wrap gap-2">
+            <ActivateButton
+              partialId="concurrent-a"
+              label="refetch a (400ms)"
+              testId="refresh-concurrent-a"
+              disableTransition
+            />
+            <ActivateButton
+              partialId="concurrent-b"
+              label="refetch b (800ms)"
+              testId="refresh-concurrent-b"
+              disableTransition
+            />
+            <ActivateButton
+              partialId="concurrent-c"
+              label="refetch c (1200ms)"
+              testId="refresh-concurrent-c"
+              disableTransition
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── 3. <WhenVisible> — viewport-triggered ─────────────── */}
+      <Card data-testid="section-any" className="mb-8 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">
+            3. <InlineCode>&lt;WhenVisible&gt;</InlineCode> — activates
+            when the fallback enters the viewport
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3 px-0">
+          <p className="text-sm text-muted-foreground">
+            Activates when the fallback scrolls into view. Uses an{" "}
+            <InlineCode>IntersectionObserver</InlineCode> attached to the
+            fallback's DOM range via a Fragment ref.
+          </p>
+          <div
+            data-testid="any-spacer"
+            className="h-[90vh]"
+            aria-hidden="true"
+          />
+          <Partial
+            selector="#any"
+            defer={<WhenVisible />}
+            fallback={
+              <DormantFallback testId="any-fallback">
+                dormant — scroll into view to activate
+              </DormantFallback>
+            }
+          >
+            <div data-testid="any-content">
+              <Timestamp prefix="activated at" />
+            </div>
+          </Partial>
+        </CardContent>
+      </Card>
+    </main>
   );
 }

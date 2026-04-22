@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { addToCart } from "./cart-actions.ts";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export function AddToCartButton({ sku }: { sku: string }) {
   const [isPending, startTransition] = useTransition();
@@ -19,40 +21,20 @@ export function AddToCartButton({ sku }: { sku: string }) {
   }
 
   return (
-    <div>
-      <button
+    <div className="flex flex-col gap-2">
+      <Button
         type="button"
+        size="sm"
         onClick={handleClick}
         disabled={isPending}
-        style={{
-          background: "#48bb78",
-          color: "#1a1a2e",
-          border: "none",
-          padding: "0.5rem 1rem",
-          borderRadius: 6,
-          cursor: isPending ? "wait" : "pointer",
-          fontWeight: 600,
-          fontSize: "0.85rem",
-        }}
+        className="bg-emerald-500 text-emerald-950 hover:bg-emerald-400"
       >
         {isPending ? "Adding..." : "Add to Cart"}
-      </button>
+      </Button>
       {error && (
-        <div
-          role="alert"
-          style={{
-            marginTop: "0.5rem",
-            padding: "0.4rem 0.6rem",
-            background: "#2a1a1a",
-            border: "1px solid #5a2a2a",
-            borderRadius: 6,
-            color: "#f56565",
-            fontSize: "0.75rem",
-            lineHeight: 1.3,
-          }}
-        >
-          {error}
-        </div>
+        <Alert variant="destructive" className="py-2">
+          <AlertDescription className="text-xs">{error}</AlertDescription>
+        </Alert>
       )}
     </div>
   );

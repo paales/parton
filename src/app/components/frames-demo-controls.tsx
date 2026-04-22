@@ -1,6 +1,7 @@
 "use client";
 
 import { useNavigation } from "../../lib/partial-client.tsx";
+import { Button } from "@/components/ui/button";
 
 /**
  * Button that navigates a named frame to a URL. Used from INSIDE a
@@ -20,20 +21,21 @@ export function FrameNavigateButton({
 }) {
   const nav = useNavigation(frameName);
   return (
-    <button
+    <Button
       type="button"
+      size="sm"
+      variant="outline"
       data-testid={testId ?? `frame-nav-${nav.name ?? "window"}`}
       onClick={() => void nav.navigate(url)}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 
 /**
  * Button that calls `updateCurrentEntry` to attach frame-state
- * to the current history entry. Used in the demo to show the state
- * readout picking up what we wrote.
+ * to the current history entry.
  */
 export function UpdateEntryStateButton({
   frame: frameName,
@@ -48,12 +50,14 @@ export function UpdateEntryStateButton({
 }) {
   const nav = useNavigation(frameName);
   return (
-    <button
+    <Button
       type="button"
+      size="sm"
+      variant="outline"
       data-testid={testId ?? `update-entry-${nav.name ?? "window"}`}
       onClick={() => nav.updateCurrentEntry({ state: patch })}
     >
       {label}
-    </button>
+    </Button>
   );
 }

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigation } from "../../lib/partial-client.tsx";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 /**
  * Manual activator: a plain button that calls
@@ -21,8 +23,7 @@ export function ActivateButton({
   /**
    * If true, the refetch bypasses React's `startTransition` wrapper —
    * each response commits on arrival rather than being held back
-   * waiting for a newer transition. Useful for concurrent-refetch
-   * demos where each response should be observable independently.
+   * waiting for a newer transition.
    */
   disableTransition?: boolean;
 }) {
@@ -37,31 +38,21 @@ export function ActivateButton({
     }
   };
   return (
-    <button
+    <Button
       type="button"
+      size="sm"
+      variant="outline"
       data-testid={testId ?? `activate-${partialId}`}
       onClick={activate}
       disabled={isPending}
-      style={{
-        background: "#2d3748",
-        color: "#ededed",
-        border: "1px solid #4a5568",
-        padding: "0.4rem 0.8rem",
-        borderRadius: 6,
-        cursor: isPending ? "wait" : "pointer",
-        fontSize: "0.85rem",
-      }}
     >
       {isPending ? "…" : label ?? "Activate"}
-    </button>
+    </Button>
   );
 }
 
 /**
- * Read / write a localStorage key. Used in the WhenStored demo so the user
- * can trigger activation from the page itself (the StorageEvent handler
- * in WhenStored only fires for OTHER tabs, so this helper emits a synthetic
- * StorageEvent for same-tab testing).
+ * Read / write a localStorage key.
  */
 export function StorageKeyEditor({
   storageKey,
@@ -85,8 +76,7 @@ export function StorageKeyEditor({
   const write = useCallback(() => {
     const oldValue = localStorage.getItem(storageKey);
     localStorage.setItem(storageKey, value);
-    // Same-tab storage events don't fire natively — dispatch a synthetic
-    // one so WhenStored's listener picks it up.
+    // Same-tab storage events don't fire natively — dispatch a synthetic one.
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: storageKey,
@@ -113,61 +103,33 @@ export function StorageKeyEditor({
   }, [storageKey]);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: "0.5rem",
-        alignItems: "center",
-        marginTop: "0.5rem",
-      }}
-    >
-      <input
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <Input
         data-testid={testId ? `${testId}-input` : `${storageKey}-input`}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder={`value for "${storageKey}"`}
-        style={{
-          background: "#111",
-          color: "#ededed",
-          border: "1px solid #4a5568",
-          padding: "0.3rem 0.5rem",
-          borderRadius: 4,
-          fontSize: "0.85rem",
-        }}
+        className="h-7 w-48 text-xs"
       />
-      <button
+      <Button
         type="button"
+        size="sm"
+        variant="outline"
         data-testid={testId ? `${testId}-set` : `${storageKey}-set`}
         onClick={write}
-        style={{
-          background: "#2d3748",
-          color: "#ededed",
-          border: "1px solid #4a5568",
-          padding: "0.3rem 0.7rem",
-          borderRadius: 4,
-          fontSize: "0.8rem",
-          cursor: "pointer",
-        }}
       >
         Set
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
+        size="sm"
+        variant="outline"
         data-testid={testId ? `${testId}-clear` : `${storageKey}-clear`}
         onClick={clear}
-        style={{
-          background: "#2d3748",
-          color: "#ededed",
-          border: "1px solid #4a5568",
-          padding: "0.3rem 0.7rem",
-          borderRadius: 4,
-          fontSize: "0.8rem",
-          cursor: "pointer",
-        }}
       >
         Clear
-      </button>
-      <code style={{ color: "#888", fontSize: "0.8rem" }}>
+      </Button>
+      <code className="text-xs text-muted-foreground font-mono">
         current: {stored == null ? "∅" : JSON.stringify(stored)}
       </code>
     </div>

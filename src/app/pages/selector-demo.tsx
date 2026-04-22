@@ -1,7 +1,6 @@
-import { Partial, PartialRoot } from "../../lib/partial.tsx";
-import { AppNav } from "../components/app-nav.tsx";
-import { ChatOverlay } from "../chat/chat-overlay.tsx";
+import { Partial } from "../../lib/partial.tsx";
 import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
  * `/selector-demo` — exercises selector-based refetch.
@@ -21,117 +20,103 @@ import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx"
 
 function ServerTime({ label }: { label: string }) {
   return (
-    <div data-testid={`time-${label}`} style={{ fontFamily: "ui-monospace, monospace" }}>
+    <div data-testid={`time-${label}`} className="font-mono">
       <strong>{label}:</strong> {new Date().toISOString()}
     </div>
   );
 }
 
+function InlineCode({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+      {children}
+    </code>
+  );
+}
+
 export function SelectorDemoPage() {
   return (
-    <PartialRoot>
-      <html lang="en">
-        <Partial selector="#head">
-          <head>
-            <meta charSet="UTF-8" />
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1.0"
-            />
-            <title>Selector Demo</title>
-            <style>{`
-              * { box-sizing: border-box; margin: 0; padding: 0; }
-              body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem; max-width: 900px; margin: 0 auto; }
-              a { color: #58a6ff; text-decoration: none; }
-              a:hover { text-decoration: underline; }
-              h1 { font-size: 1.75rem; margin-bottom: 1rem; }
-              h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
-              code { background: #2d3748; padding: 0.1rem 0.3rem; border-radius: 4px; font-size: 0.85rem; }
-              .card { background: #1a1a2e; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
-              button { background: #2d3748; color: #ededed; border: 1px solid #4a5568; padding: 0.5rem 0.9rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; margin-right: 0.5rem; }
-              button:hover { background: #4a5568; }
-            `}</style>
-          </head>
-        </Partial>
-        <body>
-          <AppNav />
-          <main style={{ padding: "1rem 0" }}>
-            <h1 style={{ marginBottom: "1rem" }}>
-              Selector-based refetch
-            </h1>
-            <p style={{ color: "#888", marginBottom: "2rem" }}>
-              <code>useNavigation().reload({'{selector: ".price"}'})</code>{" "}
-              refetches every Partial carrying that class token. Multiple
-              tokens union:{" "}
-              <code>{'{selector: ".price .featured"}'}</code> hits any
-              Partial with either label. <code>#foo</code> targets a
-              single Partial.
-            </p>
+    <main className="py-4">
+      <title>Selector Demo</title>
+      <h1 className="mb-4 text-2xl font-semibold">Selector-based refetch</h1>
+      <p className="mb-8 text-muted-foreground">
+        <InlineCode>useNavigation().reload({'{selector: ".price"}'})</InlineCode>{" "}
+        refetches every Partial carrying that class token. Multiple tokens
+        union: <InlineCode>{'{selector: ".price .featured"}'}</InlineCode>{" "}
+        hits any Partial with either label. <InlineCode>#foo</InlineCode>{" "}
+        targets a single Partial.
+      </p>
 
-            <section className="card" style={{ marginBottom: "1.5rem" }}>
-              <h2>
-                <code>&lt;Partial selector=".product"&gt;</code> —
-                anonymous
-              </h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                No <code>#</code>-token. Synthesizes{" "}
-                <code>__anon:.product</code> internally. Only addressable
-                via <code>.product</code>.
-              </p>
-              <Partial selector=".product">
-                <ServerTime label="product" />
-              </Partial>
-            </section>
+      <Card className="mb-6 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">
+            <InlineCode>&lt;Partial selector=".product"&gt;</InlineCode> —
+            anonymous
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-0">
+          <p className="mb-3 text-sm text-muted-foreground">
+            No <InlineCode>#</InlineCode>-token. Synthesizes{" "}
+            <InlineCode>__anon:.product</InlineCode> internally. Only
+            addressable via <InlineCode>.product</InlineCode>.
+          </p>
+          <Partial selector=".product">
+            <ServerTime label="product" />
+          </Partial>
+        </CardContent>
+      </Card>
 
-            <section className="card" style={{ marginBottom: "1.5rem" }}>
-              <h2>
-                <code>&lt;Partial selector=".price"&gt;</code> family
-              </h2>
-              <p style={{ color: "#888", marginBottom: "0.75rem" }}>
-                Three siblings sharing <code>.price</code>; two also carry{" "}
-                <code>.featured</code>. Selector unions let you refresh a
-                subset without plumbing ids through props.
-              </p>
-              <Partial selector="#price-a .price">
-                <ServerTime label="price-a" />
-              </Partial>
-              <Partial selector="#price-b .price .featured">
-                <ServerTime label="price-b" />
-              </Partial>
-              <Partial selector="#price-c .price .featured">
-                <ServerTime label="price-c" />
-              </Partial>
-            </section>
+      <Card className="mb-6 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">
+            <InlineCode>&lt;Partial selector=".price"&gt;</InlineCode> family
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2 px-0">
+          <p className="text-sm text-muted-foreground">
+            Three siblings sharing <InlineCode>.price</InlineCode>; two also
+            carry <InlineCode>.featured</InlineCode>. Selector unions let
+            you refresh a subset without plumbing ids through props.
+          </p>
+          <Partial selector="#price-a .price">
+            <ServerTime label="price-a" />
+          </Partial>
+          <Partial selector="#price-b .price .featured">
+            <ServerTime label="price-b" />
+          </Partial>
+          <Partial selector="#price-c .price .featured">
+            <ServerTime label="price-c" />
+          </Partial>
+        </CardContent>
+      </Card>
 
-            <section className="card">
-              <h2>Refetch controls</h2>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                <SelectorRefetchButton
-                  selector=".product"
-                  label="refetch .product"
-                  testId="refresh-product"
-                />
-                <SelectorRefetchButton
-                  selector=".price"
-                  label="refetch .price (3 partials)"
-                  testId="refresh-price"
-                />
-                <SelectorRefetchButton
-                  selector=".featured"
-                  label="refetch .featured (2 partials)"
-                  testId="refresh-price-featured"
-                />
-                <SelectorRefetchButton
-                  selector="#price-a"
-                  label="refetch #price-a"
-                  testId="refresh-price-a"
-                />
-              </div>
-            </section>
-          </main>
-          <ChatOverlay />
-        </body>
-      </html>
-    </PartialRoot>
+      <Card className="p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">Refetch controls</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2 px-0">
+          <SelectorRefetchButton
+            selector=".product"
+            label="refetch .product"
+            testId="refresh-product"
+          />
+          <SelectorRefetchButton
+            selector=".price"
+            label="refetch .price (3 partials)"
+            testId="refresh-price"
+          />
+          <SelectorRefetchButton
+            selector=".featured"
+            label="refetch .featured (2 partials)"
+            testId="refresh-price-featured"
+          />
+          <SelectorRefetchButton
+            selector="#price-a"
+            label="refetch #price-a"
+            testId="refresh-price-a"
+          />
+        </CardContent>
+      </Card>
+    </main>
   );
 }

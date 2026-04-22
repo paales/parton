@@ -2,28 +2,22 @@
 
 import { useTransition } from "react";
 import { useNavigation } from "../../lib/partial-client.tsx";
+import { Button } from "@/components/ui/button";
 
 /**
  * Client-side buttons to trigger refetches against the cache-demo
- * partials. Use these to verify that refetching a cached partial
- * doesn't re-run its server component body (check
- * data-testid="server-render-count" before/after).
+ * partials.
  */
 export function CacheControls() {
   const nav = useNavigation();
   const [isPending, startTransition] = useTransition();
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: "0.5rem",
-        marginBottom: "1rem",
-        flexWrap: "wrap",
-      }}
-    >
-      <button
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <Button
         type="button"
+        size="sm"
+        variant="outline"
         onClick={() =>
           startTransition(() => {
             void nav.reload({ selector: "#slow" });
@@ -32,9 +26,11 @@ export function CacheControls() {
         data-testid="refetch-slow"
       >
         Refetch slow
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
+        size="sm"
+        variant="outline"
         onClick={() =>
           startTransition(() => {
             void nav.reload({ selector: "#clock" });
@@ -43,9 +39,11 @@ export function CacheControls() {
         data-testid="refetch-clock"
       >
         Refetch clock
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
+        size="sm"
+        variant="outline"
         onClick={() => {
           const url = new URL(window.location.href);
           const current = url.searchParams.get("flavor") ?? "vanilla";
@@ -61,8 +59,8 @@ export function CacheControls() {
         data-testid="toggle-flavor"
       >
         Toggle flavor
-      </button>
-      {isPending && <span style={{ color: "#888" }}>…</span>}
+      </Button>
+      {isPending && <span className="text-muted-foreground">…</span>}
     </div>
   );
 }

@@ -1,12 +1,11 @@
-import { Partial, PartialRoot } from "../../lib/partial.tsx";
-import { AppNav } from "../components/app-nav.tsx";
-import { ChatOverlay } from "../chat/chat-overlay.tsx";
+import { Partial } from "../../lib/partial.tsx";
 import { getPathname, getSearchParam } from "../../framework/context.ts";
 import {
   FrameNavigateButton,
   UpdateEntryStateButton,
 } from "../components/frames-demo-controls.tsx";
 import { FrameNavigationBar } from "../components/frame-nav-bar.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
  * `/frames-demo` — two server-iframes on a normal page.
@@ -33,10 +32,10 @@ function ListView() {
   const skus = ["alpha", "beta", "gamma"];
   return (
     <div data-testid="main-list">
-      <h3 style={{ marginTop: 0 }}>Product list</h3>
-      <ul style={{ listStyle: "none", padding: 0 }}>
+      <h3 className="mb-2 text-base font-semibold">Product list</h3>
+      <ul className="list-none space-y-1 p-0">
         {skus.map((sku) => (
-          <li key={sku} style={{ padding: "0.25rem 0" }}>
+          <li key={sku}>
             <FrameNavigateButton
               url={`/frames-demo?product=${sku}`}
               label={`Open ${sku}`}
@@ -53,10 +52,13 @@ function DetailView({ sku }: { sku: string }) {
   const renderedAt = Date.now();
   return (
     <div data-testid="main-detail" data-sku={sku} data-rendered-at={renderedAt}>
-      <h3 style={{ marginTop: 0 }}>Product: {sku}</h3>
-      <p style={{ color: "#888" }}>
-        Window URL: <code>?product={sku}</code> · rendered{" "}
-        {new Date(renderedAt).toLocaleTimeString()}
+      <h3 className="mb-2 text-base font-semibold">Product: {sku}</h3>
+      <p className="mb-3 text-muted-foreground">
+        Window URL:{" "}
+        <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+          ?product={sku}
+        </code>{" "}
+        · rendered {new Date(renderedAt).toLocaleTimeString()}
       </p>
       <FrameNavigateButton
         url="/frames-demo"
@@ -76,8 +78,11 @@ function MainContent() {
 
 function CartClosedView() {
   return (
-    <div data-testid="cart-closed" style={{ color: "#888" }}>
-      <span>Cart is closed. </span>
+    <div
+      data-testid="cart-closed"
+      className="flex flex-wrap items-center gap-2 text-muted-foreground"
+    >
+      <span>Cart is closed.</span>
       <FrameNavigateButton
         url="/cart/open"
         label="Open cart"
@@ -91,30 +96,29 @@ function CartOpenView() {
   return (
     <div
       data-testid="cart-open"
-      style={{
-        border: "1px solid #4a5568",
-        borderRadius: 8,
-        padding: "1rem",
-        background: "#1a1a2e",
-      }}
+      className="rounded-lg border bg-card p-4 text-card-foreground"
     >
-      <h3 style={{ marginTop: 0 }}>Cart</h3>
-      <p style={{ color: "#888" }}>0 items · rendered at {new Date().toLocaleTimeString()}</p>
-      <FrameNavigateButton
-        url="/cart/checkout"
-        label="Go to checkout"
-        testId="cart-checkout-btn"
-      />{" "}
-      <FrameNavigateButton
-        url="/cart/closed"
-        label="Close"
-        testId="cart-close-btn"
-      />{" "}
-      <UpdateEntryStateButton
-        patch={{ itemsReady: true }}
-        label="Mark ready"
-        testId="cart-mark-ready"
-      />
+      <h3 className="mb-2 text-base font-semibold">Cart</h3>
+      <p className="mb-3 text-muted-foreground">
+        0 items · rendered at {new Date().toLocaleTimeString()}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <FrameNavigateButton
+          url="/cart/checkout"
+          label="Go to checkout"
+          testId="cart-checkout-btn"
+        />
+        <FrameNavigateButton
+          url="/cart/closed"
+          label="Close"
+          testId="cart-close-btn"
+        />
+        <UpdateEntryStateButton
+          patch={{ itemsReady: true }}
+          label="Mark ready"
+          testId="cart-mark-ready"
+        />
+      </div>
     </div>
   );
 }
@@ -123,15 +127,10 @@ function CartCheckoutView() {
   return (
     <div
       data-testid="cart-checkout"
-      style={{
-        border: "1px solid #48bb78",
-        borderRadius: 8,
-        padding: "1rem",
-        background: "#22543d",
-      }}
+      className="rounded-lg border border-emerald-600/40 bg-emerald-950/30 p-4 text-emerald-100"
     >
-      <h3 style={{ marginTop: 0 }}>Checkout</h3>
-      <p>Payment form would go here.</p>
+      <h3 className="mb-2 text-base font-semibold">Checkout</h3>
+      <p className="mb-3">Payment form would go here.</p>
       <FrameNavigateButton
         url="/cart/open"
         label="← back to cart"
@@ -152,18 +151,21 @@ function CartFrameContent() {
 
 function MenuClosedView() {
   return (
-    <div data-testid="menu-closed" style={{ color: "#888" }}>
-      <span>Menu is closed. </span>
+    <div
+      data-testid="menu-closed"
+      className="flex flex-wrap items-center gap-2 text-muted-foreground"
+    >
+      <span>Menu is closed.</span>
       <FrameNavigateButton
         url="/menu/about"
         label="About"
         testId="menu-about-btn"
-      />{" "}
+      />
       <FrameNavigateButton
         url="/menu/settings"
         label="Settings"
         testId="menu-settings-btn"
-      />{" "}
+      />
       <FrameNavigateButton
         url="/menu/slow"
         label="Slow (streaming)"
@@ -177,15 +179,12 @@ function MenuAboutView() {
   return (
     <div
       data-testid="menu-about"
-      style={{
-        border: "1px solid #4a5568",
-        borderRadius: 8,
-        padding: "1rem",
-        background: "#1a1a2e",
-      }}
+      className="rounded-lg border bg-card p-4 text-card-foreground"
     >
-      <h3 style={{ marginTop: 0 }}>About</h3>
-      <p>Demo of the Frame primitive — two server-iframes on a normal page.</p>
+      <h3 className="mb-2 text-base font-semibold">About</h3>
+      <p className="mb-3">
+        Demo of the Frame primitive — two server-iframes on a normal page.
+      </p>
       <FrameNavigateButton
         url="/menu/closed"
         label="Close"
@@ -199,15 +198,10 @@ function MenuSettingsView() {
   return (
     <div
       data-testid="menu-settings"
-      style={{
-        border: "1px solid #4a5568",
-        borderRadius: 8,
-        padding: "1rem",
-        background: "#1a1a2e",
-      }}
+      className="rounded-lg border bg-card p-4 text-card-foreground"
     >
-      <h3 style={{ marginTop: 0 }}>Settings</h3>
-      <p>(no settings yet)</p>
+      <h3 className="mb-2 text-base font-semibold">Settings</h3>
+      <p className="mb-3">(no settings yet)</p>
       <FrameNavigateButton
         url="/menu/closed"
         label="Close"
@@ -234,10 +228,7 @@ function MenuFrameContent() {
 async function SlowInsideFrame() {
   await new Promise((r) => setTimeout(r, 400));
   return (
-    <div
-      data-testid="menu-slow-content"
-      style={{ padding: "0.5rem", color: "#48bb78" }}
-    >
+    <div data-testid="menu-slow-content" className="p-2 text-emerald-400">
       Slow content loaded at {new Date().toLocaleTimeString()}
     </div>
   );
@@ -247,29 +238,28 @@ function MenuSlowView() {
   return (
     <div
       data-testid="menu-slow"
-      style={{
-        border: "1px solid #4a5568",
-        borderRadius: 8,
-        padding: "1rem",
-        background: "#1a1a2e",
-      }}
+      className="rounded-lg border bg-card p-4 text-card-foreground"
     >
-      <h3 style={{ marginTop: 0 }}>Slow menu view (streaming)</h3>
+      <h3 className="mb-2 text-base font-semibold">
+        Slow menu view (streaming)
+      </h3>
       <Partial
         selector="#menu-slow-inner"
         fallback={
-          <div data-testid="menu-slow-fallback" style={{ color: "#888" }}>
+          <div data-testid="menu-slow-fallback" className="text-muted-foreground">
             Loading slow content…
           </div>
         }
       >
         <SlowInsideFrame />
       </Partial>
-      <FrameNavigateButton
-        url="/menu/closed"
-        label="Close"
-        testId="menu-close-from-slow"
-      />
+      <div className="mt-3">
+        <FrameNavigateButton
+          url="/menu/closed"
+          label="Close"
+          testId="menu-close-from-slow"
+        />
+      </div>
     </div>
   );
 }
@@ -278,66 +268,54 @@ function MenuSlowView() {
 
 export function FramesDemoPage() {
   return (
-    <PartialRoot>
-      <html lang="en">
-        <Partial selector="#head">
-          <head>
-            <meta charSet="UTF-8" />
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1.0"
-            />
-            <title>Frames Demo</title>
-            <style>{`
-              * { box-sizing: border-box; margin: 0; padding: 0; }
-              body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem; max-width: 900px; margin: 0 auto; }
-              a { color: #58a6ff; text-decoration: none; }
-              a:hover { text-decoration: underline; }
-              h1 { font-size: 1.75rem; margin-bottom: 1rem; }
-              h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
-              code { background: #2d3748; padding: 0.1rem 0.3rem; border-radius: 4px; font-size: 0.85rem; }
-              .card { background: #1a1a2e; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
-              button { background: #2d3748; color: #ededed; border: 1px solid #4a5568; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
-              button:hover:not(:disabled) { background: #4a5568; }
-            `}</style>
-          </head>
-        </Partial>
-        <body>
-          <AppNav />
-          <main style={{ padding: "1rem 0" }}>
-            <h1>Frames demo</h1>
-            <p style={{ color: "#888", marginBottom: "1.5rem" }}>
-              The main listing is plain page content — product clicks
-              update the window URL via <code>useNavigation()</code>,
-              and the browser back/forward buttons handle navigation
-              natively. Two frames (cart and menu) live alongside with
-              their own URL scopes and inline nav bars.
-            </p>
+    <main className="py-4">
+      <title>Frames Demo</title>
+      <h1 className="mb-4 text-2xl font-semibold">Frames demo</h1>
+      <p className="mb-6 text-muted-foreground">
+        The main listing is plain page content — product clicks update
+        the window URL via{" "}
+        <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+          useNavigation()
+        </code>
+        , and the browser back/forward buttons handle navigation
+        natively. Two frames (cart and menu) live alongside with their
+        own URL scopes and inline nav bars.
+      </p>
 
-            <section className="card">
-              <h2>Main listing (page-scoped)</h2>
-              <MainContent />
-            </section>
+      <Card className="mb-4 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">
+            Main listing (page-scoped)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-0">
+          <MainContent />
+        </CardContent>
+      </Card>
 
-            <section className="card">
-              <h2>Cart frame</h2>
-              <Partial selector="#cart" frame="cart" frameUrl="/cart/closed">
-                <FrameNavigationBar />
-                <CartFrameContent />
-              </Partial>
-            </section>
+      <Card className="mb-4 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">Cart frame</CardTitle>
+        </CardHeader>
+        <CardContent className="px-0">
+          <Partial selector="#cart" frame="cart" frameUrl="/cart/closed">
+            <FrameNavigationBar />
+            <CartFrameContent />
+          </Partial>
+        </CardContent>
+      </Card>
 
-            <section className="card">
-              <h2>Menu frame</h2>
-              <Partial selector="#menu" frame="menu" frameUrl="/menu/closed">
-                <FrameNavigationBar />
-                <MenuFrameContent />
-              </Partial>
-            </section>
-          </main>
-          <ChatOverlay />
-        </body>
-      </html>
-    </PartialRoot>
+      <Card className="mb-4 p-5">
+        <CardHeader className="px-0">
+          <CardTitle className="text-base">Menu frame</CardTitle>
+        </CardHeader>
+        <CardContent className="px-0">
+          <Partial selector="#menu" frame="menu" frameUrl="/menu/closed">
+            <FrameNavigationBar />
+            <MenuFrameContent />
+          </Partial>
+        </CardContent>
+      </Card>
+    </main>
   );
 }

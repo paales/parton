@@ -11,12 +11,10 @@
  * request regardless.
  */
 
-import { Partial, PartialRoot } from "../../lib/partial.tsx";
+import { Partial } from "../../lib/partial.tsx";
 import { _cacheStats } from "../../lib/cache.tsx";
 import { CacheControls } from "../components/cache-controls.tsx";
 import { ClickCounter } from "../components/click-counter.tsx";
-import { AppNav } from "../components/app-nav.tsx";
-import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { getSearchParam } from "../../framework/context.ts";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -36,21 +34,14 @@ async function SlowContent() {
     <div
       data-testid="slow-content"
       data-render-count={slowRenderCount}
-      style={{
-        padding: "1rem",
-        background: "#1a1a2e",
-        borderRadius: 8,
-        marginBottom: "0.5rem",
-      }}
+      className="mb-2 rounded-lg bg-card p-4"
     >
-      <div style={{ fontWeight: 600 }}>Slow content (flavor: {flavor})</div>
-      <div style={{ color: "#888", fontSize: "0.8rem", marginTop: "0.25rem" }}>
+      <div className="font-semibold">Slow content (flavor: {flavor})</div>
+      <div className="mt-1 text-xs text-muted-foreground">
         rendered {slowRenderCount} time{slowRenderCount === 1 ? "" : "s"} ·
         computed at {new Date().toISOString()}
       </div>
-      {/* Client component nested inside a cached subtree — proves the
-          buffer/decode round-trip preserves client references. */}
-      <div style={{ marginTop: "0.75rem" }}>
+      <div className="mt-3">
         <ClickCounter />
       </div>
     </div>
@@ -61,15 +52,10 @@ function Clock() {
   return (
     <div
       data-testid="clock-content"
-      style={{
-        padding: "1rem",
-        background: "#2a1a2e",
-        borderRadius: 8,
-        marginBottom: "0.5rem",
-      }}
+      className="mb-2 rounded-lg bg-muted p-4"
     >
-      <div style={{ fontWeight: 600 }}>Clock (always fresh)</div>
-      <div style={{ color: "#888", fontSize: "0.8rem", marginTop: "0.25rem" }}>
+      <div className="font-semibold">Clock (always fresh)</div>
+      <div className="mt-1 text-xs text-muted-foreground">
         Server time: {new Date().toISOString()}
       </div>
     </div>
@@ -81,52 +67,48 @@ export async function CacheDemoPage() {
   const stats = await _cacheStats();
 
   return (
-    <PartialRoot>
-      <html lang="en">
-        <Partial selector="#head">
-          <head>
-            <meta charSet="UTF-8" />
-            <title>Cache Demo</title>
-            <style>{`
-              body { font-family: system-ui, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem; max-width: 800px; margin: 0 auto; }
-              a { color: #58a6ff; }
-              button { background: #2d3748; color: #ededed; border: 1px solid #4a5568; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
-              button:hover { background: #4a5568; }
-              code { background: #2d3748; padding: 0.1rem 0.3rem; border-radius: 4px; font-size: 0.85rem; }
-            `}</style>
-          </head>
-        </Partial>
-        <body>
-          <AppNav />
-          <h1>Server-side cache spike</h1>
-          <p style={{ color: "#888" }}>
-            flavor=<code>{flavor}</code> · cache size:{" "}
-            <code data-testid="cache-size">{stats.size}</code>
-          </p>
+    <>
+      <title>Cache Demo</title>
+      <h1 className="mb-4 text-2xl font-semibold">Server-side cache spike</h1>
+      <p className="mb-4 text-muted-foreground">
+        flavor=<Code>{flavor}</Code> · cache size:{" "}
+        <Code data-testid="cache-size">{stats.size}</Code>
+      </p>
 
-          <CacheControls />
+      <CacheControls />
 
-          <Partial
-            selector="#slow"
-            cache={{ maxAge: 60 }}
-            fallback={<div data-testid="slow-fallback">Loading slow…</div>}
-          >
-            <SlowContent />
-          </Partial>
+      <Partial
+        selector="#slow"
+        cache={{ maxAge: 60 }}
+        fallback={<div data-testid="slow-fallback">Loading slow…</div>}
+      >
+        <SlowContent />
+      </Partial>
 
-          <Partial selector="#clock" fallback={<div>Loading clock…</div>}>
-            <Clock />
-          </Partial>
+      <Partial selector="#clock" fallback={<div>Loading clock…</div>}>
+        <Clock />
+      </Partial>
 
-          <div style={{ marginTop: "2rem", color: "#666", fontSize: "0.8rem" }}>
-            Server <code>slowRenderCount</code>:{" "}
-            <span data-testid="server-render-count">{slowRenderCount}</span>
-            <br />
-            Try: change <code>?flavor=</code>, refetch the slow partial, reload.
-          </div>
-          <ChatOverlay />
-        </body>
-      </html>
-    </PartialRoot>
+      <div className="mt-8 text-xs text-muted-foreground">
+        Server <Code>slowRenderCount</Code>:{" "}
+        <span data-testid="server-render-count">{slowRenderCount}</span>
+        <br />
+        Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
+      </div>
+    </>
+  );
+}
+
+function Code({
+  children,
+  ...rest
+}: React.ComponentProps<"code">) {
+  return (
+    <code
+      {...rest}
+      className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono"
+    >
+      {children}
+    </code>
   );
 }

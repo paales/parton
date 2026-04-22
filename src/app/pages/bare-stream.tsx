@@ -14,42 +14,25 @@
  * they were.
  */
 
-import { PartialRoot, Partial } from "../../lib/partial.tsx";
+import { Partial } from "../../lib/partial.tsx";
 import { NextObserver } from "../components/next-observer.tsx";
 import { ScrollRestore } from "../components/scroll-restore.tsx";
-import { AppNav } from "../components/app-nav.tsx";
-import { ChatOverlay } from "../chat/chat-overlay.tsx";
 import { getSearchParam } from "../../framework/context.ts";
 
 const ITEMS_PER_PAGE = 10;
-const ITEM_HEIGHT = 80;
 
 function PageBlock({ page }: { page: number }) {
   const offset = (page - 1) * ITEMS_PER_PAGE;
   return (
-    <section
-      data-testid={`page-${page}`}
-      data-page={page}
-      style={{ marginBottom: "1rem" }}
-    >
-      <h2 style={{ color: "#888", fontSize: "0.9rem", padding: "0.5rem 0" }}>
-        Page {page}
-      </h2>
+    <section data-testid={`page-${page}`} data-page={page} className="mb-4">
+      <h2 className="py-2 text-sm text-muted-foreground">Page {page}</h2>
       {Array.from({ length: ITEMS_PER_PAGE }, (_, i) => {
         const itemId = offset + i + 1;
         return (
           <div
             key={itemId}
             data-testid={`item-${itemId}`}
-            style={{
-              height: ITEM_HEIGHT,
-              padding: "1rem",
-              marginBottom: "0.5rem",
-              background: "#1a1a2e",
-              borderRadius: 8,
-              display: "flex",
-              alignItems: "center",
-            }}
+            className="mb-2 flex h-20 items-center rounded-lg bg-card p-4"
           >
             Item #{itemId}
           </div>
@@ -72,36 +55,23 @@ export function BarePage() {
   });
 
   return (
-    <PartialRoot>
-      <html lang="en">
-        <Partial selector="#head">
-          <head>
-            <meta charSet="UTF-8" />
-            <title>Infinite Scroll Test</title>
-            <style>{`
-              body { font-family: system-ui, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem; max-width: 800px; margin: 0 auto; }
-              a { color: #58a6ff; }
-            `}</style>
-          </head>
-        </Partial>
-        <body>
-          <ScrollRestore />
-          <AppNav />
-          <h1>Infinite Scroll (renderOn-style singleton slot)</h1>
-          <p style={{ color: "#888", marginBottom: "1rem" }}>
-            <a href="/" data-testid="link-home">
-              ← Home
-            </a>
-            {" · "}
-            <span data-testid="end-readout">end={end}</span>
-          </p>
-          {pages}
-          <Partial selector="#next">
-            <NextObserver currentEnd={end} />
-          </Partial>
-          <ChatOverlay />
-        </body>
-      </html>
-    </PartialRoot>
+    <>
+      <title>Infinite Scroll Test</title>
+      <ScrollRestore />
+      <h1 className="mb-4 text-2xl font-semibold">
+        Infinite Scroll (renderOn-style singleton slot)
+      </h1>
+      <p className="mb-4 text-muted-foreground">
+        <a href="/" data-testid="link-home" className="text-primary hover:underline">
+          ← Home
+        </a>
+        {" · "}
+        <span data-testid="end-readout">end={end}</span>
+      </p>
+      {pages}
+      <Partial selector="#next">
+        <NextObserver currentEnd={end} />
+      </Partial>
+    </>
   );
 }

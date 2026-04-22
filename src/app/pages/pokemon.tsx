@@ -11,6 +11,9 @@ import { client } from "../data.ts";
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts";
 import { getPathname, getSearchParam } from "../../framework/context.ts";
 import { notFound } from "../../framework/errors.ts";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 24;
 
@@ -131,6 +134,47 @@ function extractSprite(sprites: unknown): string | null {
   );
 }
 
+/**
+ * Pokemon types → semantic tailwind background/text colors. Not a
+ * shadcn Badge variant because the pool is open-ended — we use Badge's
+ * base reset and layer a per-type className on top.
+ */
+const TYPE_COLORS: Record<string, string> = {
+  grass: "bg-emerald-900/60 text-emerald-200",
+  fire: "bg-red-900/60 text-red-200",
+  water: "bg-blue-900/60 text-blue-200",
+  electric: "bg-amber-900/60 text-amber-100",
+  normal: "bg-slate-800 text-slate-200",
+  poison: "bg-purple-900/60 text-purple-200",
+  bug: "bg-lime-900/60 text-lime-200",
+  flying: "bg-indigo-900/60 text-indigo-200",
+};
+
+function TypeBadge({
+  type,
+  className,
+}: {
+  type: string;
+  className?: string;
+}) {
+  const color = TYPE_COLORS[type] ?? "bg-slate-800 text-slate-200";
+  return (
+    <Badge
+      variant="secondary"
+      className={cn(
+        "rounded-full px-2.5 py-0.5 text-[0.7rem] font-semibold",
+        color,
+        className,
+      )}
+    >
+      {type}
+    </Badge>
+  );
+}
+
+const POKEMON_GRID =
+  "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4";
+
 export function PokemonPage() {
   // `/pokemon/:id` extracted via the framework's tracked accessor.
   // Only consume the result if the id is numeric — the pattern matches
@@ -153,15 +197,9 @@ export function PokemonPage() {
   return (
     <>
       <Partial selector="#header">
-        <header>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <span style={{ color: "#888", fontSize: "0.85rem" }}>
+        <header className="mb-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">
               {new Date().toLocaleString()}
             </span>
             {/* URL-mode open state comes from the page URL;
@@ -187,13 +225,6 @@ export function PokemonPage() {
         The inner `<SearchArea/>` is identical in both places — the
         scope around it decides which URL it sees.
       */}
-      {/* The container Partials are what the typing input refetches
-          via `selector: ".search-results"`. Page scope: the selector
-          resolves to `search-page` and its body re-runs — `<SearchArea/>`
-          reads a fresh `?q=` from the page URL and builds fresh stage
-          elements with the new prop. Frame scope: the selector filter
-          is ignored by frame navigation (frame nav always refetches
-          its own subtree), so the behavior is symmetric either way. */}
       <Partial selector="#search-page .search-results">
         <SearchArea scope="page" />
       </Partial>
@@ -216,18 +247,16 @@ export function PokemonPage() {
           <Partial selector="#species">
             <SpeciesPartial pokemonId={pokemonId} />
           </Partial>
-          <div style={{ height: "80vh" }} data-testid="lazy-spacer" />
+          <div className="h-[80vh]" data-testid="lazy-spacer" />
           <Partial
             selector="#trivia"
             defer={<WhenVisible />}
             fallback={
-              <div
-                className="card"
-                data-testid="trivia-fallback"
-                style={{ color: "#888", fontStyle: "italic" }}
-              >
-                Loading trivia…
-              </div>
+              <Card data-testid="trivia-fallback" className="mb-4 p-5">
+                <CardContent className="px-0 italic text-muted-foreground">
+                  Loading trivia…
+                </CardContent>
+              </Card>
             }
           >
             <TriviaPartial pokemonId={pokemonId} />
@@ -248,20 +277,6 @@ export function PokemonPage() {
 /**
  * Scope-agnostic search UI. Reads `?search=` and `?q=` from the
  * AMBIENT request (page URL or frame URL depending on what wraps us).
- *
- * Rendered twice in the pokemon page:
- *   - page-scoped:  <Partial selector="#search-page .search-results"><SearchArea scope="page"/></Partial>
- *   - frame-scoped: <Partial selector="#search .search-results" frame="search"><SearchArea scope="frame"/></Partial>
- *
- * The `scope` prop is purely a namespace for the stage Partial ids
- * (to avoid colliding when both instances happen to render at the
- * same time) — it does NOT change behavior.
- *
- * Both container Partials carry `.search-results` so `useNavigation()
- * .navigate(url, {selector: ".search-results"})` from inside the input
- * refetches them together. Selector resolution runs server-side
- * against the route-scoped registry; dynamic / conditional Partials
- * resolve as long as they've rendered on a prior pass.
  */
 function SearchArea({ scope }: { scope: "page" | "frame" }) {
   const isOpen = getSearchParam("search") != null;
@@ -270,16 +285,6 @@ function SearchArea({ scope }: { scope: "page" | "frame" }) {
   return (
     <SearchDialog open>
       <SearchInput query={q} />
-      {/*
-        Stage 1 has no `fallback` — the framework therefore does
-        not wrap it in a Suspense boundary. SearchStage1 still
-        awaits a GraphQL query, but that suspend resolves in the
-        outer RSC stream before the enclosing partial's chunk
-        emits, so the client commits stage-1's content inline
-        with the rest of the response. No loading flash, no
-        per-chunk streaming — appropriate for a fast "always-on"
-        slice that sits at the top of the dialog.
-      */}
       <Partial selector={`#${scope}-stage-1`} cache={{}}>
         <SearchStage1 query={q} />
       </Partial>
@@ -289,7 +294,7 @@ function SearchArea({ scope }: { scope: "page" | "frame" }) {
         fallback={
           <div
             data-testid="stage-2-fallback"
-            style={{ color: "#666", padding: "0.5rem" }}
+            className="p-2 text-muted-foreground"
           >
             Loading stage 2...
           </div>
@@ -303,7 +308,7 @@ function SearchArea({ scope }: { scope: "page" | "frame" }) {
         fallback={
           <div
             data-testid="stage-3-fallback"
-            style={{ color: "#666", padding: "0.5rem" }}
+            className="p-2 text-muted-foreground"
           >
             Loading stage 3...
           </div>
@@ -317,8 +322,6 @@ function SearchArea({ scope }: { scope: "page" | "frame" }) {
 
 /**
  * Three search stages that resolve with staggered delays (0ms, 1s, 2s).
- * Each queries a different slice of results. This tests whether RSC
- * streaming delivers partials progressively on AJAX refetch.
  */
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -367,43 +370,27 @@ function SearchResultGrid({
   if (results.length === 0) return null;
   return (
     <div data-testid={testId}>
-      <div className="grid">
+      <div className={POKEMON_GRID}>
         {results.map((r) => (
           <a
             key={r.id}
             href={`/pokemon/${r.id}`}
-            className="card"
-            style={{ display: "block" }}
+            className="block rounded-xl bg-card p-5 ring-1 ring-border/50 transition-colors hover:bg-muted"
           >
             {r.spriteUrl && (
               <img
                 src={r.spriteUrl}
                 alt={r.name}
                 loading="lazy"
-                style={{
-                  width: 64,
-                  height: 64,
-                  imageRendering: "auto" as const,
-                }}
+                className="h-16 w-16"
               />
             )}
-            <h2
-              style={{
-                textTransform: "capitalize" as const,
-                fontSize: "1rem",
-              }}
-            >
+            <h2 className="mt-1 text-base capitalize">
               #{r.id} {r.name}
             </h2>
-            <div style={{ marginTop: "0.25rem" }}>
+            <div className="mt-1 flex flex-wrap gap-1">
               {r.types.map((t) => (
-                <span
-                  key={t}
-                  className={`badge badge-${t || "default"}`}
-                  style={{ fontSize: "0.7rem" }}
-                >
-                  {t}
-                </span>
+                <TypeBadge key={t} type={t || "default"} />
               ))}
             </div>
           </a>
@@ -413,27 +400,10 @@ function SearchResultGrid({
   );
 }
 
-/**
- * Stages take `query` as a scalar prop.
- *
- * `SearchArea` reads `getSearchParam("q")` from the ambient scope
- * (page URL or frame URL) and passes the value to each stage. Reading
- * the accessor *inside* each stage would sound simpler, but the
- * stages are wrapped in `<Partial cache>` and `<Cache>`'s inner
- * render (`renderToReadableStream`) opens a fresh React internal
- * render context that doesn't inherit the frame-scope cell — so a
- * frame-scoped stage would read the page URL and miss `?q=`.
- * Lifting the read out of Cache keeps the accessor inside the
- * correct scope and also folds `query` into the stage's structural
- * fingerprint, so different `q` values produce different cache keys
- * (instead of relying solely on the Cache manifest's URL capture).
- */
-
-/** Stage 1: first 6 results, no delay */
 async function SearchStage1({ query }: { query: string }) {
   if (!query) {
     return (
-      <p style={{ color: "#666", marginTop: "1rem", fontSize: "0.85rem" }}>
+      <p className="mt-4 text-sm text-muted-foreground">
         Start typing to search...
       </p>
     );
@@ -443,15 +413,12 @@ async function SearchStage1({ query }: { query: string }) {
 
   return (
     <>
-      <h3 style={{ color: "#888", marginTop: "1rem", fontSize: "0.8rem" }}>
-        Stage 1 — instant
-      </h3>
+      <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant</h3>
       <SearchResultGrid results={results} testId="stage-1-content" />
     </>
   );
 }
 
-/** Stage 2: next 6 results, 1 second delay. No-ops when q is empty. */
 async function SearchStage2({ query }: { query: string }) {
   if (!query) return null;
   await delay(1000);
@@ -459,13 +426,12 @@ async function SearchStage2({ query }: { query: string }) {
 
   return (
     <div>
-      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>Stage 2 — 1s delay</h3>
+      <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay</h3>
       <SearchResultGrid results={results} testId="stage-2-content" />
     </div>
   );
 }
 
-/** Stage 3: next 8 results, 2 second delay. No-ops when q is empty. */
 async function SearchStage3({ query }: { query: string }) {
   if (!query) return null;
   await delay(2000);
@@ -473,7 +439,7 @@ async function SearchStage3({ query }: { query: string }) {
 
   return (
     <div>
-      <h3 style={{ color: "#888", fontSize: "0.8rem" }}>Stage 3 — 2s delay</h3>
+      <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay</h3>
       <SearchResultGrid results={results} testId="stage-3-content" />
     </div>
   );
@@ -498,14 +464,14 @@ async function PokemonListPage({
       <PageSentinel page={page} />
       {isFirst && (
         <>
-          <h1>Pokedex</h1>
+          <h1 className="mb-4 text-2xl font-semibold">Pokedex</h1>
           <title>Pokedex</title>
-          <p style={{ color: "#888", marginBottom: "1.5rem" }}>
+          <p className="mb-6 text-muted-foreground">
             Browse pokemon from the PokeAPI GraphQL endpoint.
           </p>
         </>
       )}
-      <div className="grid">
+      <div className={POKEMON_GRID}>
         {data.pokemon_v2_pokemon.map((raw) => {
           const pokemon = readFragment(PokemonListFields, raw);
           return <PokemonCard key={pokemon.id} raw={raw} />;
@@ -526,23 +492,24 @@ function PokemonCard({ raw }: { raw: FragmentOf<typeof PokemonListFields> }) {
   );
 
   return (
-    <a href={`/pokemon/${id}`} className="card" style={{ display: "block" }}>
+    <a
+      href={`/pokemon/${id}`}
+      className="block rounded-xl bg-card p-5 ring-1 ring-border/50 transition-colors hover:bg-muted"
+    >
       {spriteUrl && (
         <img
           src={spriteUrl}
           alt={name}
           loading="lazy"
-          style={{ width: 96, height: 96, imageRendering: "auto" as const }}
+          className="h-24 w-24"
         />
       )}
-      <h2 style={{ textTransform: "capitalize" as const }}>
+      <h2 className="mt-2 text-lg capitalize">
         #{id} {name}
       </h2>
-      <div style={{ marginTop: "0.5rem" }}>
+      <div className="mt-2 flex flex-wrap gap-1">
         {types.map((t) => (
-          <span key={t} className={`badge badge-${t || "default"}`}>
-            {t}
-          </span>
+          <TypeBadge key={t} type={t || "default"} />
         ))}
       </div>
     </a>
@@ -553,11 +520,7 @@ async function HeroPartial({ pokemonId }: { pokemonId: number }) {
   const data = await client.request(PokemonHeroQuery, { id: pokemonId });
 
   const pokemon = data.pokemon_v2_pokemon[0];
-  // Async 404: the PokeAPI returns an empty array for ids outside its
-  // range (there are ~1025 pokemon; /pokemon/9999999 produces this).
-  // Calling `notFound()` here sets the framework control channel and
-  // throws — the RSC entry picks up the flag after `renderHTML`
-  // awaits and returns HTTP 404.
+  // Async 404: the PokeAPI returns an empty array for ids outside its range.
   if (!pokemon) notFound();
   const { id, name, height, weight } = pokemon;
   const types = pokemon.pokemon_v2_pokemontypes.map((t) => ({
@@ -569,34 +532,31 @@ async function HeroPartial({ pokemonId }: { pokemonId: number }) {
   );
 
   return (
-    <div
-      className="card"
-      style={{ display: "flex", gap: "2rem", alignItems: "center" }}
-    >
-      {spriteUrl && (
-        <img
-          src={spriteUrl}
-          alt={name}
-          loading="lazy"
-          style={{ width: 200, height: 200 }}
-        />
-      )}
-      <div>
-        <h1 style={{ textTransform: "capitalize" as const, fontSize: "2rem" }}>
-          #{id} {name}
-        </h1>
-        <div style={{ marginTop: "0.75rem" }}>
-          {types.map((t) => (
-            <span key={t.slot} className={`badge badge-${t.name || "default"}`}>
-              {t.name}
-            </span>
-          ))}
+    <Card className="mb-4 p-5">
+      <CardContent className="flex flex-wrap items-center gap-8 px-0">
+        {spriteUrl && (
+          <img
+            src={spriteUrl}
+            alt={name}
+            loading="lazy"
+            className="h-50 w-50"
+          />
+        )}
+        <div>
+          <h1 className="text-3xl capitalize">
+            #{id} {name}
+          </h1>
+          <div className="mt-3 flex flex-wrap gap-1">
+            {types.map((t) => (
+              <TypeBadge key={t.slot} type={t.name || "default"} />
+            ))}
+          </div>
+          <div className="mt-4 text-sm text-muted-foreground">
+            Height: {(height ?? 0) / 10}m · Weight: {(weight ?? 0) / 10}kg
+          </div>
         </div>
-        <div className="meta" style={{ marginTop: "1rem" }}>
-          Height: {(height ?? 0) / 10}m · Weight: {(weight ?? 0) / 10}kg
-        </div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -612,80 +572,58 @@ async function StatsPartial({ pokemonId }: { pokemonId: number }) {
   const maxStat = 255;
 
   return (
-    <div className="card">
-      <h2>Base Stats</h2>
-      <div style={{ marginTop: "0.75rem" }}>
-        {stats.map((stat) => (
-          <div
-            key={stat.name}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              marginBottom: "0.5rem",
-              gap: "0.75rem",
-            }}
-          >
-            <span
-              style={{
-                width: 120,
-                fontSize: "0.85rem",
-                textTransform: "capitalize" as const,
-                color: "#aaa",
-              }}
-            >
-              {stat.name.replace("-", " ")}
-            </span>
-            <span
-              style={{
-                width: 35,
-                fontSize: "0.85rem",
-                textAlign: "right" as const,
-              }}
-            >
-              {stat.value}
-            </span>
-            <div
-              style={{
-                flex: 1,
-                height: 8,
-                background: "#2d3748",
-                borderRadius: 4,
-                overflow: "hidden" as const,
-              }}
-            >
-              <div
-                style={{
-                  width: `${(stat.value / maxStat) * 100}%`,
-                  height: "100%",
-                  background:
-                    stat.value >= 100
-                      ? "#48bb78"
-                      : stat.value >= 60
-                        ? "#ecc94b"
-                        : "#f56565",
-                  borderRadius: 4,
-                }}
-              />
+    <Card className="mb-4 p-5">
+      <CardContent className="flex flex-col gap-2 px-0">
+        <h2 className="text-lg font-semibold">Base Stats</h2>
+        {stats.map((stat) => {
+          const color =
+            stat.value >= 100
+              ? "bg-emerald-500"
+              : stat.value >= 60
+                ? "bg-amber-400"
+                : "bg-red-500";
+          return (
+            <div key={stat.name} className="flex items-center gap-3">
+              <span className="w-32 text-sm capitalize text-muted-foreground">
+                {stat.name.replace("-", " ")}
+              </span>
+              <span className="w-8 text-right text-sm">{stat.value}</span>
+              <div className="h-2 flex-1 overflow-hidden rounded bg-muted">
+                <div
+                  className={cn("h-full rounded", color)}
+                  style={{
+                    width: `${(stat.value / maxStat) * 100}%`,
+                  }}
+                />
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
-    </div>
+          );
+        })}
+      </CardContent>
+    </Card>
   );
 }
 
 async function TriviaPartial({ pokemonId }: { pokemonId: number }) {
-  // Short delay to make streaming visible after the IntersectionObserver
-  // fires — mirrors a slow enrichment API.
+  // Short delay to make streaming visible after the IntersectionObserver fires.
   await new Promise((r) => setTimeout(r, 500));
   return (
-    <div className="card" data-testid="trivia-content">
-      <h2>Trivia</h2>
-      <div className="meta" style={{ marginTop: "0.5rem" }}>
-        Loaded on demand via <code>renderOn="visible"</code> — pokemon id{" "}
-        <code>{pokemonId}</code>.
-      </div>
-    </div>
+    <Card data-testid="trivia-content" className="mb-4 p-5">
+      <CardContent className="px-0">
+        <h2 className="text-lg font-semibold">Trivia</h2>
+        <div className="mt-2 text-sm text-muted-foreground">
+          Loaded on demand via{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            renderOn="visible"
+          </code>{" "}
+          — pokemon id{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {pokemonId}
+          </code>
+          .
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -697,20 +635,31 @@ async function SpeciesPartial({ pokemonId }: { pokemonId: number }) {
   const englishEntry = species.pokemon_v2_pokemonspeciesflavortexts[0];
 
   return (
-    <div className="card">
-      <h2 style={{ textTransform: "capitalize" as const }}>
-        Species: {species.name}
-      </h2>
-      {englishEntry && (
-        <p style={{ marginTop: "0.75rem", lineHeight: 1.6, color: "#ccc" }}>
-          {englishEntry.flavor_text.replace(/\f|\n/g, " ")}
-        </p>
-      )}
-      <div className="meta" style={{ marginTop: "1rem" }}>
-        Generation: <code>{species.pokemon_v2_generation?.name}</code> · Base
-        Happiness: <code>{species.base_happiness}</code> · Capture Rate:{" "}
-        <code>{species.capture_rate}</code>
-      </div>
-    </div>
+    <Card className="mb-4 p-5">
+      <CardContent className="px-0">
+        <h2 className="text-lg font-semibold capitalize">
+          Species: {species.name}
+        </h2>
+        {englishEntry && (
+          <p className="mt-3 leading-relaxed text-foreground/80">
+            {englishEntry.flavor_text.replace(/\f|\n/g, " ")}
+          </p>
+        )}
+        <div className="mt-4 text-sm text-muted-foreground">
+          Generation:{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {species.pokemon_v2_generation?.name}
+          </code>{" "}
+          · Base Happiness:{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {species.base_happiness}
+          </code>{" "}
+          · Capture Rate:{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {species.capture_rate}
+          </code>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

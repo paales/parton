@@ -65,7 +65,7 @@ export function PageSentinel({ page }: { page: number }) {
     };
   }, [page, nav]);
 
-  return <div ref={ref} style={{ height: 0 }} />;
+  return <div ref={ref} className="h-0" />;
 }
 
 /**
@@ -122,19 +122,9 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
   }, [nextPage, nav]);
 
   return (
-    <div ref={ref} style={{ padding: "2rem", textAlign: "center" }}>
+    <div ref={ref} className="p-8 text-center">
       {isPending && (
-        <span
-          style={{
-            display: "inline-block",
-            width: 24,
-            height: 24,
-            border: "3px solid #2d3748",
-            borderTopColor: "#58a6ff",
-            borderRadius: "50%",
-            animation: "spin 0.6s linear infinite",
-          }}
-        />
+        <span className="inline-block size-6 animate-spin rounded-full border-[3px] border-muted border-t-primary" />
       )}
     </div>
   );
