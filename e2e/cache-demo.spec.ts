@@ -142,8 +142,11 @@ test("ClickCounter state survives refetch of its cached Partial", async ({
     (el as HTMLElement & { __stamp?: number }).__stamp = 42;
   });
 
+  const refetchResponse = page.waitForResponse(
+    (r) => r.url().includes("_.rsc") && r.url().includes("partials=slow"),
+  );
   await page.getByTestId("refetch-slow").click();
-  await page.waitForTimeout(500);
+  await refetchResponse;
 
   const stamped = await page
     .locator('[data-testid="click-counter"]')

@@ -102,7 +102,10 @@ async function ProductGrid({ search }: { search?: string }) {
       <p className="mb-6 text-muted-foreground">
         Products loaded from GraphCommerce Magento 2 API.
       </p>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
+      <div
+        data-testid="product-grid"
+        className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"
+      >
         {items.map((product) => (
           <ProductCard key={product.sku ?? product.id} product={product} />
         ))}

@@ -97,6 +97,32 @@ function getPartialId(node: React.ReactElement): string | null {
   return null;
 }
 
+/**
+ * Extract the structural fingerprint off a partial wrapper. Mirrors
+ * `getPartialId` — direct `partialFingerprint` prop, or peek through a
+ * Suspense wrapper to the PartialErrorBoundary child. Returns `null`
+ * for wrappers that don't carry one (shouldn't happen in practice but
+ * we bail rather than register a bogus value).
+ */
+function getPartialFingerprint(node: React.ReactElement): string | null {
+  const props = node.props as {
+    partialFingerprint?: unknown;
+    children?: unknown;
+  };
+  if (typeof props.partialFingerprint === "string")
+    return props.partialFingerprint;
+  if (node.type === Suspense) {
+    const child = props.children;
+    if (isValidElement(child)) {
+      const cp = (child as React.ReactElement).props as {
+        partialFingerprint?: unknown;
+      };
+      if (typeof cp.partialFingerprint === "string") return cp.partialFingerprint;
+    }
+  }
+  return null;
+}
+
 export interface PartialDebugEntry {
   id: string;
   status: "fresh" | "cached" | "data-cached";
@@ -314,6 +340,16 @@ function cacheFromStreamingChildren(
     const id = getPartialId(node);
     if (id) {
       cache.set(id, node);
+      // Populate `_fingerprints` synchronously from the tree walk
+      // rather than waiting for each `<PartialErrorBoundary>` to
+      // commit on the client. The commit order is non-deterministic
+      // across transitions (React may defer subtrees such as the
+      // `<head>` wrapper), so a targeted refetch fired right after a
+      // client nav could otherwise send a `?cached=` that's missing
+      // late-committing ids. The wrapper already carries the
+      // fingerprint — just lift it off.
+      const fp = getPartialFingerprint(node);
+      if (fp) _fingerprints.set(id, fp);
     }
     // Descend: nested partial wrappers need their own top-level cache
     // entries so subsequent parent-only refetches with inner
@@ -1384,27 +1420,32 @@ export function PartialsClient({
   // state so subsequent cache-mode refetches can reuse it without a
   // server round-trip.
   //
-  // Fingerprints land in `_fingerprints` via `PartialErrorBoundary`'s
-  // render-time `registerClientPartial` call — no props plumbing here.
+  // Fingerprints land in `_fingerprints` primarily via the synchronous
+  // walk inside `cacheFromStreamingChildren` (the wrapper props carry
+  // the fingerprint, so we don't have to wait for every
+  // `<PartialErrorBoundary>` to commit). Each boundary's render still
+  // re-registers as a fallback — harmless, same value.
   if (mode === "streaming") {
+    // Drop entries carried over from a prior route BEFORE walking the
+    // new tree. The walk inside `cacheFromStreamingChildren` then
+    // re-populates `_fingerprints` for every Partial on the new
+    // route; anything not visited (i.e. stale) is gone. Clearing
+    // AFTER the walk would wipe the fresh entries too.
+    _fingerprints.clear();
     cacheFromStreamingChildren(children, cache);
     const derived = deriveTemplate(children);
     _template = derived;
     _debug = [];
 
-    // Drop entries carried over from a prior route. The derived template
-    // lists exactly the Partial ids present on the current page; anything
-    // still in `_cache` / `_fingerprints` but not in that set is a leak
-    // from a previous navigation. `_fingerprints` is fully rewritten by
-    // `PartialErrorBoundary` renders in this pass (including deep/dynamic
-    // Partials that live inside cached ancestors), so clearing it here
-    // is safe and simpler than the selective walk `_cache` needs.
+    // Drop `_cache` entries whose id isn't on the new page. The
+    // derived template lists exactly the Partial ids present on the
+    // current page; anything still in `_cache` but not in that set
+    // is a leak from a previous navigation.
     const liveIds = new Set<string>();
     collectTemplateIds(derived, liveIds);
     for (const id of [..._cache.keys()]) {
       if (!liveIds.has(id)) _cache.delete(id);
     }
-    _fingerprints.clear();
 
     const rendered = renderTemplate(derived, cache);
     return renderWithDebugPanel(rendered, debug, fetchMs);

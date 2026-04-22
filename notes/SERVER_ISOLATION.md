@@ -82,3 +82,28 @@ ALS is a *request-scoped* container. Entries die with the request. The caches in
 ## Why a scope bucket, not ALS, for parallel tests?
 
 A scope bucket is the map *inside* Category C, keyed by an opaque token the request carries in `x-test-scope`. Lifetime is still "until the process restarts" — production requests all collapse to `"default"` so cache hits work as before. The bucket only matters when two concurrent requests arrive tagged with different scope tokens: each gets its own view of the same cache, and neither can see or evict the other's entries. That's what Playwright's per-worker fixture gives us — each worker writes and clears its own slice, so concurrent tests that both hit `/__test/clear-caches` don't trample each other.
+
+## `isTestMode()` — tighten hand-written demo delays under Playwright
+
+Added 2026-04-23 to `src/framework/context.ts`. Returns `true` when
+the current request's scope is anything other than `"default"`. In
+prod the `x-test-scope` header is ignored, so the predicate is
+`false` everywhere — no way for a real user to tag a request as
+"test".
+
+Use it to narrow hand-crafted latency in demo code. The chat-stream
+producer (`src/app/chat/log.ts`) is the current caller: its 100 ms
+× 10 s budget would dominate e2e runtime otherwise — under test
+mode the chunk delay drops to 5 ms and the budget to 3 s, keeping
+the compaction seam observable while cutting the `chat-notes.spec`
+wall time roughly 3×.
+
+**Not** wired up in the Pokemon/Magento/cache-demo simulated
+delays. Tried a shared `simulatedDelay(ms)` helper that scaled
+everything down; it broke `search-streaming.spec.ts` and
+`search-open-first-keystroke.spec.ts` — those specs assert that a
+Suspense fallback is visible before its resolved content, and at
+test-scaled latencies the fallback flashes too fast for the
+observer to catch it. Conclusion: don't globally shrink demo
+latency; reduce per-spec only where the spec isn't asserting on
+latency-sensitive behaviour.

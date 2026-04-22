@@ -104,3 +104,35 @@ same rule.
 4. Sibling / nested frames? They share the cell; read before await
    and everything resolves. If a component awaits and then reads,
    the cell may have drifted — hoist the read.
+
+## Sharp edge: fingerprint drift between render modes (2026-04-23)
+
+`<Partial>`'s fingerprint folded in an **ambient frame key** —
+`getCurrentFrameScope()?.name + url` — for descendants of a framed
+ancestor, so the structural fp changed when the enclosing frame's
+URL changed (otherwise the client-skip path would reuse stale bytes
+for stage Partials inside a frame whose URL just moved).
+
+The cell leaks that read to sibling subtrees too. Concrete trigger:
+`<ChatOverlay>` is rendered as a sibling of the page content in
+`root.tsx`. Its `<Partial frame="chat-overlay">` runs, mutates the
+cell, then React schedules the sibling page's Partials — they read
+the cell and see `inFrame=chat-overlay` in their fingerprint input
+even though they are not inside the chat frame. On the RSC-refetch
+path the page renders without the sibling overlay, so the cell is
+clean and the fingerprint differs. Result: `<Partial cache>` inside
+a leak-affected subtree thrashes — full and refetch renders produce
+different `baseKey` strings, never share a cache entry.
+
+Fix: `src/lib/partial-component.tsx` now computes two hashes.
+`structuralFp = hash(fingerprintElement(content) + ownFrameKey)` —
+feeds `<Cache id= fingerprint=>` so the cache key is stable across
+render modes. `fp = hash(… + ambientFrameKey)` — still used for the
+client fingerprint-match skip so stage Partials inside a frame
+still invalidate on frame-URL changes. The two can diverge only in
+the exact leak-induced case; for legitimate nested frames they are
+equal by construction (own and ambient frame URLs match).
+
+Repro that drove the fix: `e2e/cache-demo.spec.ts:48` (RSC refetch
+of the `#slow` Partial on `/cache-demo?flavor=…`) hit the slow
+render path on every refetch before the split, passed after.

@@ -346,11 +346,22 @@ function resolveFrameRequest(
 }
 
 /**
- * Async server component that opens a frame ALS scope and renders
- * children through a Flight round-trip so descendant async renders
- * execute inside the scope. Defers the framing from the Partial's
- * synchronous body to a proper render-time step, so the snapshot
- * captures the wrapper (re-renderable) instead of the bake.
+ * Server component that opens a frame scope before rendering
+ * children. Mutates the per-request React.cache-backed cell so
+ * descendants see the frame via `getCurrentFrameScope()`.
+ *
+ * Known sharp edge: the cell is a per-request singleton, so the
+ * mutation persists until another FrameWrapper (or an explicit
+ * caller) overwrites it. React 19 renders sibling async server
+ * components concurrently, so a sibling subtree that runs after
+ * this mutation may observe this frame's scope even though it's not
+ * actually nested inside. Effect on cache keys: the FP-side
+ * `ambientFrameKey` uses this read and can be "wrong" for a sibling.
+ * Downstream, `<Partial cache>` still keys by manifest values so the
+ * effect is limited to the structural fingerprint. Full fix is a
+ * Flight-round-trip FrameWrapper (save scope → render children
+ * inside the await → restore scope) but that has its own regressions
+ * in the current RSC bundle — punted.
  */
 function FrameWrapper({
   name,
@@ -361,15 +372,6 @@ function FrameWrapper({
   request: Request;
   children: ReactNode;
 }): ReactNode {
-  // Mutate the per-request frame-scope cell BEFORE React walks our
-  // children, so descendants that read tracked accessors (at the
-  // top of their body, before any `await`) see this frame's URL.
-  //
-  // React.cache-backed mutation — the library pattern at
-  // https://github.com/zhangyu1818/react-server-only-context. Cheap,
-  // streams naturally (no Flight round-trip), subject to the same
-  // "read before await" discipline as the cache manifest
-  // accessors (which this extends).
   setCurrentFrameScope({ name, request });
   const url = new URL(request.url);
   const initialUrl = url.pathname + url.search;
@@ -500,6 +502,19 @@ export function Partial({
     ambientScope && ambientScope.name !== frame
       ? `|inFrame=${ambientScope.name}:${ambientScope.request.url}`
       : "";
+  // Structural fingerprint — stable across "am I inside a frame?"
+  // readings, which can differ between full renders and cache-mode
+  // refetches because `getCurrentFrameScope` reads a per-request
+  // shared cell that siblings may have mutated (see FrameWrapper
+  // known-sharp-edge comment). Used for the server-side `<Cache>`
+  // baseKey so a Partial inside a Cache wrapping keeps the same
+  // cache key between full and refetch modes.
+  const structuralFp = hashFingerprint(
+    fingerprintElement(rawContent) + ownFrameKey,
+  );
+  // Full fingerprint — includes ambient frame URL so descendants of
+  // a frame whose URL changed get a different fp on the next render
+  // and skip the fingerprint-match path (see notes/FRAMES.md).
   const fp = hashFingerprint(
     fingerprintElement(rawContent) + ownFrameKey + ambientFrameKey,
   );
@@ -596,7 +611,7 @@ export function Partial({
   // values + `cache.vary` form the "which snapshot?" half.
   const cachedContent: ReactNode =
     cache !== undefined ? (
-      <Cache id={id} fingerprint={fp} options={cache}>
+      <Cache id={id} fingerprint={structuralFp} options={cache}>
         {content}
       </Cache>
     ) : (

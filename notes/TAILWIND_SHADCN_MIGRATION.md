@@ -48,91 +48,125 @@ landed, what broke, and what's left so the next pass has context.
 
 ## What's broken / flaky
 
-### 1. chat-notes frame-URL projection
-**Symptom.** `/chat-notes?msgs=IDEAS` should seed the overlay's frame
-URL with `?msgs=IDEAS` so the message streams on initial render. Test
-`e2e/chat-notes.spec.ts` expects `chat-body-IDEAS`; we see
-`chat-empty` instead.
+### 1. chat-notes frame-URL projection — **RESOLVED 2026-04-23**
 
-**Where.** Pre-refactor, `ChatNotesPage` computed the frame URL and
-rendered `<ChatOverlay defaultOpen frameUrl={…} />` itself. Post-
-refactor, the overlay lives in the shared `<body>` of `root.tsx`, so
-the projection has to be routed there:
+`ChatOverlay`'s signature was `function ChatOverlay()` — took no
+props — even though `root.tsx` called it with `defaultOpen` and
+`frameUrl`. Both props were silently dropped; the overlay rendered
+with a hardcoded `defaultOpen={false}` and no frame URL, so
+`/chat-notes?msgs=IDEAS` showed the pill.
 
-```tsx
-<ChatOverlay
-  defaultOpen={matchPath("/chat-notes") != null}
-  frameUrl={matchPath("/chat-notes") != null ? chatOverlayFrameUrl() : undefined}
-/>
-```
+Fix: give `ChatOverlay` the props it was already being called with,
+and thread `frameUrl` through to the underlying `<Partial
+frame="chat-overlay" frameUrl={…}>`. See
+`src/app/chat/chat-overlay.tsx`.
 
-The Flight payload for `/chat-notes?msgs=IDEAS` contains
-`frameUrl: "/?msgs=IDEAS"` once, so the value IS reaching the Partial
-call — but three sibling `FrameWrapper` serializations show
-`frameUrl: "$undefined"`, and the overlay body renders the empty
-state. Possibly a registry-snapshot replay issue: the snapshot
-captured at first render (before my conditional had the right value)
-gets served on subsequent renders. Needs someone who understands
-`registerPartial` / `FrameWrapper` round-trips to confirm.
+Nothing at all wrong with the projection mechanism. The registry-
+snapshot theory in the original write-up was a red herring.
 
-**Hypothesis to try first.** Pass the frame URL through the chat-
-notes page component directly instead of computing it in `root.tsx`
-— e.g. let the page itself render a `<Partial frame="chat-overlay">`
-override, and have `root.tsx`'s `<ChatOverlay/>` degrade to "no-op
-when a chat-overlay frame is already in the tree."
+### 2. Auto-tracked cache manifest regression — **ROOT CAUSE: frame-scope fingerprint drift**
 
-### 2. Auto-tracked cache manifest goes empty after long HMR sessions
-**Symptom.** `e2e/cache-auto-tracking.spec.ts` +
-`e2e/cache-demo.spec.ts` (three cache-semantics tests) fail — every
-flavor hits the same cache entry. Manually I reproduced it with
-`curl /cache-demo?flavor=aa → flavor=bb → flavor=cc` and saw
-`data-render-count` frozen at the first value. The manifest recorded
-on the first render was empty (no `url:flavor`), so
-`resolveManifest({}) → {} → hashParts({}, null)` produces one key for
-every flavor.
+Not actually HMR-staleness. The cache manifest was fine; the Partial
+*fingerprint* fed to `<Cache id fingerprint=>` differed between full
+renders and RSC refetches, so the two modes built different cache
+`baseKey`s and never shared an entry.
 
-**Key observation.** After `kill $(lsof -ti:5173)` + fresh `yarn dev`,
-the exact same curl trace produces 1 → 1 → 2, i.e. cache tracking
-works correctly. The failure is tied to a dev server that's been
-through many HMR reloads — possibly `manifestStore` / `snapshotIndex`
-holding entries from a previous module identity (so `findStoredManifestByPrefix`
-finds nothing with the new `fingerprint`, and first-render logic
-skips accessor tracking for stored-manifest-less paths).
+Why the fp drifted: the `ambientFrameKey` component of the fp reads
+`getCurrentFrameScope()` — a `React.cache`-backed mutable cell
+(`notes/FRAME_SCOPING.md`). `<ChatOverlay>` renders as a sibling of
+the page content in `root.tsx`; its `<Partial frame="chat-overlay">`
+FrameWrapper mutates the cell synchronously. Under React 19's
+concurrent server-component rendering, a sibling page Partial can
+read the cell AFTER the mutation — the read picks up
+`inFrame=chat-overlay` even though the Partial is not actually
+inside the chat frame. RSC refetch paths render only the target
+subtree (no sibling ChatOverlay), so the cell is clean and the fp
+differs.
 
-**Not a real prod regression** — a fresh boot is clean. Still needs
-fixing so the dev feedback loop isn't lying. Likely a wire-up in
-`src/lib/cache.tsx`'s HMR-clear hook (it already invalidates
-`manifestStore` on `vite:beforeUpdate`; maybe it doesn't clear
-`snapshotIndex` or `inFlightMiss` aggressively enough, or the first
-render after HMR lands with stale scope state).
+Fix: split into two hashes inside the Partial body.
 
-### 3. Pre-existing tests that depend on specific HTML markers
-Some tests grep the response body for specific class names or
-substrings:
+- `structuralFp = hash(fingerprintElement(content) + ownFrameKey)`
+  — feeds `<Cache>` so the cache key is stable regardless of
+  ambient-frame leak.
+- `fp = hash(…same… + ambientFrameKey)` — still used for the
+  client fingerprint-match skip (preserves "descendants of a frame
+  invalidate when the frame URL moves").
 
-- `e2e/magento-cache-hit-renders-body.spec.ts` expects
-  `class="grid"`. Migration moved to Tailwind
-  `grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4` —
-  no bare `class="grid"` anymore. Test needs updating to match on
-  the `grid` token within a larger className, or on a data-testid.
-- `e2e/fingerprint-skip.spec.ts` failed intermittently — likely
-  related to the HMR staleness above; not confirmed a real
-  regression from styling.
-- `e2e/search-open-first-keystroke.spec.ts` / `search-streaming.spec.ts`
-  timed out trying to `.check()` a checkbox that used to be a native
-  `<input type="checkbox">`. The migration initially swapped it for
-  shadcn's `<Checkbox/>` (Base UI compound component), which doesn't
-  look like a native checkbox to the test. Reverted to native
-  `<input type="checkbox">` in `src/app/components/search.tsx` —
-  verify the retry passes.
+For legitimately nested frames the two hashes agree by construction
+(ownFrameKey ≡ ambientFrameKey of the parent). The split only
+affects the ChatOverlay-leak scenario. See
+`src/lib/partial-component.tsx` + new section in
+`notes/FRAME_SCOPING.md`.
 
-## Open TODOs
+Regression pin: `e2e/cache-demo.spec.ts:48` (RSC refetch of the
+`#slow` Partial). Failed before the split, passes after.
 
-- **Fix the chat-notes frame-URL projection** (item 1 above).
-- **Investigate HMR-stale manifest state** in `src/lib/cache.tsx` so
-  the cache tests don't flake mid-dev-session (item 2).
-- **Update e2e HTML-marker asserts** (item 3) — prefer
-  `[data-testid]` over class-name substring matches.
+### 3. E2E HTML-marker asserts — **RESOLVED 2026-04-23**
+
+- `e2e/magento-cache-hit-renders-body.spec.ts` now matches on
+  `data-testid="product-grid"`. Added the testid to the grid wrapper
+  in `src/app/pages/magento/product-list.tsx`.
+- `e2e/fingerprint-skip.spec.ts`: passes in isolation and in most
+  full runs; the occasional fail is a worker-contention race
+  (see "Flaky under parallel load" below).
+- `e2e/search-open-first-keystroke.spec.ts` /
+  `search-streaming.spec.ts`: same story — they assert on Suspense
+  fallback visibility windows that shrink under 5-worker load.
+- `e2e/debug-refetch.spec.ts`: removed. Diagnostic-only test with
+  an 8 s `waitForTimeout` and `expect(true).toBe(true)`.
+
+### 4. Client `_fingerprints` missing late-committing ids — **NEW FIX**
+
+Unrelated to Tailwind, found during the e2e triage. The client
+registers partial fingerprints only when each `<PartialErrorBoundary>`
+commits on the browser. Commit order is non-deterministic under
+React transitions — a click that dispatches a targeted refetch
+immediately after a client nav can fire before all the new route's
+Partials have registered, so `?cached=` goes out incomplete.
+
+Fix: `src/lib/partial-client.tsx` now lifts the fingerprint off the
+wrapper's props inside `cacheFromStreamingChildren` (the synchronous
+walk that already runs on every payload) and sets it in
+`_fingerprints` directly. `PartialErrorBoundary.render` still
+registers on mount as a fallback (identical value). Also moved
+`_fingerprints.clear()` to BEFORE the walk — clearing after was
+wiping the freshly-walked entries.
+
+### 5. Chat-stream e2e wall time — **NEW FIX**
+
+`src/app/chat/log.ts` paced at 100 ms × 10 s budget. That's ~10 s
+per spec in `e2e/chat-notes.spec.ts`. Added `isTestMode()` (see
+`notes/SERVER_ISOLATION.md` addendum) and a pair of test-only
+constants: 5 ms chunk delay, 3 s budget. Chat-notes specs now
+settle in ~4 s total instead of ~15 s. Tried generalising this
+(shared `simulatedDelay` used by Pokemon search stages etc.) —
+broke progressive-streaming assertions that rely on fallback
+visibility windows. Reverted and kept the test-mode path narrowly
+scoped to the chat producer.
+
+## Known flaky-under-parallel specs (not stability-blockers)
+
+Under the default 5-worker Playwright run, one of these may fail on
+any given invocation — the same suite passes cleanly run in
+isolation:
+
+- `e2e/search-open-first-keystroke.spec.ts:131`
+- `e2e/search-streaming.spec.ts:11`
+- `e2e/trace-partials.spec.ts:8`
+- `e2e/timing-test.spec.ts:13`
+- `e2e/frames-demo.spec.ts:201` (session persists across refresh)
+- `e2e/cache-prune-across-nav.spec.ts:21` — racing `_fingerprints`
+  population with an activate click; the `head` assertion was
+  already dropped from the spec for the same reason.
+
+All of these assert on streaming / Suspense-fallback timing and
+contend on the single dev-server process when 5 workers hit it
+concurrently. Local mitigation: `yarn playwright test --workers=2`
+eliminates most of the flake; CI should either pin workers or
+accept that the suite needs a retry to go green.
+
+## Still open
+
 - **Chat overlay → ai-elements.** The overlay's body (`aside` +
   header + list + footer) is a fine candidate for `Conversation` /
   `Message` / `PromptInput` from `src/components/ai-elements/*`.
@@ -149,17 +183,29 @@ substrings:
 
 ## Things that were *not* the culprit (dead ends)
 
-- `TooltipProvider` wrapping everything. Removing it didn't fix the
-  cache regression; likely HMR state.
+- `TooltipProvider` wrapping everything. Not the cache regression —
+  that was frame-scope fingerprint drift (see #2 above).
 - The order of `matchPath` calls in `root.tsx`. `matchPath` is pure.
 - Dual `React` instances via the `@/` alias. All imports still
   resolve to the same module — confirmed by grepping `framework/context`
   paths.
 - `<code>` → `<Code>` wrapper component in cache-demo. Structurally
   equivalent from React's POV.
+- HMR staleness of `manifestStore` (original #2 theory). Reproduced
+  on a fresh `yarn dev` boot with no HMR — the bug was deterministic
+  given ChatOverlay rendered as a sibling.
+- Flight round-trip in `FrameWrapper` to contain the ALS scope.
+  Spike regressed streaming inside framed subtrees (a slow async
+  inside a frame blocked the outer render). Rolled back.
+  `notes/FRAME_SCOPING.md` already called this out as an explored
+  dead-end.
 
-## Commit state at time of writing
+## Commit state at time of writing (2026-04-23)
 
-Unit suite: **137/137 passing** (`yarn test`).
-Prod build: **passing** (`yarn build`).
-E2E suite: **61/71 passing** (`yarn test:e2e`) — failures listed above.
+Unit suite: **144/144 passing** (`yarn test`) — 133 node + 11 rsc.
+E2E suite: **70–71/71 passing** (`yarn test:e2e`) per run; occasional
+single-spec flake under 5-worker parallelism (see list above).
+Single run ≈ 21–28 s depending on flake-retries.
+Playwright now self-starts the dev server via `webServer` +
+`reuseExistingServer: true` — no manual `yarn dev` needed before
+`yarn test:e2e`.

@@ -169,24 +169,30 @@ test("compaction preserves rendered chunks — never regresses across the seam",
 }) => {
   await page.goto("/chat-notes?msgs=IDEAS");
 
-  // Sample the rendered chunk count every ~100ms for a few seconds and
-  // assert it only increases (the flat prefix must re-emit everything
-  // the previous Piece chain had). If compaction dropped chunks, the
-  // count would dip between samples.
+  // Sample the rendered chunk count every ~100ms. Each sample must be
+  // >= the previous one — compaction cannot drop chunks, since the
+  // flat prefix has to re-emit everything the prior Piece chain had.
+  // Stop early once we've crossed MAX_DEPTH AND collected enough
+  // nonzero samples (a dip would have already surfaced by then);
+  // otherwise cap at a 6s fail-safe.
   const samples: number[] = [];
   const deadline = Date.now() + 6000;
   while (Date.now() < deadline) {
     samples.push(await countChunks(page, "IDEAS"));
+    const nonzero = samples.filter((n) => n > 0);
+    if (
+      nonzero.length > 5 &&
+      nonzero[nonzero.length - 1] > MAX_DEPTH
+    ) {
+      break;
+    }
     await page.waitForTimeout(100);
   }
-  // Filter out the initial zero samples (pre-first-chunk) — just
-  // assert no dip.
   const nonzero = samples.filter((n) => n > 0);
   expect(nonzero.length).toBeGreaterThan(5);
   for (let i = 1; i < nonzero.length; i++) {
     expect(nonzero[i]).toBeGreaterThanOrEqual(nonzero[i - 1]);
   }
-  // And it must have crossed the MAX_DEPTH boundary.
   expect(nonzero[nonzero.length - 1]).toBeGreaterThan(MAX_DEPTH);
 });
 
@@ -197,7 +203,7 @@ test("stream reaches the done marker after all compactions finish", async ({
   // compactions → `chat-done-README` when the producer drains the log.
   await page.goto("/chat-notes?msgs=README");
   await expect(page.locator('[data-testid="chat-done-README"]')).toBeVisible({
-    timeout: 20000,
+    timeout: 10000,
   });
   // No ResumeTail should be present at terminal state — the final
   // render emits a `done` span and no further compaction.
@@ -212,7 +218,7 @@ test("new message link appends a fileId to ?msgs= and a second stream starts", a
   await page.goto("/chat-notes?msgs=README");
   // Wait for README to finish so test state is steady before the click.
   await expect(page.locator('[data-testid="chat-done-README"]')).toBeVisible({
-    timeout: 20000,
+    timeout: 10000,
   });
 
   // Link is an <a href> so it works pre-hydration — server-computed

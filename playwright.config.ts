@@ -14,4 +14,10 @@ export default defineConfig({
     baseURL: "http://localhost:5173",
     headless: true,
   },
+  webServer: {
+    command: "yarn dev",
+    url: "http://localhost:5173",
+    reuseExistingServer: true,
+    timeout: 60000,
+  },
 });

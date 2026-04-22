@@ -19,8 +19,11 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { getScope } from "../../framework/context.ts";
+import { getScope, isTestMode } from "../../framework/context.ts";
 
+// Demo cadence (human-perceptible trickle). Playwright workers hit
+// the fast-path below so the e2e suite doesn't pay the 100 ms × 10 s
+// budget per streaming test.
 const CHUNK_DELAY_MS = 100;
 const CHUNK_CHAR_SIZE = 25;
 // Total time budget per stream. At 25 char / 100 ms that's ~100 chunks
@@ -28,6 +31,12 @@ const CHUNK_CHAR_SIZE = 25;
 // Keeps the demo feeling like a slow trickle without producing walls of
 // text for long notes files.
 const STREAM_BUDGET_MS = 10_000;
+
+// Test-mode overrides — fast enough that chat-notes specs settle in
+// well under a second, slow enough that Suspense boundaries still
+// reveal chunks one at a time (so the compaction seam is observable).
+const CHUNK_DELAY_MS_TEST = 5;
+const STREAM_BUDGET_MS_TEST = 3_000;
 const NOTES_DIR = resolve(process.cwd(), "notes");
 
 interface MessageLog {
@@ -66,11 +75,22 @@ function ensureLog(fileId: string): MessageLog {
     aborted: false,
   };
   bucket.set(fileId, log);
-  void runProducer(fileId, log);
+  // Snapshot the test-mode decision at producer start — it's tied to
+  // the current scope's first request, not any later reader. Keeps
+  // demo cadence for real users and fast cadence for Playwright.
+  const fast = isTestMode();
+  const chunkDelayMs = fast ? CHUNK_DELAY_MS_TEST : CHUNK_DELAY_MS;
+  const streamBudgetMs = fast ? STREAM_BUDGET_MS_TEST : STREAM_BUDGET_MS;
+  void runProducer(fileId, log, chunkDelayMs, streamBudgetMs);
   return log;
 }
 
-async function runProducer(fileId: string, log: MessageLog): Promise<void> {
+async function runProducer(
+  fileId: string,
+  log: MessageLog,
+  chunkDelayMs: number,
+  streamBudgetMs: number,
+): Promise<void> {
   const start = Date.now();
   try {
     const text = await readFile(resolve(NOTES_DIR, `${fileId}.md`), "utf8");
@@ -80,8 +100,8 @@ async function runProducer(fileId: string, log: MessageLog): Promise<void> {
     // timing unpredictable; fixed-size keeps the seam easy to reason about.
     for (let i = 0; i < text.length; i += CHUNK_CHAR_SIZE) {
       if (log.aborted) return;
-      if (Date.now() - start >= STREAM_BUDGET_MS) break;
-      await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
+      if (Date.now() - start >= streamBudgetMs) break;
+      await new Promise((r) => setTimeout(r, chunkDelayMs));
       if (log.aborted) return;
       log.chunks.push(text.slice(i, i + CHUNK_CHAR_SIZE));
       wakeAll(log);

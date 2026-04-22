@@ -47,7 +47,7 @@ test("second /magento render (Cache hit) still produces full body HTML", async (
     expect(
       html,
       `${label} render should contain the product grid`,
-    ).toContain('class="grid"');
+    ).toContain('data-testid="product-grid"');
     const priceMatches = html.match(/data-testid="live-price-[^"]+"/g) ?? [];
     expect(
       priceMatches.length,

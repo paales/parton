@@ -157,6 +157,25 @@ function deriveScope(request: Request): string {
   return DEFAULT_SCOPE;
 }
 
+/**
+ * `true` whenever the current request came from a Playwright worker
+ * (anything with a non-default `x-test-scope` header). Demo-app
+ * components that simulate network latency can branch on this to
+ * emit their output at test speed — the scope header is only honored
+ * in dev, so prod requests always return `false`.
+ *
+ * Currently only `src/app/chat/log.ts` uses this, because the chat
+ * producer's hand-crafted 100 ms × 100-chunk × 10 s budget would
+ * otherwise dominate Playwright runtime. Other demo delays (Pokemon
+ * search stages, cache-demo SlowContent, frames-demo MenuSlowView)
+ * stay at demo cadence — some specs assert on absolute-latency
+ * behaviour (cache hit < cold miss / 3, fallback visible before
+ * resolved content) that breaks if you uniformly shrink them.
+ */
+export function isTestMode(): boolean {
+  return getStore().scope !== DEFAULT_SCOPE;
+}
+
 export function runWithRequest<T>(
   request: Request,
   fn: () => T,
