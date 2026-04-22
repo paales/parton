@@ -45,6 +45,15 @@ interface RequestStore {
   request: Request;
   cookies: string[];
   /**
+   * Per-request **scope token**. Production always sees `"default"`.
+   * In dev, we honour an `x-test-scope` header — Playwright workers
+   * send a distinct value per worker so concurrent test runs don't
+   * contend on the process-wide state maps (`<Cache>` store,
+   * partial registry, session store, GraphQL cache). See
+   * `getScope()` below and `notes/SERVER_ISOLATION.md`.
+   */
+  scope: string;
+  /**
    * Populated by `Root`'s framework-sentinel catch branch. Read by
    * the RSC entry after rendering to pick the right HTTP status /
    * `Location` header / payload marker.
@@ -131,11 +140,32 @@ function frameRequest(): Request | null {
   return frameScopeCell().current?.request ?? null;
 }
 
+/**
+ * Pick the scope token for this request. In dev, an `x-test-scope`
+ * header wins (Playwright workers stamp a per-worker value so their
+ * process-wide state buckets don't collide). In prod, the header is
+ * ignored — every request maps to `"default"` — so a malicious
+ * caller can't cause cache-miss amplification or state exfil by
+ * spoofing scopes.
+ */
+const DEFAULT_SCOPE = "default";
+function deriveScope(request: Request): string {
+  if (import.meta.env?.DEV) {
+    const h = request.headers.get("x-test-scope");
+    if (h) return h;
+  }
+  return DEFAULT_SCOPE;
+}
+
 export function runWithRequest<T>(
   request: Request,
   fn: () => T,
 ): { result: T; cookies: string[] } {
-  const store: RequestStore = { request, cookies: [] };
+  const store: RequestStore = {
+    request,
+    cookies: [],
+    scope: deriveScope(request),
+  };
   const result = requestContext.run(store, fn);
   return { result, cookies: store.cookies };
 }
@@ -144,7 +174,11 @@ export async function runWithRequestAsync<T>(
   request: Request,
   fn: () => Promise<T>,
 ): Promise<{ result: T; cookies: string[] }> {
-  const store: RequestStore = { request, cookies: [] };
+  const store: RequestStore = {
+    request,
+    cookies: [],
+    scope: deriveScope(request),
+  };
   const result = await requestContext.run(store, fn);
   return { result, cookies: store.cookies };
 }
@@ -164,6 +198,26 @@ export function getRequest(): Request {
 
 export function setRequest(request: Request): void {
   getStore().request = request;
+}
+
+/**
+ * Per-request scope token — `"default"` in prod, dev-only
+ * `x-test-scope` header otherwise. State modules that hold
+ * process-wide Maps (`<Cache>` store, partial registry, session
+ * store, GraphQL cache) bucket by this so parallel test workers
+ * don't interfere.
+ *
+ * Falls back to the default scope when called outside a request
+ * context — that path is exercised by HMR dispose hooks and
+ * module-init code which shouldn't throw just because there's no
+ * live request.
+ */
+export function getScope(): string {
+  return requestContext.getStore()?.scope ?? DEFAULT_SCOPE;
+}
+
+export function getDefaultScope(): string {
+  return DEFAULT_SCOPE;
 }
 
 // ─── Manifest tracking ─────────────────────────────────────────────────

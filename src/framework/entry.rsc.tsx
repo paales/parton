@@ -30,9 +30,16 @@ async function handler(request: Request): Promise<Response> {
   // fallbacks flash during an initial stage-2/3 fetch). Also clears
   // the partial-data cache and the route-scoped partial registry so
   // each run starts from a deterministic state.
+  //
+  // Scoping:
+  //   - Each worker (or a single-worker test run) hits this with its
+  //     own `x-test-scope` header → clears only that scope's state.
+  //   - `?all=1` wipes every scope — what the debug toolbar button
+  //     does from dev, and what `beforeAll` in the Playwright fixture
+  //     uses to reset the server on suite start.
   if (import.meta.env?.DEV) {
-    const pathname = new URL(request.url).pathname;
-    if (pathname === "/__test/clear-caches") {
+    const url = new URL(request.url);
+    if (url.pathname === "/__test/clear-caches") {
       const [
         { _clearCache },
         { clearCache },
@@ -46,11 +53,21 @@ async function handler(request: Request): Promise<Response> {
         import("./session.ts"),
         import("../app/chat/log.ts"),
       ]);
-      await _clearCache();
-      clearCache();
-      clearRegistry();
-      _clearAllSessions();
-      _clearLogs();
+      const all = url.searchParams.get("all") === "1";
+      if (all) {
+        await _clearCache("all");
+        clearCache("all");
+        clearRegistry("all");
+        _clearAllSessions("all");
+        _clearLogs("all");
+      } else {
+        const scope = request.headers.get("x-test-scope") ?? "default";
+        await _clearCache(scope);
+        clearCache(scope);
+        clearRegistry(scope);
+        _clearAllSessions(scope);
+        _clearLogs(scope);
+      }
       return new Response("ok", { status: 200 });
     }
   }

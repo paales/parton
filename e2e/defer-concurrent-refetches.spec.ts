@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request } from "./fixtures";
 
 /**
  * /defer-demo § 6 — concurrent refetch behavior.

@@ -243,21 +243,37 @@ A running list of design follow-ups that haven't been scheduled yet. Most live w
 ## Development
 
 ```bash
-yarn dev          # Start dev server (Vite 8 + RSC)
-yarn test         # Vitest — unit/integration tests under src/ only
-yarn test:watch   # Vitest in watch mode
-yarn test:e2e     # Playwright — end-to-end specs under e2e/
+yarn dev                # Start dev server (Vite 8 + RSC)
+yarn test               # Vitest — runs the `node` + `rsc` projects
+yarn test:node          # Only the jsdom project (fastest feedback)
+yarn test:rsc           # Only the RSC project (server-component tree tests)
+yarn test:browser       # Real Chromium via Vitest browser mode
+yarn test:all           # All three Vitest projects
+yarn test:watch         # Watch mode — node project
+yarn test:watch:rsc     # Watch mode — rsc project
+yarn test:e2e           # Playwright — end-to-end specs under e2e/
 ```
 
-`yarn test` and `yarn test:e2e` cover disjoint suites — both must pass before a change is done. Vitest's `include` is scoped to `src/**/*.{test,spec}.?(c|m)[jt]s?(x)` in `vite.config.ts`; without that scope vitest would pick up `e2e/*.spec.ts` and the legacy `archive/proxy-design/__tests__/` tests.
+`yarn test` and `yarn test:e2e` cover disjoint suites — both must pass before a change is done. See `notes/TESTING_ARCHITECTURE.md` for the full tiering and when to pick each.
 
 ## Testing
 
 Tests hit real GraphQL APIs (PokeAPI, GraphCommerce Magento). Timeout is 15-30s for integration tests.
 
-**Playwright runs with `workers: 1`.** The dev server has process-wide state (the `<Cache>` store, the route-scoped partial registry, session cookies). Parallel workers contended on that state and produced nondeterministic failures. If you add e2e tests, prefer sequential execution + explicit cache clears.
+**Four tiers, picked by glob:**
 
-**Dev-only `/__test/clear-caches` endpoint** (in `src/framework/entry.rsc.tsx`) flushes the `<Cache>` store, the partial-data cache, and the partial registry. Used by `test.beforeEach` in specs that need a cold starting state — particularly anything asserting Suspense fallback behavior, since a warm `<Cache>` returns instantly and the fallback never flashes. The same endpoint powers the dev debug toolbar's "flush cache" button (`src/app/components/debug-toolbar.tsx`).
+| Tier | Glob | What it's for | Speed |
+|---|---|---|---|
+| `node` | `src/**/*.{test,spec}.?(c\|m)[jt]s?(x)` | Unit tests, client hooks | ~2s |
+| `rsc` | `src/**/*.rsc.test.?(c\|m)[jt]s?(x)` | Server-component trees → Flight in-process | ~1s |
+| `browser` | `src/**/*.browser.test.?(c\|m)[jt]s?(x)` | Real DOM primitives jsdom can't fake | ~500ms |
+| e2e | `e2e/**/*.spec.ts` | Full-stack browser assertions against `yarn dev` | ~30s parallel |
+
+The RSC project needs `NODE_OPTIONS='--conditions=react-server'` to put `react` on the hook-less subset; the yarn scripts handle that. In-process RSC rendering uses the vendored Flight runtime directly via `src/test/rsc-server.ts` — `renderServerToFlight`, `consumePayload`, `renderWithRequest`. No dev server or subprocess required.
+
+**Playwright runs fully parallel (`fullyParallel: true`).** Each worker stamps every request with an `x-test-scope: worker-<N>` header; the framework reads it in `framework/context.ts` (`deriveScope`) and buckets every process-wide state map by scope — `<Cache>` store, partial registry, session store, GraphQL cache, chat log, demo-page counters. Parallel workers never contend on shared state. See `notes/SERVER_ISOLATION.md` for the audit. Spec files import `test`/`expect`/`request` from `e2e/fixtures.ts` (not `@playwright/test` directly) so fixture overrides inject the header automatically.
+
+**Dev-only `/__test/clear-caches` endpoint** (in `src/framework/entry.rsc.tsx`) clears state. By default it clears just the requesting worker's scope (via `x-test-scope`); `?all=1` wipes every scope — what the debug toolbar flush button does (`src/app/components/debug-toolbar.tsx`). Used by `test.beforeEach` in specs that need a cold starting state — particularly anything asserting Suspense fallback behavior.
 
 **Vitest's route-keyed fixtures need a registry reset.** `partial.test.tsx` has a top-level `beforeEach(clearRegistry)` because dynamic partials registered under the fake URL (`http://localhost/test`) otherwise leak across tests and contaminate tag resolution.
 

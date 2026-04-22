@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request } from "./fixtures";
 
 /**
  * /defer-demo — exercises all three shapes of `<Partial defer>`:

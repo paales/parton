@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request } from "./fixtures";
 
 // Cold-start every run so the `<Cache>` store doesn't short-circuit
 // stage-2/3's artificial delays. Without this, a prior test's cached

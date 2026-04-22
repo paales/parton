@@ -38,11 +38,38 @@ export default defineConfig({
 		},
 	},
 	test: {
-		setupFiles: ["./vitest.setup.ts"],
-		// Vitest only owns unit/integration tests under src/. Playwright
-		// specs live in e2e/ (run via `yarn test:e2e`); the legacy proxy
-		// data layer in archive/ has its own tests that aren't wired up.
-		include: ["src/**/*.{test,spec}.?(c|m)[jt]s?(x)"],
+		// Three projects, each owning a distinct test tier:
+		//   - node:    jsdom, plugin-rsc disabled — fast bulk of the
+		//              suite (hook tests, client-only units).
+		//   - rsc:     Node + `react-server` condition + plugin-rsc
+		//              active — tests that render server trees to
+		//              Flight in-process. See `vitest.rsc.config.ts`.
+		//   - browser: real Chromium via Playwright provider — tests
+		//              that need real DOM primitives jsdom can't fake
+		//              (focus, Navigation API, measurement). See
+		//              `vitest.browser.config.ts`.
+		// `yarn test` runs the fast tiers (node + rsc); browser tier
+		// is opt-in via `yarn test:browser` to avoid paying the
+		// browser-boot cost on every save. CI runs all three.
+		projects: [
+			{
+				extends: true,
+				test: {
+					name: "node",
+					setupFiles: ["./vitest.setup.ts"],
+					include: ["src/**/*.{test,spec}.?(c|m)[jt]s?(x)"],
+					// Other tiers own their own globs.
+					exclude: [
+						"**/node_modules/**",
+						"src/**/*.rsc.test.?(c|m)[jt]s?(x)",
+						"src/**/*.browser.test.?(c|m)[jt]s?(x)",
+					],
+					environment: "jsdom",
+				},
+			},
+			"./vitest.rsc.config.ts",
+			"./vitest.browser.config.ts",
+		],
 	},
 	resolve: {
 		dedupe: ["react", "react-dom"],

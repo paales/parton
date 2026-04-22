@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * /bare — infinite scroll via the singleton-`<Partial selector="#next">` slot.

@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request } from "./fixtures";
 
 /**
  * /not-found-demo throws `notFound()` → HTTP 404 + <NotFoundPage/>.

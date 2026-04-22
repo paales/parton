@@ -14,7 +14,15 @@
  *
  * This is the ESI model: compose pages from independently cached
  * fragments, fetch only what's stale.
+ *
+ * ── Scoping ─────────────────────────────────────────────────────────
+ * The cache is scoped per request (`getScope()` — "default" in prod,
+ * `x-test-scope` header in dev). Playwright workers > 1 get isolated
+ * buckets so their entries don't cross-contaminate.
  */
+
+import { getScope } from "../framework/context.ts";
+import { djb2 as hashQuery } from "./hash.ts";
 
 interface CacheEntry {
   data: Record<string, unknown>;
@@ -24,11 +32,19 @@ interface CacheEntry {
 }
 
 // CATEGORY C (notes/SERVER_ISOLATION.md) — shared GraphQL response cache.
-// Entries keyed by query hash + variables; safe to share across users for
-// anonymous queries, and authenticated queries should not end up here.
-const cache = new Map<string, CacheEntry>();
+// Entries keyed by query hash + variables within a scope; safe to share
+// across users for anonymous queries, and authenticated queries should
+// not end up here.
+const scopes = new Map<string, Map<string, CacheEntry>>();
 
-import { djb2 as hashQuery } from "./hash.ts";
+function bucket(scope: string = getScope()): Map<string, CacheEntry> {
+  let b = scopes.get(scope);
+  if (!b) {
+    b = new Map();
+    scopes.set(scope, b);
+  }
+  return b;
+}
 
 /**
  * Look up cached response data for a query.
@@ -38,10 +54,11 @@ export function getCachedData(
   query: string,
 ): Record<string, unknown> | null {
   const key = hashQuery(query);
-  const entry = cache.get(key);
+  const b = bucket();
+  const entry = b.get(key);
   if (!entry) return null;
   if (Date.now() > entry.expiresAt) {
-    cache.delete(key);
+    b.delete(key);
     return null;
   }
   return entry.data;
@@ -61,7 +78,7 @@ export function setCachedData(
   tags: string[] = [],
 ): void {
   const key = hashQuery(query);
-  cache.set(key, {
+  bucket().set(key, {
     data,
     query,
     tags,
@@ -70,35 +87,47 @@ export function setCachedData(
 }
 
 /**
- * Invalidate all cache entries matching any of the given tags.
- * Called from server actions via entry.rsc.tsx.
+ * Invalidate all cache entries matching any of the given tags within
+ * the current request's scope. Called from server actions via
+ * entry.rsc.tsx.
  */
 export function invalidateByTags(tags: string[]): number {
   const tagSet = new Set(tags);
   let purged = 0;
-  for (const [key, entry] of cache) {
+  const b = bucket();
+  for (const [key, entry] of b) {
     if (entry.tags.some((t) => tagSet.has(t))) {
-      cache.delete(key);
+      b.delete(key);
       purged++;
     }
   }
   return purged;
 }
 
-/** Clear the entire cache. Useful for testing. */
-export function clearCache(): void {
-  cache.clear();
+/**
+ * Clear cache entries. With no argument (or `"all"`), clears every
+ * scope — used by HMR dispose hooks and by the dev debug toolbar.
+ * Pass a specific scope to clear just that worker's entries (the
+ * `/__test/clear-caches` endpoint does this per-request).
+ */
+export function clearCache(scope?: string | "all"): void {
+  if (scope === undefined || scope === "all") {
+    scopes.clear();
+    return;
+  }
+  scopes.delete(scope);
 }
 
-/** Get cache stats. Useful for debugging. */
+/** Get cache stats for the current request's scope. Useful for debugging. */
 export function getCacheStats(): {
   size: number;
   entries: Array<{ query: string; tags: string[]; ttlRemaining: number }>;
 } {
   const now = Date.now();
+  const b = bucket();
   return {
-    size: cache.size,
-    entries: [...cache.values()].map((e) => ({
+    size: b.size,
+    entries: [...b.values()].map((e) => ({
       query: e.query.slice(0, 80) + (e.query.length > 80 ? "..." : ""),
       tags: e.tags,
       ttlRemaining: Math.max(0, Math.round((e.expiresAt - now) / 1000)),

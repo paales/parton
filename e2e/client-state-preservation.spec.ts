@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request } from "./fixtures";
 
 /**
  * Regression: client state inside a `<Partial>` survives a refetch.

@@ -1,4 +1,4 @@
-import { expect, request, test } from "@playwright/test";
+import { expect, request, test } from "./fixtures";
 
 /**
  * Dynamic Partials inside a `<Partial cache>` must remain holes —

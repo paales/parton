@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request } from "./fixtures";
 
 /**
  * Verify: after navigating between routes, the client `_cache` drops

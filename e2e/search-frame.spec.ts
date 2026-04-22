@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * "Search (Frame)" — frame-scoped version of the pokemon search demo.

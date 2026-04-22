@@ -1,4 +1,4 @@
-import { expect, request, test } from "@playwright/test";
+import { expect, request, test } from "./fixtures";
 
 /**
  * Regression: on the *second* GET of /magento (when the server-side

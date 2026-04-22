@@ -16,9 +16,16 @@
  * scene. Closing the browser, reopening, and hitting the same URL
  * gets the same scene — as long as the cookie is still there and
  * the server hasn't evicted the session.
+ *
+ * ── Scoping ─────────────────────────────────────────────────────────
+ * The store is bucketed per request scope (`getScope()`). In prod,
+ * every user maps to the default scope and sessions are looked up
+ * cookie-to-state as before. In dev, Playwright workers supply a
+ * per-worker `x-test-scope` header so parallel test workers don't
+ * trample each other's session state.
  */
 
-import { getCookie, setCookie } from "./context.ts";
+import { getCookie, getScope, setCookie } from "./context.ts";
 
 export interface FrameSessionState {
   url: string;
@@ -30,9 +37,19 @@ export interface SessionState {
 
 const SESSION_COOKIE = "__frame_sid";
 
-// CATEGORY C (notes/SERVER_ISOLATION.md) — intentional shared map.
-// Keyed by opaque session ID; different users don't collide.
-const store = new Map<string, SessionState>();
+// CATEGORY C (notes/SERVER_ISOLATION.md) — intentional shared map,
+// now nested under a per-scope bucket. Inner map keyed by opaque
+// session ID; different users don't collide within a scope.
+const scopes = new Map<string, Map<string, SessionState>>();
+
+function store(scope: string = getScope()): Map<string, SessionState> {
+  let b = scopes.get(scope);
+  if (!b) {
+    b = new Map();
+    scopes.set(scope, b);
+  }
+  return b;
+}
 
 function generateSessionId(): string {
   return crypto.randomUUID();
@@ -69,7 +86,7 @@ export function ensureSessionId(): string {
 export function getSessionState(): SessionState {
   const id = getSessionId();
   if (!id) return { frames: {} };
-  return store.get(id) ?? { frames: {} };
+  return store().get(id) ?? { frames: {} };
 }
 
 /**
@@ -86,9 +103,10 @@ export function getSessionFrameUrl(frameName: string): string | null {
  */
 export function setSessionFrameUrl(frameName: string, url: string): void {
   const id = ensureSessionId();
-  const existing = store.get(id) ?? { frames: {} };
+  const b = store();
+  const existing = b.get(id) ?? { frames: {} };
   existing.frames = { ...existing.frames, [frameName]: { url } };
-  store.set(id, existing);
+  b.set(id, existing);
 }
 
 /**
@@ -98,27 +116,37 @@ export function setSessionFrameUrl(frameName: string, url: string): void {
 export function clearSessionFrame(frameName: string): void {
   const id = getSessionId();
   if (!id) return;
-  const existing = store.get(id);
+  const b = store();
+  const existing = b.get(id);
   if (!existing) return;
   const { [frameName]: _removed, ...rest } = existing.frames;
   existing.frames = rest;
-  store.set(id, existing);
+  b.set(id, existing);
 }
 
-/** Test-only: wipe all sessions. */
-export function _clearAllSessions(): void {
-  store.clear();
+/**
+ * Test-only: wipe sessions. No argument (or `"all"`): all scopes;
+ * otherwise the named scope only. Per-worker clears flow through
+ * `/__test/clear-caches`, which forwards the request scope.
+ */
+export function _clearAllSessions(scope?: string | "all"): void {
+  if (scope === undefined || scope === "all") {
+    scopes.clear();
+    return;
+  }
+  scopes.delete(scope);
 }
 
-/** Test/debug: stats on the session store. */
+/** Test/debug: stats on the current scope's session store. */
 export function _sessionStats(): { sessions: number; frameCounts: Record<string, number> } {
   const frameCounts: Record<string, number> = {};
-  for (const state of store.values()) {
+  const b = store();
+  for (const state of b.values()) {
     for (const frameName of Object.keys(state.frames)) {
       frameCounts[frameName] = (frameCounts[frameName] ?? 0) + 1;
     }
   }
-  return { sessions: store.size, frameCounts };
+  return { sessions: b.size, frameCounts };
 }
 
 if (import.meta.hot) {

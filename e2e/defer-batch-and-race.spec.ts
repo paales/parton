@@ -1,4 +1,4 @@
-import { test, expect, request } from "@playwright/test";
+import { test, expect, request } from "./fixtures";
 
 /**
  * /defer-demo § 4-5 — dispatch behavior under concurrent activations.

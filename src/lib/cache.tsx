@@ -64,6 +64,7 @@ import {
   getCurrentCacheManifest,
   getCurrentFrameScope,
   getRequest,
+  getScope,
   resolveManifest,
   runWithCacheManifest,
   type ManifestScope,
@@ -134,19 +135,45 @@ class MemoryCacheStore implements CacheStore {
   }
 }
 
-// CATEGORY C (notes/SERVER_ISOLATION.md) — intentional shared cache. Key
-// surface includes per-request variants via the auto-tracked manifest, so
-// entries are safe to share across users.
-const store: CacheStore = new MemoryCacheStore();
-
-// CATEGORY C — process-local side-table holding dynamic-partial snapshots
-// per cache key. Populated on miss, read on hit. Dynamic partial snapshots
-// reference live React element functions that can't serialize, so they
-// stay in-process.
-const snapshotIndex = new Map<string, Map<string, PartialSnapshot>>();
+// CATEGORY C (notes/SERVER_ISOLATION.md) — all five pieces of shared
+// cache state (render-output store, dynamic-snapshot side-table,
+// manifest side-table, SWR in-flight guard, cold-miss dedupe) are
+// bundled per scope. `getScope()` maps each request to a bucket.
+// Production: every request → `"default"` → one bucket, same
+// semantics as before. Dev with `x-test-scope` header (Playwright
+// workers > 1): one bucket per worker so they don't contend.
 const SNAPSHOT_INDEX_MAX = 10_000;
 
+interface ScopeState {
+  store: CacheStore;
+  snapshotIndex: Map<string, Map<string, PartialSnapshot>>;
+  manifestStore: Map<string, Set<string>>;
+  refreshing: Set<string>;
+  inFlightMiss: Map<
+    string,
+    Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }>
+  >;
+}
+
+const scopes = new Map<string, ScopeState>();
+
+function state(scope: string = getScope()): ScopeState {
+  let s = scopes.get(scope);
+  if (!s) {
+    s = {
+      store: new MemoryCacheStore(),
+      snapshotIndex: new Map(),
+      manifestStore: new Map(),
+      refreshing: new Set(),
+      inFlightMiss: new Map(),
+    };
+    scopes.set(scope, s);
+  }
+  return s;
+}
+
 function setSnapshots(key: string, snaps: Map<string, PartialSnapshot>): void {
+  const { snapshotIndex } = state();
   snapshotIndex.delete(key);
   snapshotIndex.set(key, snaps);
   while (snapshotIndex.size > SNAPSHOT_INDEX_MAX) {
@@ -155,25 +182,6 @@ function setSnapshots(key: string, snaps: Map<string, PartialSnapshot>): void {
     snapshotIndex.delete(oldest);
   }
 }
-
-/**
- * Manifest side-table: `(id, fingerprint, ids-hash)` → the Set of
- * tracked accessor keys read during the Partial's body execution.
- *
- * Lives alongside `snapshotIndex` — process-local, in-memory. Doesn't
- * need to cross process boundaries (a fresh process rebuilds it on
- * first render). Never serialized.
- *
- * CATEGORY C (notes/SERVER_ISOLATION.md) — intentional shared.
- */
-const manifestStore = new Map<string, Set<string>>();
-
-// CATEGORY C — SWR in-flight guard. Two concurrent requests may both see
-// !has(key) before either adds; both kick off a refresh. Correctness is
-// fine (both read the stale cached bytes); the extra refresh work in the
-// race window is accepted in exchange for avoiding a mutex. Documented
-// in notes/SERVER_ISOLATION.md §C.
-const refreshing = new Set<string>();
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -601,7 +609,7 @@ export async function Cache({
 }
 
 function findStoredManifestByPrefix(prefix: string): Set<string> | undefined {
-  for (const [k, v] of manifestStore) {
+  for (const [k, v] of state().manifestStore) {
     if (k.startsWith(prefix)) return v;
   }
   return undefined;
@@ -615,6 +623,13 @@ async function cacheImpl(
   scope: ManifestScope,
   frameRequest: Request | undefined,
 ): Promise<ReactNode> {
+  const {
+    store,
+    snapshotIndex,
+    manifestStore,
+    refreshing,
+    inFlightMiss,
+  } = state();
   const manifest = scope.current;
   // Strip statically-visible partials. Placeholders go into the cached
   // bytes; live elements are re-injected on the way out so partials
@@ -708,13 +723,10 @@ async function cacheImpl(
 }
 
 // ─── Miss helpers ──────────────────────────────────────────────────────
-
-// CATEGORY C (notes/SERVER_ISOLATION.md) — cold-miss dedupe. Multiple
-// requests hitting the same cold key share one in-flight render Promise.
-const inFlightMiss = new Map<
-  string,
-  Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }>
->();
+//
+// The cold-miss dedupe map lives on `ScopeState.inFlightMiss` — multiple
+// requests hitting the same cold key within a scope share one in-flight
+// render Promise.
 
 async function renderMissAndStore(
   baseKey: string,
@@ -727,6 +739,7 @@ async function renderMissAndStore(
   storedManifest: Set<string> | undefined,
   frameRequest: Request | undefined,
 ): Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }> {
+  const { store, manifestStore } = state();
   // Render to Flight ONCE, then tee:
   //   • user branch → decoded immediately, returned to outer render.
   //     Inner Suspense boundaries stay lazy so the client paints
@@ -805,6 +818,7 @@ async function refreshEntry(
   partialId: string,
   frameRequest: Request | undefined,
 ): Promise<void> {
+  const { store, manifestStore } = state();
   // SWR refresh runs in a separate async chain; open its own manifest
   // scope so accessor calls during re-render go into the right bucket.
   const storedManifest = manifestStore.get(baseKey);
@@ -870,15 +884,26 @@ function freshEntry(
 // ─── Dev / debugging helpers ────────────────────────────────────────────
 
 export function _cacheStats(): Promise<{ size: number; keys: string[] }> {
-  return store.stats();
+  return state().store.stats();
 }
 
-export async function _clearCache(): Promise<void> {
-  await store.clear();
-  snapshotIndex.clear();
-  manifestStore.clear();
-  inFlightMiss.clear();
-  refreshing.clear();
+/**
+ * Clear cache state. No argument (or `"all"`): every scope — used by
+ * HMR dispose hooks and the debug toolbar's flush button. Pass a
+ * specific scope to target a single worker's entries (e.g. what
+ * `/__test/clear-caches` does per-request).
+ */
+export async function _clearCache(scope?: string | "all"): Promise<void> {
+  if (scope === undefined || scope === "all") {
+    const all = [...scopes.values()];
+    scopes.clear();
+    await Promise.all(all.map((s) => s.store.clear()));
+    return;
+  }
+  const s = scopes.get(scope);
+  if (!s) return;
+  scopes.delete(scope);
+  await s.store.clear();
 }
 
 if (import.meta.hot) {

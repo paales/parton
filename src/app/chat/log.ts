@@ -19,6 +19,7 @@
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { getScope } from "../../framework/context.ts";
 
 const CHUNK_DELAY_MS = 100;
 const CHUNK_CHAR_SIZE = 25;
@@ -37,10 +38,25 @@ interface MessageLog {
   aborted: boolean;
 }
 
-const logs = new Map<string, MessageLog>();
+// Per-scope log store so parallel Playwright workers (each scoped via
+// the `x-test-scope` header) don't share producer state — one test's
+// in-flight stream shouldn't be visible to another worker reading the
+// same fileId.
+const scopes = new Map<string, Map<string, MessageLog>>();
+
+function logs(): Map<string, MessageLog> {
+  const scope = getScope();
+  let m = scopes.get(scope);
+  if (!m) {
+    m = new Map();
+    scopes.set(scope, m);
+  }
+  return m;
+}
 
 function ensureLog(fileId: string): MessageLog {
-  let log = logs.get(fileId);
+  const bucket = logs();
+  let log = bucket.get(fileId);
   if (log) return log;
   log = {
     chunks: [],
@@ -49,7 +65,7 @@ function ensureLog(fileId: string): MessageLog {
     waiters: new Set(),
     aborted: false,
   };
-  logs.set(fileId, log);
+  bucket.set(fileId, log);
   void runProducer(fileId, log);
   return log;
 }
@@ -123,14 +139,29 @@ export function readLogPrefix(fileId: string, cursor: number): string[] {
   return log.chunks.slice(0, Math.max(0, cursor));
 }
 
-/** Test-only: wipe every log (used by dev cache-clear + test isolation). */
-export function _clearLogs(): void {
-  // Mark live producers aborted so they exit their loop instead of
-  // continuing to burn CPU / setTimeout scheduling in the background
-  // after a test has moved on.
-  for (const log of logs.values()) {
-    log.aborted = true;
-    wakeAll(log);
+/**
+ * Test-only: wipe logs. No argument (or `"all"`): every scope —
+ * what the debug toolbar's flush button and HMR dispose hooks use.
+ * Pass a specific scope to target a single worker's logs.
+ */
+export function _clearLogs(scope?: string | "all"): void {
+  const wipe = (m: Map<string, MessageLog>) => {
+    // Mark live producers aborted so they exit their loop instead of
+    // continuing to burn CPU / setTimeout scheduling in the background
+    // after a test has moved on.
+    for (const log of m.values()) {
+      log.aborted = true;
+      wakeAll(log);
+    }
+    m.clear();
+  };
+  if (scope === undefined || scope === "all") {
+    for (const m of scopes.values()) wipe(m);
+    scopes.clear();
+    return;
   }
-  logs.clear();
+  const m = scopes.get(scope);
+  if (!m) return;
+  wipe(m);
+  scopes.delete(scope);
 }

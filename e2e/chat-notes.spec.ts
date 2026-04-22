@@ -1,4 +1,4 @@
-import { test, expect, request, type Page } from "@playwright/test";
+import { test, expect, request, type Page } from "./fixtures";
 
 /**
  * /chat-notes — bounded-recursion streaming with server-side compaction.

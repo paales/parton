@@ -3,7 +3,7 @@
  *
  * Captures each `<Partial>`'s *content descriptor* (the JSX inside it,
  * as a React element) the first time it actually renders. Keyed by
- * `(route path, partial id)`.
+ * `(scope, route path, partial id)`.
  *
  * Why: the only "static walk" of the JSX children chain is `seedRegistry`
  * in `PartialRoot` — it bootstraps the registry from statically-visible
@@ -30,8 +30,14 @@
  * clears the registry, and in production a deploy spins a new
  * process. Either way: new code path → empty registry → first
  * request repopulates.
+ *
+ * ── Scoping ─────────────────────────────────────────────────────────
+ * Keyed by `getScope()` first — Playwright workers > 1 get isolated
+ * route maps so snapshots registered by worker A don't resolve for
+ * worker B. Production uses the default scope for every request.
  */
 import type { ReactNode } from "react";
+import { getScope } from "../framework/context.ts";
 import type { CacheOptions } from "./cache-options.ts";
 
 export interface PartialSnapshot {
@@ -62,16 +68,30 @@ export interface PartialSnapshot {
   frameUrl?: string;
 }
 
-// CATEGORY C (notes/SERVER_ISOLATION.md) — route-scoped snapshot store
-// shared across requests. Rebuilt on HMR / process restart; cleared on
-// full streaming renders for a given route via clearRoute(route).
-const registry = new Map<string, Map<string, PartialSnapshot>>();
+type RouteMap = Map<string, Map<string, PartialSnapshot>>;
+
+// CATEGORY C (notes/SERVER_ISOLATION.md) — route-scoped snapshot store,
+// outer key is the per-request `scope` (test-worker isolation; always
+// "default" in prod). Inner: route → partial id → snapshot. Rebuilt on
+// HMR / process restart; cleared on full streaming renders via
+// clearRoute(route).
+const scopes = new Map<string, RouteMap>();
+
+function scopeMap(scope: string = getScope()): RouteMap {
+  let m = scopes.get(scope);
+  if (!m) {
+    m = new Map();
+    scopes.set(scope, m);
+  }
+  return m;
+}
 
 function routeBucket(route: string): Map<string, PartialSnapshot> {
-  let bucket = registry.get(route);
+  const m = scopeMap();
+  let bucket = m.get(route);
   if (!bucket) {
     bucket = new Map();
-    registry.set(route, bucket);
+    m.set(route, bucket);
   }
   return bucket;
 }
@@ -88,7 +108,7 @@ export function lookupPartial(
   route: string,
   id: string,
 ): PartialSnapshot | undefined {
-  return registry.get(route)?.get(id);
+  return scopeMap().get(route)?.get(id);
 }
 
 /**
@@ -99,23 +119,32 @@ export function lookupPartial(
 export function getRouteSnapshots(
   route: string,
 ): Map<string, PartialSnapshot> | undefined {
-  return registry.get(route);
+  return scopeMap().get(route);
 }
 
 /**
- * Drop all snapshots for a route. Called at the start of every
- * streaming render so the registry reflects ONLY the partials the
- * current layout produced — stale entries from prior renders (e.g.
- * `page-2` registered when `?end=2` was visited earlier) do not
- * linger and cause future refetches to take the cache-mode path
- * when they should fall back to streaming.
+ * Drop all snapshots for a route within the current scope. Called at
+ * the start of every streaming render so the registry reflects ONLY
+ * the partials the current layout produced — stale entries from
+ * prior renders (e.g. `page-2` registered when `?end=2` was visited
+ * earlier) do not linger and cause future refetches to take the
+ * cache-mode path when they should fall back to streaming.
  */
 export function clearRoute(route: string): void {
-  registry.delete(route);
+  scopeMap().delete(route);
 }
 
-export function clearRegistry(): void {
-  registry.clear();
+/**
+ * Clear registry entries. No argument (or `"all"`): every scope is
+ * wiped — used by HMR dispose hooks. Pass a scope to target a single
+ * worker's entries.
+ */
+export function clearRegistry(scope?: string | "all"): void {
+  if (scope === undefined || scope === "all") {
+    scopes.clear();
+    return;
+  }
+  scopes.delete(scope);
 }
 
 export function _registryStats(): {
@@ -125,16 +154,17 @@ export function _registryStats(): {
 } {
   const byRoute: Record<string, string[]> = {};
   let partials = 0;
-  for (const [route, bucket] of registry) {
+  const m = scopeMap();
+  for (const [route, bucket] of m) {
     byRoute[route] = [...bucket.keys()];
     partials += bucket.size;
   }
-  return { routes: registry.size, partials, byRoute };
+  return { routes: m.size, partials, byRoute };
 }
 
 // HMR: snapshotted React elements reference component functions whose
-// module identities change across edits. Clearing on update prevents
-// stale references from being re-rendered.
+// module identities change across edits. Clear everything (all scopes)
+// on update to prevent stale references from being re-rendered.
 if (import.meta.hot) {
   import.meta.hot.on("vite:beforeUpdate", () => clearRegistry());
   import.meta.hot.on("vite:beforeFullReload", () => clearRegistry());

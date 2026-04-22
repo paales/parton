@@ -3,12 +3,13 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30000,
-  // Tests share a single dev server with process-wide state (`<Cache>`,
-  // the partial registry, cart cookies). Running them in parallel lets
-  // workers contend on that state — one test's cached bytes or
-  // registry entries interfere with another's assertions. Serialize
-  // to keep the suite deterministic.
-  workers: 1,
+  // Workers > 1 is safe now: `e2e/fixtures.ts` stamps every request
+  // with a per-worker `x-test-scope` header, and the framework (see
+  // `framework/context.ts` — `deriveScope`) routes each request to
+  // its own bucket of process-wide state (<Cache>, registry,
+  // session, GraphQL cache). Default (`undefined`) lets Playwright
+  // pick based on CPU count.
+  fullyParallel: true,
   use: {
     baseURL: "http://localhost:5173",
     headless: true,

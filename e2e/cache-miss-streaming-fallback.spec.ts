@@ -1,4 +1,4 @@
-import { expect, request, test } from "@playwright/test";
+import { expect, request, test } from "./fixtures";
 
 /**
  * Cold-cache regression: on the first load (no cached entry), the

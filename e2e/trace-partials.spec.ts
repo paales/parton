@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * Detailed tracing: watches EVERY mutation inside #root (full DOM walk),

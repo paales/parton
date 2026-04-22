@@ -1,4 +1,4 @@
-import { expect, request, test } from "@playwright/test";
+import { expect, request, test } from "./fixtures";
 
 /**
  * Dynamic Partial discovery + refresh end-to-end.

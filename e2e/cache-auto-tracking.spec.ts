@@ -1,4 +1,4 @@
-import { expect, request, test } from "@playwright/test";
+import { expect, request, test } from "./fixtures";
 
 /**
  * End-to-end verification of auto-tracked cache keys.

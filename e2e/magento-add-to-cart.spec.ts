@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * E2E test: after a successful "Add to Cart" action, the cart badge in the

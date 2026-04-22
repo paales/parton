@@ -15,12 +15,20 @@ import { Partial } from "../../lib/partial.tsx";
 import { _cacheStats } from "../../lib/cache.tsx";
 import { CacheControls } from "../components/cache-controls.tsx";
 import { ClickCounter } from "../components/click-counter.tsx";
-import { getSearchParam } from "../../framework/context.ts";
+import { getScope, getSearchParam } from "../../framework/context.ts";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Module-level counter to prove whether the body actually ran this request.
-let slowRenderCount = 0;
+// Per-scope counter so parallel Playwright workers (each with its own
+// `x-test-scope` header) don't share the tally. Tests assert on
+// deltas within a single scope, which is what matters.
+const slowRenderCounts = new Map<string, number>();
+function bumpSlowRender(): number {
+  const scope = getScope();
+  const next = (slowRenderCounts.get(scope) ?? 0) + 1;
+  slowRenderCounts.set(scope, next);
+  return next;
+}
 
 async function SlowContent() {
   // Demonstrates auto-tracked cache keys: `getSearchParam` records
@@ -28,7 +36,7 @@ async function SlowContent() {
   // so cached bytes are automatically keyed per flavor without any
   // `vary` declaration on the Partial.
   const flavor = getSearchParam("flavor") ?? "vanilla";
-  slowRenderCount++;
+  const slowRenderCount = bumpSlowRender();
   await delay(500);
   return (
     <div
@@ -91,7 +99,9 @@ export async function CacheDemoPage() {
 
       <div className="mt-8 text-xs text-muted-foreground">
         Server <Code>slowRenderCount</Code>:{" "}
-        <span data-testid="server-render-count">{slowRenderCount}</span>
+        <span data-testid="server-render-count">
+          {slowRenderCounts.get(getScope()) ?? 0}
+        </span>
         <br />
         Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
       </div>
