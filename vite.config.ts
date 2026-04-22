@@ -1,5 +1,7 @@
+import path from "node:path";
 import react from "@vitejs/plugin-react";
 import rsc from "@vitejs/plugin-rsc";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 // Skip `@vitejs/plugin-rsc` when vitest is running: its `"use client"`
@@ -9,7 +11,9 @@ import { defineConfig } from "vite";
 const isTest = process.env.VITEST === "true";
 
 export default defineConfig({
-	plugins: isTest ? [react()] : [rsc(), react()],
+	plugins: isTest
+		? [react(), tailwindcss()]
+		: [rsc(), react(), tailwindcss()],
 	environments: {
 		rsc: {
 			build: {
@@ -42,5 +46,8 @@ export default defineConfig({
 	},
 	resolve: {
 		dedupe: ["react", "react-dom"],
+		alias: {
+			"@": path.resolve(import.meta.dirname, "src"),
+		},
 	},
 });

@@ -1,3 +1,4 @@
+import "./styles.css";
 import { PokemonPage } from "./pages/pokemon.tsx";
 import { MagentoPage } from "./pages/magento/product-list.tsx";
 import { BarePage } from "./pages/bare-stream.tsx";
@@ -21,6 +22,7 @@ import { Redirect } from "../framework/redirect-client.tsx";
 import { DebugToolbar } from "./components/debug-toolbar.tsx";
 import { AppNav } from "./components/app-nav.tsx";
 import { ChatOverlay } from "./chat/chat-overlay.tsx";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export function Root() {
   try {
@@ -100,14 +102,16 @@ function renderRoute() {
           </head>
         </Partial>
         <body>
-          <AppNav />
-          {pickRoute([
-            ["/magento", () => MagentoPage()],
-            ["/magento/*", () => MagentoPage()],
-            ["/*", () => PokemonPage()],
-          ])}
-          {import.meta.env.DEV && <DebugToolbar />}
-          <ChatOverlay />
+          <TooltipProvider>
+            <AppNav />
+            {pickRoute([
+              ["/magento", () => MagentoPage()],
+              ["/magento/*", () => MagentoPage()],
+              ["/*", () => PokemonPage()],
+            ])}
+            {import.meta.env.DEV && <DebugToolbar />}
+            <ChatOverlay />
+          </TooltipProvider>
         </body>
       </html>
     </PartialRoot>

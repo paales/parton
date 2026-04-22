@@ -9,9 +9,17 @@
     "module": "ESNext",
     "target": "ESNext",
     "lib": ["ESNext", "DOM"],
-    "types": ["vite/client", "@vitejs/plugin-rsc/types", "node", "react/canary"],
+    "types": [
+      "vite/client",
+      "@vitejs/plugin-rsc/types",
+      "node",
+      "react/canary"
+    ],
     "jsx": "react-jsx",
     "strict": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
     "plugins": [
       {
         "name": "gql.tada/ts-plugin",
