@@ -32,6 +32,8 @@ export function AppNav() {
         <a href="/sentinels-demo">Sentinels Demo</a>
         {" · "}
         <a href="/frames-demo">Frames Demo</a>
+        {" · "}
+        <a href="/chat-notes">Chat Notes</a>
       </nav>
     </Partial>
   );

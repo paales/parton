@@ -1,0 +1,229 @@
+import { test, expect, type Page } from "@playwright/test";
+
+/**
+ * /chat-notes — bounded-recursion streaming with server-side compaction.
+ *
+ *   The source stream is `notes/*.md` paragraph-by-paragraph (see
+ *   `src/app/chat/log.ts`). Each paragraph is a chunk. The message
+ *   partial renders a recursive `<Piece>` server component that awaits
+ *   the next chunk and recurses inside a `<Suspense>` — so every chunk
+ *   arrives as its own Flight reveal.
+ *
+ *   Recursion is capped at MAX_DEPTH (currently 12). At the bound the
+ *   chain ends in a client-side `<ResumeTail>` that calls
+ *   `nav.navigate({ selector: "#chat-msg-${fileId}" })` with a bumped
+ *   `?cursor-${fileId}=` in the URL. The server re-renders the message
+ *   as a synchronous `<FlatPrefix>` (all chunks up to cursor, from the
+ *   log) plus a fresh depth-0 Piece chain for the tail.
+ *
+ *   These tests pin the important invariants:
+ *     - Initial render stops at MAX_DEPTH with a ResumeTail.
+ *     - After compaction, the cursor in the URL and on the message's
+ *       `data-cursor` attribute advances in MAX_DEPTH strides.
+ *     - Chunk count never regresses across compaction boundaries
+ *       (the flat prefix has to re-emit everything the old chain had).
+ *     - Terminal state reaches `chat-done` for files whose log drains.
+ */
+
+const MAX_DEPTH = 12;
+
+async function countChunks(page: Page, fileId: string): Promise<number> {
+  return page
+    .locator(`[data-testid="chat-body-${fileId}"] [data-chunk]`)
+    .count();
+}
+
+async function readCursor(page: Page, fileId: string): Promise<number> {
+  const attr = await page
+    .locator(`[data-testid="chat-msg-${fileId}"]`)
+    .getAttribute("data-cursor");
+  return Number(attr ?? "0");
+}
+
+test.beforeEach(async ({ page }) => {
+  // Stream state (logs, registry, caches) is process-wide. Flush so
+  // each test starts from a cold server and can assert initial
+  // cursor=0 reliably.
+  await page.goto("/__test/clear-caches");
+});
+
+test("empty state renders when no messages are active", async ({ page }) => {
+  await page.goto("/chat-notes");
+  await expect(page.locator('[data-testid="chat-box"]')).toBeVisible();
+  await expect(page.locator('[data-testid="chat-empty"]')).toBeVisible();
+  expect(await page.locator("[data-chunk]").count()).toBe(0);
+});
+
+test("initial render bounds Piece recursion at MAX_DEPTH with a ResumeTail", async ({
+  page,
+}) => {
+  // IDEAS.md has ~79 paragraphs — guaranteed to exceed MAX_DEPTH so the
+  // initial render hits the bound.
+  await page.goto("/chat-notes?msgs=IDEAS");
+
+  // Wait for the first chunk to show (log producer + Flight stream).
+  await expect(
+    page
+      .locator('[data-testid="chat-body-IDEAS"] [data-chunk]')
+      .first(),
+  ).toBeAttached({ timeout: 5000 });
+
+  // The ResumeTail is client-only so it mounts after hydration. Give
+  // it a beat to appear before we check.
+  await page.waitForSelector('[data-testid="resume-tail-IDEAS"]', {
+    state: "attached",
+    timeout: 5000,
+  });
+
+  // The tail carries a positive multiple of MAX_DEPTH — once the client
+  // hydrates, compactions fire fast on a hot log so we can't pin the
+  // exact multiple, but the structural invariant (cursor = k·MAX_DEPTH)
+  // holds across every render.
+  const cursorAttr = await page
+    .locator('[data-testid="resume-tail-IDEAS"]')
+    .first()
+    .getAttribute("data-cursor");
+  const tailCursor = Number(cursorAttr);
+  expect(tailCursor).toBeGreaterThan(0);
+  expect(tailCursor % MAX_DEPTH).toBe(0);
+});
+
+test("chat list auto-scrolls to bottom as chunks stream in", async ({
+  page,
+}) => {
+  await page.goto("/chat-notes?msgs=IDEAS");
+
+  // Wait until there's enough content for the list to actually overflow.
+  await expect
+    .poll(
+      async () => {
+        const list = page.locator('[data-testid="chat-list"]');
+        return (
+          (await list.evaluate((el) => el.scrollHeight)) -
+          (await list.evaluate((el) => el.clientHeight))
+        );
+      },
+      { timeout: 10000 },
+    )
+    .toBeGreaterThan(100);
+
+  // Auto-scroll pins the bottom — scrollTop should be within a small
+  // epsilon of `scrollHeight - clientHeight`.
+  const { scrollTop, scrollHeight, clientHeight } = await page
+    .locator('[data-testid="chat-list"]')
+    .evaluate((el) => ({
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    }));
+  expect(scrollHeight - scrollTop - clientHeight).toBeLessThan(80);
+});
+
+test("compaction: cursor advances and chunk count grows monotonically", async ({
+  page,
+}) => {
+  await page.goto("/chat-notes?msgs=IDEAS");
+
+  // The message mounts with cursor=0.
+  await expect(page.locator('[data-testid="chat-msg-IDEAS"]')).toHaveAttribute(
+    "data-cursor",
+    "0",
+    { timeout: 5000 },
+  );
+
+  // After MAX_DEPTH chunks stream, ResumeTail fires and the partial
+  // re-renders with cursor=MAX_DEPTH. Poll for the cursor advance.
+  await expect
+    .poll(() => readCursor(page, "IDEAS"), { timeout: 10000, intervals: [100] })
+    .toBeGreaterThanOrEqual(MAX_DEPTH);
+
+  // Second compaction — cursor bumps another MAX_DEPTH. Proves the
+  // ResumeTail re-arms cleanly after unmount/remount across the seam.
+  await expect
+    .poll(() => readCursor(page, "IDEAS"), { timeout: 10000, intervals: [100] })
+    .toBeGreaterThanOrEqual(MAX_DEPTH * 2);
+
+  // The URL reflects the compaction — cursor lives in ?cursor-IDEAS.
+  const urlCursor = Number(
+    new URL(page.url()).searchParams.get("cursor-IDEAS") ?? "0",
+  );
+  expect(urlCursor).toBeGreaterThanOrEqual(MAX_DEPTH * 2);
+});
+
+test("compaction preserves rendered chunks — never regresses across the seam", async ({
+  page,
+}) => {
+  await page.goto("/chat-notes?msgs=IDEAS");
+
+  // Sample the rendered chunk count every ~100ms for a few seconds and
+  // assert it only increases (the flat prefix must re-emit everything
+  // the previous Piece chain had). If compaction dropped chunks, the
+  // count would dip between samples.
+  const samples: number[] = [];
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    samples.push(await countChunks(page, "IDEAS"));
+    await page.waitForTimeout(100);
+  }
+  // Filter out the initial zero samples (pre-first-chunk) — just
+  // assert no dip.
+  const nonzero = samples.filter((n) => n > 0);
+  expect(nonzero.length).toBeGreaterThan(5);
+  for (let i = 1; i < nonzero.length; i++) {
+    expect(nonzero[i]).toBeGreaterThanOrEqual(nonzero[i - 1]);
+  }
+  // And it must have crossed the MAX_DEPTH boundary.
+  expect(nonzero[nonzero.length - 1]).toBeGreaterThan(MAX_DEPTH);
+});
+
+test("stream reaches the done marker after all compactions finish", async ({
+  page,
+}) => {
+  // README.md is ~7000 chars → ~70 chunks at 100 chars/chunk → several
+  // compactions → `chat-done-README` when the producer drains the log.
+  await page.goto("/chat-notes?msgs=README");
+  await expect(page.locator('[data-testid="chat-done-README"]')).toBeVisible({
+    timeout: 20000,
+  });
+  // No ResumeTail should be present at terminal state — the final
+  // render emits a `done` span and no further compaction.
+  expect(
+    await page.locator('[data-testid="resume-tail-README"]').count(),
+  ).toBe(0);
+});
+
+test("new message link appends a fileId to ?msgs= and a second stream starts", async ({
+  page,
+}) => {
+  await page.goto("/chat-notes?msgs=README");
+  // Wait for README to finish so test state is steady before the click.
+  await expect(page.locator('[data-testid="chat-done-README"]')).toBeVisible({
+    timeout: 20000,
+  });
+
+  // Link is an <a href> so it works pre-hydration — server-computed
+  // `nextHref` walks the available-files pool and picks the first one
+  // that isn't already in `?msgs=`. `PARTIAL_ARCHITECTURE` is second in
+  // the pool after `README`.
+  await expect(page.locator('[data-testid="new-message-btn"]')).toHaveAttribute(
+    "href",
+    "/chat-notes?msgs=README%2CPARTIAL_ARCHITECTURE",
+  );
+  await page.locator('[data-testid="new-message-btn"]').click();
+
+  // The button walks the available-files list and picks the first that
+  // isn't already in `?msgs=`. `PARTIAL_ARCHITECTURE` is second in the
+  // pool after `README`.
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("msgs"))
+    .toBe("README,PARTIAL_ARCHITECTURE");
+
+  await expect(
+    page.locator('[data-testid="chat-msg-PARTIAL_ARCHITECTURE"]'),
+  ).toBeAttached({ timeout: 5000 });
+  await expect(
+    page
+      .locator('[data-testid="chat-body-PARTIAL_ARCHITECTURE"] [data-chunk]')
+      .first(),
+  ).toBeAttached({ timeout: 5000 });
+});

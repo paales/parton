@@ -1,3 +1,9 @@
+## Continuous streaming content — SHIPPED as bounded `<Piece>` + compaction (2026-04-22)
+
+`user-ideas.md:35` asked how to implement AI-chat-style trickling content. Landed as a demo at `/chat-notes`: recursive `<Piece>` server component, each chunk its own Suspense reveal, `MAX_DEPTH` cap with a client-side `<ResumeTail>` firing a targeted refetch at the bound. Server re-renders as `<FlatPrefix>` (synchronous chunks `[0..cursor)`) + fresh depth-0 Piece chain. Durable per-message log decouples source production from client reconnects; cursor lives in the URL so reloads/back-forward resume correctly. See `STREAMING_CHAT.md` for the full write-up, including why SSE / unbounded recursion / multipart-redirect were passed over, and the two gotchas that turned into generalizable lessons (React fiber reuse across targeted refetches requires per-value `useEffect` guards, not booleans; `disableTransition: true` is load-bearing for per-chunk reveals).
+
+---
+
 ## Borrowed-from-Inertia candidates (2026-04-16)
 
 ### Lazy partials — SHIPPED as `<Partial defer>` (2026-04-18)

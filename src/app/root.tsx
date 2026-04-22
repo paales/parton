@@ -6,6 +6,7 @@ import { DeferDemoPage } from "./pages/defer-demo.tsx";
 import { SelectorDemoPage } from "./pages/selector-demo.tsx";
 import { SentinelsDemoPage } from "./pages/sentinels-demo.tsx";
 import { FramesDemoPage } from "./pages/frames-demo.tsx";
+import { ChatNotesPage } from "./pages/chat-notes.tsx";
 import { NotFoundPage } from "./pages/not-found.tsx";
 import { PartialRoot, Partial } from "../lib/partial.tsx";
 import { matchPath, pickRoute } from "../framework/router.ts";
@@ -50,6 +51,7 @@ function renderRoute() {
   if (matchPath("/selector-demo")) return <SelectorDemoPage />;
   if (matchPath("/sentinels-demo")) return <SentinelsDemoPage />;
   if (matchPath("/frames-demo")) return <FramesDemoPage />;
+  if (matchPath("/chat-notes")) return <ChatNotesPage />;
   if (matchPath("/not-found-demo")) return notFound();
   if (matchPath("/redirect-demo")) return redirect("/cache-demo");
 

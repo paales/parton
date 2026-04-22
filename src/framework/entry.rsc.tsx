@@ -38,16 +38,19 @@ async function handler(request: Request): Promise<Response> {
         { clearCache },
         { clearRegistry },
         { _clearAllSessions },
+        { _clearLogs },
       ] = await Promise.all([
         import("../lib/cache.tsx"),
         import("../lib/partial-cache.ts"),
         import("../lib/partial-registry.ts"),
         import("./session.ts"),
+        import("../app/chat/log.ts"),
       ]);
       await _clearCache();
       clearCache();
       clearRegistry();
       _clearAllSessions();
+      _clearLogs();
       return new Response("ok", { status: 200 });
     }
   }
