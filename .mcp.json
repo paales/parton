@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "mcp-refactor-typescript": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-refactor-typescript"
+      ],
+      "env": {}
+    }
+  }
+}

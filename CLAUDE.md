@@ -244,6 +244,17 @@ A running list of design follow-ups that haven't been scheduled yet. Most live w
 - **Re-defer on stale.** Once activated, a Partial can't go dormant again. `{once: false}` on `useActivate` is the first step; a `<Partial unmountWhen={<WhenHidden/>}>` activator is the larger story. See `notes/IDEAS.md` §Re-defer / unmount policy.
 - **Deeper scope propagation into `<Cache>`.** Cache's inner render (`renderToReadableStream`) doesn't inherit the `React.cache`-backed frame-scope cell, so a cache-wrapped Partial inside a frame can't read `getSearchParam` to get the frame URL's query. Today's workaround: the parent reads the accessor and passes a scalar prop. A cleaner fix would propagate the frame scope into the inner render. See `notes/NAVIGATE_UNIFIED.md` §Sharp edges.
 
+## Tooling — `mcp-refactor-typescript`
+
+The project ships an MCP server (`.mcp.json`) for type-aware TS refactors. Prefer these over `Edit`/`mv`/`grep` for anything that crosses file boundaries — they update imports, dynamic imports, JSDoc refs, and type-only imports that hand edits miss. All support `preview: true` for a dry run.
+
+- `file_operations` — `rename_file`, `move_file`, `batch_move_files`. Use instead of `mv` whenever a `.ts`/`.tsx` file moves.
+- `refactoring` — `rename` (symbol-wide rename), `extract_function`, `extract_constant`, `extract_variable`, `move_to_file`, `infer_return_type`. Use instead of `Edit` for symbol renames or cross-file extractions.
+- `workspace` — `refactor_module` (move + organize + fix combined), `cleanup_codebase` (⚠️ can delete files — always run with `preview: true` first), `restart_tsserver` (when the TS server goes stale). **Skip `find_references`** — it times out on any non-trivial symbol in this repo. Use `refactoring.rename` with `preview: true` instead; same lookup, succeeds where find-refs fails, and returns the full edit plan so you see blast radius + exact edits in one call.
+- `code_quality` — `fix_all`, `organize_imports`, `remove_unused` on a single file. Run before commits after significant edits.
+
+For symbol-scoped blast-radius checks, always prefer `refactoring.rename` (preview) over `workspace.find_references` — the latter is unreliable on this codebase.
+
 ## Development
 
 ```bash
