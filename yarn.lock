@@ -1033,6 +1033,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@fontsource-variable/geist@npm:^5.2.8":
+  version: 5.2.8
+  resolution: "@fontsource-variable/geist@npm:5.2.8"
+  checksum: 10c0/be455d4498ab0323b45d8bb37698dca810ae761643e85583605e18fc4175dec9b5ca518193673544b32a096cb3073fec0df0ef5cec92ce6ab0f58b29cd7ba596
+  languageName: node
+  linkType: hard
+
+"@fontsource-variable/inter@npm:^5.2.8":
+  version: 5.2.8
+  resolution: "@fontsource-variable/inter@npm:5.2.8"
+  checksum: 10c0/35b46df31c8c18f55f87228acf6297e4dac6cc9f38d0faaafdaf5a40e40c386cf1bfb115fb0fe0dcdb9b7e14f582843693ccf070d9c903072a5b2fc0f8dfde56
+  languageName: node
+  linkType: hard
+
 "@fontsource-variable/jetbrains-mono@npm:^5.2.8":
   version: 5.2.8
   resolution: "@fontsource-variable/jetbrains-mono@npm:5.2.8"
@@ -6831,12 +6845,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^1.8.0":
-  version: 1.8.0
-  resolution: "lucide-react@npm:1.8.0"
+"lucide-react@npm:^1.9.0":
+  version: 1.9.0
+  resolution: "lucide-react@npm:1.9.0"
   peerDependencies:
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-  checksum: 10c0/f7398f89a0f5b2cbfd1b7a7f6b2f00b0abd05d4b21d948bbd281ab141c42cdff9f1d2aed4e32b78b4bbdfa78308b6577705698af8bf9945bad23ed7d56e255b4
+  checksum: 10c0/742bfbb83b7d65ade51caddc4428549085794ff883bfc7fe6527e0cd080d73f072a5472599550c610d9a98d91b1574977fa74cd916e578ad2b660e7190412b5d
   languageName: node
   linkType: hard
 
@@ -8459,6 +8473,8 @@ __metadata:
   dependencies:
     "@base-ui/react": "npm:^1.4.1"
     "@biomejs/biome": "npm:2.4.4"
+    "@fontsource-variable/geist": "npm:^5.2.8"
+    "@fontsource-variable/inter": "npm:^5.2.8"
     "@fontsource-variable/jetbrains-mono": "npm:^5.2.8"
     "@phosphor-icons/react": "npm:^2.1.10"
     "@playwright/test": "npm:^1.59.1"
@@ -8489,7 +8505,7 @@ __metadata:
     graphql-request: "npm:^7.4.0"
     input-otp: "npm:^1.4.2"
     jsdom: "npm:^29.0.2"
-    lucide-react: "npm:^1.8.0"
+    lucide-react: "npm:^1.9.0"
     media-chrome: "npm:^4.19.0"
     motion: "npm:^12.38.0"
     nanoid: "npm:^5.1.9"
@@ -8502,6 +8518,7 @@ __metadata:
     react-resizable-panels: "npm:^4.10.0"
     recharts: "npm:3.8.0"
     rsc-html-stream: "npm:^0.0.7"
+    server-only: "npm:^0.0.1"
     shadcn: "npm:^4.4.0"
     shiki: "npm:^4.0.2"
     sonner: "npm:^2.0.7"
@@ -9223,6 +9240,13 @@ __metadata:
     parseurl: "npm:^1.3.3"
     send: "npm:^1.2.0"
   checksum: 10c0/37986096e8572e2dfaad35a3925fa8da0c0969f8814fd7788e84d4d388bc068cf0c06d1658509788e55bed942a6b6d040a8a267fa92bb9ffb1179f8bacde5fd7
+  languageName: node
+  linkType: hard
+
+"server-only@npm:^0.0.1":
+  version: 0.0.1
+  resolution: "server-only@npm:0.0.1"
+  checksum: 10c0/4704f0ef85da0be981af6d4ed8e739d39bcfd265b9c246a684060acda5642d0fdc6daffc2308e71e2682c5f508090978802eae0a77623c9b90a49f9ae68048d6
   languageName: node
   linkType: hard
 

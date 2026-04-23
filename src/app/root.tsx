@@ -30,7 +30,7 @@ export function Root() {
   try {
     return (
       <PartialRoot>
-        <html lang="en" className="dark">
+        <html lang="en" className="light">
           <Partial parent={ROOT} selector="#head">
             <head>
               <meta charSet="UTF-8" />
