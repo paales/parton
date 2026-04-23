@@ -49,44 +49,18 @@ function computeNextHref(msgIds: string[]): string | null {
   return `?${params.toString()}`;
 }
 
-/**
- * Global chat overlay. Mounted inside every page's layout.
- *
- * `defaultOpen` seeds the open/closed state the first time the overlay
- * renders on a route (before the user clicks the pill). `/chat-notes`
- * passes `true` so the overlay greets the visitor expanded; every
- * other page passes `false` so only the pill shows.
- *
- * `frameUrl` seeds the frame's URL on its first render. `/chat-notes`
- * projects its window URL's `?msgs=` and `?chat=` onto the frame URL
- * (via `chatOverlayFrameUrl()`) so deep links like
- * `/chat-notes?msgs=README` still drive the stream on initial load
- * and in e2e tests — even though the overlay itself lives outside the
- * page URL on every other route.
- */
-export function ChatOverlay({
-  defaultOpen = false,
-  frameUrl,
-}: {
-  defaultOpen?: boolean;
-  frameUrl?: string;
-}) {
+export function ChatOverlay() {
   return (
-    <Partial
-      parent={ROOT}
-      selector="#chat-overlay"
-      frame="chat-overlay"
-      frameUrl={frameUrl}
-    >
-      <ChatOverlayBody defaultOpen={defaultOpen} />
+    <Partial parent={ROOT} selector="#chat-overlay" frame="chat-overlay">
+      <ChatOverlayBody />
     </Partial>
   );
 }
 
-function ChatOverlayBody({ defaultOpen }: { defaultOpen: boolean }) {
+function ChatOverlayBody() {
   const parent = capturePartialContext();
   const chatParam = getSearchParam("chat");
-  const open = chatParam != null ? chatParam === "open" : defaultOpen;
+  const open = chatParam != null ? chatParam === "open" : false;
 
   if (!open) return <ChatOpenPill />;
 

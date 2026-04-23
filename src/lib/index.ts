@@ -17,7 +17,6 @@ export {
   getCachedPartialIds,
   useActivate,
   useNavigation,
-  type PartialDebugEntry,
 } from "./partial-client.tsx";
 export type {
   FrameworkNavigation,

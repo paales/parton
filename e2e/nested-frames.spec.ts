@@ -14,7 +14,7 @@ test.beforeEach(async ({ request }) => {
 
 async function awaitHydrated(page: import("@playwright/test").Page) {
   await page.waitForFunction(() => {
-    const el = document.querySelector('[data-testid="navbar-cart-reload"]');
+    const el = document.querySelector('[data-testid="partial-debug-cart-hash-cart"]');
     if (!el) return false;
     return Object.keys(el).some((k) => k.startsWith("__reactFiber"));
   });
@@ -28,15 +28,15 @@ test("both nested tab frames render with the same local name but distinct identi
 
   // Open cart — nested `cart.tab` mounts.
   await page.getByTestId("cart-open-btn").click();
-  await expect(page.getByTestId("frame-navbar-cart.tab")).toBeVisible();
+  await expect(page.getByTestId("partial-debug-cart-tab")).toBeVisible();
   // Open menu — nested `menu.tab` mounts alongside.
   await page.getByTestId("menu-about-btn").click();
-  await expect(page.getByTestId("frame-navbar-menu.tab")).toBeVisible();
+  await expect(page.getByTestId("partial-debug-menu-tab")).toBeVisible();
 
   // Each starts at its author-provided initial URL — independent,
   // not a shared `tab` default.
-  await expect(page.getByTestId("navbar-cart.tab-url")).toHaveText("/items");
-  await expect(page.getByTestId("navbar-menu.tab-url")).toHaveText("/general");
+  await expect(page.getByTestId("partial-debug-cart-tab-url")).toHaveText("/items");
+  await expect(page.getByTestId("partial-debug-menu-tab-url")).toHaveText("/general");
 });
 
 test("nested tab nav updates only its own URL — siblings untouched", async ({
@@ -46,21 +46,21 @@ test("nested tab nav updates only its own URL — siblings untouched", async ({
   await awaitHydrated(page);
 
   await page.getByTestId("cart-open-btn").click();
-  await expect(page.getByTestId("frame-navbar-cart.tab")).toBeVisible();
+  await expect(page.getByTestId("partial-debug-cart-tab")).toBeVisible();
   await page.getByTestId("menu-about-btn").click();
-  await expect(page.getByTestId("frame-navbar-menu.tab")).toBeVisible();
+  await expect(page.getByTestId("partial-debug-menu-tab")).toBeVisible();
 
   // Cart-tab → coupons. Menu-tab stays on general.
   await page.getByTestId("cart-tab-coupons").click();
   await expect(page.getByTestId("cart-tab-coupons-body")).toBeVisible();
-  await expect(page.getByTestId("navbar-cart.tab-url")).toHaveText("/coupons");
-  await expect(page.getByTestId("navbar-menu.tab-url")).toHaveText("/general");
+  await expect(page.getByTestId("partial-debug-cart-tab-url")).toHaveText("/coupons");
+  await expect(page.getByTestId("partial-debug-menu-tab-url")).toHaveText("/general");
 
   // Menu-tab → advanced. Cart-tab stays on coupons.
   await page.getByTestId("menu-tab-advanced").click();
   await expect(page.getByTestId("menu-tab-advanced-body")).toBeVisible();
-  await expect(page.getByTestId("navbar-menu.tab-url")).toHaveText("/advanced");
-  await expect(page.getByTestId("navbar-cart.tab-url")).toHaveText("/coupons");
+  await expect(page.getByTestId("partial-debug-menu-tab-url")).toHaveText("/advanced");
+  await expect(page.getByTestId("partial-debug-cart-tab-url")).toHaveText("/coupons");
 });
 
 test("nested frame's back stack is independent of its parent's", async ({
@@ -73,24 +73,24 @@ test("nested frame's back stack is independent of its parent's", async ({
 
   // Nested cart.tab history builds up from navigation inside the tab.
   await page.getByTestId("cart-tab-coupons").click();
-  await expect(page.getByTestId("navbar-cart.tab-url")).toHaveText("/coupons");
+  await expect(page.getByTestId("partial-debug-cart-tab-url")).toHaveText("/coupons");
   await page.getByTestId("cart-tab-summary").click();
-  await expect(page.getByTestId("navbar-cart.tab-url")).toHaveText("/summary");
+  await expect(page.getByTestId("partial-debug-cart-tab-url")).toHaveText("/summary");
 
   // Walking cart.tab back does NOT change the parent cart frame
   // (which is still at /cart/open). Only the nested URL rewinds.
-  await expect(page.getByTestId("navbar-cart.tab-back")).toBeEnabled();
-  await page.getByTestId("navbar-cart.tab-back").click();
-  await expect(page.getByTestId("navbar-cart.tab-url")).toHaveText("/coupons");
-  await expect(page.getByTestId("navbar-cart-url")).toHaveText("/cart/open");
+  await expect(page.getByTestId("partial-debug-cart-tab-back")).toBeEnabled();
+  await page.getByTestId("partial-debug-cart-tab-back").click();
+  await expect(page.getByTestId("partial-debug-cart-tab-url")).toHaveText("/coupons");
+  await expect(page.getByTestId("partial-debug-cart-url")).toHaveText("/cart/open");
 
   // One more back gets us to the initial `/items` — nested back stack
   // is empty. The PARENT cart frame's back stack is independent:
   // opening cart (/cart/closed → /cart/open) pushed onto its own past.
-  await page.getByTestId("navbar-cart.tab-back").click();
-  await expect(page.getByTestId("navbar-cart.tab-url")).toHaveText("/items");
-  await expect(page.getByTestId("navbar-cart.tab-back")).toBeDisabled();
-  await expect(page.getByTestId("navbar-cart-back")).toBeEnabled();
+  await page.getByTestId("partial-debug-cart-tab-back").click();
+  await expect(page.getByTestId("partial-debug-cart-tab-url")).toHaveText("/items");
+  await expect(page.getByTestId("partial-debug-cart-tab-back")).toBeDisabled();
+  await expect(page.getByTestId("partial-debug-cart-back")).toBeEnabled();
 });
 
 test("?__frame= wire format carries the full dotted path", async ({

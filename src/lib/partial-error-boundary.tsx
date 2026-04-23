@@ -2,6 +2,7 @@
 
 import React from "react";
 import { _windowNav, registerClientPartial } from "./partial-client.tsx";
+import { registerDebugPartial } from "./partial-debug.tsx";
 
 interface Props {
   partialId: string;
@@ -9,6 +10,14 @@ interface Props {
    *  gets registered into the client-side fingerprint map on render
    *  so subsequent navigations can send it back via `?cached=`. */
   partialFingerprint?: string;
+  /** Parsed selector — populates the dev debugger's per-Partial pills. */
+  debugUniqueTokens?: readonly string[];
+  debugSharedTokens?: readonly string[];
+  debugFramePath?: readonly string[];
+  /** Ancestor Partial-id chain (outer-first) — drives indentation in
+   *  the debug panel so nested Partials visually sit under their
+   *  parents. */
+  debugParentPath?: readonly string[];
   children: React.ReactNode;
   /**
    * Optional error fallback. Rendered when a descendant throws.
@@ -62,6 +71,18 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
         this.props.partialId,
         this.props.partialFingerprint,
       );
+    }
+    if (
+      import.meta.env.DEV &&
+      import.meta.env.MODE !== "test" &&
+      (this.props.debugUniqueTokens || this.props.debugSharedTokens)
+    ) {
+      registerDebugPartial(this.props.partialId, {
+        uniqueTokens: this.props.debugUniqueTokens ?? [],
+        sharedTokens: this.props.debugSharedTokens ?? [],
+        framePath: this.props.debugFramePath ?? [],
+        parentPath: this.props.debugParentPath ?? [],
+      });
     }
     if (this.state.error) {
       if (this.props.fallback !== undefined) {

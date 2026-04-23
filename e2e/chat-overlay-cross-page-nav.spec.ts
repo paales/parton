@@ -1,5 +1,8 @@
 import { test, expect } from "./fixtures";
 
+// Skipped: depends on the `/chat-notes` route + the `defaultOpen`
+// plumbing on `<ChatOverlay/>`, both removed from `root.tsx`.
+
 /**
  * Cross-page navigation must preserve the already-streamed chat
  * overlay — the bug this spec guards against:
@@ -25,7 +28,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/__test/clear-caches");
 });
 
-test("opened chat overlay survives navigation from / to /magento", async ({
+test.skip("opened chat overlay survives navigation from / to /magento", async ({
   page,
 }) => {
   await page.goto("/");

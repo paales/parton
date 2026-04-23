@@ -39,7 +39,7 @@
  */
 
 import React, { type ReactNode } from "react";
-import { PartialsClient, type PartialDebugEntry } from "./partial-client.tsx";
+import { PartialsClient } from "./partial-client.tsx";
 import {
   Partial,
   PartialBoundary,
@@ -340,11 +340,8 @@ export async function PartialRoot({ children }: PartialRootProps) {
       isPartialRefetch: false,
     };
     enterPartialState(streamState);
-    const debug: PartialDebugEntry[] = [];
     return (
-      <PartialsClient mode="streaming" debug={debug} fetchMs={0}>
-        {children}
-      </PartialsClient>
+      <PartialsClient mode="streaming">{children}</PartialsClient>
     );
   }
 
@@ -375,13 +372,6 @@ export async function PartialRoot({ children }: PartialRootProps) {
     })
     .filter((x): x is NonNullable<typeof x> => x != null);
 
-  const debug: PartialDebugEntry[] = activeIds.map((id) => ({
-    id,
-    status: "fresh",
-    fingerprint: "",
-    query: null,
-  }));
-
   // Pass wrappedChildren as positional args via `createElement` rather
   // than `{wrappedChildren}` in JSX. Passing an array as a child prop
   // triggers React's "each child in a list needs a key" warning.
@@ -396,7 +386,7 @@ export async function PartialRoot({ children }: PartialRootProps) {
   // sidestep both: no warning, no composite.
   return React.createElement(
     PartialsClient,
-    { mode: "cache", debug, fetchMs: 0 },
+    { mode: "cache" },
     ...wrappedChildren,
   );
 }

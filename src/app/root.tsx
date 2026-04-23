@@ -8,11 +8,10 @@ import { DeferDemoPage } from "./pages/defer-demo.tsx";
 import { SelectorDemoPage } from "./pages/selector-demo.tsx";
 import { SentinelsDemoPage } from "./pages/sentinels-demo.tsx";
 import { FramesDemoPage } from "./pages/frames-demo.tsx";
-import { ChatNotesPage, chatOverlayFrameUrl } from "./pages/chat-notes.tsx";
 import { NotFoundPage } from "./pages/not-found.tsx";
 import { PartialRoot, Partial } from "../lib/partial.tsx";
 import { ROOT } from "../lib/partial-context.ts";
-import { matchPath, pickRoute } from "../framework/router.ts";
+import { pickRoute } from "../framework/router.ts";
 import {
   NotFoundError,
   RedirectError,
@@ -21,7 +20,7 @@ import {
 } from "../framework/errors.ts";
 import { setFrameworkControl } from "../framework/context.ts";
 import { Redirect } from "../framework/redirect-client.tsx";
-import { DebugToolbar } from "./components/debug-toolbar.tsx";
+import { PartialsDebug } from "../lib/partial-debug.tsx";
 import { AppNav } from "./components/app-nav.tsx";
 import { ChatOverlay } from "./chat/chat-overlay.tsx";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -50,21 +49,14 @@ export function Root() {
               ["/selector-demo", SelectorDemoPage],
               ["/sentinels-demo", SentinelsDemoPage],
               ["/frames-demo", FramesDemoPage],
-              ["/chat-notes", ChatNotesPage],
               ["/not-found-demo", () => notFound()],
               ["/redirect-demo", () => redirect("/cache-demo")],
               ["/magento", MagentoPage],
               ["/magento/*", MagentoPage],
               ["/*", PokemonPage],
             ])}
-            <ChatOverlay
-              defaultOpen={matchPath("/chat-notes") != null}
-              frameUrl={
-                matchPath("/chat-notes") != null
-                  ? chatOverlayFrameUrl()
-                  : undefined
-              }
-            />
+            <ChatOverlay />
+            {import.meta.env.DEV && <PartialsDebug />}
           </body>
         </html>
       </PartialRoot>

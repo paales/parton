@@ -1,5 +1,10 @@
 import { test, expect, request, type Page } from "./fixtures";
 
+// Skipped: the `/chat-notes` route + the `defaultOpen` / `frameUrl`
+// plumbing on `<ChatOverlay/>` were removed from `root.tsx`. These
+// specs exercise that surface and will pass again once the route is
+// reintroduced.
+
 /**
  * /chat-notes — bounded-recursion streaming with server-side compaction.
  *
@@ -56,7 +61,7 @@ test.afterAll(async ({ baseURL }) => {
   await ctx.dispose();
 });
 
-test("empty state renders when ?msgs= is explicitly empty", async ({ page }) => {
+test.skip("empty state renders when ?msgs= is explicitly empty", async ({ page }) => {
   // No ?msgs= defaults to streaming AA_CHAT_STREAMING; pass an empty
   // value to force the empty state.
   await page.goto("/chat-notes?msgs=");
@@ -65,7 +70,7 @@ test("empty state renders when ?msgs= is explicitly empty", async ({ page }) => 
   expect(await page.locator("[data-chunk]").count()).toBe(0);
 });
 
-test("initial render bounds Piece recursion at MAX_DEPTH with a ResumeTail", async ({
+test.skip("initial render bounds Piece recursion at MAX_DEPTH with a ResumeTail", async ({
   page,
 }) => {
   // IDEAS.md has ~79 paragraphs — guaranteed to exceed MAX_DEPTH so the
@@ -99,7 +104,7 @@ test("initial render bounds Piece recursion at MAX_DEPTH with a ResumeTail", asy
   expect(tailCursor % MAX_DEPTH).toBe(0);
 });
 
-test("chat list auto-scrolls to bottom as chunks stream in", async ({
+test.skip("chat list auto-scrolls to bottom as chunks stream in", async ({
   page,
 }) => {
   await page.goto("/chat-notes?msgs=IDEAS");
@@ -130,7 +135,7 @@ test("chat list auto-scrolls to bottom as chunks stream in", async ({
   expect(scrollHeight - scrollTop - clientHeight).toBeLessThan(80);
 });
 
-test("compaction: cursor advances and chunk count grows monotonically", async ({
+test.skip("compaction: cursor advances and chunk count grows monotonically", async ({
   page,
 }) => {
   await page.goto("/chat-notes?msgs=IDEAS");
@@ -164,7 +169,7 @@ test("compaction: cursor advances and chunk count grows monotonically", async ({
   );
 });
 
-test("compaction preserves rendered chunks — never regresses across the seam", async ({
+test.skip("compaction preserves rendered chunks — never regresses across the seam", async ({
   page,
 }) => {
   await page.goto("/chat-notes?msgs=IDEAS");
@@ -196,7 +201,7 @@ test("compaction preserves rendered chunks — never regresses across the seam",
   expect(nonzero[nonzero.length - 1]).toBeGreaterThan(MAX_DEPTH);
 });
 
-test("stream reaches the done marker after all compactions finish", async ({
+test.skip("stream reaches the done marker after all compactions finish", async ({
   page,
 }) => {
   // README.md is ~7000 chars → ~70 chunks at 100 chars/chunk → several
@@ -212,7 +217,7 @@ test("stream reaches the done marker after all compactions finish", async ({
   ).toBe(0);
 });
 
-test("new message link appends a fileId to ?msgs= and a second stream starts", async ({
+test.skip("new message link appends a fileId to ?msgs= and a second stream starts", async ({
   page,
 }) => {
   await page.goto("/chat-notes?msgs=README");

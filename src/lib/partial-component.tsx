@@ -671,6 +671,10 @@ export function Partial({
           key={id}
           partialId={id}
           partialFingerprint={fp}
+          debugUniqueTokens={uniqueTokens}
+          debugSharedTokens={sharedTokens}
+          debugFramePath={framePath}
+          debugParentPath={parent.path}
           fallback={errorWith}
         >
           {dormant}
@@ -718,6 +722,10 @@ export function Partial({
         <PartialErrorBoundary
           partialId={id}
           partialFingerprint={fp}
+          debugUniqueTokens={uniqueTokens}
+          debugSharedTokens={sharedTokens}
+          debugFramePath={framePath}
+          debugParentPath={parent.path}
           fallback={errorWith}
         >
           {cachedContent}
@@ -728,6 +736,9 @@ export function Partial({
         key={id}
         partialId={id}
         partialFingerprint={fp}
+        debugUniqueTokens={uniqueTokens}
+        debugSharedTokens={sharedTokens}
+        debugFramePath={framePath}
         fallback={errorWith}
       >
         {cachedContent}

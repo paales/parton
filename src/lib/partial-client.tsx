@@ -123,13 +123,6 @@ function getPartialFingerprint(node: React.ReactElement): string | null {
   return null;
 }
 
-export interface PartialDebugEntry {
-  id: string;
-  status: "fresh" | "cached" | "data-cached";
-  fingerprint: string;
-  query: string | null;
-}
-
 interface PartialsClientProps {
   /**
    * Rendering mode:
@@ -141,11 +134,10 @@ interface PartialsClientProps {
    *   and the rest are served from the client cache.
    */
   mode?: "streaming" | "cache";
-  /** Per-partial debug metadata */
-  debug: PartialDebugEntry[];
-  /** Total fetch time for all parallel queries */
-  fetchMs: number;
-  children: ReactNode;
+  // Optional at the type level so callers that supply children via
+  // positional `createElement(PartialsClient, props, ...children)`
+  // don't trip the required-prop check.
+  children?: ReactNode;
 }
 
 /**
@@ -460,7 +452,6 @@ function renderTemplate(
  */
 const _cache = new Map<string, ReactNode>();
 const _fingerprints = new Map<string, string>();
-let _debug: PartialDebugEntry[] = [];
 
 /**
  * Structural layout skeleton, derived from the most recent full-payload
@@ -1056,17 +1047,21 @@ function projectEntryForFrame(
     typeof window !== "undefined" ? window.location.origin : "http://_";
   const absoluteUrl = new URL(frameUrl, origin).href;
   return new Proxy(entry, {
-    get(target, prop, receiver) {
+    get(_target, prop, _receiver) {
       if (prop === "url") return absoluteUrl;
       if (prop === "getState") {
         return function getState(): FrameEntryState | null {
-          const bucket = _readFrameNode(target.getState(), path)?.__frameState;
+          const bucket = _readFrameNode(entry.getState(), path)?.__frameState;
           if (bucket == null || typeof bucket !== "object") return null;
           return bucket as FrameEntryState;
         };
       }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
+      // Native NavigationHistoryEntry getters (url, key, id, index,
+      // sameDocument) throw "Illegal invocation" when invoked with a
+      // non-NavigationHistoryEntry `this` — so we must bypass the
+      // Proxy receiver and read directly off the underlying entry.
+      const value = (entry as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof value === "function" ? value.bind(entry) : value;
     },
   }) as FrameNavigationHistoryEntry;
 }
@@ -1185,12 +1180,17 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
   };
 
   return new Proxy(nav, {
-    get(target, prop, receiver) {
+    get(_target, prop, _receiver) {
       if (prop === "name") return null;
       if (prop === "navigate") return windowNavigate;
       if (prop === "reload") return windowReload;
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
+      // Native Navigation getters (currentEntry, canGoBack,
+      // canGoForward, transition, activation) throw "Illegal
+      // invocation" when invoked with a non-Navigation `this`, so we
+      // have to bypass the Proxy receiver and read directly off
+      // `window.navigation`.
+      const value = (nav as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof value === "function" ? value.bind(nav) : value;
     },
   }) as unknown as FrameworkNavigation;
 }
@@ -1401,7 +1401,10 @@ function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
             .filter((e): e is FrameNavigationHistoryEntry => e !== null);
       }
       if (prop === "updateCurrentEntry") return frameUpdateCurrentEntry;
-      const value = Reflect.get(target, prop, receiver);
+      // See window-handle Proxy above — native Navigation getters
+      // throw "Illegal invocation" when reached via the Proxy
+      // receiver, so we read directly off `target` (window.navigation).
+      const value = (target as unknown as Record<string | symbol, unknown>)[prop];
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as unknown as FrameworkNavigation;
@@ -1584,8 +1587,6 @@ export function useActivate(
 
 export function PartialsClient({
   mode = "cache",
-  debug,
-  fetchMs,
   children,
 }: PartialsClientProps) {
   const cache = _cache;
@@ -1617,7 +1618,6 @@ export function PartialsClient({
     cacheFromStreamingChildren(children, cache);
     const derived = deriveTemplate(children);
     _template = derived;
-    _debug = [];
 
     // Drop `_cache` entries whose id isn't on the new page. The
     // derived template lists exactly the Partial ids present on the
@@ -1630,7 +1630,7 @@ export function PartialsClient({
     }
 
     const rendered = renderTemplate(derived, cache);
-    return renderWithDebugPanel(rendered, debug, fetchMs);
+    return renderChildren(rendered);
   }
 
   // ── Cache mode ──────────────────────────────────────────────────────
@@ -1647,168 +1647,20 @@ export function PartialsClient({
   // find no top-level cache entry to fill the placeholder.
   cacheFromStreamingChildren(children, cache);
 
-  const freshDebugIds = new Set(debug.map((d) => d.id));
-  _debug = [
-    ..._debug.filter((d) => !freshDebugIds.has(d.id) && cache.has(d.id)),
-    ...debug,
-  ];
-
   const rendered = renderTemplate(_template, cache);
-  return renderWithDebugPanel(rendered, _debug, fetchMs);
+  return renderChildren(rendered);
 }
 
 /**
- * Return `<>{...rendered}<PartialDebugPanel/></>`, but built via
- * `React.createElement` so the array is spread as positional children.
- * `<>{rendered}</>` passes the array as a single children prop, which
- * makes React enforce the unique-key rule on every item — and the
- * cached partial elements carry intentional non-keys (adding one would
- * trigger Flight's outer/inner key composite, remounting client state
- * on refetch; see `partialFromSnapshot`).
+ * Return `<>{...rendered}</>`, but built via `React.createElement` so
+ * the array is spread as positional children. `<>{rendered}</>` passes
+ * the array as a single children prop, which makes React enforce the
+ * unique-key rule on every item — and the cached partial elements
+ * carry intentional non-keys (adding one would trigger Flight's
+ * outer/inner key composite, remounting client state on refetch; see
+ * `partialFromSnapshot`).
  */
-function renderWithDebugPanel(
-  rendered: ReactNode[],
-  debug: PartialDebugEntry[],
-  fetchMs: number,
-): ReactNode {
-  return React.createElement(
-    React.Fragment,
-    null,
-    ...rendered,
-    React.createElement(PartialDebugPanel, {
-      entries: debug,
-      fetchMs,
-      key: "__partial-debug-panel",
-    }),
-  );
+function renderChildren(rendered: ReactNode[]): ReactNode {
+  return React.createElement(React.Fragment, null, ...rendered);
 }
 
-function PartialDebugPanel({
-  entries,
-  fetchMs,
-}: {
-  entries: PartialDebugEntry[];
-  fetchMs: number;
-}) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const freshCount = entries.filter((e) => e.status === "fresh").length;
-  const dataCachedCount = entries.filter(
-    (e) => e.status === "data-cached",
-  ).length;
-  const cachedCount = entries.filter((e) => e.status === "cached").length;
-  const queryCount = entries.filter((e) => e.query).length;
-
-  return (
-    <details
-      style={{
-        background: "#111",
-        border: "1px solid #333",
-        borderRadius: 8,
-        padding: "1rem",
-        marginTop: "2rem",
-        overflow: "hidden",
-      }}
-    >
-      <summary
-        style={{
-          cursor: "pointer",
-          color: "#888",
-          fontSize: "0.85rem",
-          display: "flex",
-          gap: "1rem",
-          alignItems: "center",
-        }}
-      >
-        <span>Partials</span>
-        <span style={{ color: "#8b8" }}>{freshCount} fresh</span>
-        {dataCachedCount > 0 && (
-          <span style={{ color: "#8bd" }}>{dataCachedCount} data-cached</span>
-        )}
-        {cachedCount > 0 && (
-          <span style={{ color: "#bb8" }}>{cachedCount} cached</span>
-        )}
-        <span style={{ color: "#88b" }}>
-          {queryCount} {queryCount === 1 ? "query" : "queries"}
-        </span>
-        <span style={{ color: "#666" }}>{fetchMs}ms</span>
-      </summary>
-      <div style={{ marginTop: "0.75rem" }}>
-        {entries.map((entry) => (
-          <div
-            key={entry.id}
-            style={{
-              borderTop: "1px solid #222",
-              padding: "0.5rem 0",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                cursor: entry.query ? "pointer" : "default",
-              }}
-              onClick={() =>
-                entry.query &&
-                setExpandedId(expandedId === entry.id ? null : entry.id)
-              }
-            >
-              <span
-                style={{
-                  display: "inline-block",
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background:
-                    entry.status === "fresh"
-                      ? "#48bb78"
-                      : entry.status === "data-cached"
-                        ? "#63b3ed"
-                        : "#ecc94b",
-                  flexShrink: 0,
-                }}
-              />
-              <code style={{ color: "#ededed", fontSize: "0.8rem" }}>
-                {entry.id}
-              </code>
-              <span style={{ color: "#666", fontSize: "0.75rem" }}>
-                {entry.status}
-              </span>
-              <span
-                style={{
-                  color: "#444",
-                  fontSize: "0.7rem",
-                  marginLeft: "auto",
-                }}
-              >
-                fp:{entry.fingerprint}
-              </span>
-              {entry.query && (
-                <span style={{ color: "#555", fontSize: "0.75rem" }}>
-                  {expandedId === entry.id ? "\u25BC" : "\u25B6"}
-                </span>
-              )}
-            </div>
-            {expandedId === entry.id && entry.query && (
-              <pre
-                style={{
-                  fontSize: "0.7rem",
-                  color: "#8b8",
-                  whiteSpace: "pre-wrap",
-                  marginTop: "0.5rem",
-                  padding: "0.5rem",
-                  background: "#0a0a0a",
-                  borderRadius: 4,
-                  maxHeight: 300,
-                  overflow: "auto",
-                }}
-              >
-                {entry.query}
-              </pre>
-            )}
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}

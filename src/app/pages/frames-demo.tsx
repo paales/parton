@@ -5,7 +5,6 @@ import {
   FrameNavigateButton,
   UpdateEntryStateButton,
 } from "../components/frames-demo-controls.tsx";
-import { FrameNavigationBar } from "../components/frame-nav-bar.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
@@ -200,7 +199,8 @@ function TabBody({
   );
 }
 
-/** Shell around any nested frame — label + its own nav bar. */
+/** Shell around any nested frame — label only; the dev debugger
+ *  renders the URL / back / forward overlay. */
 function NestedFrameShell({
   label,
   children,
@@ -213,7 +213,6 @@ function NestedFrameShell({
       <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-sky-400">
         nested frame · {label}
       </div>
-      <FrameNavigationBar />
       {children}
     </div>
   );
@@ -457,7 +456,6 @@ export function FramesDemoPage() {
             frame="cart"
             frameUrl="/cart/closed"
           >
-            <FrameNavigationBar />
             <CartFrameContent />
           </Partial>
         </CardContent>
@@ -474,7 +472,6 @@ export function FramesDemoPage() {
             frame="menu"
             frameUrl="/menu/closed"
           >
-            <FrameNavigationBar />
             <MenuFrameContent />
           </Partial>
         </CardContent>

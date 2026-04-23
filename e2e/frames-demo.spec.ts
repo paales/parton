@@ -11,20 +11,20 @@ test.beforeEach(async ({ request }) => {
 
 async function awaitHydrated(page: import("@playwright/test").Page) {
   await page.waitForFunction(() => {
-    const el = document.querySelector('[data-testid="navbar-cart-reload"]');
+    const el = document.querySelector('[data-testid="partial-debug-cart-hash-cart"]');
     if (!el) return false;
     return Object.keys(el).some((k) => k.startsWith("__reactFiber"));
   });
 }
 
-test("cart and menu frames render with their own nav bars", async ({
+test("cart and menu frames expose their own debug strips", async ({
   page,
 }) => {
   await page.goto("/frames-demo");
   await awaitHydrated(page);
 
-  await expect(page.getByTestId("frame-navbar-cart")).toBeVisible();
-  await expect(page.getByTestId("frame-navbar-menu")).toBeVisible();
+  await expect(page.getByTestId("partial-debug-cart")).toBeVisible();
+  await expect(page.getByTestId("partial-debug-menu")).toBeVisible();
 
   await expect(page.getByTestId("main-list")).toBeVisible();
   await expect(page.getByTestId("cart-closed")).toBeVisible();
@@ -85,47 +85,47 @@ test("cart frame navigates through its own states (drawer)", async ({ page }) =>
   await expect(page.getByTestId("cart-closed")).toBeVisible();
 });
 
-test("navbar URL reflects the frame's current URL", async ({ page }) => {
+test("debug URL strip reflects the frame's current URL", async ({ page }) => {
   await page.goto("/frames-demo");
   await awaitHydrated(page);
 
-  await expect(page.getByTestId("navbar-cart-url")).toHaveText("/cart/closed");
-  await expect(page.getByTestId("navbar-menu-url")).toHaveText("/menu/closed");
+  await expect(page.getByTestId("partial-debug-cart-url")).toHaveText("/cart/closed");
+  await expect(page.getByTestId("partial-debug-menu-url")).toHaveText("/menu/closed");
 
   await page.getByTestId("cart-open-btn").click();
-  await expect(page.getByTestId("navbar-cart-url")).toHaveText("/cart/open");
-  await expect(page.getByTestId("navbar-menu-url")).toHaveText("/menu/closed");
+  await expect(page.getByTestId("partial-debug-cart-url")).toHaveText("/cart/open");
+  await expect(page.getByTestId("partial-debug-menu-url")).toHaveText("/menu/closed");
 });
 
-test("back from a single frame navigation restores the initial state", async ({
+test("frame back navigation restores the initial state", async ({
   page,
 }) => {
   await page.goto("/frames-demo");
   await awaitHydrated(page);
 
-  await expect(page.getByTestId("navbar-cart-back")).toBeDisabled();
+  await expect(page.getByTestId("partial-debug-cart-back")).toBeDisabled();
 
   await page.getByTestId("cart-open-btn").click();
   await expect(page.getByTestId("cart-open")).toBeVisible();
-  await expect(page.getByTestId("navbar-cart-back")).toBeEnabled();
+  await expect(page.getByTestId("partial-debug-cart-back")).toBeEnabled();
 
-  await page.getByTestId("navbar-cart-back").click();
+  await page.getByTestId("partial-debug-cart-back").click();
   await expect(page.getByTestId("cart-closed")).toBeVisible();
-  await expect(page.getByTestId("navbar-cart-url")).toHaveText("/cart/closed");
+  await expect(page.getByTestId("partial-debug-cart-url")).toHaveText("/cart/closed");
 });
 
-test("navbar forward re-navigates after back", async ({ page }) => {
+test("frame forward re-navigates after back", async ({ page }) => {
   await page.goto("/frames-demo");
   await awaitHydrated(page);
 
   await page.getByTestId("cart-open-btn").click();
   await expect(page.getByTestId("cart-open")).toBeVisible();
 
-  await page.getByTestId("navbar-cart-back").click();
+  await page.getByTestId("partial-debug-cart-back").click();
   await expect(page.getByTestId("cart-closed")).toBeVisible();
 
-  await expect(page.getByTestId("navbar-cart-forward")).toBeEnabled();
-  await page.getByTestId("navbar-cart-forward").click();
+  await expect(page.getByTestId("partial-debug-cart-forward")).toBeEnabled();
+  await page.getByTestId("partial-debug-cart-forward").click();
   await expect(page.getByTestId("cart-open")).toBeVisible();
 });
 
@@ -139,26 +139,26 @@ test("reload re-renders the frame without changing its URL", async ({
   await expect(page.getByTestId("cart-open")).toBeVisible();
 
   await page.waitForTimeout(50);
-  await page.getByTestId("navbar-cart-reload").click();
+  await page.getByTestId("partial-debug-cart-hash-cart").click();
   await expect(page.getByTestId("cart-open")).toBeVisible();
-  await expect(page.getByTestId("navbar-cart-url")).toHaveText("/cart/open");
+  await expect(page.getByTestId("partial-debug-cart-url")).toHaveText("/cart/open");
 });
 
-test("updateCurrentEntry writes per-frame state visible in navbar", async ({
+test("updateCurrentEntry writes per-frame state visible in debug strip", async ({
   page,
 }) => {
   await page.goto("/frames-demo");
   await awaitHydrated(page);
 
   await page.getByTestId("cart-open-btn").click();
-  await expect(page.getByTestId("navbar-cart-state")).toHaveText("state: ∅");
+  await expect(page.getByTestId("partial-debug-cart-state")).toHaveText("{}");
 
   await page.getByTestId("cart-mark-ready").click();
-  await expect(page.getByTestId("navbar-cart-state")).toContainText(
+  await expect(page.getByTestId("partial-debug-cart-state")).toContainText(
     '"itemsReady":true',
   );
   // Menu state isn't polluted.
-  await expect(page.getByTestId("navbar-menu-state")).toHaveText("state: ∅");
+  await expect(page.getByTestId("partial-debug-menu-state")).toHaveText("{}");
 });
 
 test("streaming inside a frame: fallback paints first, content streams in", async ({
