@@ -175,12 +175,31 @@ give it a real page URL.
 - **Reading accessors after `await`.** The scope cell is shared per
   request; sibling frames mutate it. Hoist reads to the top (same
   rule as the cache manifest).
-- **History stack is flat but per-frame addressable.** Every frame
-  navigation pushes into the single `navigation` history. Each
-  entry carries a full `__frames` snapshot. `frame.back()` walks
-  entries looking for one whose snapshot's URL for THIS frame
-  differs; `navigation.traverseTo(key)` to it. Browser's global
-  back pops one entry (whichever was most recently pushed).
+- **Two history axes, not one.** Frame navigation defaults to
+  `history: "auto"` which patches the current entry's state via
+  `navigation.updateCurrentEntry({ state })` — no new browser entry,
+  no browser-back pollution. A per-frame back/forward stack lives
+  inside the current entry's state at
+  `state.__frameHistory[name] = { past, future }`, and is what
+  `frame.back()` / `forward()` walk. Explicit `history: "push"`
+  still creates a browser entry (for bookmarkable drawer URLs);
+  `history: "replace"` is a pure URL sync (no per-frame push — use
+  for search-as-you-type). The browser's global back button stays
+  attached to real page navigations; drawer-shaped frame navs never
+  show up there by default.
+
+## Two history axes — the `history` option per handle
+
+| Mode | Window handle | Frame handle (default: `"auto"`) |
+|---|---|---|
+| `"auto"` | Browser default: push on URL change, replace otherwise. | **`updateCurrentEntry({ state })`** — no new browser entry. Pushes prior frame URL onto `__frameHistory[name].past`, clears `future`. Drawer-friendly. |
+| `"push"` | New browser entry. | New browser entry AND push on per-frame stack. Use when the user should be able to bookmark / share the open state (e.g. a deep product frame URL), or when browser-back should walk frame state too. |
+| `"replace"` | Replace current entry. | Replace current entry, **no** per-frame stack mutation. Pure URL sync — search-as-you-type driving a frame URL. |
+
+`frame.canGoBack` / `canGoForward` read from `__frameHistory[name]`
+on the current entry — NOT from `navigation.entries()`. That means
+browser back/forward and frame back/forward are two independent
+axes: browser-back leaves the page, frame-back rewinds the drawer.
 
 ## Rules of thumb
 

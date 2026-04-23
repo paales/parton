@@ -174,7 +174,11 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
     //      — the main page content needs a full refetch.
     //   2. Frame snapshots differ between destination and current
     //      — each differing frame needs its server session updated
-    //      AND its subtree re-rendered.
+    //      AND its subtree re-rendered. This fires when the user has
+    //      done explicit `history: "push"` / `"replace"` frame navs
+    //      (which create browser entries). The default `history:
+    //      "auto"` on frames uses `updateCurrentEntry`, which doesn't
+    //      create entries, so drawer-shaped frames never show up here.
     //
     // Both axes are handled in one request: we build a refetch URL
     // with the destination's page URL AND append `__frame/__frameUrl`
@@ -182,9 +186,7 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
     // session updates, then does a streaming render for the new URL.
     //
     // If the URL didn't change and only frames changed, skip the full
-    // render and fire targeted per-frame refetches instead — keeps
-    // drawer-shaped back navigation cheap (cart/menu within the same
-    // page URL).
+    // render and fire targeted per-frame refetches instead.
     if (event.navigationType === "traverse") {
       const destSnap = _readFramesSnapshot(event.destination.getState?.());
       const currentSnap = _readFramesSnapshot(

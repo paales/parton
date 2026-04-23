@@ -17,15 +17,24 @@
 /**
  * State shape the framework persists on each navigation entry.
  *
- *   __frames     — per-frame URL snapshot (for back/forward diffing)
- *   __frameState — per-frame user-provided state bag (namespaced so
- *                  multiple frames on one entry can't collide)
+ *   __frames        — per-frame URL snapshot (for browser back/forward
+ *                     diffing and cold-load rehydration)
+ *   __frameHistory  — per-frame back/forward stack LOCAL TO THIS ENTRY.
+ *                     `past[last]` is the most recent URL you'd return
+ *                     to via `frame.back()`; `future[0]` is where
+ *                     `frame.forward()` advances to. Kept per-entry so
+ *                     browser-level navigation doesn't pollute frame
+ *                     history and vice versa — see `notes/FRAMES.md`
+ *                     §"Two history axes".
+ *   __frameState    — per-frame user-provided state bag (namespaced so
+ *                     multiple frames on one entry can't collide)
  *
  * User state from `useNavigation().navigate(url, { state })` merges
  * onto the top level alongside these framework fields.
  */
 export interface FrameEntryState {
   readonly __frames?: Record<string, { url: string }>;
+  readonly __frameHistory?: Record<string, { past: string[]; future: string[] }>;
   readonly __frameState?: Record<string, Record<string, unknown>>;
   readonly [userKey: string]: unknown;
 }
@@ -59,14 +68,28 @@ export interface FrameNavigationHistoryEntry extends Omit<
  * from a frame handle throws; from the window handle it goes through
  * the browser's normal cross-origin navigation behavior.
  */
-export type NavigateTarget =
-  | string
-  | URL
-  | ((current: URL) => URL | string);
+export type NavigateTarget = string | URL | ((current: URL) => URL | string);
 
 /**
  * Superset of the browser's `NavigationNavigateOptions` with the
  * framework's targeted-refetch + commit knobs.
+ *
+ * ── `history` default differs between handles ─────────────────────
+ * `"auto"` (the inherited default when `history` is omitted) resolves
+ * differently for the window handle vs. a frame handle:
+ *
+ *   - Window handle: browser default (push for a URL change, replace
+ *     when pathname+search are identical). Unchanged.
+ *   - Frame handle: patch the current window entry via
+ *     `updateCurrentEntry` (no new browser entry) and push onto the
+ *     frame's per-entry `__frameHistory[name].past` array. Browser
+ *     back/forward stays attached to real page navigations; frame
+ *     back/forward lives on its own axis via `frame.back()`.
+ *
+ * Explicit `"push"` / `"replace"` on either handle use the browser's
+ * `nav.navigate()` path — for a frame, this means a new/replaced
+ * browser entry AND a push on the per-frame stack. See the decision
+ * matrix in `notes/FRAMES.md` §"Two history axes".
  */
 export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
   /**

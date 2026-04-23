@@ -88,6 +88,8 @@ For `reload(opts)`:
 
 Frame handles (`useNavigation("name")`) ignore `selector` / `silent` on `navigate`: frame navigation refetches the frame Partial, which re-runs its subtree with the new frame URL. A frame `reload()` just redispatches the current frame URL.
 
+**Frame `history` default = `"auto"`** — patches the current entry's state via `updateCurrentEntry` (no new browser entry) and pushes the prior URL onto an in-state `__frameHistory[name]` stack. Drawer-shaped frames stop polluting browser back. `frame.back()` / `forward()` walk the in-state stack, not `navigation.entries()`. See `notes/FRAMES.md` §"Two history axes".
+
 ### Dispatch
 
 A targeted refetch URL looks like:

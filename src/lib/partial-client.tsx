@@ -515,15 +515,17 @@ export function getCachedPartialIds(): string[] {
 // persisted on the history entry, so it's a natural channel for
 // signalling intent from initiator to listener.
 //
-// Two framework-internal navigations need the page-level intercept to
-// stand down:
+// Two framework-internal paths still go through `nav.navigate()` and
+// need the page-level intercept to stand down:
 //   - window-scoped silent nav (URL-only update, or caller dispatches
 //     its own targeted refetch via `enqueueRefetch`)
-//   - frame nav (caller dispatches `_dispatchFrameRefetch` itself)
+//   - frame nav with explicit `history: "push" | "replace"` (caller
+//     dispatches `_dispatchFrameRefetch` itself)
 //
-// Both stamp a branded info payload. The listener in
-// `entry.browser.tsx` calls `event.intercept()` to declare
-// same-document and returns — no refetch.
+// Frame navs with the default `history: "auto"` do NOT stamp silent
+// info — they patch state via `updateCurrentEntry`, which fires
+// `currententrychange` but not `navigate`, so there's nothing for the
+// listener to intercept.
 //
 // Any non-framework-branded `info` (user-provided via
 // `navigate(url, { info })`) passes straight through as a normal
@@ -696,9 +698,19 @@ export const FrameNameContext = createContext<string | null>(null);
  * frames that changed. See `notes/FRAMES.md`.
  */
 const FRAMES_KEY = "__frames";
+const FRAME_HISTORY_KEY = "__frameHistory";
 
 interface FramesSnapshot {
   [frameName: string]: { url: string };
+}
+
+interface FrameHistoryEntry {
+  past: string[];
+  future: string[];
+}
+
+interface FrameHistoryMap {
+  [frameName: string]: FrameHistoryEntry;
 }
 
 /**
@@ -724,10 +736,40 @@ function writeFramesSnapshot(
 }
 
 /**
+ * Read the per-frame back/forward history local to the current
+ * navigation entry. Missing frame → `{past: [], future: []}`.
+ *
+ * This history is SEPARATE from the browser's window history stack:
+ * it lives in the current entry's state and is mutated via
+ * `updateCurrentEntry`, not by pushing new entries. That's what lets
+ * drawer-shaped frames navigate freely without polluting browser
+ * back/forward. See `notes/FRAMES.md` §"Two history axes".
+ */
+function readFramesHistory(state: unknown): FrameHistoryMap {
+  if (state == null || typeof state !== "object") return {};
+  const v = (state as Record<string, unknown>)[FRAME_HISTORY_KEY];
+  if (v == null || typeof v !== "object") return {};
+  return v as FrameHistoryMap;
+}
+
+function writeFramesHistory(
+  priorState: unknown,
+  history: FrameHistoryMap,
+): Record<string, unknown> {
+  const base = (priorState as Record<string, unknown> | null) ?? {};
+  return { ...base, [FRAME_HISTORY_KEY]: history };
+}
+
+function emptyHistoryEntry(): FrameHistoryEntry {
+  return { past: [], future: [] };
+}
+
+/**
  * Wraps descendants so `useNavigation()` calls inside them bind to this
  * frame by default. Also seeds the current navigation entry's state
- * with this frame's URL on first mount — so browser-back from a
- * later entry can find a "restore to initial" target for the frame.
+ * with this frame's initial URL + an empty history stack on first
+ * mount, so `frame.canGoBack` / `canGoForward` read a well-formed
+ * shape even before the first frame nav.
  */
 export function FrameNameProvider({
   name,
@@ -747,12 +789,21 @@ export function FrameNameProvider({
     if (!nav) return;
     const current = nav.currentEntry?.getState() ?? null;
     const snap = readFramesSnapshot(current);
-    if (!snap[name]) {
+    const history = readFramesHistory(current);
+    const needsSnap = !snap[name];
+    const needsHistory = !history[name];
+    if (needsSnap || needsHistory) {
+      const nextSnap = needsSnap
+        ? { ...snap, [name]: { url: initialUrl } }
+        : snap;
+      const nextHistory = needsHistory
+        ? { ...history, [name]: emptyHistoryEntry() }
+        : history;
       nav.updateCurrentEntry({
-        state: writeFramesSnapshot(current, {
-          ...snap,
-          [name]: { url: initialUrl },
-        }),
+        state: writeFramesHistory(
+          writeFramesSnapshot(current, nextSnap),
+          nextHistory,
+        ),
       });
     }
   }, [name, initialUrl]);
@@ -803,56 +854,6 @@ export async function _dispatchFrameRefetch(
  * without clobbering each other.
  */
 const FRAME_STATE_KEY = "__frameState";
-
-/**
- * True when some earlier / later entry's frames-snapshot has a
- * different URL for `name` than the current entry does. The user
- * can traverse there to restore that URL.
- */
-function computeCanTraverse(
-  nav: Navigation,
-  name: string,
-  direction: "back" | "forward",
-): boolean {
-  const entries = nav.entries();
-  const currentIdx = nav.currentEntry?.index ?? -1;
-  if (currentIdx < 0) return false;
-  const currentUrl = readFramesSnapshot(entries[currentIdx].getState())[name]
-    ?.url;
-  const walk =
-    direction === "back"
-      ? (i: number) => i >= 0 && i < currentIdx
-      : (i: number) => i > currentIdx && i < entries.length;
-  const step = direction === "back" ? -1 : 1;
-  const start = currentIdx + step;
-  for (let i = start; walk(i); i += step) {
-    const url = readFramesSnapshot(entries[i].getState())[name]?.url;
-    if (url && url !== currentUrl) return true;
-  }
-  return false;
-}
-
-function findFrameEntry(
-  nav: Navigation,
-  name: string,
-  direction: "back" | "forward",
-): NavigationHistoryEntry | null {
-  const entries = nav.entries();
-  const currentIdx = nav.currentEntry?.index ?? -1;
-  if (currentIdx < 0) return null;
-  const currentUrl = readFramesSnapshot(entries[currentIdx].getState())[name]
-    ?.url;
-  const step = direction === "back" ? -1 : 1;
-  const inBounds =
-    direction === "back"
-      ? (i: number) => i >= 0
-      : (i: number) => i < entries.length;
-  for (let i = currentIdx + step; inBounds(i); i += step) {
-    const url = readFramesSnapshot(entries[i].getState())[name]?.url;
-    if (url && url !== currentUrl) return entries[i];
-  }
-  return null;
-}
 
 // ─── NavigateTarget resolution ────────────────────────────────────
 //
@@ -1131,13 +1132,22 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
 
 /**
  * Frame-scoped handle — a Proxy over `window.navigation` with
- * frame-scoped overrides: `currentEntry` / `entries()` project the
- * frame URL and state, `canGoBack` / `canGoForward` scan for
- * per-frame URL diffs across entries, `back` / `forward` traverse to
- * the nearest differing entry, `navigate` writes a new frames
- * snapshot and dispatches a refetch, `reload` dispatches a refetch
- * at the current frame URL, `updateCurrentEntry` merges under
- * `__frameState[name]`.
+ * frame-scoped overrides.
+ *
+ * `navigate` defaults to `history: "auto"` which patches the current
+ * browser entry via `updateCurrentEntry` (no new entry) and pushes
+ * the prior frame URL onto `__frameHistory[name].past`. Browser
+ * back/forward is left alone; `frame.back()` walks the in-state
+ * stack. Explicit `history: "push" | "replace"` still uses
+ * `nav.navigate()` for callers that want a bookmarkable drawer URL
+ * or a pure URL sync (search-as-you-type).
+ *
+ * `back` / `forward` / `canGoBack` / `canGoForward` read the
+ * in-state `__frameHistory[name]` arrays instead of scanning
+ * browser entries — this is what lets a drawer have a back stack
+ * without polluting browser history. `currentEntry` / `entries()`
+ * project the frame URL and state; `updateCurrentEntry` merges user
+ * state under `__frameState[name]`.
  */
 function buildFrameHandle(frameName: string): FrameworkNavigation {
   const nav = getNavigation();
@@ -1148,28 +1158,76 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
     options?: FrameworkNavigateOptions,
   ): FrameworkNavigationResult => {
     const url = resolveFrameTarget(target, frameName);
+    const historyMode: NavigationHistoryBehavior = options?.history ?? "auto";
+
     // Carry forward other frames' URLs; overwrite this frame's.
     // User `state` merges next to the snapshot, not inside it.
     const priorState =
       (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
     const priorSnap = readFramesSnapshot(priorState);
+    const priorHistory = readFramesHistory(priorState);
+    // Prior URL for this frame — prefer the entry snapshot (what the
+    // entry state actually encodes), fall back to the module-level
+    // cache for first nav before FrameNameProvider seeded the entry.
+    const priorUrl =
+      priorSnap[frameName]?.url ?? _frameUrls.get(frameName) ?? null;
+
     const nextSnap: FramesSnapshot = {
       ...priorSnap,
       [frameName]: { url },
     };
+
+    // History update policy per mode:
+    //   auto  — push prior URL onto past, clear future. (DEFAULT)
+    //   push  — same push on the per-frame stack, PLUS a new browser
+    //           entry (drawer URLs the user wants in browser history).
+    //   replace — no change to the per-frame stack (pure URL sync).
+    const pushToHistory = historyMode === "auto" || historyMode === "push";
+    let nextHistory: FrameHistoryMap = priorHistory;
+    if (pushToHistory) {
+      const prev = priorHistory[frameName] ?? emptyHistoryEntry();
+      const past =
+        priorUrl != null && priorUrl !== url
+          ? [...prev.past, priorUrl]
+          : prev.past;
+      nextHistory = {
+        ...priorHistory,
+        [frameName]: { past, future: [] },
+      };
+    }
+
     const userState =
       (options?.state as Record<string, unknown> | null) ?? null;
-    const nextState = writeFramesSnapshot(
-      { ...priorState, ...(userState ?? {}) },
-      nextSnap,
+    const nextState = writeFramesHistory(
+      writeFramesSnapshot(
+        { ...priorState, ...(userState ?? {}) },
+        nextSnap,
+      ),
+      nextHistory,
     );
-    // Seed the client-side frame-URL cache BEFORE `nav.navigate` —
-    // the call fires the `navigate` event synchronously, which bumps
-    // reactive consumers; waiting until `committed` would have them
-    // read a stale URL.
+
+    // Seed the client-side frame-URL cache BEFORE we touch Navigation —
+    // `nav.navigate`/`updateCurrentEntry` fires events synchronously
+    // that bump reactive consumers; waiting would have them read a
+    // stale URL.
     _frameUrls.set(frameName, url);
+
+    if (historyMode === "auto") {
+      // No new browser entry. updateCurrentEntry patches state in
+      // place, fires currententrychange (consumers update) but NOT
+      // navigate — no silent-info bypass needed.
+      nav.updateCurrentEntry({ state: nextState });
+      return syntheticResult(
+        nav,
+        _dispatchFrameRefetch(frameName, url, options),
+      );
+    }
+
+    // Explicit push/replace — browser entry grows/replaces. Use the
+    // silent-info brand so the page-level listener doesn't also fire
+    // a full-page refetch.
     const result = nav.navigate(window.location.href, {
-      history: options?.history ?? "push",
+      history: historyMode,
       state: nextState,
       info: makeSilentInfo("frame", frameName),
     });
@@ -1191,18 +1249,70 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
     );
   };
 
-  const frameTraverse = (
+  /**
+   * Move within the per-entry `__frameHistory[name]` arrays. No
+   * browser traversal — this is a pure state patch via
+   * `updateCurrentEntry` plus a refetch dispatch. Missing / empty
+   * stack → no-op with a stub result.
+   */
+  const frameTraverseInState = (
     direction: "back" | "forward",
   ): NavigationResult => {
-    const dest = findFrameEntry(nav, frameName, direction);
-    if (!dest) {
-      const stub = null as unknown as NavigationHistoryEntry;
-      return {
-        committed: Promise.resolve(stub),
-        finished: Promise.resolve(stub),
-      };
+    const stub = null as unknown as NavigationHistoryEntry;
+    const priorState =
+      (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
+    const priorSnap = readFramesSnapshot(priorState);
+    const priorHistory = readFramesHistory(priorState);
+    const entry = priorHistory[frameName] ?? emptyHistoryEntry();
+    const currentUrl =
+      priorSnap[frameName]?.url ?? _frameUrls.get(frameName) ?? null;
+
+    let nextUrl: string | null = null;
+    let nextPast = entry.past;
+    let nextFuture = entry.future;
+    if (direction === "back") {
+      if (entry.past.length === 0) {
+        return {
+          committed: Promise.resolve(stub),
+          finished: Promise.resolve(stub),
+        };
+      }
+      nextUrl = entry.past[entry.past.length - 1];
+      nextPast = entry.past.slice(0, -1);
+      nextFuture = currentUrl != null ? [currentUrl, ...entry.future] : entry.future;
+    } else {
+      if (entry.future.length === 0) {
+        return {
+          committed: Promise.resolve(stub),
+          finished: Promise.resolve(stub),
+        };
+      }
+      nextUrl = entry.future[0];
+      nextFuture = entry.future.slice(1);
+      nextPast = currentUrl != null ? [...entry.past, currentUrl] : entry.past;
     }
-    return nav.traverseTo(dest.key);
+
+    const nextSnap: FramesSnapshot = {
+      ...priorSnap,
+      [frameName]: { url: nextUrl },
+    };
+    const nextHistory: FrameHistoryMap = {
+      ...priorHistory,
+      [frameName]: { past: nextPast, future: nextFuture },
+    };
+    const nextState = writeFramesHistory(
+      writeFramesSnapshot(priorState, nextSnap),
+      nextHistory,
+    );
+
+    _frameUrls.set(frameName, nextUrl);
+    nav.updateCurrentEntry({ state: nextState });
+    const work = _dispatchFrameRefetch(frameName, nextUrl);
+    const resolveEntry = () => nav.currentEntry ?? stub;
+    return {
+      committed: Promise.resolve(resolveEntry()),
+      finished: work.then(resolveEntry),
+    };
   };
 
   const frameUpdateCurrentEntry = (
@@ -1231,11 +1341,16 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
       if (prop === "name") return frameName;
       if (prop === "navigate") return frameNavigate;
       if (prop === "reload") return frameReload;
-      if (prop === "back") return () => frameTraverse("back");
-      if (prop === "forward") return () => frameTraverse("forward");
-      if (prop === "canGoBack") return computeCanTraverse(target, frameName, "back");
-      if (prop === "canGoForward")
-        return computeCanTraverse(target, frameName, "forward");
+      if (prop === "back") return () => frameTraverseInState("back");
+      if (prop === "forward") return () => frameTraverseInState("forward");
+      if (prop === "canGoBack") {
+        const history = readFramesHistory(target.currentEntry?.getState());
+        return (history[frameName]?.past.length ?? 0) > 0;
+      }
+      if (prop === "canGoForward") {
+        const history = readFramesHistory(target.currentEntry?.getState());
+        return (history[frameName]?.future.length ?? 0) > 0;
+      }
       if (prop === "currentEntry")
         return projectEntryForFrame(target.currentEntry, frameName);
       if (prop === "entries") {
