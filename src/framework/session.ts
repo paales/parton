@@ -3,13 +3,19 @@
  *
  * A cookie (`__frame_sid`) carries a session ID; the server holds the
  * per-session state in an in-memory map (swap for Redis/KV later
- * behind the same interface). State today: frame URLs keyed by frame
- * name. The session is the **source of truth** for "what scene is
- * the user looking at" — the window URL is a shareable projection
- * over it (see `notes/FRAME_SCOPING.md` and task 6).
+ * behind the same interface). State: frame URLs keyed by the frame's
+ * dotted PATH (every `<Partial frame="…">` ancestor joined with `.`),
+ * so nested frames live alongside each other without name collisions.
+ * The session is the **source of truth** for "what scene is the user
+ * looking at" — the window URL is a shareable projection over it
+ * (see `notes/FRAME_SCOPING.md`).
  *
  *   cookie `__frame_sid=abc123` → store[abc123] = {
- *     frames: { cart: { url: "/cart/checkout" }, menu: { url: "/menu" } }
+ *     frames: {
+ *       "cart": { url: "/cart/checkout" },
+ *       "menu": { url: "/menu/about" },
+ *       "products.list": { url: "/products/list?page=3" },
+ *     }
  *   }
  *
  * A page refresh re-reads the session, so the user sees the same
@@ -32,7 +38,19 @@ export interface FrameSessionState {
 }
 
 export interface SessionState {
+  /** Keys are dotted frame paths (e.g. `"cart"` or `"products.list"`). */
   frames: Record<string, FrameSessionState>;
+}
+
+/**
+ * Canonical string key for a frame path. Empty path throws — a frame
+ * always has at least one name (the Partial's local `frame` prop).
+ */
+function pathKey(path: readonly string[]): string {
+  if (path.length === 0) {
+    throw new Error("session: frame path must be non-empty");
+  }
+  return path.join(".");
 }
 
 const SESSION_COOKIE = "__frame_sid";
@@ -91,21 +109,25 @@ export function getSessionState(): SessionState {
 
 /**
  * Look up one frame's URL in the session. Returns `null` if no
- * session or no entry for this frame.
+ * session or no entry for this frame. `path` is the dotted frame
+ * path (every `<Partial frame>` ancestor from root, inner-most last).
  */
-export function getSessionFrameUrl(frameName: string): string | null {
-  return getSessionState().frames[frameName]?.url ?? null;
+export function getSessionFrameUrl(path: readonly string[]): string | null {
+  return getSessionState().frames[pathKey(path)]?.url ?? null;
 }
 
 /**
  * Set (or overwrite) a frame's URL in the session. Creates the
  * session (and Set-Cookies the ID) if it doesn't exist yet.
  */
-export function setSessionFrameUrl(frameName: string, url: string): void {
+export function setSessionFrameUrl(
+  path: readonly string[],
+  url: string,
+): void {
   const id = ensureSessionId();
   const b = store();
   const existing = b.get(id) ?? { frames: {} };
-  existing.frames = { ...existing.frames, [frameName]: { url } };
+  existing.frames = { ...existing.frames, [pathKey(path)]: { url } };
   b.set(id, existing);
 }
 
@@ -113,13 +135,14 @@ export function setSessionFrameUrl(frameName: string, url: string): void {
  * Remove a frame entry from the session (e.g. a closing drawer). No-op
  * if there's no session or no entry.
  */
-export function clearSessionFrame(frameName: string): void {
+export function clearSessionFrame(path: readonly string[]): void {
   const id = getSessionId();
   if (!id) return;
   const b = store();
   const existing = b.get(id);
   if (!existing) return;
-  const { [frameName]: _removed, ...rest } = existing.frames;
+  const key = pathKey(path);
+  const { [key]: _removed, ...rest } = existing.frames;
   existing.frames = rest;
   b.set(id, existing);
 }
@@ -142,8 +165,8 @@ export function _sessionStats(): { sessions: number; frameCounts: Record<string,
   const frameCounts: Record<string, number> = {};
   const b = store();
   for (const state of b.values()) {
-    for (const frameName of Object.keys(state.frames)) {
-      frameCounts[frameName] = (frameCounts[frameName] ?? 0) + 1;
+    for (const framePath of Object.keys(state.frames)) {
+      frameCounts[framePath] = (frameCounts[framePath] ?? 0) + 1;
     }
   }
   return { sessions: b.size, frameCounts };

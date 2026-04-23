@@ -169,9 +169,13 @@ give it a real page URL.
 - **Session ID in a non-HttpOnly cookie.** Current `setCookie`
   doesn't mark `HttpOnly`. Fine for research; production needs
   HttpOnly + Secure + SameSite=Lax.
-- **Frame name collision.** Two `<Partial frame="cart">` on the same
-  page both point at the same session entry. Not enforced — authors
-  avoid it.
+- ~~**Frame name collision.**~~ **RESOLVED** — frame names are now
+  scoped to their enclosing frame. Two `<Partial frame="list">`
+  under different parent frames resolve to distinct dotted paths
+  (`"products.list"` vs `"blog.list"`); only a duplicate at the same
+  nesting level collides. See the `PartialCtx.frameChain` thread in
+  `src/lib/partial-context.ts`. Historical entry preserved so blame
+  tells the story.
 - **Reading accessors after `await`.** The scope cell is shared per
   request; sibling frames mutate it. Hoist reads to the top (same
   rule as the cache manifest).

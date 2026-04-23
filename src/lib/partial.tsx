@@ -190,15 +190,27 @@ function partialFromSnapshot(_id: string, snap: PartialSnapshot): ReactNode {
   // Reconstruct the parent context from the stored path. The cell
   // can't be trusted for this call — we're rendering snapshots as
   // flat siblings in cache-mode, not through their original tree.
+  // We reconstruct `frameChain` from the snapshot's `framePath` so
+  // that if this Partial is itself a frame, its own FrameWrapper
+  // re-computes the full dotted frame path identically to the
+  // original render.
+  const frameChain: readonly string[] =
+    snap.framePath.length > 0
+      ? snap.framePath.slice(0, snap.framePath.length - 1)
+      : [];
+  const frameLocalName: string | undefined =
+    snap.framePath.length > 0
+      ? snap.framePath[snap.framePath.length - 1]
+      : undefined;
   return React.createElement(
     Partial,
     {
-      parent: { path: snap.parentPath },
+      parent: { path: snap.parentPath, frameChain },
       selector,
       fallback: snap.fallback ?? undefined,
       errorWith: snap.errorWith,
       cache: snap.cache,
-      frame: snap.frame,
+      frame: frameLocalName,
       frameUrl: snap.frameUrl,
     },
     snap.content,
@@ -214,15 +226,16 @@ export async function PartialRoot({ children }: PartialRootProps) {
   const cachedParam = requestUrl.searchParams.get("cached");
   const populateCache = requestUrl.searchParams.has("__populateCache");
 
-  // Frame navigation: `?__frame=name&__frameUrl=/path` carries the
-  // next URL for a named frame. Write it to the session before any
-  // `<Partial frame=…>` runs — its `resolveFrameRequest` will pick
-  // up the new URL from the session.
+  // Frame navigation: `?__frame=a.b.c&__frameUrl=/path` carries the
+  // next URL for a frame at a dotted path. Write it to the session
+  // before any `<Partial frame=…>` runs — its `resolveFrameRequest`
+  // will pick up the new URL from the session.
   const frameNames = requestUrl.searchParams.getAll("__frame");
   const frameUrls = requestUrl.searchParams.getAll("__frameUrl");
   if (frameNames.length > 0 && frameNames.length === frameUrls.length) {
     for (let i = 0; i < frameNames.length; i++) {
-      setSessionFrameUrl(frameNames[i], frameUrls[i]);
+      const path = frameNames[i].split(".").filter(Boolean);
+      if (path.length > 0) setSessionFrameUrl(path, frameUrls[i]);
     }
   }
 

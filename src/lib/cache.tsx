@@ -493,14 +493,18 @@ function reinjectDynamic(
           ...snap.uniqueTokens.map((t): `#${string}` => `#${t}`),
           ...snap.sharedTokens.map((t): `.${string}` => `.${t}`),
         ];
-        // Reconstruct parent from the snapshot's stored path — the
-        // render-time cell is long gone by the time cached bytes are
-        // reinjected, so we rely on the path we recorded during the
-        // original render.
+        // Reconstruct parent (path + frameChain) from the snapshot's
+        // stored paths — the render-time cell is long gone by the
+        // time cached bytes are reinjected, so we rely on what we
+        // recorded during the original render.
+        const frameChain: readonly string[] =
+          snap.framePath.length > 0
+            ? snap.framePath.slice(0, snap.framePath.length - 1)
+            : [];
         return createElement(
           Partial,
           {
-            parent: { path: snap.parentPath },
+            parent: { path: snap.parentPath, frameChain },
             selector,
             fallback: snap.fallback ?? undefined,
             errorWith: snap.errorWith,

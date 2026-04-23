@@ -12,6 +12,7 @@ import type { RscPayload } from "./entry.rsc";
 import { GlobalErrorBoundary } from "./error-boundary";
 import { createRscRenderRequest } from "./request";
 import {
+  _collectFramePaths,
   _dispatchFrameRefetch,
   _readFramesSnapshot,
   getCachedPartialIds,
@@ -188,19 +189,22 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
     // If the URL didn't change and only frames changed, skip the full
     // render and fire targeted per-frame refetches instead.
     if (event.navigationType === "traverse") {
-      const destSnap = _readFramesSnapshot(event.destination.getState?.());
-      const currentSnap = _readFramesSnapshot(
-        nav.currentEntry?.getState() ?? null,
+      const destPaths = _collectFramePaths(
+        _readFramesSnapshot(event.destination.getState?.()),
+      );
+      const currentPaths = _collectFramePaths(
+        _readFramesSnapshot(nav.currentEntry?.getState() ?? null),
       );
       const names = new Set([
-        ...Object.keys(destSnap),
-        ...Object.keys(currentSnap),
+        ...Object.keys(destPaths),
+        ...Object.keys(currentPaths),
       ]);
-      const diffs: Array<{ name: string; url: string }> = [];
+      // Each diff entry carries the dotted frame path and the destination URL.
+      const diffs: Array<{ key: string; url: string }> = [];
       for (const name of names) {
-        const dest = destSnap[name]?.url;
-        const cur = currentSnap[name]?.url;
-        if (dest && dest !== cur) diffs.push({ name, url: dest });
+        const dest = destPaths[name]?.url;
+        const cur = currentPaths[name]?.url;
+        if (dest && dest !== cur) diffs.push({ key: name, url: dest });
       }
       const urlChanged = event.destination.url !== window.location.href;
       if (urlChanged) {
@@ -208,7 +212,7 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
           handler: async () => {
             const url = new URL(event.destination.url);
             for (const d of diffs) {
-              url.searchParams.append("__frame", d.name);
+              url.searchParams.append("__frame", d.key);
               url.searchParams.append("__frameUrl", d.url);
             }
             const handler = (window as Window & {
@@ -223,7 +227,7 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
         event.intercept({
           handler: async () => {
             await Promise.all(
-              diffs.map((d) => _dispatchFrameRefetch(d.name, d.url)),
+              diffs.map((d) => _dispatchFrameRefetch(d.key.split("."), d.url)),
             );
           },
         });

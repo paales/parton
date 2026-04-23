@@ -49,6 +49,18 @@ import { cache } from "react";
  * render tree. Passed via `<Partial parent={...}>`; consumed by the
  * registry so every Partial's parent edge is recorded even when React
  * has interleaved siblings across async boundaries.
+ *
+ * Carries two parallel chains:
+ *
+ *   - `path` — every ancestor Partial, by effective id. Scoped to the
+ *     render tree; drives registry parent-edge recording.
+ *   - `frameChain` — every ancestor Partial that opened a **frame**
+ *     (`<Partial frame="…">`), by local frame name. A frame's
+ *     canonical identity is `frameChain.join(".")` (dotted path), so
+ *     `<Partial frame="list">` nested inside `<Partial frame="products">`
+ *     is addressed as `"products.list"` — distinct from a `"list"`
+ *     frame under a different parent. Only non-empty when some
+ *     ancestor opened a frame.
  */
 export interface PartialCtx {
   /**
@@ -56,6 +68,13 @@ export interface PartialCtx {
    * root. `path[path.length - 1]` is the immediate parent id.
    */
   readonly path: readonly string[];
+  /**
+   * Local frame names contributed by ancestor Partials that declared
+   * `frame="…"`, outer-first. Empty when no enclosing frame. The
+   * join on `.` is the frame's canonical path used in session
+   * storage, navigation state, and the `__frame=` wire param.
+   */
+  readonly frameChain: readonly string[];
 }
 
 /**
@@ -63,7 +82,10 @@ export interface PartialCtx {
  * prop on the outermost `<Partial>`s (those not nested inside any
  * other Partial).
  */
-export const ROOT: PartialCtx = Object.freeze({ path: Object.freeze([]) as readonly string[] });
+export const ROOT: PartialCtx = Object.freeze({
+  path: Object.freeze([]) as readonly string[],
+  frameChain: Object.freeze([]) as readonly string[],
+});
 
 /**
  * React.cache-backed mutable cell carrying the current parent
@@ -102,10 +124,31 @@ export function capturePartialContext(): PartialCtx {
 
 /**
  * Derive the child context a new `<Partial>` should push when it
- * renders: parent's path + its own effective id.
+ * renders: parent's path + this Partial's effective id, parent's
+ * frame chain + this Partial's frame name (if any).
  *
  * @internal
  */
-export function _childContext(parent: PartialCtx, selfId: string): PartialCtx {
-  return { path: Object.freeze([...parent.path, selfId]) as readonly string[] };
+export function _childContext(
+  parent: PartialCtx,
+  selfId: string,
+  frame: string | undefined,
+): PartialCtx {
+  const path = Object.freeze([...parent.path, selfId]) as readonly string[];
+  const frameChain =
+    frame != null
+      ? (Object.freeze([...parent.frameChain, frame]) as readonly string[])
+      : parent.frameChain;
+  return { path, frameChain };
+}
+
+/**
+ * Canonical dotted path for a frame. The empty chain maps to `""`
+ * (no enclosing frame) — callers typically branch on `chain.length > 0`
+ * before using this.
+ *
+ * @internal
+ */
+export function _joinFrameChain(chain: readonly string[]): string {
+  return chain.join(".");
 }

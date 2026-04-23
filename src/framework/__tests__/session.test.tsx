@@ -36,7 +36,7 @@ describe("session store basics", () => {
     const req = await makeRequest();
     const { result } = await runWithRequestAsync(req, async () => ({
       id: getSessionId(),
-      cartUrl: getSessionFrameUrl("cart"),
+      cartUrl: getSessionFrameUrl(["cart"]),
     }));
     expect(result.id).toBeNull();
     expect(result.cartUrl).toBeNull();
@@ -66,7 +66,7 @@ describe("session store basics", () => {
     // Request 1: no cookie, set cart URL.
     const req1 = await makeRequest();
     const { result: sid, cookies } = await runWithRequestAsync(req1, async () => {
-      setSessionFrameUrl("cart", "/cart/checkout");
+      setSessionFrameUrl(["cart"], "/cart/checkout");
       return getSessionId();
     });
     expect(sid).not.toBeNull();
@@ -79,7 +79,7 @@ describe("session store basics", () => {
     // Request 2: with the cookie — session state is visible.
     const req2 = await makeRequest(sessionId);
     const { result } = await runWithRequestAsync(req2, async () => {
-      return getSessionFrameUrl("cart");
+      return getSessionFrameUrl(["cart"]);
     });
     expect(result).toBe("/cart/checkout");
   });
@@ -87,13 +87,13 @@ describe("session store basics", () => {
   it("different cookies get isolated state", async () => {
     const req1 = await makeRequest();
     const { cookies: cookies1 } = await runWithRequestAsync(req1, async () => {
-      setSessionFrameUrl("cart", "/user-a/cart");
+      setSessionFrameUrl(["cart"], "/user-a/cart");
     });
     const id1 = cookies1[0].match(/__frame_sid=([^;]+)/)![1];
 
     const req2 = await makeRequest();
     const { cookies: cookies2 } = await runWithRequestAsync(req2, async () => {
-      setSessionFrameUrl("cart", "/user-b/cart");
+      setSessionFrameUrl(["cart"], "/user-b/cart");
     });
     const id2 = cookies2[0].match(/__frame_sid=([^;]+)/)![1];
 
@@ -102,11 +102,11 @@ describe("session store basics", () => {
     // Check each user sees only their own URL.
     const { result: a } = await runWithRequestAsync(
       await makeRequest(id1),
-      async () => getSessionFrameUrl("cart"),
+      async () => getSessionFrameUrl(["cart"]),
     );
     const { result: b } = await runWithRequestAsync(
       await makeRequest(id2),
-      async () => getSessionFrameUrl("cart"),
+      async () => getSessionFrameUrl(["cart"]),
     );
     expect(a).toBe("/user-a/cart");
     expect(b).toBe("/user-b/cart");
@@ -115,17 +115,17 @@ describe("session store basics", () => {
   it("clearSessionFrame removes the entry", async () => {
     const req = await makeRequest();
     const { cookies } = await runWithRequestAsync(req, async () => {
-      setSessionFrameUrl("cart", "/cart/open");
+      setSessionFrameUrl(["cart"], "/cart/open");
     });
     const sid = cookies[0].match(/__frame_sid=([^;]+)/)![1];
 
     await runWithRequestAsync(await makeRequest(sid), async () => {
-      clearSessionFrame("cart");
+      clearSessionFrame(["cart"]);
     });
 
     const { result } = await runWithRequestAsync(
       await makeRequest(sid),
-      async () => getSessionFrameUrl("cart"),
+      async () => getSessionFrameUrl(["cart"]),
     );
     expect(result).toBeNull();
   });
@@ -133,12 +133,12 @@ describe("session store basics", () => {
   it("stats reflects active sessions + frame counts", async () => {
     const r1 = await makeRequest();
     await runWithRequestAsync(r1, async () => {
-      setSessionFrameUrl("cart", "/a");
-      setSessionFrameUrl("menu", "/m");
+      setSessionFrameUrl(["cart"], "/a");
+      setSessionFrameUrl(["menu"], "/m");
     });
     const r2 = await makeRequest();
     await runWithRequestAsync(r2, async () => {
-      setSessionFrameUrl("cart", "/b");
+      setSessionFrameUrl(["cart"], "/b");
     });
     const stats = _sessionStats();
     expect(stats.sessions).toBe(2);

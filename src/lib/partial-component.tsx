@@ -28,6 +28,8 @@ import {
   type PartialCtx,
 } from "./partial-context.ts";
 
+const EMPTY_PATH: readonly string[] = Object.freeze([]) as readonly string[];
+
 /**
  * Recognizable wrapper around a rendered Partial.
  *
@@ -48,15 +50,14 @@ export function PartialBoundary({
   uniqueTokens,
   sharedTokens,
   cache,
-  frame,
+  framePath,
   frameUrl,
   children,
 }: {
   id: string;
   /** Outer-first chain of ancestor partial ids, from the `parent`
    *  prop. Recorded in the registry so the server knows the full
-   *  hierarchy — see `notes/PARENT_CONTEXT.md` and
-   *  `src/lib/partial-context.ts`. */
+   *  hierarchy — see `src/lib/partial-context.ts`. */
   parentPath: readonly string[];
   /** Original children of the `<Partial>` — stored in the registry so
    *  a refetch can render it directly. */
@@ -66,7 +67,10 @@ export function PartialBoundary({
   uniqueTokens: string[];
   sharedTokens: string[];
   cache?: CacheOptions;
-  frame?: string;
+  /** Canonical dotted-path of every enclosing `<Partial frame>`
+   *  ancestor plus this Partial's local `frame` name. Empty when
+   *  this Partial doesn't open a frame. */
+  framePath: readonly string[];
   frameUrl?: string;
   children: ReactNode;
 }): ReactNode {
@@ -78,7 +82,7 @@ export function PartialBoundary({
     uniqueTokens,
     sharedTokens,
     cache,
-    frame,
+    framePath,
     frameUrl,
     parentPath,
   });
@@ -356,7 +360,7 @@ function resolveEffectiveId(parsed: ParsedSelector): string {
 
 /**
  * Resolve a frame's Request object. Lookup order:
- *   1. Server session entry for this frame (source of truth).
+ *   1. Server session entry for this frame path (source of truth).
  *   2. `frameUrl` prop (author-provided initial URL).
  *   3. Page request (frame and page agree — no-op frame).
  *
@@ -364,11 +368,11 @@ function resolveEffectiveId(parsed: ParsedSelector): string {
  * the frame still work (cookies live on the response, not per-frame).
  */
 function resolveFrameRequest(
-  frameName: string,
+  framePath: readonly string[],
   initialUrl: string | undefined,
 ): Request {
   const pageRequest = getRequest();
-  const sessionUrl = getSessionFrameUrl(frameName);
+  const sessionUrl = getSessionFrameUrl(framePath);
   const effective = sessionUrl ?? initialUrl;
   if (effective == null) return pageRequest;
   const resolved = new URL(effective, pageRequest.url).toString();
@@ -405,19 +409,19 @@ function resolveFrameRequest(
  * — punted.
  */
 function FrameWrapper({
-  name,
+  path,
   request,
   children,
 }: {
-  name: string;
+  path: readonly string[];
   request: Request;
   children: ReactNode;
 }): ReactNode {
-  setCurrentFrameScope({ name, request });
+  setCurrentFrameScope({ path, request });
   const url = new URL(request.url);
   const initialUrl = url.pathname + url.search;
   return (
-    <FrameNameProvider name={name} initialUrl={initialUrl}>
+    <FrameNameProvider path={path} initialUrl={initialUrl}>
       {children}
     </FrameNameProvider>
   );
@@ -501,7 +505,7 @@ export function Partial({
   // `capturePartialContext()`; descendants across an await must have
   // captured earlier and threaded `parent` explicitly (the cell is
   // unreliable post-await due to RSC sibling interleaving).
-  _setCurrentPartialContext(_childContext(parent, id));
+  _setCurrentPartialContext(_childContext(parent, id, frame));
 
   const isExplicit = state.explicitIds.has(id);
   const effectiveFallback = fallback ?? null;
@@ -509,8 +513,11 @@ export function Partial({
   const rawContent = children;
 
   // Frame scope: if `frame` is set, wrap the children in a
-  // `<FrameWrapper>` component that does the Flight round-trip when
-  // it renders. That way:
+  // `<FrameWrapper>` component. The full frame path is
+  // `[...parent.frameChain, frame]` — so two `<Partial frame="list">`
+  // under different ancestor frames get distinct paths
+  // (`"products.list"` vs `"blog.list"`) for session, navigation
+  // state, and `?__frame=` wire lookups.
   //
   //   1. The registry snapshot carries the UNFRAMED children (the
   //      wrapper JSX) — cache-mode refetches can replay them through
@@ -524,11 +531,13 @@ export function Partial({
   // `createContext` in the react-server build), so the nested scope
   // has to be ALS-with-containment (Flight round-trip keeps the
   // scope from leaking to siblings).
+  const framePath: readonly string[] =
+    frame != null ? [...parent.frameChain, frame] : EMPTY_PATH;
   const frameRequest =
-    frame != null ? resolveFrameRequest(frame, frameUrl) : null;
+    frame != null ? resolveFrameRequest(framePath, frameUrl) : null;
   const content: ReactNode =
     frame != null && frameRequest != null ? (
-      <FrameWrapper name={frame} request={frameRequest}>
+      <FrameWrapper path={framePath} request={frameRequest}>
         {rawContent}
       </FrameWrapper>
     ) : (
@@ -552,7 +561,7 @@ export function Partial({
   //     the client with stale cached bytes.
   const ownFrameKey =
     frame != null && frameRequest != null
-      ? `|frame=${frame}:${frameRequest.url}`
+      ? `|frame=${framePath.join(".")}:${frameRequest.url}`
       : "";
   // Only fold the ambient frame into the fp when this Partial does NOT
   // open its own frame. A framed Partial's content runs under its own
@@ -569,7 +578,7 @@ export function Partial({
   const ambientScope = getCurrentFrameScope();
   const ambientFrameKey =
     frame == null && ambientScope
-      ? `|inFrame=${ambientScope.name}:${ambientScope.request.url}`
+      ? `|inFrame=${ambientScope.path.join(".")}:${ambientScope.request.url}`
       : "";
   // Structural fingerprint — stable across "am I inside a frame?"
   // readings, which can differ between full renders and cache-mode
@@ -625,7 +634,7 @@ export function Partial({
       uniqueTokens,
       sharedTokens,
       cache,
-      frame,
+      framePath,
       frameUrl,
       parentPath: parent.path,
     });
@@ -655,7 +664,7 @@ export function Partial({
         uniqueTokens={uniqueTokens}
         sharedTokens={sharedTokens}
         cache={cache}
-        frame={frame}
+        framePath={framePath}
         frameUrl={frameUrl}
       >
         <PartialErrorBoundary
@@ -735,7 +744,7 @@ export function Partial({
       uniqueTokens={uniqueTokens}
       sharedTokens={sharedTokens}
       cache={cache}
-      frame={frame}
+      framePath={framePath}
       frameUrl={frameUrl}
     >
       {rendered}

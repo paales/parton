@@ -676,20 +676,32 @@ function enqueueRefetch(entry: RefetchBatchEntry): Promise<void> {
 // ─── Frame navigation ─────────────────────────────────────────────
 
 /**
- * Cached frame URLs on the client, keyed by frame name. Updated on
- * each `useNavigation(name).navigate(url)` call so `.currentUrl`
- * can return a synchronous value without a server round-trip. The
- * server session is authoritative — this is a cache for UX.
+ * Cached frame URLs on the client, keyed by the frame's dotted path
+ * (`"cart"` or `"products.list"`). Updated on every
+ * `useNavigation(path).navigate(url)` call so `currentEntry.url` can
+ * return a synchronous value without a server round-trip. The server
+ * session is authoritative — this is a UX cache.
  */
 const _frameUrls = new Map<string, string>();
 
 /**
- * Client-side context carrying the ambient frame name. Populated by
- * `<FrameNameProvider>` (rendered as part of `<Partial frame="X">`).
- * Lets `useNavigation()` default to "the enclosing frame" without every
- * caller having to pass the name explicitly.
+ * Client-side context carrying the AMBIENT frame path (outer-most to
+ * inner-most). Populated by `<FrameNameProvider>` (rendered as part of
+ * `<Partial frame="X">`) which stacks its own local name onto any
+ * enclosing chain. Empty array at the page root. Lets
+ * `useNavigation()` default to "the enclosing frame" without every
+ * caller passing the path explicitly, and gives nested frames a
+ * canonical identity (`["products","list"]` → `"products.list"`) for
+ * session/state lookup.
  */
-export const FrameNameContext = createContext<string | null>(null);
+export const FrameNameContext = createContext<readonly string[]>(
+  Object.freeze([]) as readonly string[],
+);
+
+/** Dotted canonical name for a frame path. */
+function joinFramePath(path: readonly string[]): string {
+  return path.join(".");
+}
 
 /**
  * Multi-frame URL snapshot carried on each navigation entry. Every
@@ -698,66 +710,120 @@ export const FrameNameContext = createContext<string | null>(null);
  * frames that changed. See `notes/FRAMES.md`.
  */
 const FRAMES_KEY = "__frames";
-const FRAME_HISTORY_KEY = "__frameHistory";
 
-interface FramesSnapshot {
-  [frameName: string]: { url: string };
-}
-
+/**
+ * Tree-shaped per-frame record on a navigation entry. Every
+ * `<Partial frame="X">` (at any nesting depth) contributes one node,
+ * keyed by its local name inside its parent's `__frames`.
+ *
+ *   state.__frames = {
+ *     cart:     { url: "/cart/open", __frameHistory: {...} },
+ *     products: { url: "/products", __frameHistory: {...},
+ *                 __frames: {
+ *                   list: { url: "/list?page=3", __frameHistory: {...} }
+ *                 } }
+ *   }
+ *
+ * `__frameHistory` and `__frameState` live at each node, scoped to
+ * that node's navigation — a nested frame's history doesn't pollute
+ * its parent's and vice versa.
+ */
 interface FrameHistoryEntry {
   past: string[];
   future: string[];
 }
 
-interface FrameHistoryMap {
-  [frameName: string]: FrameHistoryEntry;
+interface FrameNode {
+  /** Current URL for this frame. Not always present — a node may
+   *  exist only to carry `__frames` for descendants (e.g. a parent
+   *  node whose children mutated first). Readers fall back to
+   *  `_frameUrls`. */
+  url?: string;
+  __frameHistory?: FrameHistoryEntry;
+  __frameState?: Record<string, unknown>;
+  __frames?: Record<string, FrameNode>;
+}
+
+interface FramesTree {
+  [localName: string]: FrameNode;
 }
 
 /**
- * Read the per-frame URL snapshot from a navigation entry's state.
+ * Read the per-frame URL tree from a navigation entry's state.
  * Exported for `entry.browser.tsx`'s traverse listener.
  */
-export function _readFramesSnapshot(state: unknown): FramesSnapshot {
+export function _readFramesSnapshot(state: unknown): FramesTree {
   if (state == null || typeof state !== "object") return {};
   const v = (state as Record<string, unknown>)[FRAMES_KEY];
   if (v == null || typeof v !== "object") return {};
-  return v as FramesSnapshot;
+  return v as FramesTree;
 }
 
-// Local alias for the exported reader.
-const readFramesSnapshot = _readFramesSnapshot;
-
-function writeFramesSnapshot(
-  priorState: unknown,
-  snapshot: FramesSnapshot,
-): Record<string, unknown> {
-  const base = (priorState as Record<string, unknown> | null) ?? {};
-  return { ...base, [FRAMES_KEY]: snapshot };
+/** Walk the tree at `path`, returning the node or `undefined`. */
+export function _readFrameNode(
+  state: unknown,
+  path: readonly string[],
+): FrameNode | undefined {
+  let cursor: FrameNode | undefined = undefined;
+  let level: FramesTree = _readFramesSnapshot(state);
+  for (const name of path) {
+    cursor = level[name];
+    if (cursor == null) return undefined;
+    level = cursor.__frames ?? {};
+  }
+  return cursor;
 }
 
 /**
- * Read the per-frame back/forward history local to the current
- * navigation entry. Missing frame → `{past: [], future: []}`.
- *
- * This history is SEPARATE from the browser's window history stack:
- * it lives in the current entry's state and is mutated via
- * `updateCurrentEntry`, not by pushing new entries. That's what lets
- * drawer-shaped frames navigate freely without polluting browser
- * back/forward. See `notes/FRAMES.md` §"Two history axes".
+ * Flatten the tree into `{dottedPath: url}` pairs — used by browser
+ * traverse diffing in `entry.browser.tsx` to detect which frames
+ * changed between two entries.
  */
-function readFramesHistory(state: unknown): FrameHistoryMap {
-  if (state == null || typeof state !== "object") return {};
-  const v = (state as Record<string, unknown>)[FRAME_HISTORY_KEY];
-  if (v == null || typeof v !== "object") return {};
-  return v as FrameHistoryMap;
+export function _collectFramePaths(
+  tree: FramesTree,
+  prefix: readonly string[] = [],
+): Record<string, { url: string }> {
+  const out: Record<string, { url: string }> = {};
+  for (const [name, node] of Object.entries(tree)) {
+    const path = [...prefix, name];
+    if (node.url != null) out[path.join(".")] = { url: node.url };
+    if (node.__frames) {
+      Object.assign(out, _collectFramePaths(node.__frames, path));
+    }
+  }
+  return out;
 }
 
-function writeFramesHistory(
+/**
+ * Immutably patch a frame node at `path`. Returns a new state object
+ * with parent chain cloned; creates missing intermediate nodes as
+ * empty containers.
+ */
+function writeFrameNode(
   priorState: unknown,
-  history: FrameHistoryMap,
+  path: readonly string[],
+  patch: (node: FrameNode) => FrameNode,
 ): Record<string, unknown> {
+  if (path.length === 0) {
+    throw new Error("writeFrameNode: path must be non-empty");
+  }
   const base = (priorState as Record<string, unknown> | null) ?? {};
-  return { ...base, [FRAME_HISTORY_KEY]: history };
+  const rootTree: FramesTree = { ...(_readFramesSnapshot(priorState) ?? {}) };
+
+  // Walk into the tree, cloning each node we pass through.
+  let levelTree = rootTree;
+  for (let i = 0; i < path.length - 1; i++) {
+    const name = path[i];
+    const existing = levelTree[name] ?? {};
+    const childrenCopy = { ...(existing.__frames ?? {}) };
+    const cloned: FrameNode = { ...existing, __frames: childrenCopy };
+    levelTree[name] = cloned;
+    levelTree = childrenCopy;
+  }
+  const leafName = path[path.length - 1];
+  levelTree[leafName] = patch(levelTree[leafName] ?? {});
+
+  return { ...base, [FRAMES_KEY]: rootTree };
 }
 
 function emptyHistoryEntry(): FrameHistoryEntry {
@@ -772,42 +838,38 @@ function emptyHistoryEntry(): FrameHistoryEntry {
  * shape even before the first frame nav.
  */
 export function FrameNameProvider({
-  name,
+  path,
   initialUrl,
   children,
 }: {
-  name: string;
+  path: readonly string[];
   initialUrl: string;
   children: ReactNode;
 }) {
+  const key = joinFramePath(path);
   useEffect(() => {
-    // Client cache: so `useNavigation(name).currentUrl` is non-null on cold load.
-    if (!_frameUrls.has(name)) {
-      _frameUrls.set(name, initialUrl);
+    // Client cache: so `useNavigation(path).currentEntry.url` is
+    // non-null on cold load.
+    if (!_frameUrls.has(key)) {
+      _frameUrls.set(key, initialUrl);
     }
     const nav = getNavigation();
     if (!nav) return;
     const current = nav.currentEntry?.getState() ?? null;
-    const snap = readFramesSnapshot(current);
-    const history = readFramesHistory(current);
-    const needsSnap = !snap[name];
-    const needsHistory = !history[name];
-    if (needsSnap || needsHistory) {
-      const nextSnap = needsSnap
-        ? { ...snap, [name]: { url: initialUrl } }
-        : snap;
-      const nextHistory = needsHistory
-        ? { ...history, [name]: emptyHistoryEntry() }
-        : history;
+    const existing = _readFrameNode(current, path);
+    const hasUrl = existing?.url != null;
+    const hasHistory = existing?.__frameHistory != null;
+    if (!hasUrl || !hasHistory) {
       nav.updateCurrentEntry({
-        state: writeFramesHistory(
-          writeFramesSnapshot(current, nextSnap),
-          nextHistory,
-        ),
+        state: writeFrameNode(current, path, (node) => ({
+          ...node,
+          url: node.url ?? initialUrl,
+          __frameHistory: node.__frameHistory ?? emptyHistoryEntry(),
+        })),
       });
     }
-  }, [name, initialUrl]);
-  return <FrameNameContext value={name}>{children}</FrameNameContext>;
+  }, [key, initialUrl]);
+  return <FrameNameContext value={path}>{children}</FrameNameContext>;
 }
 
 /**
@@ -818,11 +880,12 @@ export function FrameNameProvider({
  * differs between the destination entry and the current one).
  */
 export async function _dispatchFrameRefetch(
-  name: string,
+  path: readonly string[],
   url: string,
   options?: FrameworkNavigateOptions,
 ): Promise<void> {
-  _frameUrls.set(name, url);
+  const key = joinFramePath(path);
+  _frameUrls.set(key, url);
   const handler = (
     window as Window & {
       __rsc_partial_refetch?: (url: string) => Promise<void>;
@@ -830,30 +893,24 @@ export async function _dispatchFrameRefetch(
   ).__rsc_partial_refetch;
   if (!handler) return;
   const refetchUrl = new URL(window.location.href);
-  refetchUrl.searchParams.set("__frame", name);
+  refetchUrl.searchParams.set("__frame", key);
   refetchUrl.searchParams.set("__frameUrl", url);
-  // Convention: the frame name matches the root Partial's `#`-token.
-  // Sending `partials=<name>` narrows the server render to the frame
-  // Partial's subtree, skipping unrelated page content. The server's
-  // direct-lookup on effective id hits `#<name>` selectors. Frame
-  // refetches invoked from the urlChanged path in `entry.browser.tsx`
-  // deliberately DO NOT set `partials=` — they want a full render so
-  // URL-dependent content (e.g. main listing switching on `?product=`)
-  // rerenders while `__frame` still updates the session.
-  refetchUrl.searchParams.set("partials", name);
+  // Convention: the frame's LOCAL name matches the root Partial's
+  // `#`-token inside its subtree. For a nested frame (path length > 1),
+  // we send only the leaf name as the partials filter because the
+  // effective id is still the selector's `#`-token — path-qualification
+  // is only for session/state keying, not for the partial-id lookup.
+  // Frame refetches invoked from the urlChanged path in
+  // `entry.browser.tsx` deliberately DO NOT set `partials=` — they want
+  // a full render so URL-dependent content (e.g. main listing switching
+  // on `?product=`) rerenders while `__frame` still updates the session.
+  const leaf = path[path.length - 1];
+  refetchUrl.searchParams.set("partials", leaf);
   if (options?.disableTransition) {
     refetchUrl.searchParams.set("disableTransition", "1");
   }
   await handler(refetchUrl.toString());
 }
-
-/**
- * Per-frame key for custom state in a Navigation entry's state
- * object. We scope user-provided `updateCurrentEntry` data under
- * `__frameState[name]` so multiple frames can coexist on one entry
- * without clobbering each other.
- */
-const FRAME_STATE_KEY = "__frameState";
 
 // ─── NavigateTarget resolution ────────────────────────────────────
 //
@@ -973,31 +1030,28 @@ function hasRefetchFilter(
 /**
  * Project a window `NavigationHistoryEntry` into a frame-scoped
  * `FrameNavigationHistoryEntry`: `url` reports the frame's URL
- * (absolute, against the page origin); `getState()` returns just the
- * `__frameState[name]` bucket, not the whole window state.
+ * (absolute, against the page origin); `getState()` returns the node
+ * at `path`'s `__frameState` bucket, not the whole window state.
  */
 function projectEntryForFrame(
   entry: NavigationHistoryEntry | null,
-  frameName: string,
+  path: readonly string[],
 ): FrameNavigationHistoryEntry | null {
   if (!entry) return null;
-  const snap = readFramesSnapshot(entry.getState());
-  const framePath = snap[frameName]?.url ?? _frameUrls.get(frameName) ?? "/";
+  const key = joinFramePath(path);
+  const node = _readFrameNode(entry.getState(), path);
+  const frameUrl = node?.url ?? _frameUrls.get(key) ?? "/";
   const origin =
     typeof window !== "undefined" ? window.location.origin : "http://_";
-  const absoluteUrl = new URL(framePath, origin).href;
+  const absoluteUrl = new URL(frameUrl, origin).href;
   return new Proxy(entry, {
     get(target, prop, receiver) {
       if (prop === "url") return absoluteUrl;
       if (prop === "getState") {
         return function getState(): FrameEntryState | null {
-          const state = target.getState();
-          if (state == null || typeof state !== "object") return null;
-          const bucket = (state as Record<string, unknown>)[FRAME_STATE_KEY];
+          const bucket = _readFrameNode(target.getState(), path)?.__frameState;
           if (bucket == null || typeof bucket !== "object") return null;
-          const forName = (bucket as Record<string, unknown>)[frameName];
-          if (forName == null || typeof forName !== "object") return null;
-          return forName as FrameEntryState;
+          return bucket as FrameEntryState;
         };
       }
       const value = Reflect.get(target, prop, receiver);
@@ -1149,33 +1203,28 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
  * project the frame URL and state; `updateCurrentEntry` merges user
  * state under `__frameState[name]`.
  */
-function buildFrameHandle(frameName: string): FrameworkNavigation {
+function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
   const nav = getNavigation();
-  if (!nav) return nullNavigation(frameName);
+  const key = joinFramePath(path);
+  if (!nav) return nullNavigation(key);
+  if (path.length === 0) {
+    throw new Error("buildFrameHandle: path must be non-empty");
+  }
 
   const frameNavigate = (
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
   ): FrameworkNavigationResult => {
-    const url = resolveFrameTarget(target, frameName);
+    const url = resolveFrameTarget(target, key);
     const historyMode: NavigationHistoryBehavior = options?.history ?? "auto";
 
-    // Carry forward other frames' URLs; overwrite this frame's.
-    // User `state` merges next to the snapshot, not inside it.
     const priorState =
       (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
-    const priorSnap = readFramesSnapshot(priorState);
-    const priorHistory = readFramesHistory(priorState);
-    // Prior URL for this frame — prefer the entry snapshot (what the
-    // entry state actually encodes), fall back to the module-level
-    // cache for first nav before FrameNameProvider seeded the entry.
-    const priorUrl =
-      priorSnap[frameName]?.url ?? _frameUrls.get(frameName) ?? null;
-
-    const nextSnap: FramesSnapshot = {
-      ...priorSnap,
-      [frameName]: { url },
-    };
+    const priorNode = _readFrameNode(priorState, path);
+    // Prior URL for this frame — prefer the entry snapshot, fall back
+    // to the module-level cache for first nav before FrameNameProvider
+    // seeded the entry.
+    const priorUrl = priorNode?.url ?? _frameUrls.get(key) ?? null;
 
     // History update policy per mode:
     //   auto  — push prior URL onto past, clear future. (DEFAULT)
@@ -1183,34 +1232,29 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
     //           entry (drawer URLs the user wants in browser history).
     //   replace — no change to the per-frame stack (pure URL sync).
     const pushToHistory = historyMode === "auto" || historyMode === "push";
-    let nextHistory: FrameHistoryMap = priorHistory;
-    if (pushToHistory) {
-      const prev = priorHistory[frameName] ?? emptyHistoryEntry();
-      const past =
-        priorUrl != null && priorUrl !== url
-          ? [...prev.past, priorUrl]
-          : prev.past;
-      nextHistory = {
-        ...priorHistory,
-        [frameName]: { past, future: [] },
-      };
-    }
 
     const userState =
       (options?.state as Record<string, unknown> | null) ?? null;
-    const nextState = writeFramesHistory(
-      writeFramesSnapshot(
-        { ...priorState, ...(userState ?? {}) },
-        nextSnap,
-      ),
-      nextHistory,
-    );
+    const baseState = { ...priorState, ...(userState ?? {}) };
+    const nextState = writeFrameNode(baseState, path, (node) => {
+      const existingHistory = node.__frameHistory ?? emptyHistoryEntry();
+      const nextHistory: FrameHistoryEntry = pushToHistory
+        ? {
+            past:
+              priorUrl != null && priorUrl !== url
+                ? [...existingHistory.past, priorUrl]
+                : existingHistory.past,
+            future: [],
+          }
+        : existingHistory;
+      return { ...node, url, __frameHistory: nextHistory };
+    });
 
     // Seed the client-side frame-URL cache BEFORE we touch Navigation —
     // `nav.navigate`/`updateCurrentEntry` fires events synchronously
     // that bump reactive consumers; waiting would have them read a
     // stale URL.
-    _frameUrls.set(frameName, url);
+    _frameUrls.set(key, url);
 
     if (historyMode === "auto") {
       // No new browser entry. updateCurrentEntry patches state in
@@ -1219,7 +1263,7 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
       nav.updateCurrentEntry({ state: nextState });
       return syntheticResult(
         nav,
-        _dispatchFrameRefetch(frameName, url, options),
+        _dispatchFrameRefetch(path, url, options),
       );
     }
 
@@ -1229,31 +1273,30 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
     const result = nav.navigate(window.location.href, {
       history: historyMode,
       state: nextState,
-      info: makeSilentInfo("frame", frameName),
+      info: makeSilentInfo("frame", key),
     });
     return composeResult(
       result,
       () => nav.currentEntry!,
-      () => _dispatchFrameRefetch(frameName, url, options),
+      () => _dispatchFrameRefetch(path, url, options),
     );
   };
 
   const frameReload = (
     options?: FrameworkReloadOptions,
   ): FrameworkNavigationResult => {
-    const url = _frameUrls.get(frameName);
+    const url = _frameUrls.get(key);
     if (!url) return syntheticResult(nav, Promise.resolve());
     return syntheticResult(
       nav,
-      _dispatchFrameRefetch(frameName, url, options),
+      _dispatchFrameRefetch(path, url, options),
     );
   };
 
   /**
-   * Move within the per-entry `__frameHistory[name]` arrays. No
-   * browser traversal — this is a pure state patch via
-   * `updateCurrentEntry` plus a refetch dispatch. Missing / empty
-   * stack → no-op with a stub result.
+   * Move within the per-entry `__frameHistory` arrays. No browser
+   * traversal — pure state patch via `updateCurrentEntry` plus a
+   * refetch dispatch. Missing / empty stack → no-op with stub result.
    */
   const frameTraverseInState = (
     direction: "back" | "forward",
@@ -1261,53 +1304,47 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
     const stub = null as unknown as NavigationHistoryEntry;
     const priorState =
       (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
-    const priorSnap = readFramesSnapshot(priorState);
-    const priorHistory = readFramesHistory(priorState);
-    const entry = priorHistory[frameName] ?? emptyHistoryEntry();
-    const currentUrl =
-      priorSnap[frameName]?.url ?? _frameUrls.get(frameName) ?? null;
+    const priorNode = _readFrameNode(priorState, path);
+    const history = priorNode?.__frameHistory ?? emptyHistoryEntry();
+    const currentUrl = priorNode?.url ?? _frameUrls.get(key) ?? null;
 
     let nextUrl: string | null = null;
-    let nextPast = entry.past;
-    let nextFuture = entry.future;
+    let nextPast = history.past;
+    let nextFuture = history.future;
     if (direction === "back") {
-      if (entry.past.length === 0) {
+      if (history.past.length === 0) {
         return {
           committed: Promise.resolve(stub),
           finished: Promise.resolve(stub),
         };
       }
-      nextUrl = entry.past[entry.past.length - 1];
-      nextPast = entry.past.slice(0, -1);
-      nextFuture = currentUrl != null ? [currentUrl, ...entry.future] : entry.future;
+      nextUrl = history.past[history.past.length - 1];
+      nextPast = history.past.slice(0, -1);
+      nextFuture =
+        currentUrl != null ? [currentUrl, ...history.future] : history.future;
     } else {
-      if (entry.future.length === 0) {
+      if (history.future.length === 0) {
         return {
           committed: Promise.resolve(stub),
           finished: Promise.resolve(stub),
         };
       }
-      nextUrl = entry.future[0];
-      nextFuture = entry.future.slice(1);
-      nextPast = currentUrl != null ? [...entry.past, currentUrl] : entry.past;
+      nextUrl = history.future[0];
+      nextFuture = history.future.slice(1);
+      nextPast =
+        currentUrl != null ? [...history.past, currentUrl] : history.past;
     }
 
-    const nextSnap: FramesSnapshot = {
-      ...priorSnap,
-      [frameName]: { url: nextUrl },
-    };
-    const nextHistory: FrameHistoryMap = {
-      ...priorHistory,
-      [frameName]: { past: nextPast, future: nextFuture },
-    };
-    const nextState = writeFramesHistory(
-      writeFramesSnapshot(priorState, nextSnap),
-      nextHistory,
-    );
+    const resolvedNextUrl = nextUrl;
+    const nextState = writeFrameNode(priorState, path, (node) => ({
+      ...node,
+      url: resolvedNextUrl,
+      __frameHistory: { past: nextPast, future: nextFuture },
+    }));
 
-    _frameUrls.set(frameName, nextUrl);
+    _frameUrls.set(key, resolvedNextUrl);
     nav.updateCurrentEntry({ state: nextState });
-    const work = _dispatchFrameRefetch(frameName, nextUrl);
+    const work = _dispatchFrameRefetch(path, resolvedNextUrl);
     const resolveEntry = () => nav.currentEntry ?? stub;
     return {
       committed: Promise.resolve(resolveEntry()),
@@ -1320,44 +1357,36 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
   ): void => {
     const current =
       (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {};
-    const bucket =
-      (current[FRAME_STATE_KEY] as Record<string, unknown> | null) ?? {};
     const patch = options.state as Record<string, unknown> | null;
-    const merged = {
-      ...current,
-      [FRAME_STATE_KEY]: {
-        ...bucket,
-        [frameName]: {
-          ...((bucket[frameName] as object | undefined) ?? {}),
-          ...(patch ?? {}),
-        },
-      },
-    };
-    nav.updateCurrentEntry({ state: merged });
+    const next = writeFrameNode(current, path, (node) => ({
+      ...node,
+      __frameState: { ...(node.__frameState ?? {}), ...(patch ?? {}) },
+    }));
+    nav.updateCurrentEntry({ state: next });
   };
 
   return new Proxy(nav, {
     get(target, prop, receiver) {
-      if (prop === "name") return frameName;
+      if (prop === "name") return key;
       if (prop === "navigate") return frameNavigate;
       if (prop === "reload") return frameReload;
       if (prop === "back") return () => frameTraverseInState("back");
       if (prop === "forward") return () => frameTraverseInState("forward");
       if (prop === "canGoBack") {
-        const history = readFramesHistory(target.currentEntry?.getState());
-        return (history[frameName]?.past.length ?? 0) > 0;
+        const node = _readFrameNode(target.currentEntry?.getState(), path);
+        return (node?.__frameHistory?.past.length ?? 0) > 0;
       }
       if (prop === "canGoForward") {
-        const history = readFramesHistory(target.currentEntry?.getState());
-        return (history[frameName]?.future.length ?? 0) > 0;
+        const node = _readFrameNode(target.currentEntry?.getState(), path);
+        return (node?.__frameHistory?.future.length ?? 0) > 0;
       }
       if (prop === "currentEntry")
-        return projectEntryForFrame(target.currentEntry, frameName);
+        return projectEntryForFrame(target.currentEntry, path);
       if (prop === "entries") {
         return () =>
           target
             .entries()
-            .map((e) => projectEntryForFrame(e, frameName))
+            .map((e) => projectEntryForFrame(e, path))
             .filter((e): e is FrameNavigationHistoryEntry => e !== null);
       }
       if (prop === "updateCurrentEntry") return frameUpdateCurrentEntry;
@@ -1368,7 +1397,9 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
 }
 
 /**
- * Framework-internal plain-function handle for a frame.
+ * Framework-internal plain-function handle for a frame. Accepts the
+ * frame's full dotted path (e.g. `"cart"` or `"products.list"`) or an
+ * equivalent array of local names.
  *
  * @internal Not part of the public API. App code should always use
  * {@link useNavigation} — it's reactive, participates in React's
@@ -1377,8 +1408,19 @@ function buildFrameHandle(frameName: string): FrameworkNavigation {
  * component methods, module scope, callbacks invoked from
  * `useActivate` subscriptions — where the hook can't reach).
  */
-export function _frame(name: string): FrameworkNavigation {
-  return buildFrameHandle(name);
+export function _frame(
+  pathOrName: string | readonly string[],
+): FrameworkNavigation {
+  const path = Array.isArray(pathOrName)
+    ? pathOrName
+    : splitFramePath(pathOrName as string);
+  return buildFrameHandle(path);
+}
+
+/** Parse a dotted frame path into its component names. Empty → []. */
+function splitFramePath(dotted: string): readonly string[] {
+  if (!dotted) return [];
+  return dotted.split(".").filter(Boolean);
 }
 
 /**
@@ -1404,13 +1446,18 @@ export function _windowNav(): FrameworkNavigation {
 /**
  * React hook returning a {@link FrameworkNavigation} handle.
  *
- *   useNavigation()          // no name + inside <Partial frame=X> → X
- *   useNavigation()          // no name + outside any frame → window
- *   useNavigation("cart")    // explicit name → cart frame
+ *   useNavigation()                  // no name + inside <Partial frame=X> → X
+ *   useNavigation()                  // no name + outside any frame → window
+ *   useNavigation("cart")            // explicit absolute name → top-level cart frame
+ *   useNavigation("products.list")   // nested frame via dotted path
  *
- * The handle's live getters (`currentEntry`, `canGoBack`, `canGoForward`)
- * subscribe to `navigation` events, so they stay reactive across any
- * navigation on the page.
+ * `name` is an ABSOLUTE dotted path from the page root, not a local
+ * name relative to the enclosing frame. To get the ambient (innermost)
+ * frame, omit the argument.
+ *
+ * The handle's live getters (`currentEntry`, `canGoBack`,
+ * `canGoForward`) subscribe to `navigation` events, so they stay
+ * reactive across any navigation on the page.
  *
  * Always returns a handle — never throws. Outside a frame it's a
  * small Proxy over `window.navigation`; inside a frame it's a Proxy
@@ -1419,7 +1466,11 @@ export function _windowNav(): FrameworkNavigation {
  */
 export function useNavigation(name?: string): FrameworkNavigation {
   const ambient = useContext(FrameNameContext);
-  const resolved = name ?? ambient;
+  const resolvedPath: readonly string[] =
+    name != null ? splitFramePath(name) : ambient;
+  // Stable key for memoization — names may be dotted, ambients may be
+  // distinct arrays that encode the same path across renders.
+  const resolvedKey = joinFramePath(resolvedPath);
   // Bump on any navigation so computed getters (`currentUrl`,
   // `canGoBack`, `entryState`) re-read after a commit. Runs for all
   // navigation types — framework-silent window navs and frame navs
@@ -1450,8 +1501,13 @@ export function useNavigation(name?: string): FrameworkNavigation {
   // fresh props.)
   return useMemo(
     () =>
-      resolved ? buildFrameHandle(resolved) : buildWindowNavigationHandle(),
-    [resolved],
+      resolvedPath.length > 0
+        ? buildFrameHandle(resolvedPath)
+        : buildWindowNavigationHandle(),
+    // resolvedKey captures any change to the path — resolvedPath is a
+    // fresh array each render, so we can't use it as a dep directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resolvedKey],
   );
 }
 

@@ -108,8 +108,9 @@ const manifestContext = new AsyncLocalStorage<ManifestScope>();
 export interface FrameScope {
   /** Synthetic Request this frame's accessors resolve against. */
   request: Request;
-  /** Frame name — debugging. */
-  name: string;
+  /** Full frame path, outer-first (e.g. `["products", "list"]`).
+   *  Dotted for logging / session lookup via `path.join(".")`. */
+  path: readonly string[];
 }
 
 /**

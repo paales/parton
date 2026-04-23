@@ -58,11 +58,14 @@ export interface PartialSnapshot {
   /** Cache options if the Partial declared `cache={…}`. Stored so
    *  cache-mode refetches re-apply the same cache semantics. */
   cache?: CacheOptions;
-  /** Frame name if the Partial declared `frame="…"`. Stored so
-   *  cache-mode refetches re-open the frame scope with the current
-   *  session URL (not the URL baked on first render), and so the
-   *  server can resolve `?__frame=X` back to this snapshot. */
-  frame?: string;
+  /** Canonical frame path if the Partial declared `frame="…"` — the
+   *  dotted join of every enclosing `frame` ancestor plus this local
+   *  name. Two `<Partial frame="list">`s under different parent
+   *  frames thus resolve to distinct paths (`"products.list"` vs
+   *  `"blog.list"`), which the session store, navigation state, and
+   *  `?__frame=` wire param all key off. Empty array means the
+   *  Partial doesn't open a frame. */
+  framePath: readonly string[];
   /** The author-provided `frameUrl` fallback. Session overrides it
    *  when present; kept here as the cold-session default. */
   frameUrl?: string;
