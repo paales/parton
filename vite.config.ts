@@ -10,10 +10,19 @@ import { defineConfig } from "vite";
 // copy. For dev / build we still want the plugin active.
 const isTest = process.env.VITEST === "true";
 
-export default defineConfig({
+// `yarn dev:clean` → `--mode clean`. Runs on port 5174 with HMR off
+// and the Vite websocket closed, so the RSC/Flight stream isn't
+// interleaved with HMR pings and rsc:update messages. Intended for
+// observing actual payload shape in DevTools — not for iterating
+// on code. Edit and refresh the page manually.
+export default defineConfig(({ mode }) => ({
 	plugins: isTest
 		? [react(), tailwindcss()]
 		: [rsc(), react(), tailwindcss()],
+	server:
+		mode === "clean"
+			? { port: 5174, strictPort: true, hmr: false, ws: false }
+			: undefined,
 	environments: {
 		rsc: {
 			build: {
@@ -77,4 +86,4 @@ export default defineConfig({
 			"@": path.resolve(import.meta.dirname, "src"),
 		},
 	},
-});
+}));

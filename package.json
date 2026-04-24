@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:clean": "vite --mode clean",
     "build": "vite build",
     "preview": "vite preview",
     "test": "yarn test:node && yarn test:rsc",
