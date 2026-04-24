@@ -2,6 +2,7 @@
 
 **Added:** 2026-04-20
 **Files:** `src/lib/cache.tsx`, `src/lib/partial-registry.ts`, `src/lib/partial-client.tsx`, `src/framework/context.ts`
+**Related:** `AUTO_TRACKED_CACHE_KEYS.md` (how each `<Partial cache>` entry's key is derived), `DYNAMIC_PARTIAL_REGISTRY.md` (the middle tier in more depth).
 
 Answers the questions: *"is the cache global or route-specific"*, *"what's a route"*, and *"does the same Partial on multiple URLs share anything"*. Short reference — not a design doc.
 

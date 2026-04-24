@@ -4,6 +4,7 @@
 **Files:** `src/framework/context.ts` (tracked accessors + `ManifestScope` + `HoistingViolationError`), `src/lib/cache-options.ts` (`CacheOptions` type), `src/lib/cache.tsx` (manifest store + key derivation + sync hoisting check), `src/lib/partial-component.tsx` (`PartialProps.cache` shape).
 **Tests:** `src/framework/__tests__/tracked-accessors.test.ts` (manifest + hoisting unit tests), `e2e/cache-auto-tracking.spec.ts` (auto-tracked keys via the cache-demo page).
 **Predecessors (now archived):** `/archive/SERVER_CACHE_NOTES.md` (original `<Cache dep>` mechanics), `/archive/PARTIAL_CACHE_DESIGN.md` (the fold proposal — superseded by this).
+**Related:** `CACHE_SCOPING.md` (where the resulting cache entries live across the three storage tiers).
 
 ---
 

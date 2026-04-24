@@ -96,11 +96,15 @@ No namespace. No `<Partials>` wrapper. No `key`.
 
 ### Dynamic Partials (inside `.map()`)
 
-A Partial produced inside an async component's return value (e.g. per-row in a product grid) is picked up the same as a statically-placed one. Each `<Partial>` render calls `<PartialBoundary>` which side-effects into a **route-scoped registry** (`src/lib/partial-registry.ts`); subsequent refetches consult the registry to resolve selector tokens without re-running ancestors. See `notes/DYNAMIC_PARTIAL_REGISTRY.md`.
+A Partial produced inside an async component's return value (e.g. per-row in a product grid) is picked up the same as a statically-placed one. Each `<Partial>` render calls `<PartialBoundary>` which side-effects into a **route-scoped registry** (`src/lib/partial-registry.ts`); subsequent refetches consult the registry to resolve selector tokens without re-running ancestors. See `notes/DYNAMIC_PARTIAL_REGISTRY.md` for the full mode walkthrough (streaming / cache-mode targeted / registry-miss bailout).
+
+### `parent` — tracking the tree across async boundaries
+
+Every `<Partial>` requires an explicit `parent` prop: `ROOT` at the top, `capturePartialContext()` (or a threaded-down `parent` prop) for any nested Partial. RSC's async renderer interleaves sibling work across `await`s, so a single ancestor-tracking cell drifts; the author threads the token explicitly and the framework records it into the registry (`parentPath`) so cache-mode refetches can reconstruct the tree position without re-executing ancestors. Capture at the top of a body, BEFORE any `await` — same discipline as tracked request accessors. See `notes/PARENT_CONTEXT.md`.
 
 ### Fingerprints
 
-Each Partial computes a structural fingerprint (hash of component types + scalar props + children shape). The client sends `?cached=id:fp,…` with every refetch. `<Partial>` skips (emits an `<i data-partial hidden>` placeholder) when its fingerprint matches what the client already has, so the browser fills from `_cache` and no bytes are wasted on unchanged subtrees.
+Each Partial computes a structural fingerprint (hash of component types + scalar props + children shape). The client sends `?cached=id:fp,…` with every refetch. `<Partial>` skips (emits an `<i data-partial hidden>` placeholder) when its fingerprint matches what the client already has, so the browser fills from `_cache` and no bytes are wasted on unchanged subtrees. This inner optimization runs in both streaming and cache mode — see `notes/DYNAMIC_PARTIAL_REGISTRY.md` §6 for the interaction with the mode decision.
 
 ### Client navigation — `useNavigation()`
 

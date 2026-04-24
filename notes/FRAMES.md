@@ -90,7 +90,8 @@ The server tracks the full chain via `PartialCtx.frameChain` threaded
 through `<Partial parent={…}>` — an opaque token built from either
 `ROOT` at the top or `capturePartialContext()` in a sync code path,
 and threaded as an explicit prop across any `await` (same discipline
-as tracked accessors; see `src/lib/partial-context.ts`). On the wire,
+as tracked accessors; see `PARENT_CONTEXT.md` for the full rationale).
+On the wire,
 `?__frame=products.list&__frameUrl=/list?page=3` carries the full
 path; session storage keys off the dotted path; client navigation
 state nests by tree:
