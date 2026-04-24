@@ -168,7 +168,7 @@ function ProductCard({
           // Dynamic Partial — see previous comment pool.
           <Partial
             parent={parent}
-            selector={[`#price-${id}`, ".price"]}
+            selector={[`#price-${sku}`, ".price"]}
             fallback={
               <LivePriceFallback
                 sku={sku}

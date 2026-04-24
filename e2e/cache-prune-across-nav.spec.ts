@@ -45,7 +45,14 @@ test("client-side nav from /pokemon/1 to /defer-demo prunes stale ids from ?cach
   );
 
   // Capture the RSC refetch URL when we activate the "manual" partial.
-  const rscRequest = page.waitForRequest((req) => req.url().includes("_.rsc"));
+  // Match specifically on `partials=manual` — activators like WhenVisible
+  // / WhenStored on other defer-demo sections can race into `_.rsc` on
+  // slow parallel runs, and a generic `_.rsc` match would grab theirs.
+  const rscRequest = page.waitForRequest(
+    (req) =>
+      req.url().includes("_.rsc") &&
+      new URL(req.url()).searchParams.get("partials") === "manual",
+  );
   await page.locator('[data-testid="activate-manual"]').click();
   const req = await rscRequest;
 

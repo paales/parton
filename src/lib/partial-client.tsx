@@ -961,15 +961,37 @@ function resolveFrameTarget(target: NavigateTarget, frameName: string): string {
  * fallback resolution. Our handle always fills both — so the
  * `NavigationHistoryEntry | null` union collapses to a non-null entry
  * by the time the caller awaits.
+ *
+ * Fire-and-forget callers (`void nav.navigate(url)`) discard the result
+ * without awaiting. If a newer navigation supersedes this one, the
+ * browser's `committed` / `finished` promises reject with AbortError —
+ * unobserved, that surfaces as an unhandled rejection. Attach a silent
+ * sink so awaiters still see the rejection but the fire-and-forget path
+ * doesn't pollute the console.
  */
 function tightenResult(
   result: NavigationResult,
   fallbackEntry: () => NavigationHistoryEntry,
 ): FrameworkNavigationResult {
-  return {
-    committed: result.committed ?? Promise.resolve(fallbackEntry()),
-    finished: result.finished ?? Promise.resolve(fallbackEntry()),
-  };
+  const committed = result.committed ?? Promise.resolve(fallbackEntry());
+  const finished = result.finished ?? Promise.resolve(fallbackEntry());
+  sinkAbort(committed);
+  sinkAbort(finished);
+  return { committed, finished };
+}
+
+function sinkAbort(p: Promise<unknown>): void {
+  // Silently swallow AbortError so fire-and-forget `void nav.navigate(...)`
+  // doesn't surface as an unhandled rejection when a newer navigation
+  // supersedes it. Callers who .then/await the same promise still see
+  // the rejection — Promise allows multiple subscribers, each receives
+  // the settled value independently.
+  p.catch((err) => {
+    if (err instanceof Error && err.name === "AbortError") return;
+    // Re-raise anything else so it shows up in the console (matches the
+    // default unhandled-rejection behavior for non-AbortErrors).
+    console.error(err);
+  });
 }
 
 /**
@@ -990,6 +1012,8 @@ function syntheticResult(
   };
   const committed = Promise.resolve().then(entry);
   const finished = work.then(entry);
+  sinkAbort(committed);
+  sinkAbort(finished);
   return { committed, finished };
 }
 
@@ -1010,6 +1034,8 @@ function composeResult(
     await extraWork();
     return entry;
   })();
+  sinkAbort(committed);
+  sinkAbort(finished);
   return { committed, finished };
 }
 

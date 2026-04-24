@@ -124,12 +124,16 @@ async function main() {
   } else {
     hydrateRoot(document, browserRoot, {
       formState: initialPayload.formState,
+      onRecoverableError: silenceTornStream,
     });
   }
 
   if (import.meta.hot) {
     import.meta.hot.on("rsc:update", () => {
-      fetchRscPayload();
+      fetchRscPayload().catch((err) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+        console.error(err);
+      });
     });
   }
 }
@@ -209,39 +213,78 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
       const urlChanged = event.destination.url !== window.location.href;
       if (urlChanged) {
         event.intercept({
-          handler: async () => {
-            const url = new URL(event.destination.url);
-            for (const d of diffs) {
-              url.searchParams.append("__frame", d.key);
-              url.searchParams.append("__frameUrl", d.url);
-            }
-            const handler = (window as Window & {
-              __rsc_partial_refetch?: (url: string) => Promise<void>;
-            }).__rsc_partial_refetch;
-            if (handler) await handler(url.toString());
-          },
+          handler: () =>
+            swallowNavigationAbort(async () => {
+              const url = new URL(event.destination.url);
+              for (const d of diffs) {
+                url.searchParams.append("__frame", d.key);
+                url.searchParams.append("__frameUrl", d.url);
+              }
+              const handler = (
+                window as Window & {
+                  __rsc_partial_refetch?: (url: string) => Promise<void>;
+                }
+              ).__rsc_partial_refetch;
+              if (handler) await handler(url.toString());
+            }),
         });
         return;
       }
       if (diffs.length > 0) {
         event.intercept({
-          handler: async () => {
-            await Promise.all(
-              diffs.map((d) => _dispatchFrameRefetch(d.key.split("."), d.url)),
-            );
-          },
+          handler: () =>
+            swallowNavigationAbort(() =>
+              Promise.all(
+                diffs.map((d) =>
+                  _dispatchFrameRefetch(d.key.split("."), d.url),
+                ),
+              ).then(() => undefined),
+            ),
         });
         return;
       }
     }
 
     event.intercept({
-      handler: () => onNavigation(event.destination.url),
+      handler: () =>
+        swallowNavigationAbort(() => onNavigation(event.destination.url)),
     });
   };
 
   nav.addEventListener("navigate", handler);
   return () => nav.removeEventListener("navigate", handler);
+}
+
+// When a client-initiated navigation (or the in-flight refetch for the
+// initial page) gets cancelled mid-stream — user clicks away, newer
+// navigation supersedes — React sees a Suspense boundary that never
+// finished and logs "The server could not finish this Suspense boundary"
+// through onRecoverableError. Expected; swallow it. Any other recoverable
+// error still surfaces.
+function silenceTornStream(error: unknown): void {
+  if (
+    error instanceof Error &&
+    (error.message.includes(
+      "The server could not finish this Suspense boundary",
+    ) ||
+      error.name === "AbortError")
+  ) {
+    return;
+  }
+  console.error(error);
+}
+
+// Wrap a navigate-intercept handler so AbortError (newer navigation
+// supersedes an in-flight one) doesn't surface as an unhandled rejection.
+async function swallowNavigationAbort(
+  fn: () => Promise<void>,
+): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") return;
+    throw err;
+  }
 }
 
 main();

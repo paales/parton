@@ -211,6 +211,7 @@ async function handleRequest(
   };
   const rscStream = renderToReadableStream<RscPayload>(rscPayload, {
     temporaryReferences,
+    onError: silenceClientDisconnect,
   });
 
   // Root is a synchronous function — the plugin's renderToReadableStream
@@ -266,7 +267,10 @@ async function handleRequest(
     };
     const notFoundStream = renderToReadableStream<RscPayload>(
       notFoundPayload,
-      { temporaryReferences: createTemporaryReferenceSet() },
+      {
+        temporaryReferences: createTemporaryReferenceSet(),
+        onError: silenceClientDisconnect,
+      },
     );
     const notFoundSsr = await ssrEntryModule.renderHTML(notFoundStream, {
       formState,
@@ -282,6 +286,32 @@ async function handleRequest(
     status: ssrResult.status,
     headers: { "Content-type": "text/html" },
   });
+}
+
+// Swallow the synthesized "The render was aborted by the server without a
+// reason." error that fires when the client disconnects mid-stream. srvx
+// cancels the reader with no argument; React then aborts the request with
+// reason=undefined and synthesizes the no-reason error. Also swallow
+// AbortError — same root cause when the request signal fires. Framework
+// sentinels (`notFound()` / `redirect()`) throw to short-circuit render;
+// they're already handled via the framework-control channel, so don't
+// pollute the console with a stack trace. Everything else re-surfaces.
+//
+// See https://github.com/oven-sh/bun/issues/17142#issuecomment-2642535493
+// for the equivalent pattern in Bun.
+function silenceClientDisconnect(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    if (
+      error.name === "AbortError" ||
+      error.name === "NotFoundError" ||
+      error.name === "RedirectError" ||
+      error.message === "The render was aborted by the server without a reason."
+    ) {
+      return undefined;
+    }
+  }
+  console.error(error);
+  return undefined;
 }
 
 if (import.meta.hot) {

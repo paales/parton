@@ -153,6 +153,8 @@ nav.reload({ selector: ".price" });
 
 3. **`nav.currentEntry?.url` is always an absolute URL** (post-FrameworkNavigation cutover). On the window handle it's `window.location.href`; on a frame handle it's the frame's path synthesized against `window.location.origin`. Callers that want `pathname + search` extract them with `new URL(entry.url)`. For the common case of "patch one param and navigate," prefer the updater callback form — `nav.navigate(u => { u.searchParams.set(...); return u })` — which hands you a mutable absolute URL directly, no base-URL gymnastics.
 
+4. **`AbortError` on superseded navs is swallowed for fire-and-forget.** `void nav.navigate(url)` discards the `{committed, finished}` handle. When a newer navigation supersedes this one mid-flight, the browser rejects both promises with `AbortError` — and with no subscriber, V8 reports an unhandled rejection. `tightenResult` / `syntheticResult` / `composeResult` in `src/lib/partial-client.tsx` attach a silent `.catch` that filters `AbortError` (and re-surfaces other rejections via `console.error`). Callers that `await` the result still see the rejection — promise multi-subscribe works. The same pattern lives in `entry.browser.tsx` where `event.intercept({ handler })` is wrapped with `swallowNavigationAbort` so the browser's own abort doesn't bubble through.
+
 ## Implementation pointers
 
 | Piece | File | What it does |
