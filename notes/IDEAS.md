@@ -201,7 +201,7 @@ Things the framework will need before it can host a real app. Flagged here so th
 - **Accessibility defaults for refetch.** `aria-busy` during pending, focus restoration policy across swaps, live-region announcements. Currently on the app; will be pile-of-ad-hoc in a year.
 - **Per-Partial observability.** Trace context threaded through Partial boundaries so logs group automatically. Pairs with the debug-overlay idea in `user-ideas.md` §partial-debugging-component.
 - **i18n as a Partial concern.** Locale switching that refetches only locale-sensitive Partials (`tags={["i18n"]}`). Locale as a first-class input alongside URL/cookie state.
-- **CMS authoring mode.** Conspicuously absent given the repo name. Directions: draft/preview modes as a Partial property, author-editable regions identified by tag/selector, per-Partial publish workflows, edit-in-place overlays. If the framework's positioning is "CMS," this isn't optional — it's the core use case.
+- **CMS authoring mode.** Conspicuously absent given the repo name. Directions: draft/preview modes as a Partial property, author-editable regions identified by tag/selector, per-Partial publish workflows, edit-in-place overlays. If the framework's positioning is "CMS," this isn't optional — it's the core use case. **— DESIGN EXTRACTED 2026-04-25** into a dedicated doc family: `CMS_VISION.md` (the why + prior art), `CMS_MANIFEST.md` (data model — the insight is that the existing tracked-accessor manifest already dimensions configuration space), `CMS_EDITOR.md` (authoring UX — the debug panel expanded with forms + drag-drop, preview via `<Partial frame>` not iframe). Not yet shipped; see those docs for the current design.
 
 ---
 
