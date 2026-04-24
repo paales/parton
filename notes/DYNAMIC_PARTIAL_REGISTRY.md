@@ -258,6 +258,27 @@ a React built-in, so when a Partial has a fallback and is wrapped in
 Suspense, `node.key` works too — but `partialId` is the source of
 truth. See `LESSONS_FROM_REFACTOR.md` §3–§4.
 
+**Side note — cache-hit reinjection:** when `<Cache>` serves bytes on
+a hit, dynamic partials inside the cached region are holes
+represented by `<i key={id} hidden data-partial>` placeholders. On
+the way out, `reinjectDynamic` (`cache.tsx`) swaps each placeholder
+for a fresh `<Partial>` element, which the RSC renderer then expands
+into its Suspense / PartialErrorBoundary wrapper. The subtle part:
+the new `<Partial>` has to preserve the placeholder's array-slot key
+(the placeholder was one item in a parent's children array), but it
+must not put `key={id}` on the Partial itself — Flight would
+composite that with the inner `<Suspense key={id}>` as `"id,id"` on
+the wire, which the client reconciles as a different identity than
+the plain `"id"` emitted in streaming mode and remounts client state
+inside the partial. The fix is to wrap the replacement in a keyed
+`<Fragment key={id}>` — Fragments are transparent, the key survives
+in the parent's child list for reconciliation, and no composite
+lands on the Partial's own wrappers. Without the Fragment wrap,
+React fires "Each child in a list should have a unique 'key' prop"
+for every cache-hit render that has a sibling-list dynamic Partial
+(e.g. `/magento` — each `ProductCard` contains a `<Partial>` for
+LivePrice).
+
 ## 8. Persistence + HMR
 
 Registry is **module-level, per Node process**. No cross-request

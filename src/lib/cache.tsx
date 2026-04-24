@@ -47,6 +47,7 @@
  */
 
 import {
+  Fragment,
   Suspense,
   cloneElement,
   createElement,
@@ -501,16 +502,32 @@ function reinjectDynamic(
           snap.framePath.length > 0
             ? snap.framePath.slice(0, snap.framePath.length - 1)
             : [];
+        // Wrap in a keyed Fragment to preserve the placeholder's array
+        // slot identity without compositing a key onto the Partial's
+        // own rendered output. A bare `<Partial>` in an array without a
+        // key trips React's "each child in a list needs a key" warning;
+        // putting `key={id}` directly on the Partial would composite
+        // with its inner `<Suspense key={id}>` on the Flight wire as
+        // `"id,id"`, which the client reconciles as a different
+        // identity than the `"id"` emitted in streaming mode and
+        // remounts client state inside the partial (see
+        // `partialFromSnapshot`). Fragments are transparent — their
+        // key only affects sibling identity, it doesn't composite into
+        // children's keys.
         return createElement(
-          Partial,
-          {
-            parent: { path: snap.parentPath, frameChain },
-            selector,
-            fallback: snap.fallback ?? undefined,
-            errorWith: snap.errorWith,
-            cache: snap.cache,
-          },
-          snap.content,
+          Fragment,
+          { key: node.key ?? id },
+          createElement(
+            Partial,
+            {
+              parent: { path: snap.parentPath, frameChain },
+              selector,
+              fallback: snap.fallback ?? undefined,
+              errorWith: snap.errorWith,
+              cache: snap.cache,
+            },
+            snap.content,
+          ),
         );
       }
     }
