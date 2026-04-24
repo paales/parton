@@ -56,6 +56,27 @@ export interface SlotSpec {
 }
 
 /**
+ * Typed entity reference produced by `getReference(name, type)`.
+ * Consumed by userspace loaders (`getProduct(ref)`, `getPokemon(ref)`,
+ * …) which decide how to resolve a concrete value or fall back.
+ *
+ * Shape:
+ *   - `type` — entity-family tag (`"product"`, `"pokemon"`, …). A
+ *     loader accepts only refs of its family.
+ *   - `value` — the concrete id/sku/slug from the CMS config, or
+ *     `null` when no value was stored for this name.
+ *   - `fallback` — what the loader should do if `value` is absent.
+ *     `"closest"` (default) means "walk the parent chain via
+ *     `getClosest<T>(type)`". `null` means "return null, the author
+ *     explicitly wants a specific value or nothing."
+ */
+export interface Reference<T extends string = string> {
+  readonly type: T;
+  readonly value: string | null;
+  readonly fallback: "closest" | null;
+}
+
+/**
  * Per-Partial CMS scope, held in a React.cache-backed cell (see
  * `context.ts`). Mutated when `<Partial cmsId=…>` runs; read by content
  * accessors. Same discipline as the frame-scope cell: read BEFORE any

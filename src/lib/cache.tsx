@@ -520,7 +520,7 @@ function reinjectDynamic(
           createElement(
             Partial,
             {
-              parent: { path: snap.parentPath, frameChain },
+              parent: { path: snap.parentPath, frameChain, provides: {} },
               selector,
               fallback: snap.fallback ?? undefined,
               errorWith: snap.errorWith,

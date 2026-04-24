@@ -1,7 +1,7 @@
 # CMS via accessor-tracked manifest — data model
 
 **Added:** 2026-04-25
-**Status:** chunk 1 (content-field accessors + resolver + `cmsId`) and chunk 2a (slots + block registry) both shipped 2026-04-25 — see `CMS_VISION.md § First milestone`. Still design-sketch: `provides` / `getClosest`, `getReference` + entity loaders, presets, editor. Companion: `CMS_VISION.md` (why), `CMS_EDITOR.md` (authoring UX).
+**Status:** chunks 1 (content-field accessors + resolver + `cmsId`), 2a (slots + block registry), and 2b (`provides` / `getClosest` / `getReference` + example loader) all shipped 2026-04-25 — see `CMS_VISION.md § First milestone`. Still design-sketch: presets, block palette prerender, draft/published cookie fork, editor surface. Companion: `CMS_VISION.md` (why), `CMS_EDITOR.md` (authoring UX).
 
 ---
 

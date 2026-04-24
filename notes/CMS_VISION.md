@@ -111,6 +111,26 @@ The framework is complete-enough-to-ship-demos when a dev can:
 
 Nothing requires a new runtime — every mechanic reuses an existing primitive. The work (fully enumerated in `CMS_EDITOR.md §Implementation sketch`) is: extend the manifest with field/slot/reference sections; add content accessors + `<Children>`/`<Child>` + `provides`; build a block catalog; build the editor route on top of the existing debug panel.
 
+### Chunk 2b — shipped 2026-04-25
+
+Ancestor context inheritance + typed references — completes the composition primitives (items 2, 5 finished).
+
+- `PartialCtx` grew a `provides: Readonly<Record<string, unknown>>` section. Parent-merged into the child ctx by `_childContext`; passthrough-by-reference when a Partial doesn't contribute its own entries. `ROOT.provides` is a frozen empty object.
+- New `provides` prop on `<Partial>` — accepts a record, merged into descendants' ctx.
+- `getClosest<T>(key)` in `context.ts` — reads the ambient partial context's `provides` chain and records the key into the CMS scope's `contextConsumes` for future-editor introspection.
+- `Reference<T extends string>` in `cms-runtime.ts` — opaque `{type, value, fallback}` handle.
+- `getReference(name, type)` in `context.ts` — records into CMS scope's `references` map, reads the resolved config's stored value, defaults fallback to `"closest"`.
+- `src/app/loaders/pokemon.ts` — example loader demonstrating the `Reference → entity` pattern. `getPokemon(ref)` fetches by id or falls back to `getClosest<Pokemon>("pokemon")`. Userspace — the framework ships the primitives, apps wire their own entity types.
+- Snapshot-mode reconstruction (`partialFromSnapshot` + `cache.tsx::reinjectDynamic`) passes `provides: {}` explicitly — ancestor-contributed context doesn't survive the snapshot round-trip by design; blocks that must survive a cache-mode refetch should carry a concrete `getReference` value alongside relying on `closest`.
+- Tests: 6 new RSC tests covering `provides` one-level / multi-level inheritance, child-overrides-parent, and `getReference` outside/inside a CMS scope.
+
+What chunk 2b does NOT yet include:
+
+- Picker widgets for the editor (entity selection UI per type tag).
+- Draft / published cookie-driven fork.
+- Block preset support + palette prerender.
+- The editor surface itself.
+
 ### Chunk 2a — shipped 2026-04-25
 
 Composition primitives + block registry. Items 1 (partly) and 5 (partly) from the list above.

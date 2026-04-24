@@ -258,6 +258,26 @@ export interface PartialProps {
    * leak to its cmsId-bearing ancestor's node.
    */
   cmsId?: string;
+  /**
+   * Ancestor-contributed context values made available to descendants
+   * via `getClosest<T>(key)`. Merged with the parent Partial's
+   * provides (child entries override parent entries of the same key).
+   *
+   * Typical use: a product page's top-level Partial sets
+   * `provides={{product: await fetchProduct(slug)}}` so every block
+   * nested inside can pull the product without a prop drill or a
+   * second fetch. CMS `getReference("product", "product")` with the
+   * default `"closest"` fallback resolves through the same chain.
+   *
+   * Cache-mode refetch limitation: snapshots don't re-derive
+   * ancestor `provides` values. If an inner Partial runs from its
+   * snapshot in cache mode, its `getClosest(key)` reads return null
+   * for keys that came from an ancestor. Blocks that need to survive
+   * a cache-mode refetch should also have a concrete fallback
+   * (e.g., `getReference("product", "product")` with a stored value)
+   * rather than relying solely on `closest`.
+   */
+  provides?: Readonly<Record<string, unknown>>;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -489,6 +509,7 @@ export function Partial({
   frame,
   frameUrl,
   cmsId,
+  provides,
 }: PartialProps): ReactNode {
   if (parent == null || !Array.isArray(parent.path)) {
     throw new Error(
@@ -537,7 +558,7 @@ export function Partial({
   // `capturePartialContext()`; descendants across an await must have
   // captured earlier and threaded `parent` explicitly (the cell is
   // unreliable post-await due to RSC sibling interleaving).
-  _setCurrentPartialContext(_childContext(parent, id, frame));
+  _setCurrentPartialContext(_childContext(parent, id, frame, provides));
 
   // CMS scope: mutate the per-request cell so descendant server
   // components' content accessors (`getText` et al.) resolve against

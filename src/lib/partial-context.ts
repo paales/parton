@@ -75,6 +75,18 @@ export interface PartialCtx {
    * storage, navigation state, and the `__frame=` wire param.
    */
   readonly frameChain: readonly string[];
+  /**
+   * Ancestor-contributed context values. Built up by `<Partial
+   * provides={{key: value}}>` — each Partial extends its parent's
+   * provides with its own entries and passes the merged bag to
+   * descendants. Descendants read via `getClosest<T>(key)`.
+   *
+   * Readonly per-level; a new object is allocated each time a
+   * Partial opens a `provides`, otherwise the parent's bag is
+   * passed through unchanged. Keys are intentionally string-typed —
+   * higher-level wrappers (entity loaders) can layer typing on top.
+   */
+  readonly provides: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -82,9 +94,12 @@ export interface PartialCtx {
  * prop on the outermost `<Partial>`s (those not nested inside any
  * other Partial).
  */
+const EMPTY_PROVIDES: Readonly<Record<string, unknown>> = Object.freeze({});
+
 export const ROOT: PartialCtx = Object.freeze({
   path: Object.freeze([]) as readonly string[],
   frameChain: Object.freeze([]) as readonly string[],
+  provides: EMPTY_PROVIDES,
 });
 
 /**
@@ -125,7 +140,8 @@ export function capturePartialContext(): PartialCtx {
 /**
  * Derive the child context a new `<Partial>` should push when it
  * renders: parent's path + this Partial's effective id, parent's
- * frame chain + this Partial's frame name (if any).
+ * frame chain + this Partial's frame name (if any), parent's
+ * provides merged with the Partial's own `provides` entries (if any).
  *
  * @internal
  */
@@ -133,13 +149,18 @@ export function _childContext(
   parent: PartialCtx,
   selfId: string,
   frame: string | undefined,
+  provides?: Readonly<Record<string, unknown>>,
 ): PartialCtx {
   const path = Object.freeze([...parent.path, selfId]) as readonly string[];
   const frameChain =
     frame != null
       ? (Object.freeze([...parent.frameChain, frame]) as readonly string[])
       : parent.frameChain;
-  return { path, frameChain };
+  const mergedProvides =
+    provides && Object.keys(provides).length > 0
+      ? Object.freeze({ ...parent.provides, ...provides })
+      : parent.provides;
+  return { path, frameChain, provides: mergedProvides };
 }
 
 /**

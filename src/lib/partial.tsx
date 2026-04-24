@@ -205,7 +205,13 @@ function partialFromSnapshot(_id: string, snap: PartialSnapshot): ReactNode {
   return React.createElement(
     Partial,
     {
-      parent: { path: snap.parentPath, frameChain },
+      // Cache-mode refetches render snapshots as flat siblings with
+      // no surviving ancestor chain — `provides` from the original
+      // render's ancestors are gone (see `Partial.provides` docs).
+      // Descendants relying on `getClosest(key)` for an ancestor-
+      // provided value should also carry a concrete `getReference`
+      // value in the store so the refetch still resolves.
+      parent: { path: snap.parentPath, frameChain, provides: {} },
       selector,
       fallback: snap.fallback ?? undefined,
       errorWith: snap.errorWith,

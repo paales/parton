@@ -40,7 +40,9 @@ import {
   resolveCmsScope,
   type CmsScope,
   type ContentFieldKind,
+  type Reference,
 } from "./cms-runtime.ts";
+import { capturePartialContext } from "../lib/partial-context.ts";
 
 interface FrameworkControl {
   notFound?: boolean;
@@ -598,6 +600,70 @@ export function getImage(name: string): ImageValue {
     src: typeof obj.src === "string" ? obj.src : "",
     alt: typeof obj.alt === "string" ? obj.alt : "",
   };
+}
+
+/**
+ * Declare a typed entity reference. Returns a `Reference<T>` that
+ * userspace loaders consume to resolve the entity.
+ *
+ * Resolution order inside a loader:
+ *   1. If `ref.value` is set, the loader fetches that concrete id.
+ *   2. Else if `ref.fallback === "closest"`, the loader calls
+ *      `getClosest<T>(ref.type)` to inherit from an ancestor that
+ *      provided an entity of this type.
+ *   3. Else the loader returns `null` (author said "no fallback").
+ *
+ * Records into the CMS scope's `references` map so the future editor
+ * can render a picker widget for this name, keyed by the type tag.
+ * Outside a CMS scope returns a ref with `value: null` and the
+ * `"closest"` fallback — blocks still compose via ancestor context
+ * even when not CMS-authored.
+ *
+ * See `notes/CMS_MANIFEST.md` § Reference accessors.
+ */
+export function getReference<T extends string>(
+  name: string,
+  type: T,
+): Reference<T> {
+  const scope = cmsScopeCell().current;
+  if (!scope) {
+    return { type, value: null, fallback: "closest" };
+  }
+  if (!scope.references.has(name)) {
+    scope.references.set(name, type);
+  }
+  const raw = resolveCmsScope(scope, currentRequest())?.[name];
+  const value =
+    typeof raw === "string"
+      ? raw
+      : typeof raw === "number"
+        ? String(raw)
+        : null;
+  return { type, value, fallback: "closest" };
+}
+
+/**
+ * Read the nearest ancestor-provided context value for `key`.
+ * Returns `null` when no ancestor set this key.
+ *
+ * Records the read into the CMS scope's `contextConsumes` set so
+ * the editor can surface "this block depends on an ancestor
+ * providing X" in authoring UI. Reading outside a CMS scope still
+ * resolves through the partial-context chain — context inheritance
+ * works for any Partial, not just CMS-authored ones.
+ *
+ * Hoisting: call at the top of a block/component body, before any
+ * `await`. The partial-context cell drifts across async boundaries
+ * in the same way tracked-accessor and frame-scope cells do.
+ */
+export function getClosest<T>(key: string): T | null {
+  const scope = cmsScopeCell().current;
+  if (scope) {
+    scope.contextConsumes.add(key);
+  }
+  const ctx = capturePartialContext();
+  const value = ctx.provides[key];
+  return value === undefined ? null : (value as T);
 }
 
 export function setFrameworkControl(patch: FrameworkControl): void {
