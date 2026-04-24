@@ -151,13 +151,7 @@ const TYPE_COLORS: Record<string, string> = {
   flying: "bg-indigo-900/60 text-indigo-200",
 };
 
-function TypeBadge({
-  type,
-  className,
-}: {
-  type: string;
-  className?: string;
-}) {
+function TypeBadge({ type, className }: { type: string; className?: string }) {
   const color = TYPE_COLORS[type] ?? "bg-slate-800 text-slate-200";
   return (
     <Badge
@@ -186,14 +180,6 @@ export function PokemonPage() {
     routeIdStr && /^\d+$/.test(routeIdStr) ? Number(routeIdStr) : undefined;
   const urlSearchOpen = getSearchParam("search") != null;
   const pages = Math.max(1, Number(getSearchParam("pages")) || 1);
-  const pagePartials =
-    pokemonId == null
-      ? Array.from({ length: pages }, (_, i) => (
-          <Partial key={`page-${i + 1}`} parent={ROOT} selector={`#page-${i + 1}`}>
-            <PokemonListPage offset={i * PAGE_SIZE} isFirst={i === 0} />
-          </Partial>
-        ))
-      : [];
 
   return (
     <>
@@ -267,7 +253,15 @@ export function PokemonPage() {
         </>
       ) : (
         <>
-          {pagePartials}
+          {Array.from({ length: pages }, (_, i) => (
+            <Partial
+              key={`page-${i + 1}`}
+              parent={ROOT}
+              selector={`#page-${i + 1}`}
+            >
+              <PokemonListPage offset={i * PAGE_SIZE} isFirst={i === 0} />
+            </Partial>
+          ))}
           <Partial parent={ROOT} selector="#load-more">
             <LoadMore nextPage={pages + 1} />
           </Partial>
@@ -503,12 +497,7 @@ function PokemonCard({ raw }: { raw: FragmentOf<typeof PokemonListFields> }) {
       className="block rounded-xl bg-card p-5 ring-1 ring-border/50 transition-colors hover:bg-muted"
     >
       {spriteUrl && (
-        <img
-          src={spriteUrl}
-          alt={name}
-          loading="lazy"
-          className="h-24 w-24"
-        />
+        <img src={spriteUrl} alt={name} loading="lazy" className="h-24 w-24" />
       )}
       <h2 className="mt-2 text-lg capitalize">
         #{id} {name}

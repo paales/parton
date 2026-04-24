@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  getCookie,
-  getSearchParam,
-} from "../framework/context.ts";
+import { getCookie, getSearchParam } from "../framework/context.ts";
 import { renderWithRequest } from "./rsc-server.ts";
 
 describe("renderWithRequest", () => {
@@ -36,15 +33,13 @@ describe("renderWithRequest", () => {
   it("returns throws-out-of-render errors back to the caller", async () => {
     function Boom() {
       throw new Error("kaboom");
+      return null;
     }
     // The Flight renderer catches render errors and emits them in the
     // stream. Consumer-side, `createFromReadableStream` rejects when
     // we try to resolve the root. We assert on the serialized text
     // instead — it's the layer most tests actually care about.
-    const { stream } = await renderWithRequest(
-      "http://localhost/",
-      <Boom />,
-    );
+    const { stream } = await renderWithRequest("http://localhost/", <Boom />);
     const text = await new Response(stream).text();
     expect(text).toContain("kaboom");
   });

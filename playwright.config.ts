@@ -11,12 +11,12 @@ export default defineConfig({
   // pick based on CPU count.
   fullyParallel: true,
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: "http://localhost:5179",
     headless: true,
   },
   webServer: {
-    command: "yarn dev",
-    url: "http://localhost:5173",
+    command: "yarn dev --port 5179",
+    url: "http://localhost:5179",
     reuseExistingServer: true,
     timeout: 60000,
   },
