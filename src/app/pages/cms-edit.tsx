@@ -198,14 +198,23 @@ function TreeContents({ selected }: { selected: string | null }) {
                   {entry.type}
                 </Badge>
               )}
-              {entry.draftOnly && (
+              {entry.draftOnly ? (
                 <Badge
                   variant="outline"
                   className="border-amber-400/60 px-1.5 py-0 text-[0.65rem] text-amber-600 dark:text-amber-400"
+                  data-testid={`cms-edit-tree-entry-${entry.id}-draft-badge`}
                 >
                   draft
                 </Badge>
-              )}
+              ) : entry.hasDraft ? (
+                <Badge
+                  variant="outline"
+                  className="border-blue-400/60 px-1.5 py-0 text-[0.65rem] text-blue-600 dark:text-blue-400"
+                  data-testid={`cms-edit-tree-entry-${entry.id}-modified-badge`}
+                >
+                  modified
+                </Badge>
+              ) : null}
             </a>
           </li>
         );

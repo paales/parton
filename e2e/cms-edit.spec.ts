@@ -286,6 +286,38 @@ test.describe("CMS editor — smoke", () => {
     });
   });
 
+  test("modified badge appears on a published entry once it has a draft override", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/cms-edit?select=cms-demo-greeting&config=2",
+    );
+    // Before any edit: no badge on cms-demo-greeting.
+    await expect(
+      page.getByTestId(
+        "cms-edit-tree-entry-cms-demo-greeting-modified-badge",
+      ),
+    ).toHaveCount(0);
+
+    await page
+      .getByTestId("cms-edit-field-input-headline")
+      .fill("Modified default");
+    const responseP = page.waitForResponse(
+      (r) => r.request().method() === "POST" && r.ok(),
+      { timeout: 5000 },
+    );
+    await page.getByRole("button", { name: "Save to draft" }).click();
+    await responseP;
+    await page.reload();
+
+    // Now the entry has a top-level draft override → modified badge.
+    await expect(
+      page.getByTestId(
+        "cms-edit-tree-entry-cms-demo-greeting-modified-badge",
+      ),
+    ).toBeVisible();
+  });
+
   test("save writes to draft and the preview picks up the new value", async ({
     page,
   }) => {

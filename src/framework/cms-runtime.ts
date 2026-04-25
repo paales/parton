@@ -290,8 +290,14 @@ export interface CmsTreeEntry {
   slotName?: string;
   parentId?: string;
   /** `true` when this id only exists in draft (no published
-   *  counterpart yet). */
+   *  counterpart yet) — added by the editor, never published. */
   draftOnly: boolean;
+  /** `true` when this id has a top-level draft entry, regardless of
+   *  whether published also has it. Covers both "new" (draftOnly is
+   *  true) and "modified" (draftOnly is false but draft exists)
+   *  cases. The editor uses it for a "modified" badge so authors
+   *  can see at a glance which entries have unpublished edits. */
+  hasDraft: boolean;
 }
 
 export function listAllCmsNodes(): CmsTreeEntry[] {
@@ -308,6 +314,7 @@ export function listAllCmsNodes(): CmsTreeEntry[] {
     slotName: string | undefined,
     parentId: string | undefined,
   ): void => {
+    const hasDraft = draft[node.id] != null;
     entries.push({
       id: node.id,
       type: node.type,
@@ -315,7 +322,8 @@ export function listAllCmsNodes(): CmsTreeEntry[] {
       depth,
       slotName,
       parentId,
-      draftOnly: draft[node.id] != null && published[node.id] == null,
+      draftOnly: hasDraft && published[node.id] == null,
+      hasDraft,
     });
     if (node.slots) {
       for (const [name, children] of Object.entries(node.slots)) {
