@@ -118,7 +118,7 @@ export function PartialsDebug() {
 
 function PartialsDebugMounted() {
   const snap = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   if (snap.length === 0) return null;
 

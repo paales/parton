@@ -150,6 +150,15 @@ describe("lookupCmsNode — top-level draft wins over slot-nested copy", () => {
   });
 });
 
+// NOTE: regression coverage for `listAllCmsNodes` slot-child dedupe
+// lives in the e2e suite (`e2e/cms-edit.spec.ts > editing a slot
+// child only renders one tree entry for the edited id`). Unit-level
+// tests that wrote to draft.json from this file flaked under
+// parallel cross-file vitest workers — multiple test files share the
+// same on-disk draft.json and there's no per-test mutex. Keeping the
+// unit tier off the shared file avoids the race; the e2e covers the
+// behavior end-to-end.
+
 describe("publishDraft", () => {
   // NOTE: this test writes to src/cms/content.json. We restore by
   // re-publishing the original state after each test — snapshot the

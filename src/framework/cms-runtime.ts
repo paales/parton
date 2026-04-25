@@ -308,6 +308,24 @@ export function listAllCmsNodes(): CmsTreeEntry[] {
   for (const [id, node] of Object.entries(draft)) {
     merged[id] = node;
   }
+  // Pre-pass: every id that lives as a slot child somewhere in the
+  // merged forest. `saveCmsFields` writes top-level draft entries for
+  // edited slot children (the runtime's flat-index lookup top-level-
+  // wins design — see `buildIndex`); without this dedupe step, those
+  // edited children would surface in the tree twice — once nested
+  // under their parent's slot walk, and once as a fake root entry.
+  const slotChildIds = new Set<string>();
+  const collectSlotChildren = (node: CmsNode): void => {
+    if (!node.slots) return;
+    for (const children of Object.values(node.slots)) {
+      for (const child of children) {
+        slotChildIds.add(child.id);
+        collectSlotChildren(child);
+      }
+    }
+  };
+  for (const node of Object.values(merged)) collectSlotChildren(node);
+
   const entries: CmsTreeEntry[] = [];
   const walk = (
     node: CmsNode,
@@ -326,13 +344,25 @@ export function listAllCmsNodes(): CmsTreeEntry[] {
       draftOnly: hasDraft && published[node.id] == null,
       hasDraft,
     });
+    // Prefer the merged top-level version of each slot child when
+    // available — that's the post-edit state. Fall back to the inline
+    // copy for ids the author hasn't edited yet (or that never had a
+    // top-level entry, i.e. published slot children).
     if (node.slots) {
       for (const [name, children] of Object.entries(node.slots)) {
-        for (const child of children) walk(child, depth + 1, name, node.id);
+        for (const child of children) {
+          const effective = merged[child.id] ?? child;
+          walk(effective, depth + 1, name, node.id);
+        }
       }
     }
   };
-  for (const node of Object.values(merged)) walk(node, 0, undefined, undefined);
+  for (const node of Object.values(merged)) {
+    // Skip ids that show up as a slot child of some other node — they
+    // are emitted by the parent's slot walk above.
+    if (slotChildIds.has(node.id)) continue;
+    walk(node, 0, undefined, undefined);
+  }
   return entries;
 }
 

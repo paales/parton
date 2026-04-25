@@ -359,4 +359,114 @@ test.describe("CMS editor — smoke", () => {
     // (Adding a separate badge for "has a draft overlay" is future
     // work.)
   });
+
+  // Regression: tree-click selection routes through
+  // `nav.navigate(href, { selector: "#cms-edit-tree #cms-edit-fields"
+  // })` (see `<CmsEditTreeLink>`). That keeps the URL in sync but
+  // restricts the refetch to the tree + field Partials — the preview
+  // never sees a navigation. Plain `<a href="?select=…">` would
+  // trigger a full page nav that re-streams `/cms-edit`, which under
+  // startTransition can briefly empty the preview cell while React
+  // reconciles the new payload (the "ping-pong" the user reported).
+  //
+  // We assert by inspecting the RSC request URL: a selector-targeted
+  // refetch carries `?partials=cms-edit-tree,cms-edit-fields`. A
+  // full page nav would not.
+  test("clicking a tree entry fires a selector-targeted refetch (preview stays put)", async ({
+    page,
+  }) => {
+    await page.goto("/cms-edit");
+    await expect(
+      page.getByTestId("cms-edit-preview-pane"),
+    ).toContainText("Welcome to the CMS demo");
+    // The click handler depends on hydrated `useNavigation` — wait
+    // for hydration to finish before clicking (otherwise the click
+    // hits a server-rendered anchor with no listener and the browser
+    // does a full-page nav, which is the very thing we're testing
+    // against).
+    await page.waitForLoadState("networkidle");
+
+    // Capture every request fired during the click. The selector-
+    // targeted nav goes through `enqueueRefetch` on a microtask after
+    // the Navigation API commit, so an `await waitForRequest` after
+    // the click can race the request — it's already in-flight by the
+    // time the listener is attached. A persistent listener attached
+    // before the click avoids that.
+    const seen: string[] = [];
+    const onReq = (r: import("@playwright/test").Request) => {
+      if (r.url().includes("/cms-edit_.rsc")) seen.push(r.url());
+    };
+    page.on("request", onReq);
+    try {
+      await page.getByTestId("cms-edit-tree-entry-composed-hero-1").click();
+      await page.waitForResponse((r) => r.url().includes("/cms-edit_.rsc"), {
+        timeout: 5000,
+      });
+    } finally {
+      page.off("request", onReq);
+    }
+    expect(seen.length).toBeGreaterThan(0);
+    const reqUrl = new URL(seen[0]);
+    const partials = reqUrl.searchParams.get("partials");
+    expect(partials).not.toBeNull();
+    // Preview is NOT in the requested set — it stays put.
+    expect(partials).not.toContain("cms-edit-preview");
+    // Tree + fields ARE in the requested set.
+    expect(partials).toContain("cms-edit-tree");
+    expect(partials).toContain("cms-edit-fields");
+
+    // And the field panel ends up resolved to the clicked id.
+    await expect(
+      page.getByTestId("cms-edit-selected-id"),
+    ).toContainText("composed-hero-1");
+    // Preview content is still visible.
+    await expect(
+      page.getByTestId("cms-edit-preview-pane"),
+    ).toContainText("Welcome to the CMS demo");
+  });
+
+  // Regression: editing a slot child whose previous draft override
+  // wrote a top-level entry must not surface the same id twice in the
+  // tree (once as a slot child of cms-demo-composed, once as a fake
+  // root entry). The dedupe lives in `listAllCmsNodes` —
+  // `slotChildIds` skips top-level merged entries that are already
+  // emitted by some parent's slot walk.
+  test("editing a slot child only renders one tree entry for the edited id", async ({
+    page,
+  }) => {
+    await page.goto("/cms-edit?select=composed-text-1");
+    await page
+      .getByTestId("cms-edit-field-input-body")
+      .fill("Edited rich-text body");
+    const responseP = page.waitForResponse(
+      (r) => r.request().method() === "POST" && r.ok(),
+      { timeout: 5000 },
+    );
+    await page.getByRole("button", { name: "Save to draft" }).click();
+    await responseP;
+    await page.reload();
+    // Exactly one tree row for composed-text-1.
+    await expect(
+      page.getByTestId("cms-edit-tree-entry-composed-text-1"),
+    ).toHaveCount(1);
+  });
+
+  // Regression: saving rich-text content on a slot child should
+  // refresh the preview the same way saving a hero block does.
+  test("save updates the preview for a slot-child rich-text block", async ({
+    page,
+  }) => {
+    await page.goto("/cms-edit?select=composed-text-1");
+    const preview = page.getByTestId("cms-edit-preview-pane");
+    await expect(preview.getByTestId("composed-rich-text").first()).toContainText(
+      "rich-text block is the second entry",
+    );
+
+    await page
+      .getByTestId("cms-edit-field-input-body")
+      .fill("Saved rich text body via editor");
+    await page.getByRole("button", { name: "Save to draft" }).click();
+
+    await expect(preview).toContainText("Saved rich text body via editor");
+  });
 });

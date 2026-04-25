@@ -30,7 +30,7 @@
  *   - Draft isolation per author/session.
  */
 
-import { getSearchParam, setCookie } from "../../framework/context.ts";
+import { getRequest, setCookie } from "../../framework/context.ts";
 import {
   CMS_DRAFT_COOKIE,
   listAllCmsNodes,
@@ -52,6 +52,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { CmsDemoPage } from "./cms-demo.tsx";
+import { CmsEditTreeLink } from "../components/cms-edit-tree-link.tsx";
 import {
   addBlockToSlot,
   moveBlockInSlot,
@@ -75,9 +76,11 @@ export function CmsEditPage() {
   //     render because the cookie hasn't round-tripped yet).
   setCookie(CMS_DRAFT_COOKIE, "1");
 
-  const selected = getSearchParam("select");
-  const configIndexRaw = getSearchParam("config");
-  const configIndex = configIndexRaw != null ? Number(configIndexRaw) : null;
+  // NOTE: `?select=` and `?config=` are read INSIDE TreeContents and
+  // FieldPanel (not here). That way a cache-mode refetch of
+  // `#cms-edit-tree` / `#cms-edit-fields` triggered by selector-
+  // targeted nav (`<CmsEditTreeLink>`) re-resolves the URL state
+  // freshly — the snapshots can't bake in a stale `selected` closure.
 
   return (
     <Partial parent={ROOT} selector="#cms-edit-root">
@@ -91,7 +94,7 @@ export function CmsEditPage() {
           className="overflow-y-auto border-r bg-muted/30 p-4"
           data-testid="cms-edit-tree-pane"
         >
-          <TreePanel selected={selected} />
+          <TreePanel />
         </aside>
         <main
           className="overflow-y-auto p-4"
@@ -104,7 +107,7 @@ export function CmsEditPage() {
           data-testid="cms-edit-field-pane"
         >
           <Partial parent={ROOT} selector="#cms-edit-fields">
-            <FieldPanel selected={selected} configIndex={configIndex} />
+            <FieldPanel />
           </Partial>
         </aside>
       </div>
@@ -146,20 +149,36 @@ function PreviewPanel() {
 
 // ─── Tree ──────────────────────────────────────────────────────────────
 
-function TreePanel({ selected }: { selected: string | null }) {
+function TreePanel() {
   return (
     <Partial parent={ROOT} selector="#cms-edit-tree">
       <div>
         <p className="mb-3 text-xs uppercase tracking-wide text-muted-foreground">
           Content tree
         </p>
-        <TreeContents selected={selected} />
+        <TreeContents />
       </div>
     </Partial>
   );
 }
 
-function TreeContents({ selected }: { selected: string | null }) {
+function TreeContents() {
+  // Read URL state INSIDE the Partial so cache-mode refetches see the
+  // fresh `?select=` value — the snapshot's content runs again on
+  // every refetch.
+  //
+  // Why getRequest() and not getSearchParam(): the preview Partial's
+  // <Partial frame="preview"> mutates the per-request frame-scope
+  // cell to its own URL (`/cms-demo?cms-draft=1`). React 19's RSC
+  // renderer interleaves siblings — TreeContents/FieldPanel may run
+  // AFTER the preview's FrameWrapper has set the cell, so a tracked
+  // `getSearchParam` would resolve against the frame URL (no
+  // `?select=` param) instead of the editor's page URL. This is the
+  // sibling-interleaving sharp edge documented in CLAUDE.md /
+  // notes/FRAME_SCOPING.md. `getRequest()` returns the page request
+  // unconditionally, sidestepping the leak. The editor route has no
+  // <Partial cache>, so cache-key tracking isn't needed here.
+  const selected = pageSearchParam("select");
   const entries = listAllCmsNodes();
   if (entries.length === 0) {
     return (
@@ -179,7 +198,7 @@ function TreeContents({ selected }: { selected: string | null }) {
             key={entry.id}
             style={{ paddingLeft: `${entry.depth * 12}px` }}
           >
-            <a
+            <CmsEditTreeLink
               href={`/cms-edit?select=${encodeURIComponent(entry.id)}`}
               className={cn(
                 "flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors",
@@ -187,8 +206,8 @@ function TreeContents({ selected }: { selected: string | null }) {
                   ? "bg-primary/10 text-primary"
                   : "hover:bg-muted",
               )}
-              data-testid={`cms-edit-tree-entry-${entry.id}`}
-              data-selected={isSelected}
+              testId={`cms-edit-tree-entry-${entry.id}`}
+              selected={isSelected}
             >
               <span className="flex-1 truncate">{label}</span>
               {entry.type && (
@@ -216,7 +235,7 @@ function TreeContents({ selected }: { selected: string | null }) {
                   modified
                 </Badge>
               ) : null}
-            </a>
+            </CmsEditTreeLink>
           </li>
         );
       })}
@@ -226,13 +245,15 @@ function TreeContents({ selected }: { selected: string | null }) {
 
 // ─── Field form ────────────────────────────────────────────────────────
 
-async function FieldPanel({
-  selected,
-  configIndex,
-}: {
-  selected: string | null;
-  configIndex: number | null;
-}) {
+async function FieldPanel() {
+  // Read URL state inside the Partial — selector-targeted refetches
+  // (`<CmsEditTreeLink>`) re-execute this body, so URL changes are
+  // picked up without re-running ancestors. See `pageSearchParam`
+  // for why we bypass `getSearchParam` (frame-scope leak from the
+  // sibling preview Partial).
+  const selected = pageSearchParam("select");
+  const configIndexRaw = pageSearchParam("config");
+  const configIndex = configIndexRaw != null ? Number(configIndexRaw) : null;
   if (!selected) {
     return (
       <div className="text-sm text-muted-foreground">
@@ -604,6 +625,18 @@ function formatScalar(name: string, clause: ScalarOrIn): string {
     return `${name}∈${clause.in.join(",")}`;
   }
   return name;
+}
+
+/**
+ * Read a search param off the page request, bypassing the frame
+ * scope cell. See the comment in TreeContents for why — the preview
+ * Partial leaks its frame URL into the cell when this Partial's body
+ * runs after it (sibling interleaving). The editor route has no
+ * `<Partial cache>` so the cache-tracking that `getSearchParam` does
+ * isn't needed here.
+ */
+function pageSearchParam(name: string): string | null {
+  return new URL(getRequest().url).searchParams.get(name);
 }
 
 function shortKey(key: string): string {

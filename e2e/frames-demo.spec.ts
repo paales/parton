@@ -15,6 +15,12 @@ async function awaitHydrated(page: import("@playwright/test").Page) {
     if (!el) return false;
     return Object.keys(el).some((k) => k.startsWith("__reactFiber"));
   });
+  // Debug toolbar starts collapsed by default; expand so the per-Partial
+  // rows the assertions below depend on are visible.
+  const toggle = page.getByTestId("partials-debug-toggle");
+  if ((await toggle.textContent())?.trim().startsWith("▸")) {
+    await toggle.click();
+  }
 }
 
 test("cart and menu frames expose their own debug strips", async ({
