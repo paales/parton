@@ -236,16 +236,26 @@ function substituteNested(
     if (id && id !== skipId) return cache.get(id) ?? node;
   }
 
-  // Partial-shape wrapper: substitute with the cache entry if it
-  // differs (this is how nested Partials inside a cached ancestor get
-  // refreshed with newer content on refetch). Don't descend into the
-  // wrapper's own children — they may be unresolved Flight lazies.
+  // Partial-shape wrapper: if there's a fresh cache entry, use it.
+  // If the cache entry is the same wrapper we're looking at (i.e. the
+  // wrapper itself wasn't replaced this round), descend INTO its
+  // children so any descendant Partial that DID get a fresh cache
+  // entry still gets swapped. Without this descent, a refetch
+  // targeting a deeply-nested partial (e.g. `#product-card-1` inside
+  // a preview frame) lands a fresh entry in the cache for that id,
+  // but the surrounding ancestor wrappers (cms-edit-preview, the
+  // composed/group containers) keep their old children references —
+  // so the new content never reaches the rendered tree.
   if (isPartialWrapper(node)) {
     const id = getPartialId(node);
     if (id && id !== skipId) {
       const fresh = cache.get(id);
       if (fresh && fresh !== node) return fresh;
-      return node;
+      // Wrapper unchanged — keep descending so nested partials whose
+      // cache entries DID change still get substituted. Lazy-safety:
+      // any unresolved Flight lazy hits the `unwrapLazy` branch
+      // earlier in this function on its first visit, so by the time
+      // we recurse here the wrapper's children are real elements.
     }
   }
 

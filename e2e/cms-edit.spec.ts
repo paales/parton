@@ -642,6 +642,114 @@ test.describe("CMS editor — smoke", () => {
     });
   });
 
+  test.describe("group + product-card", () => {
+    // The Group block (Horizon-style layout primitive) holds an
+    // `items` slot constrained to `.group-item`. The fixture
+    // `cms-demo-product-grid` is a Group of three product cards
+    // arranged in a wrap row — exercises both the layout primitive
+    // and the per-card field accessors (title/price/image).
+
+    test("the product grid Group + its three cards appear in the tree", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit");
+      // The Group itself is a slot child of cms-demo-root.body, so
+      // it's a regular tree entry.
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-cms-demo-product-grid"),
+      ).toBeVisible();
+      // It declares one slot, `items`, → one slot intermediary.
+      await expect(
+        page.getByTestId(
+          "cms-edit-tree-entry-slot:cms-demo-product-grid:items",
+        ),
+      ).toBeVisible();
+      for (const id of [
+        "product-card-1",
+        "product-card-2",
+        "product-card-3",
+      ]) {
+        await expect(
+          page.getByTestId(`cms-edit-tree-entry-${id}`),
+        ).toBeVisible();
+      }
+    });
+
+    test("the items slot's +add palette only shows .group-item types", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit");
+      // group + product-card both carry `.group-item`, so both
+      // appear in this slot's palette.
+      await expect(
+        page.getByTestId(
+          "cms-edit-slot-add-cms-demo-product-grid-items-group",
+        ),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId(
+          "cms-edit-slot-add-cms-demo-product-grid-items-product-card",
+        ),
+      ).toBeVisible();
+      // A page-level-only block like `page-hero` is NOT in this
+      // slot's palette (it doesn't carry `.group-item`).
+      await expect(
+        page.getByTestId(
+          "cms-edit-slot-add-cms-demo-product-grid-items-page-hero",
+        ),
+      ).toHaveCount(0);
+    });
+
+    test("the preview renders all three product cards with their fields", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit");
+      const preview = page.getByTestId("cms-edit-preview-pane");
+      await expect(preview.getByTestId("product-card")).toHaveCount(3);
+      await expect(
+        preview.getByTestId("product-card-title").nth(0),
+      ).toHaveText("Linen apron");
+      await expect(
+        preview.getByTestId("product-card-price").nth(0),
+      ).toHaveText("$38.00");
+      await expect(
+        preview.getByTestId("product-card-title").nth(1),
+      ).toHaveText("Cast iron skillet");
+      await expect(
+        preview.getByTestId("product-card-title").nth(2),
+      ).toHaveText("Walnut cutting board");
+    });
+
+    test("editing a product-card field updates the preview live", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit?select=product-card-1");
+      await page.waitForLoadState("networkidle");
+      await page
+        .getByTestId("cms-edit-field-input-title")
+        .fill("Editor-set title");
+
+      const responseP = page.waitForResponse(
+        (r) => r.request().method() === "POST" && r.ok(),
+        { timeout: 5000 },
+      );
+      await page.getByRole("button", { name: "Save to draft" }).click();
+      await responseP;
+
+      // The action's `invalidate` directive folds `partials=` into
+      // the same response (vs. firing a separate GET), so the new
+      // bytes arrive on the action POST itself. Playwright's auto-
+      // retrying assertions handle the small window between
+      // response receipt and React's commit; we use a generous
+      // timeout to absorb commit jitter under heavy parallel-test
+      // load.
+      const preview = page.getByTestId("cms-edit-preview-pane");
+      await expect(
+        preview.getByTestId("product-card-title").first(),
+      ).toHaveText("Editor-set title", { timeout: 10000 });
+    });
+  });
+
   test.describe("page-as-slot", () => {
     // The /cms-demo page is itself modeled as a Partial whose body is
     // a `<Children name="body">` slot. Every visible chunk (hero,

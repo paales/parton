@@ -21,6 +21,7 @@
  * the expected shape.
  */
 
+import { isValidElement, type ReactNode } from "react";
 import {
   createCmsScope,
   getBlockSpec,
@@ -32,6 +33,13 @@ import {
   _runWithPrerenderCmsScope,
   runWithRequestAsync,
 } from "./context.ts";
+
+// Brand symbol stamped on `Children` / `Child` slot components in
+// `src/lib/slot.tsx`. We can't import the components directly here
+// — `slot.tsx` transits through `partial-component.tsx` and the
+// node-tier vitest project doesn't load that. Re-deriving the brand
+// from the same well-known string avoids the dep cycle.
+const SLOT_KIND_BRAND = Symbol.for("cms.slotKind");
 
 export interface BlockManifest {
   readonly type: string;
@@ -57,9 +65,19 @@ export async function prerenderBlock(type: string): Promise<BlockManifest | null
         // accessor read that happens inside a microtask still lands
         // in the scope. Failures are swallowed — the manifest is
         // advisory.
-        if (out instanceof Promise) {
-          await out.catch(() => undefined);
-        }
+        const resolved = out instanceof Promise ? await out : out;
+        // Slot declarations live INSIDE the returned JSX —
+        // `<Children name="items" allow=".group-item">` is an
+        // element, not a side-effecting call, so the prerender's
+        // single-call to `spec.component()` doesn't populate
+        // `childSlots` on its own. Walk the returned tree and
+        // explicitly invoke `Children` / `Child` so they side-effect
+        // into the scope. We don't recurse into other function
+        // components — those would re-enter render (potentially
+        // touching state we don't want during prerender). Slot
+        // declarations are conventionally at the top level of a
+        // block's body, which is what the walk reaches.
+        invokeSlotDeclarations(resolved);
       } catch {
         // Sync render errors (component throws before returning) —
         // accessor reads up to the throw still populated the scope.
@@ -74,6 +92,47 @@ export async function prerenderBlock(type: string): Promise<BlockManifest | null
     references: Object.fromEntries(scope.references),
     childSlots: Object.fromEntries(scope.childSlots),
   };
+}
+
+/**
+ * Recursively walk a JSX tree and invoke any `<Children>` /
+ * `<Child>` element we find. Calling the function side-effects
+ * `scope.childSlots` so the manifest captures slot declarations
+ * — the prerender pass otherwise stops at the top-level
+ * `spec.component()` call and never enters the rendered tree.
+ *
+ * Walks DOM elements + Fragment children + arrays. Stops at other
+ * function components (we don't re-enter render).
+ */
+function invokeSlotDeclarations(node: ReactNode): void {
+  if (node == null || typeof node === "boolean") return;
+  if (typeof node === "string" || typeof node === "number") return;
+  if (Array.isArray(node)) {
+    for (const child of node) invokeSlotDeclarations(child);
+    return;
+  }
+  if (!isValidElement(node)) return;
+  if (
+    typeof node.type === "function" &&
+    (node.type as { [SLOT_KIND_BRAND]?: string })[SLOT_KIND_BRAND] != null
+  ) {
+    try {
+      // Calling the function records the slot into the ambient
+      // CMS scope (set up by `_runWithPrerenderCmsScope` above).
+      // The return value is discarded — we only care about the
+      // side-effect.
+      (node.type as (
+        props: Record<string, unknown>,
+      ) => unknown)(node.props as Record<string, unknown>);
+    } catch {
+      // Children may throw if the runtime store doesn't have the
+      // expected node shape — harmless during prerender, just skip.
+    }
+    return;
+  }
+  // Plain DOM element / fragment: recurse into its children.
+  const children = (node.props as { children?: ReactNode }).children;
+  if (children !== undefined) invokeSlotDeclarations(children);
 }
 
 export async function buildCatalogManifest(): Promise<

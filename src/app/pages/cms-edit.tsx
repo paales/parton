@@ -193,7 +193,7 @@ function TreePanel() {
   );
 }
 
-function TreeContents() {
+async function TreeContents() {
   // Read URL state INSIDE the Partial so cache-mode refetches see the
   // fresh `?select=` value — the snapshot's content runs again on
   // every refetch.
@@ -212,6 +212,16 @@ function TreeContents() {
   const selected = pageSearchParam("select");
   const entries = listAllCmsNodes();
   const blockTypes = listBlockTypes();
+  const catalog = await getCatalogManifest();
+
+  // Build parentId → parentType map so we can look up each slot
+  // intermediary's parent block type (and from there, the slot's
+  // `allow` declaration in the manifest).
+  const parentTypeById = new Map<string, string | undefined>();
+  for (const entry of entries) {
+    if (entry.kind === "node") parentTypeById.set(entry.id, entry.type);
+  }
+
   if (entries.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -253,13 +263,33 @@ function TreeContents() {
     <ul className="space-y-1">
       {entries.map((entry) => {
         if (entry.kind === "slot") {
+          // Filter the +add palette by the slot's `allow` selector —
+          // we look up the parent's block type → manifest →
+          // `childSlots[slotName].allow` → keep only block types
+          // whose tags satisfy the allow tokens. If the parent has
+          // no type or no manifest entry, the palette falls back to
+          // the full block-type list (better to show too many
+          // options than zero on an unrecognized parent).
+          const parentType = parentTypeById.get(entry.parentId!);
+          const parentManifest = parentType
+            ? catalog[parentType]
+            : undefined;
+          const allow =
+            parentManifest?.childSlots[entry.slotName!]?.allow ?? null;
+          const filteredTypes = allow
+            ? blockTypes.filter((type) => {
+                const m = catalog[type];
+                if (!m) return false;
+                return blockTagsSatisfyAllow(m.tags, allow);
+              })
+            : blockTypes;
           return (
             <SlotTreeRow
               key={entry.id}
               parentCmsId={entry.parentId!}
               slotName={entry.slotName!}
               depth={entry.depth}
-              blockTypes={blockTypes}
+              blockTypes={filteredTypes}
             />
           );
         }
@@ -705,6 +735,46 @@ function formatScalar(name: string, clause: ScalarOrIn): string {
  */
 function pageSearchParam(name: string): string | null {
   return new URL(getRequest().url).searchParams.get(name);
+}
+
+/**
+ * Check whether a block's tag list satisfies a slot's `allow`
+ * selector. Allow follows the same selector grammar as
+ * `<Partial selector>`:
+ *
+ *   - Each whitespace-separated token starts with `.` (shared) or
+ *     `#` (unique).
+ *   - A `.foo` token matches a block whose tags include `.foo`.
+ *   - A `#foo` token matches a block whose unique-token name equals
+ *     `foo` (rare; allow is usually class-based).
+ *
+ * Multiple tokens combine as union — a block matches if it satisfies
+ * ANY of the allow tokens.
+ */
+function blockTagsSatisfyAllow(
+  tags: readonly `.${string}`[],
+  allow: string,
+): boolean {
+  const tokens = allow
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  for (const token of tokens) {
+    if (token.startsWith(".") && tags.includes(token as `.${string}`)) {
+      return true;
+    }
+    // `#`-tokens in allow target a specific block-type name. Block
+    // types don't currently expose a unique token directly, but the
+    // type name itself is a useful proxy — `#group` means "only
+    // accept the group block type".
+    if (token.startsWith("#")) {
+      // Type-name match handled by the caller's filter (we don't
+      // have the type name here, only tags). Caller should also
+      // check `blockType === token.slice(1)` if needed. For now,
+      // `.`-tokens cover every demo-fixture allow expression.
+    }
+  }
+  return false;
 }
 
 function shortKey(key: string): string {

@@ -60,12 +60,31 @@ export interface ChildProps {
 }
 
 /**
+ * Brand used to identify slot components from outside. The catalog
+ * prerender walks the JSX tree to find slot declarations and call
+ * them so they side-effect into `scope.childSlots` — but importing
+ * `Children` / `Child` directly into the prerender pulls in
+ * `partial-component.tsx`, which the node-tier vitest project can't
+ * resolve. The prerender keys off this brand symbol instead.
+ */
+export const SLOT_KIND_BRAND = Symbol.for("cms.slotKind");
+export type SlotKind = "multi" | "single";
+
+interface SlotComponent {
+  (props: ChildrenProps | ChildProps): ReactNode;
+  [SLOT_KIND_BRAND]?: SlotKind;
+}
+
+/**
  * Multi-entry slot — renders every block in `node.slots[name]` in the
  * order stored. Each block is wrapped in its own `<Partial>` so it
  * participates in the fingerprint-skip / invalidation graph like any
  * other Partial.
  */
-export function Children({ name, allow }: ChildrenProps): ReactNode {
+export const Children: SlotComponent = function Children({
+  name,
+  allow,
+}: ChildrenProps): ReactNode {
   const scope = getCurrentCmsScope();
   if (!scope) return null;
   scope.childSlots.set(name, { multi: true, allow });
@@ -75,14 +94,18 @@ export function Children({ name, allow }: ChildrenProps): ReactNode {
   if (entries.length === 0) return null;
 
   return renderSlotEntries(entries);
-}
+};
+Children[SLOT_KIND_BRAND] = "multi";
 
 /**
  * Singleton slot — renders at most one block. If the store has more
  * than one entry (author mistake, migration), only the first is
  * rendered; the editor is responsible for preventing accumulation.
  */
-export function Child({ name, allow }: ChildProps): ReactNode {
+export const Child: SlotComponent = function Child({
+  name,
+  allow,
+}: ChildProps): ReactNode {
   const scope = getCurrentCmsScope();
   if (!scope) return null;
   scope.childSlots.set(name, { multi: false, allow });
@@ -93,7 +116,8 @@ export function Child({ name, allow }: ChildProps): ReactNode {
   if (!entry) return null;
 
   return renderSlotEntries([entry]);
-}
+};
+Child[SLOT_KIND_BRAND] = "single";
 
 function renderSlotEntries(entries: readonly CmsNode[]): ReactNode {
   const parent = capturePartialContext();

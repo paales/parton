@@ -18,6 +18,9 @@ import { PageGreetingBlock } from "./page-greeting.tsx";
 import { PageSlugNavBlock } from "./page-slug-nav.tsx";
 import { PageComposedBlock } from "./page-composed.tsx";
 import { PageMultiSlotBlock } from "./page-multi-slot.tsx";
+import { GroupBlock } from "./group.tsx";
+import { ProductCardBlock } from "./product-card.tsx";
+import { PageRootBlock } from "./page-root.tsx";
 
 // Slot-level blocks (used inside `<Children>` slots within page-level
 // blocks like the composed section).
@@ -29,6 +32,15 @@ registerBlock("hero", {
 registerBlock("rich-text", {
   tags: [".demo-block", ".composed-rich-text"],
   component: RichTextBlock,
+});
+
+// Page root — registered so the catalog manifest knows the slot's
+// `allow` value, which the editor's slot palette uses to filter the
+// `+ add` buttons. Without this, the page root has no `type` and
+// the palette has no manifest to consult.
+registerBlock("page-root", {
+  tags: [],
+  component: PageRootBlock,
 });
 
 // Page-level blocks (slot children of the page root, `cms-demo-root`).
@@ -58,4 +70,22 @@ registerBlock("page-composed", {
 registerBlock("page-multi-slot", {
   tags: [".page-block"],
   component: PageMultiSlotBlock,
+});
+
+// Layout primitive — `.page-block` so it can sit at the page level,
+// `.group-item` so it can also nest inside another Group (recursive
+// composition). Holds its own `items` slot that accepts anything
+// tagged `.group-item`.
+registerBlock("group", {
+  tags: [".page-block", ".group-item"],
+  component: GroupBlock,
+});
+
+// Product card — `.group-item` so it slots into a Group's items
+// slot. Not tagged `.page-block` because a card on its own at the
+// page level isn't a useful page section; cards live inside a
+// Group (a grid row, a horizontal scroller, etc.).
+registerBlock("product-card", {
+  tags: [".group-item"],
+  component: ProductCardBlock,
 });

@@ -2,6 +2,7 @@
   "partials": {
     "cms-demo-root": {
       "id": "cms-demo-root",
+      "type": "page-root",
       "displayName": "Page (/cms-demo)",
       "configs": [
         {
@@ -184,6 +185,73 @@
                       "fields": {
                         "headline": "Sidebar slot",
                         "subhead": "Secondary content lane."
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "cms-demo-product-grid",
+            "type": "group",
+            "displayName": "#product-grid",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "direction": "row",
+                  "align": "stretch",
+                  "justify": "start",
+                  "gap": 16,
+                  "padding": 16,
+                  "wrap": "wrap"
+                }
+              }
+            ],
+            "slots": {
+              "items": [
+                {
+                  "id": "product-card-1",
+                  "type": "product-card",
+                  "configs": [
+                    {
+                      "match": {},
+                      "fields": {
+                        "title": "Linen apron",
+                        "price": 38,
+                        "imageSrc": "https://placehold.co/200x200/e2d3b8/2a2a2a?text=Apron",
+                        "imageAlt": "Linen apron"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "product-card-2",
+                  "type": "product-card",
+                  "configs": [
+                    {
+                      "match": {},
+                      "fields": {
+                        "title": "Cast iron skillet",
+                        "price": 89,
+                        "imageSrc": "https://placehold.co/200x200/333333/eeeeee?text=Skillet",
+                        "imageAlt": "Cast iron skillet"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "product-card-3",
+                  "type": "product-card",
+                  "configs": [
+                    {
+                      "match": {},
+                      "fields": {
+                        "title": "Walnut cutting board",
+                        "price": 64,
+                        "imageSrc": "https://placehold.co/200x200/8b6f47/ffffff?text=Board",
+                        "imageAlt": "Walnut cutting board"
                       }
                     }
                   ]
