@@ -16,7 +16,7 @@ import { CmsEditPage } from "./pages/cms-edit.tsx";
 import { NotFoundPage } from "./pages/not-found.tsx";
 import { PartialRoot, Partial } from "../lib/partial.tsx";
 import { ROOT } from "../lib/partial-context.ts";
-import { pickRoute } from "../framework/router.ts";
+import { matchPath, pickRoute } from "../framework/router.ts";
 import {
   NotFoundError,
   RedirectError,
@@ -45,7 +45,19 @@ export function Root() {
               <title>React Partials</title>
             </head>
           </Partial>
-          <body className="mx-auto min-h-screen max-w-225 bg-background p-8 text-foreground antialiased">
+          {/* Most pages constrain content to a 900px reading column; the
+              CMS editor needs the full viewport for its three-pane
+              layout, so it opts out via its own bleed. We branch
+              on the route to keep the debug overlay (fixed-positioned,
+              640px wide, bottom-left) clear of content on the
+              constrained pages. */}
+          <body
+            className={
+              matchPath("/cms-edit") != null
+                ? "min-h-screen bg-background p-8 text-foreground antialiased"
+                : "mx-auto min-h-screen max-w-225 bg-background p-8 text-foreground antialiased"
+            }
+          >
             <AppNav />
             {pickRoute([
               ["/bare", BarePage],

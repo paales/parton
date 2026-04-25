@@ -6,10 +6,15 @@ import { expect, test, request as apiRequest } from "./fixtures.ts";
 test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ baseURL }) => {
+  // Scoped clear, NOT `?all=1`. The draft file is process-global and
+  // gets wiped on every clear-caches call regardless, which is what
+  // we want for editor isolation. The other cleared state (`<Cache>`
+  // store, partial registry, etc.) is scope-bucketed by the
+  // `x-test-scope` worker header — using `all=1` would also wipe
+  // every other concurrently-running spec's warmed state and flake
+  // tests across the suite.
   const ctx = await apiRequest.newContext({ baseURL });
-  // Clear the draft file so each test gets a clean slate. Caches
-  // reset too; Partial registry included.
-  await ctx.get("/__test/clear-caches?all=1");
+  await ctx.get("/__test/clear-caches");
   await ctx.dispose();
 });
 

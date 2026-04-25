@@ -49,20 +49,22 @@ export function CmsDemoPage() {
         <HeroBlock />
       </Partial>
 
-      <nav
-        className="mb-6 flex flex-wrap gap-1"
-        aria-label="CMS demo slugs"
-      >
-        {SLUG_LINKS.map(([href, label]) => (
-          <a
-            key={href}
-            href={href}
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            {label}
-          </a>
-        ))}
-      </nav>
+      <Partial parent={ROOT} selector="#cms-demo-slug-nav">
+        <nav
+          className="mb-6 flex flex-wrap gap-1"
+          aria-label="CMS demo slugs"
+        >
+          {SLUG_LINKS.map(([href, label]) => (
+            <a
+              key={href}
+              href={href}
+              className={buttonVariants({ variant: "ghost", size: "sm" })}
+            >
+              {label}
+            </a>
+          ))}
+        </nav>
+      </Partial>
 
       <Partial
         parent={ROOT}
