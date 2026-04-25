@@ -371,6 +371,23 @@ export function buildCmsTreeEntries(
   for (const [id, node] of Object.entries(draft)) {
     merged[id] = node;
   }
+  // Collect every id reachable in the published forest (top-level or
+  // nested as a slot child). Drives the `draftOnly` flag — an id is
+  // "draft only" when it has a draft entry but is nowhere in
+  // published, even nested. Without this nesting walk the flag would
+  // misfire for slot children (which only ever live nested in
+  // published), giving them a misleading amber "draft" badge after
+  // any edit.
+  const publishedIds = new Set<string>();
+  const collectPublishedIds = (node: CmsNode): void => {
+    publishedIds.add(node.id);
+    if (!node.slots) return;
+    for (const children of Object.values(node.slots)) {
+      for (const child of children) collectPublishedIds(child);
+    }
+  };
+  for (const node of Object.values(published)) collectPublishedIds(node);
+
   // Pre-pass: every id that lives as a slot child somewhere in the
   // merged forest. `saveCmsFields` writes top-level draft entries
   // for edited slot children (the runtime's flat-index lookup top-
@@ -406,7 +423,10 @@ export function buildCmsTreeEntries(
       depth,
       slotName,
       parentId,
-      draftOnly: hasDraft && published[node.id] == null,
+      // "draft only" = exists in draft, nowhere in published. Walks
+      // the published tree (not just top-level) so slot children with
+      // a draft override don't get misflagged as brand-new.
+      draftOnly: hasDraft && !publishedIds.has(node.id),
       hasDraft,
     });
     if (!node.slots) return;

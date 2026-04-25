@@ -247,12 +247,16 @@ test.describe("CMS editor — smoke", () => {
       await responseP;
       await page.reload();
 
-      // Two rich-text children rendered in the preview now (the
-      // committed `composed-text-1` + the freshly-added one).
+      // Three rich-text children rendered in the preview now: the
+      // committed `composed-text-1` (in cms-demo-composed.body) +
+      // the freshly-added one + `multi-body-1` (in
+      // cms-demo-multi-slot.body, also a rich-text). All three use
+      // the same `composed-rich-text` testid because they share
+      // RichTextBlock.
       const preview = page.getByTestId("cms-edit-preview-pane");
       await expect(
         preview.getByTestId("composed-rich-text"),
-      ).toHaveCount(2);
+      ).toHaveCount(3);
     });
 
     test("removing a block drops it from the tree and the preview", async ({
@@ -269,9 +273,11 @@ test.describe("CMS editor — smoke", () => {
         page.getByTestId("cms-edit-tree-entry-composed-text-1"),
       ).toHaveCount(0);
       const preview = page.getByTestId("cms-edit-preview-pane");
+      // multi-body-1 (rich-text in multi-slot.body) survives — only
+      // composed-text-1 was removed.
       await expect(
         preview.getByTestId("composed-rich-text"),
-      ).toHaveCount(0);
+      ).toHaveCount(1);
     });
 
     test("moving a block reorders it in the tree", async ({ page }) => {
@@ -633,6 +639,64 @@ test.describe("CMS editor — smoke", () => {
       const preview = page.getByTestId("cms-edit-preview-pane");
       await expect(preview).toContainText("Beta/Gamma view");
       expect(new URL(page.url()).pathname).toBe("/cms-edit");
+    });
+  });
+
+  test.describe("page-as-slot", () => {
+    // The /cms-demo page is itself modeled as a Partial whose body is
+    // a `<Children name="body">` slot. Every visible chunk (hero,
+    // slug nav, greeting, composed, multi-slot) is a slot child of
+    // `cms-demo-root` — there is no separate "top-level" tier in the
+    // tree. The editor's tree shows the root, its slot intermediary,
+    // and the +add palette listing every registered `page-*` block
+    // type.
+
+    test("the page root + its slot intermediary appear at the top of the tree", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit");
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-slot:cms-demo-root:body"),
+      ).toBeVisible();
+      // Every existing top-level partial is now a slot child of the
+      // root — they hang under the slot:cms-demo-root:body
+      // intermediary.
+      for (const id of [
+        "cms-demo-hero",
+        "cms-demo-slug-nav",
+        "cms-demo-greeting",
+        "cms-demo-composed",
+        "cms-demo-multi-slot",
+      ]) {
+        await expect(
+          page.getByTestId(`cms-edit-tree-entry-${id}`),
+        ).toBeVisible();
+      }
+    });
+
+    test("the page root's slot palette lists every registered page-* block type", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit");
+      // The +add palette is filtered server-side by the slot's
+      // `allow=".page-block"` declaration; every page-* block in
+      // the catalog carries the `.page-block` shared tag.
+      for (const type of [
+        "page-hero",
+        "page-slug-nav",
+        "page-greeting",
+        "page-composed",
+        "page-multi-slot",
+      ]) {
+        await expect(
+          page.getByTestId(
+            `cms-edit-slot-add-cms-demo-root-body-${type}`,
+          ),
+        ).toBeVisible();
+      }
     });
   });
 });

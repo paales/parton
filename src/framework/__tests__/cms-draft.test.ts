@@ -160,51 +160,63 @@ describe("lookupCmsNode — top-level draft wins over slot-nested copy", () => {
 // behavior end-to-end.
 
 describe("publishDraft", () => {
-  // NOTE: this test writes to src/cms/content.json. We restore by
-  // re-publishing the original state after each test — snapshot the
-  // committed published node first, modify through draft+publish,
-  // then re-publish a draft that restores the original.
+  // Storage isolation: inject a fresh JsonFileStorage pointing at a
+  // tmp directory so the test doesn't pollute src/cms/content.json
+  // (the previous implementation tried to write+restore the shared
+  // file, which caused two issues: a mid-restore failure left the
+  // committed JSON dirty, and the post-page-as-slot refactor changed
+  // content.json's top-level shape so the "restore" wrote a
+  // different shape than the file actually had).
+  const tmpDir = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    `tmp-publish-test-${process.pid}`,
+  );
+  const tmpPublished = join(tmpDir, "content.json");
+  const tmpDraft = join(tmpDir, "draft.json");
+
+  beforeEach(async () => {
+    const { JsonFileStorage, setCmsStorage } = await import(
+      "../cms-storage.ts"
+    );
+    setCmsStorage(new JsonFileStorage(tmpPublished, tmpDraft));
+    _invalidateCmsStoreCache();
+  });
+
+  afterEach(async () => {
+    const { _resetCmsStorage } = await import("../cms-storage.ts");
+    _resetCmsStorage();
+    _invalidateCmsStoreCache();
+    if (existsSync(tmpPublished)) unlinkSync(tmpPublished);
+    if (existsSync(tmpDraft)) unlinkSync(tmpDraft);
+    try {
+      const { rmdirSync } = await import("node:fs");
+      rmdirSync(tmpDir);
+    } catch {
+      // dir might already be gone or non-empty in flake; safe to
+      // ignore for a test cleanup.
+    }
+  });
 
   it("copies draft entries into published and clears the draft", async () => {
-    const originalHero = lookupCmsNode("cms-demo-hero");
-    expect(originalHero).not.toBeNull();
-    const originalHeadline =
-      originalHero!.configs[0].fields.headline;
+    // Seed an initial published store via the injected backend.
+    await writeDraftNode("seed-id", {
+      id: "seed-id",
+      configs: [{ match: {}, fields: { headline: "seed" } }],
+    });
+    await publishDraft();
 
-    try {
-      await writeDraftNode("cms-demo-hero", {
-        id: "cms-demo-hero",
-        configs: [
-          { match: {}, fields: { headline: "Published via test" } },
-        ],
-      });
-      await publishDraft();
-      // Draft is empty after publish.
-      expect(existsSync(DRAFT_PATH)).toBe(true);
-      // Published now carries the new value (no cookie needed).
-      const publishedView = lookupCmsNode("cms-demo-hero");
-      expect(publishedView?.configs[0].fields.headline).toBe(
-        "Published via test",
-      );
-    } finally {
-      // Restore original committed state by publishing a draft that
-      // reverts — keeps the repo tidy for the next test run.
-      await writeDraftNode("cms-demo-hero", {
-        id: "cms-demo-hero",
-        displayName: "#hero",
-        configs: [
-          {
-            match: {},
-            fields: {
-              headline: originalHeadline,
-              subhead:
-                "Every field on this page is read through accessor-tracked calls. Edit src/cms/content.json and reload to see changes.",
-              tone: "calm",
-            },
-          },
-        ],
-      });
-      await publishDraft();
-    }
+    // Now drop a draft override and publish it.
+    await writeDraftNode("seed-id", {
+      id: "seed-id",
+      configs: [{ match: {}, fields: { headline: "Published via test" } }],
+    });
+    await publishDraft();
+
+    // The draft is cleared; the published copy carries the new value.
+    const node = lookupCmsNode("seed-id");
+    expect(node?.configs[0].fields.headline).toBe("Published via test");
   });
 });

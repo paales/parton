@@ -1,90 +1,37 @@
 /**
- * CMS demo — chunk 1 end-to-end proof.
+ * CMS demo — root-as-page-slot.
  *
- * Two CMS-aware Partials on one page:
+ * The page is a single CMS-aware Partial whose body is a `<Children
+ * name="body">` slot. Every visible piece of the page (hero, slug
+ * nav, greeting, composed section, multi-slot section) is a slot
+ * child stored in `cms-demo-root.slots.body[]` in the CMS store.
  *
- *   - `#hero` (cmsId="cms-demo-hero") has no request-input dimensions
- *     in its store entry, so every visitor sees the same content.
- *     Global configuration.
+ * Why this matters: the editor's tree models the page exactly the
+ * same way it models any other slot-bearing node. Authors can
+ * reorder, remove, or `+ add` page-level blocks from the
+ * `slot:cms-demo-root:body` intermediary in the tree — no separate
+ * "add a top-level block" surface needed. This is the "100% slot-
+ * driven" vision: there is no special root-level render path,
+ * just `<Children>` all the way down.
  *
- *   - `#greeting` (cmsId="cms-demo-greeting") has per-slug configs
- *     keyed on `pathname:/cms-demo/:slug`. Visit `/cms-demo/alpha`,
- *     `/cms-demo/beta`, `/cms-demo/gamma`, or `/cms-demo/zulu` to see
- *     cascade resolution pick different fields. The `alpha` config is
- *     an exact match; `beta` / `gamma` share a config via `{in: [...]}`;
- *     `zulu` (and `/cms-demo` with no slug) fall through to the default.
- *
- * None of these field values are in code — edit `src/cms/content.json`
- * and reload. Authoring for this chunk is "hand-edit the JSON"; the
- * visual editor comes in a future chunk.
+ * Each piece of content is registered as a `page-*` block type in
+ * `src/app/blocks/catalog.ts`. Match clauses (per-slug greeting
+ * configs, etc.) live on the slot-child entries themselves; the
+ * resolver evaluates them against the request URL the same way it
+ * does for any CMS-aware Partial.
  *
  * See `notes/CMS_VISION.md` / `notes/CMS_MANIFEST.md` / `notes/CMS_EDITOR.md`.
  */
 
-import {
-  getBoolean,
-  getEnum,
-  getNumber,
-  getText,
-} from "../../framework/context.ts";
 import { Children, Partial } from "../../lib";
 import { ROOT } from "../../lib/partial-context.ts";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-
-const SLUG_LINKS: ReadonlyArray<[href: string, label: string]> = [
-  ["/cms-demo", "Default (no slug)"],
-  ["/cms-demo/alpha", "alpha"],
-  ["/cms-demo/beta", "beta"],
-  ["/cms-demo/gamma", "gamma"],
-  ["/cms-demo/zulu", "zulu (unmatched)"],
-];
 
 export function CmsDemoPage() {
   return (
     <>
-      <Partial parent={ROOT} selector="#cms-demo-hero" cmsId="cms-demo-hero">
-        <HeroBlock />
-      </Partial>
-
-      <Partial parent={ROOT} selector="#cms-demo-slug-nav">
-        <nav
-          className="mb-6 flex flex-wrap gap-1"
-          aria-label="CMS demo slugs"
-        >
-          {SLUG_LINKS.map(([href, label]) => (
-            <a
-              key={href}
-              href={href}
-              className={buttonVariants({ variant: "ghost", size: "sm" })}
-            >
-              {label}
-            </a>
-          ))}
-        </nav>
-      </Partial>
-
-      <Partial
-        parent={ROOT}
-        selector="#cms-demo-greeting"
-        cmsId="cms-demo-greeting"
-      >
-        <GreetingBlock />
-      </Partial>
-
-      <h2 className="mt-8 mb-3 text-lg font-semibold">
-        Composed from a slot
-      </h2>
-      <Partial
-        parent={ROOT}
-        selector="#cms-demo-composed"
-        cmsId="cms-demo-composed"
-      >
-        <div data-testid="cms-demo-composed-slot">
-          <Children name="body" allow=".demo-block" />
-        </div>
+      <Partial parent={ROOT} selector="#cms-demo-root" cmsId="cms-demo-root">
+        <Children name="body" allow=".page-block" />
       </Partial>
 
       <Card className="mt-8 p-5">
@@ -94,106 +41,44 @@ export function CmsDemoPage() {
           </p>
           <ul className="list-disc space-y-1 pl-5">
             <li>
-              Both blocks render content read from{" "}
+              The page above is a single Partial (
               <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-                src/cms/content.json
+                #cms-demo-root
+              </code>
+              ) whose only child is a{" "}
+              <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+                &lt;Children name="body" /&gt;
               </code>{" "}
-              through accessor calls like{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-                getText("headline")
-              </code>
-              . No component receives CMS data as props — the accessor
-              reads the ambient CMS scope opened by{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-                &lt;Partial cmsId=…&gt;
-              </code>
-              .
+              slot. Every visible piece — hero, nav, greeting,
+              composed, multi-slot — is a slot child contributed via
+              the CMS store, not an explicit JSX declaration.
             </li>
             <li>
-              Changing the URL segment changes the greeting Partial's
-              resolved config. The resolver reads each config's{" "}
+              The editor's tree (
+              <a className="underline" href="/cms-edit">
+                /cms-edit
+              </a>
+              ) shows the page root with a{" "}
               <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-                match
+                slot:cms-demo-root:body
               </code>{" "}
-              clause directly against the current request — no{" "}
+              intermediary; the slot's `+ add` palette lists every
+              registered{" "}
               <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-                getPathname
+                page-*
               </code>{" "}
-              call needed inside the block itself.
+              block type.
             </li>
             <li>
-              Edit the JSON and reload — mtime-based caching picks up
-              the change on the next request.
+              Per-slug content (the greeting card) still works — match
+              clauses on the greeting's slot-child entry resolve
+              against the request URL exactly like any top-level
+              CMS-aware Partial. Visit /cms-demo/alpha vs /cms-demo
+              to see it.
             </li>
           </ul>
         </CardContent>
       </Card>
     </>
-  );
-}
-
-function HeroBlock() {
-  const headline = getText("headline");
-  const subhead = getText("subhead");
-  const tone = getEnum("tone", ["calm", "loud"] as const);
-  return (
-    <Card
-      className={cn(
-        "mb-4 p-6",
-        tone === "loud" &&
-          "border-amber-400/60 bg-amber-500/5 dark:bg-amber-400/10",
-      )}
-      data-testid="cms-demo-hero"
-    >
-      <CardContent className="px-0">
-        <h1 className="text-2xl font-semibold" data-testid="cms-demo-hero-headline">
-          {headline}
-        </h1>
-        <p className="mt-2 text-muted-foreground">{subhead}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function GreetingBlock() {
-  const headline = getText("headline");
-  const body = getText("body");
-  const tone = getEnum("tone", ["calm", "loud"] as const);
-  const accent = getNumber("accent");
-  const emphasize = getBoolean("emphasize");
-  return (
-    <Card
-      className={cn(
-        "mb-4 p-6",
-        tone === "loud" &&
-          "border-emerald-400/60 bg-emerald-500/5 dark:bg-emerald-400/10",
-      )}
-      data-testid="cms-demo-greeting"
-    >
-      <CardContent className="px-0">
-        <div className="flex items-center gap-3">
-          <h2
-            className={cn(
-              "text-xl font-semibold",
-              emphasize && "uppercase tracking-wide",
-            )}
-            data-testid="cms-demo-greeting-headline"
-          >
-            {headline}
-          </h2>
-          {accent > 0 && (
-            <Badge variant="secondary" data-testid="cms-demo-greeting-accent">
-              accent {accent}
-            </Badge>
-          )}
-        </div>
-        <p
-          className="mt-2 text-muted-foreground"
-          data-testid="cms-demo-greeting-body"
-        >
-          {body}
-        </p>
-      </CardContent>
-    </Card>
   );
 }
