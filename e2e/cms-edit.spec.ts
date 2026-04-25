@@ -1,5 +1,10 @@
 import { expect, test, request as apiRequest } from "./fixtures.ts";
 
+// CMS editor tests mutate the shared draft.json file. Run them
+// serially so concurrent `/__test/clear-caches` calls (in another
+// test's beforeEach) don't wipe draft state mid-observation.
+test.describe.configure({ mode: "serial" });
+
 test.beforeEach(async ({ baseURL }) => {
   const ctx = await apiRequest.newContext({ baseURL });
   // Clear the draft file so each test gets a clean slate. Caches
@@ -158,6 +163,122 @@ test.describe("CMS editor — smoke", () => {
     await expect(
       page.getByTestId("cms-demo-greeting-headline"),
     ).toHaveText("Default greeting");
+  });
+
+  test.describe("slot palette", () => {
+    test("renders the slot's children with remove + reorder controls + an add-block palette", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit?select=cms-demo-composed");
+      const panel = page.getByTestId("cms-edit-slot-panel-body");
+      await expect(panel).toBeVisible();
+      // Three published children + remove/reorder + add-block buttons.
+      await expect(
+        page.getByTestId("cms-edit-slot-child-composed-hero-1"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("cms-edit-slot-child-composed-text-1"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("cms-edit-slot-child-composed-hero-2"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("cms-edit-slot-remove-composed-hero-1"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("cms-edit-slot-add-body-hero"),
+      ).toBeVisible();
+      await expect(
+        page.getByTestId("cms-edit-slot-add-body-rich-text"),
+      ).toBeVisible();
+    });
+
+    // Helper: wait for the server-action POST to complete before
+     // the test reloads. `page.reload()` starts a fresh navigation
+     // that can race with an in-flight action — the reload sees
+     // pre-action state + the subsequent assertion sits on a DOM
+     // that never updates.
+    async function waitForActionResponse(page: import("./fixtures.ts").Page) {
+      await page.waitForResponse(
+        (r) => r.request().method() === "POST" && r.ok(),
+        { timeout: 5000 },
+      );
+    }
+
+    test("adding a block appends it to the slot and shows in the preview", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit?select=cms-demo-composed");
+      // Make sure the page is fully hydrated before we try to click
+      // an action button — otherwise the click event can race the
+      // hydration boundary and end up double-submitting (React
+      // reconciles the form during commit and the second click
+      // surface inherits the same handler).
+      await page.waitForLoadState("networkidle");
+      const beforeCount = await page
+        .locator('[data-testid^="cms-edit-slot-child-"]')
+        .count();
+      expect(beforeCount).toBe(3);
+
+      const responseP = waitForActionResponse(page);
+      await page.getByTestId("cms-edit-slot-add-body-rich-text").click();
+      await responseP;
+      await page.reload();
+
+      await expect(
+        page.locator('[data-testid^="cms-edit-slot-child-"]'),
+      ).toHaveCount(4);
+      const preview = page.getByTestId("cms-edit-preview-pane");
+      await expect(
+        preview.getByTestId("composed-rich-text"),
+      ).toHaveCount(2);
+    });
+
+    test("removing a block drops it from the slot and the preview", async ({
+      page,
+    }) => {
+      await page.goto("/cms-edit?select=cms-demo-composed");
+      const responseP = waitForActionResponse(page);
+      await page
+        .getByTestId("cms-edit-slot-remove-composed-text-1")
+        .click();
+      await responseP;
+      await page.reload();
+      await expect(
+        page.getByTestId("cms-edit-slot-child-composed-text-1"),
+      ).toHaveCount(0);
+      const preview = page.getByTestId("cms-edit-preview-pane");
+      await expect(
+        preview.getByTestId("composed-rich-text"),
+      ).toHaveCount(0);
+    });
+
+    test("moving a block reorders it in the slot", async ({ page }) => {
+      await page.goto("/cms-edit?select=cms-demo-composed");
+      const responseP = waitForActionResponse(page);
+      await page
+        .locator('[aria-label="Move composed-text-1 up"]')
+        .click();
+      await responseP;
+      await page.reload();
+
+      const items = await page
+        .locator('[data-testid^="cms-edit-slot-child-"]')
+        .all();
+      const ids = await Promise.all(
+        items.map(async (el) =>
+          (await el.getAttribute("data-testid"))!.replace(
+            "cms-edit-slot-child-",
+            "",
+          ),
+        ),
+      );
+      expect(ids).toEqual([
+        "composed-text-1",
+        "composed-hero-1",
+        "composed-hero-2",
+      ]);
+    });
   });
 
   test("save writes to draft and the preview picks up the new value", async ({

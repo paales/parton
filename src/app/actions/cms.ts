@@ -13,19 +13,37 @@
  */
 
 import {
-  lookupCmsNode,
+  getBlockSpec,
+  lookupDraftNode,
   publishDraft,
   writeDraftNode,
   type CmsConfig,
   type CmsNode,
 } from "../../framework/cms-runtime.ts";
 
+/**
+ * Mutations that change slot structure (add/remove/reorder) need to
+ * refetch both the preview Partial (to re-render the actual content)
+ * AND the editor's tree + field panels (to re-render the slot list,
+ * config tabs, etc.). Baking the selector list into a helper keeps
+ * every action's return in sync.
+ */
+function invalidateEditorAround(cmsId: string): {
+  invalidate: { selector: string };
+} {
+  return {
+    invalidate: {
+      selector: `#${cmsId} #cms-edit-tree #cms-edit-fields`,
+    },
+  };
+}
+
 export async function saveCmsFields(
   cmsId: string,
   configIndex: number,
   formData: FormData,
 ): Promise<{ invalidate: { selector: string } }> {
-  const existing: CmsNode = lookupCmsNode(cmsId) ?? {
+  const existing: CmsNode = lookupDraftNode(cmsId) ?? {
     id: cmsId,
     configs: [],
   };
@@ -92,7 +110,7 @@ export async function saveCmsFields(
   }
 
   writeDraftNode(cmsId, node);
-  return { invalidate: { selector: `#${cmsId}` } };
+  return invalidateEditorAround(cmsId);
 }
 
 export async function publishCmsDraft(): Promise<{
@@ -103,4 +121,146 @@ export async function publishCmsDraft(): Promise<{
   // updated stores. A future iteration could target only the
   // previously-drafted ids.
   return { invalidate: { selector: "#cms-edit-tree" } };
+}
+
+/**
+ * Deep clone of a CmsNode with its configs and slot children. Used
+ * by mutation actions so we never write back the cached object that
+ * `lookupCmsNode` returned — mutating it would silently corrupt the
+ * in-memory index for other concurrent reads.
+ */
+function cloneNode(node: CmsNode): CmsNode {
+  return {
+    ...node,
+    configs: node.configs.map((c) => ({
+      match: { ...c.match },
+      fields: { ...c.fields },
+    })),
+    slots: node.slots
+      ? Object.fromEntries(
+          Object.entries(node.slots).map(([name, children]) => [
+            name,
+            children.map(cloneNode),
+          ]),
+        )
+      : undefined,
+  };
+}
+
+/**
+ * Generate a unique block id for a new slot entry. 8 chars of
+ * base36 randomness after the type prefix — collision space is
+ * ~2.8T, overkill for draft storage.
+ */
+function generateBlockId(type: string): string {
+  return `${type}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Append a newly-instantiated block of `blockType` to `parentCmsId`'s
+ * `slotName` slot. Writes the parent to the draft store with the
+ * new child attached. The child starts with an empty default config
+ * — authors fill fields via the normal `saveCmsFields` flow on the
+ * new block.
+ *
+ * Throws if the block type isn't registered (the palette shouldn't
+ * offer unregistered types, but we guard at the action boundary too).
+ */
+export async function addBlockToSlot(
+  parentCmsId: string,
+  slotName: string,
+  blockType: string,
+): Promise<{ invalidate: { selector: string } }> {
+  if (!getBlockSpec(blockType)) {
+    throw new Error(
+      `addBlockToSlot: block type "${blockType}" is not registered. ` +
+        `Add it to the app's catalog before wiring it into the palette.`,
+    );
+  }
+  const existing = lookupDraftNode(parentCmsId);
+  if (!existing) {
+    throw new Error(
+      `addBlockToSlot: parent "${parentCmsId}" not found in draft or published stores.`,
+    );
+  }
+  const parent = cloneNode(existing);
+  const slots = parent.slots ?? {};
+  const children = slots[slotName] ?? [];
+  const newChild: CmsNode = {
+    id: generateBlockId(blockType),
+    type: blockType,
+    configs: [{ match: {}, fields: {} }],
+  };
+  parent.slots = {
+    ...slots,
+    [slotName]: [...children, newChild],
+  };
+  writeDraftNode(parentCmsId, parent);
+  return invalidateEditorAround(parentCmsId);
+}
+
+/**
+ * Remove a slot child by `childCmsId` from `parentCmsId`'s `slotName`
+ * slot. Idempotent — if the child isn't found the parent is written
+ * back unchanged. The child's top-level draft entry (if any) is not
+ * deleted here; authors who want a clean store can re-publish.
+ */
+export async function removeBlockFromSlot(
+  parentCmsId: string,
+  slotName: string,
+  childCmsId: string,
+): Promise<{ invalidate: { selector: string } }> {
+  const existing = lookupDraftNode(parentCmsId);
+  if (!existing) {
+    throw new Error(
+      `removeBlockFromSlot: parent "${parentCmsId}" not found.`,
+    );
+  }
+  const parent = cloneNode(existing);
+  const slots = parent.slots ?? {};
+  const children = slots[slotName] ?? [];
+  parent.slots = {
+    ...slots,
+    [slotName]: children.filter((c) => c.id !== childCmsId),
+  };
+  writeDraftNode(parentCmsId, parent);
+  return invalidateEditorAround(parentCmsId);
+}
+
+/**
+ * Reorder a slot's children. `direction` is `"up"` (swap with
+ * previous sibling) or `"down"` (swap with next). No-op at the
+ * boundaries. Simple one-step move so the UI can expose `↑ / ↓`
+ * buttons without a drag-drop layer yet.
+ */
+export async function moveBlockInSlot(
+  parentCmsId: string,
+  slotName: string,
+  childCmsId: string,
+  direction: "up" | "down",
+): Promise<{ invalidate: { selector: string } }> {
+  const existing = lookupDraftNode(parentCmsId);
+  if (!existing) {
+    throw new Error(
+      `moveBlockInSlot: parent "${parentCmsId}" not found.`,
+    );
+  }
+  const parent = cloneNode(existing);
+  const slots = parent.slots ?? {};
+  const children = [...(slots[slotName] ?? [])];
+  const idx = children.findIndex((c) => c.id === childCmsId);
+  if (idx < 0) {
+    // Nothing to do.
+    return invalidateEditorAround(parentCmsId);
+  }
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= children.length) {
+    return invalidateEditorAround(parentCmsId);
+  }
+  const tmp = children[idx];
+  children[idx] = children[swapIdx];
+  children[swapIdx] = tmp;
+  parent.slots = { ...slots, [slotName]: children };
+  writeDraftNode(parentCmsId, parent);
+  return invalidateEditorAround(parentCmsId);
 }

@@ -116,6 +116,40 @@ describe("writeDraftNode", () => {
   });
 });
 
+describe("lookupCmsNode — top-level draft wins over slot-nested copy", () => {
+  // Regression cover: when the editor saves a slot child via
+  // `writeDraftNode(childId, …)`, the resulting draft store has the
+  // child BOTH at top-level (fresh) AND nested inside the parent's
+  // slots (stale, from whenever the parent was last written). The
+  // flat index must prefer top-level so lookupCmsNode returns the
+  // fresh version.
+  it("prefers a top-level draft entry over the same id nested in a parent slot", () => {
+    // Parent in draft with a stale copy of the child.
+    writeDraftNode("cms-demo-composed", {
+      id: "cms-demo-composed",
+      configs: [{ match: {}, fields: {} }],
+      slots: {
+        body: [
+          {
+            id: "composed-hero-1",
+            type: "hero",
+            configs: [{ match: {}, fields: { headline: "STALE" } }],
+          },
+        ],
+      },
+    });
+    // Child at top-level with fresh content.
+    writeDraftNode("composed-hero-1", {
+      id: "composed-hero-1",
+      type: "hero",
+      configs: [{ match: {}, fields: { headline: "FRESH" } }],
+    });
+
+    const node = lookupCmsNode("composed-hero-1", draftRequest());
+    expect(node?.configs[0].fields.headline).toBe("FRESH");
+  });
+});
+
 describe("publishDraft", () => {
   // NOTE: this test writes to src/cms/content.json. We restore by
   // re-publishing the original state after each test — snapshot the

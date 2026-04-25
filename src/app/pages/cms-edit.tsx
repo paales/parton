@@ -34,7 +34,8 @@ import { getSearchParam, setCookie } from "../../framework/context.ts";
 import {
   CMS_DRAFT_COOKIE,
   listAllCmsNodes,
-  lookupCmsNode,
+  listBlockTypes,
+  lookupDraftNode,
   type CmsConfig,
   type CmsNode,
   type ContentFieldKind,
@@ -51,7 +52,13 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { CmsDemoPage } from "./cms-demo.tsx";
-import { publishCmsDraft, saveCmsFields } from "../actions/cms.ts";
+import {
+  addBlockToSlot,
+  moveBlockInSlot,
+  publishCmsDraft,
+  removeBlockFromSlot,
+  saveCmsFields,
+} from "../actions/cms.ts";
 
 const PREVIEW_FRAME_URL = "/cms-demo?cms-draft=1";
 
@@ -95,7 +102,9 @@ export function CmsEditPage() {
           className="overflow-y-auto border-l bg-muted/30 p-4"
           data-testid="cms-edit-field-pane"
         >
-          <FieldPanel selected={selected} configIndex={configIndex} />
+          <Partial parent={ROOT} selector="#cms-edit-fields">
+            <FieldPanel selected={selected} configIndex={configIndex} />
+          </Partial>
         </aside>
       </div>
     </Partial>
@@ -221,7 +230,7 @@ async function FieldPanel({
       </div>
     );
   }
-  const node = lookupCmsNode(selected);
+  const node = lookupDraftNode(selected);
   const catalog = await getCatalogManifest();
   const manifest = node?.type ? catalog[node.type] : undefined;
   // Default tab: the `match: {}` config if present (most permissive);
@@ -292,6 +301,164 @@ async function FieldPanel({
             </a>
           </div>
         </form>
+      )}
+
+      {node?.slots &&
+        Object.entries(node.slots).map(([slotName, children]) => (
+          <SlotPanel
+            key={slotName}
+            parentCmsId={selected}
+            slotName={slotName}
+            children={children}
+          />
+        ))}
+    </div>
+  );
+}
+
+// ─── Slot palette ──────────────────────────────────────────────────────
+
+function SlotPanel({
+  parentCmsId,
+  slotName,
+  children,
+}: {
+  parentCmsId: string;
+  slotName: string;
+  children: readonly CmsNode[];
+}) {
+  const types = listBlockTypes();
+  return (
+    <div
+      className="space-y-2 rounded-lg border bg-background/60 p-3"
+      data-testid={`cms-edit-slot-panel-${slotName}`}
+    >
+      <div className="flex items-center justify-between">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+          Slot: {slotName}
+        </p>
+        <span className="text-[0.65rem] text-muted-foreground">
+          {children.length}{" "}
+          {children.length === 1 ? "block" : "blocks"}
+        </span>
+      </div>
+
+      {children.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground">Empty.</p>
+      ) : (
+        <ul className="space-y-1">
+          {children.map((child, idx) => (
+            <li
+              key={child.id}
+              className="flex items-center gap-1 rounded-md bg-muted/40 px-2 py-1 text-xs"
+              data-testid={`cms-edit-slot-child-${child.id}`}
+            >
+              <a
+                href={cmsEditHref(child.id, -1)}
+                className="flex-1 truncate hover:underline"
+              >
+                <span className="font-medium">{child.id}</span>
+                {child.type && (
+                  <span className="ml-2 text-[0.65rem] text-muted-foreground">
+                    {child.type}
+                  </span>
+                )}
+              </a>
+              <form
+                action={moveBlockInSlot.bind(
+                  null,
+                  parentCmsId,
+                  slotName,
+                  child.id,
+                  "up",
+                )}
+                className="contents"
+              >
+                <button
+                  type="submit"
+                  className="rounded px-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                  disabled={idx === 0}
+                  title="Move up"
+                  aria-label={`Move ${child.id} up`}
+                >
+                  ↑
+                </button>
+              </form>
+              <form
+                action={moveBlockInSlot.bind(
+                  null,
+                  parentCmsId,
+                  slotName,
+                  child.id,
+                  "down",
+                )}
+                className="contents"
+              >
+                <button
+                  type="submit"
+                  className="rounded px-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                  disabled={idx === children.length - 1}
+                  title="Move down"
+                  aria-label={`Move ${child.id} down`}
+                >
+                  ↓
+                </button>
+              </form>
+              <form
+                action={removeBlockFromSlot.bind(
+                  null,
+                  parentCmsId,
+                  slotName,
+                  child.id,
+                )}
+                className="contents"
+              >
+                <button
+                  type="submit"
+                  className="rounded px-1 text-red-600/80 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/40"
+                  title="Remove"
+                  aria-label={`Remove ${child.id}`}
+                  data-testid={`cms-edit-slot-remove-${child.id}`}
+                >
+                  ×
+                </button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {types.length > 0 && (
+        <div>
+          <p className="mb-1 text-[0.65rem] uppercase tracking-wide text-muted-foreground">
+            Add block
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {types.map((type) => (
+              <form
+                key={type}
+                action={addBlockToSlot.bind(
+                  null,
+                  parentCmsId,
+                  slotName,
+                  type,
+                )}
+                className="contents"
+              >
+                <button
+                  type="submit"
+                  className={buttonVariants({
+                    size: "sm",
+                    variant: "outline",
+                  })}
+                  data-testid={`cms-edit-slot-add-${slotName}-${type}`}
+                >
+                  + {type}
+                </button>
+              </form>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

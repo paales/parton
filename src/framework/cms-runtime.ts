@@ -199,11 +199,24 @@ let draftSlot: CacheSlot | null = null;
 
 function buildIndex(store: CmsStore): Map<string, CmsNode> {
   const index = new Map<string, CmsNode>();
-  const walk = (node: CmsNode): void => {
+  // Pass 1: every top-level entry. These are the "authoritative"
+  // versions — a draft write of a slot child goes here, so we want
+  // it to take precedence over any stale nested copy that still
+  // lives inside a parent's `slots` array.
+  for (const node of Object.values(store.partials)) {
     index.set(node.id, node);
-    if (node.slots) {
-      for (const entries of Object.values(node.slots)) {
-        for (const child of entries) walk(child);
+  }
+  // Pass 2: recurse into slots and register nested children that
+  // DON'T already have a top-level entry. This covers the published
+  // shape (slot children are only stored inline, never at the top
+  // level) without letting stale inline copies shadow a fresh
+  // top-level edit in the draft store.
+  const walk = (node: CmsNode): void => {
+    if (!node.slots) return;
+    for (const entries of Object.values(node.slots)) {
+      for (const child of entries) {
+        if (!index.has(child.id)) index.set(child.id, child);
+        walk(child);
       }
     }
   };
@@ -338,6 +351,23 @@ export function lookupCmsNode(
     const draftHit = loadDraftStore().index.get(cmsId);
     if (draftHit) return draftHit;
   }
+  return loadPublishedStore().index.get(cmsId) ?? null;
+}
+
+/**
+ * Editor-mode lookup: always prefer the draft store, fall back to
+ * published. Use this in editor server actions + the editor page's
+ * own (non-preview) reads, where the current request might not carry
+ * the draft cookie yet (first page load hasn't round-tripped
+ * Set-Cookie) but the editor still wants to see draft content.
+ *
+ * Do NOT use from application-facing code paths — the request-based
+ * `lookupCmsNode` is the default, and draft visibility is
+ * authoritatively keyed off the `cms-draft=1` cookie / query param.
+ */
+export function lookupDraftNode(cmsId: string): CmsNode | null {
+  const draftHit = loadDraftStore().index.get(cmsId);
+  if (draftHit) return draftHit;
   return loadPublishedStore().index.get(cmsId) ?? null;
 }
 
