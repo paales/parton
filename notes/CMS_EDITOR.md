@@ -3,6 +3,14 @@
 **Added:** 2026-04-25
 **Status:** MVE shipped 2026-04-25 (chunk 3) — tree + preview + field form + save + publish. Per-config tabs, block palette, drag-drop, entity pickers, draft isolation still deferred. Runtime underneath (chunk 1 content accessors + resolver, chunk 2a slots, chunk 2b provides/getReference, chunk 3 draft/published + catalog prerender) shipped 2026-04-25. Companion: `CMS_VISION.md` (why), `CMS_MANIFEST.md` (data model).
 
+**Update 2026-04-25b:** tree polish round — slot intermediary split into a label HEADER row at the top of the slot's children plus a `+ Block` dropdown FOOTER row at the bottom (matches Shopify / WordPress / Storyblok "list grows downward" mental model). Tree labels fall back to a node's first `title` / `headline` / `name` field when no `displayName` is set, so blocks like product cards show "Linen apron" instead of `#product-card-1`. Tree column widened to 320px and labels carry a `title` attribute so heavy truncation still surfaces full names on hover. Group's `items` slot now uses `allow="*"` (wildcard) so a Group can compose anything its enclosing slot already permits.
+
+**Update 2026-04-25c:** save-protocol fix — the client-side cache substitution (`substituteNested` in `src/lib/partial-client.tsx`) now recursively walks INTO substituted wrappers. Before, a cache-mode refetch that re-rendered an ancestor (e.g. `cms-demo-root`) but emitted fp-skip placeholders for its children would substitute the ancestor wrapper from cache and stop — the inner placeholders survived as `<i hidden>` markers in the DOM, leaving the partial's region blank. Three reported regressions all traced back to this:
+- "Two consecutive moves on the same slot child blank the preview"
+- "Save-to-draft after navigating the preview frame doesn't update the preview"
+- "Selecting page-greeting then clicking the alpha frame nav loses the field form" (same cache-substitution miss surfacing on the editor's right pane)
+The fix: on every substitution (placeholder → wrapper, OR wrapper → fresh wrapper), recurse into the result with the substituted id as the new `skipId` so a self-pointing reference can't loop.
+
 ---
 
 ## One-liner

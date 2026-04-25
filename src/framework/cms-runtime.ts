@@ -313,7 +313,7 @@ function isDraftRequest(request: Request | undefined): boolean {
  *     palette (add/reorder/remove). `slotName` and `parentId` are
  *     filled in.
  */
-export type CmsTreeEntryKind = "node" | "slot";
+export type CmsTreeEntryKind = "node" | "slot" | "slot-add";
 
 export interface CmsTreeEntry {
   id: string;
@@ -322,11 +322,12 @@ export interface CmsTreeEntry {
   displayName?: string;
   depth: number;
   /** For `"node"` entries: the slot of the parent this node hangs in
-   *  (undefined for top-level nodes). For `"slot"` entries: the slot
-   *  name. */
+   *  (undefined for top-level nodes). For `"slot"` / `"slot-add"`
+   *  entries: the slot name. */
   slotName?: string;
   /** For `"node"` entries: the `cmsId` of the parent node (undefined
-   *  at top level). For `"slot"` entries: the parent node's `cmsId`. */
+   *  at top level). For `"slot"` / `"slot-add"` entries: the parent
+   *  node's `cmsId`. */
   parentId?: string;
   /** `true` when this id only exists in draft (no published
    *  counterpart yet) — added by the editor, never published. */
@@ -339,18 +340,27 @@ export interface CmsTreeEntry {
   hasDraft: boolean;
 }
 
-/** Synthetic id for a slot tree entry. */
+/** Synthetic id for a slot header tree entry. */
 export function slotEntryId(parentId: string, slotName: string): string {
   return `slot:${parentId}:${slotName}`;
 }
 
-/** Parse a slot entry id back into its `{parentId, slotName}` parts,
- *  or `null` if the id isn't a slot entry. */
+/** Synthetic id for the slot-add tree entry (the `+ <type>` palette
+ *  rendered AT THE END of a slot's children). */
+export function slotAddEntryId(parentId: string, slotName: string): string {
+  return `slot-add:${parentId}:${slotName}`;
+}
+
+/** Parse a slot entry id (either header `slot:` or footer `slot-add:`)
+ *  back into its `{parentId, slotName}` parts, or `null` if the id
+ *  isn't a slot entry. */
 export function parseSlotEntryId(
   id: string,
 ): { parentId: string; slotName: string } | null {
-  if (!id.startsWith("slot:")) return null;
-  const rest = id.slice("slot:".length);
+  let rest: string;
+  if (id.startsWith("slot-add:")) rest = id.slice("slot-add:".length);
+  else if (id.startsWith("slot:")) rest = id.slice("slot:".length);
+  else return null;
   const colon = rest.lastIndexOf(":");
   if (colon < 0) return null;
   return { parentId: rest.slice(0, colon), slotName: rest.slice(colon + 1) };
@@ -419,7 +429,17 @@ export function buildCmsTreeEntries(
       id: node.id,
       kind: "node",
       type: node.type,
-      displayName: node.displayName,
+      // Editor needs a HUMAN label for each row. Order:
+      //   1. explicit `displayName` (author wrote it on the node)
+      //   2. derived label from a well-known content field on the
+      //      default config (title / headline / name) — the
+      //      product-card "Linen apron" case the user flagged
+      //   3. undefined → the editor falls back to `#${id}`
+      // Step 2 keeps the tree readable even when authors haven't
+      // bothered to set a displayName per node — common for blocks
+      // contributed via the +add palette which only seeds an empty
+      // default config.
+      displayName: node.displayName ?? deriveLabelFromConfigs(node.configs),
       depth,
       slotName,
       parentId,
@@ -430,14 +450,22 @@ export function buildCmsTreeEntries(
       hasDraft,
     });
     if (!node.slots) return;
-    // Every slot a parent declares gets its own
-    // `slot:<parent>:<name>` intermediary entry. The intermediary
-    // hosts the slot management UI (+add-block palette and the
-    // boundary marker for slot membership) inline in the tree, so
-    // the field panel doesn't need to render an inline SlotPanel
-    // anymore. The intermediary itself is non-selectable (the
-    // editor renders it as plain text, not a link) — clicking it is
-    // a no-op; only its embedded action buttons fire.
+    // Every slot a parent declares gets two synthetic entries:
+    //
+    //   1. `slot:<parent>:<name>` — header at the top of the slot's
+    //      children. Just a label (▸ <slotName>); non-selectable
+    //      (rendered as plain text, not a link).
+    //   2. `slot-add:<parent>:<name>` — footer at the bottom of the
+    //      slot's children. Hosts the +add-block palette so authors
+    //      naturally append blocks at the end of the list (matches
+    //      the typical "list grows downward" mental model — Shopify,
+    //      WordPress, Storyblok all put +add at the bottom).
+    //
+    // Splitting the intermediary into header + footer cleans up the
+    // tree: the slot row is no longer a wide cluster of `+ type`
+    // buttons that wraps to multiple lines and squeezes the slot
+    // name. See the issue report (2026-04-25) for the visual breakage
+    // before this split.
     for (const [name, children] of Object.entries(node.slots)) {
       entries.push({
         id: slotEntryId(node.id, name),
@@ -456,6 +484,15 @@ export function buildCmsTreeEntries(
         const effective = merged[child.id] ?? child;
         walk(effective, depth + 2, name, node.id);
       }
+      entries.push({
+        id: slotAddEntryId(node.id, name),
+        kind: "slot-add",
+        depth: depth + 2,
+        slotName: name,
+        parentId: node.id,
+        draftOnly: false,
+        hasDraft: false,
+      });
     }
   };
   for (const node of Object.values(merged)) {
@@ -465,6 +502,24 @@ export function buildCmsTreeEntries(
     walk(node, 0, undefined, undefined);
   }
   return entries;
+}
+
+/**
+ * Pick the best human label from a node's default config when the
+ * author hasn't set an explicit `displayName`. Walks the configs for
+ * the first `match: {}` entry (or the first config if none match) and
+ * tries common title-shaped field names in order. Returns undefined
+ * if nothing useful is set — caller falls back to `#${id}`.
+ */
+function deriveLabelFromConfigs(configs: readonly CmsConfig[]): string | undefined {
+  if (configs.length === 0) return undefined;
+  const defaultConfig =
+    configs.find((c) => Object.keys(c.match).length === 0) ?? configs[0];
+  for (const field of ["title", "headline", "name", "label"] as const) {
+    const v = defaultConfig.fields[field];
+    if (typeof v === "string" && v.trim() !== "") return v;
+  }
+  return undefined;
 }
 
 export function listAllCmsNodes(): CmsTreeEntry[] {

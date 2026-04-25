@@ -13,6 +13,15 @@
  * variants. Those can be additive later — the current shape is
  * enough to demonstrate aligning fields inside a card and arranging
  * cards in a grid row.
+ *
+ * Slot accept policy: Group's `items` slot uses `allow="*"` — accept
+ * any registered block. Group is meant to compose anything the parent
+ * slot permits (page-level blocks at the page level, group-items
+ * inside another group, demo-blocks inside a composed section), and
+ * forcing a single tag here would break one of those positions. The
+ * "ideally inherit the parent slot's allow" semantic is left for a
+ * future iteration — wildcard is the simplest answer that doesn't
+ * pin Group to any single role.
  */
 import { getEnum, getNumber } from "../../framework/context.ts";
 import { Children } from "../../lib";
@@ -77,7 +86,7 @@ export function GroupBlock() {
       }}
       data-testid="group-block"
     >
-      <Children name="items" allow=".group-item" />
+      <Children name="items" allow="*" />
     </div>
   );
 }

@@ -231,9 +231,29 @@ function substituteNested(
 
   // Placeholder: substitute from cache. Id comes from the
   // `data-partial-id` prop (stable), not the key (Flight composites).
+  //
+  // Recurse into the cached wrapper. A wrapper produced by a
+  // cache-mode refetch can carry INTERNAL placeholders for partials
+  // whose fp matched (no fresh content emitted server-side). Those
+  // inner placeholders need to be substituted with the next cache
+  // entries — without the recursion the inner placeholders survive
+  // into the rendered tree as `<i hidden>` markers and the partial's
+  // descendant content is empty in the DOM. This was the
+  // "consecutive moves blank the preview" bug (issue #1, 2026-04-25):
+  // move 2's cms-demo-root wrapper held 6 Fragments-with-placeholder
+  // children, and the substitution stopped at the wrapper without
+  // unfolding those nested placeholders against the cache entries
+  // populated by move 1.
+  //
+  // Pass `id` as the new skipId so the recursion can't loop on a
+  // wrapper that contains a placeholder pointing to itself (which
+  // happens any time a fp-skipped partial gets cached).
   if (isPlaceholder(node)) {
     const id = getPlaceholderId(node);
-    if (id && id !== skipId) return cache.get(id) ?? node;
+    if (id && id !== skipId) {
+      const fresh = cache.get(id);
+      return fresh ? substituteNested(fresh, cache, id) : node;
+    }
   }
 
   // Partial-shape wrapper: if there's a fresh cache entry, use it.
@@ -250,7 +270,16 @@ function substituteNested(
     const id = getPartialId(node);
     if (id && id !== skipId) {
       const fresh = cache.get(id);
-      if (fresh && fresh !== node) return fresh;
+      if (fresh && fresh !== node) {
+        // Recurse into the substituted wrapper. A cache-mode
+        // refetch can produce a wrapper whose children are
+        // placeholders or stale nested wrappers — without recursing
+        // those inner stale references survive into the rendered
+        // tree, leaving partial regions blank. Pass `id` as the new
+        // skipId so the recursion can't loop on a wrapper that
+        // contains a placeholder pointing to itself.
+        return substituteNested(fresh, cache, id);
+      }
       // Wrapper unchanged — keep descending so nested partials whose
       // cache entries DID change still get substituted. Lazy-safety:
       // any unresolved Flight lazy hits the `unwrapLazy` branch

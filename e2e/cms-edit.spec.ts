@@ -149,7 +149,17 @@ test.describe("CMS editor — smoke", () => {
     // what we're editing, so its rendered headline should stay put
     // across the save round-trip.
     await expect(preview).toContainText("Default greeting");
+    // Wait for the action POST to land on disk before navigating
+    // away. `page.goto` fires before the server-action POST drains
+    // otherwise — the navigation aborts the in-flight request, the
+    // draft never gets written, and the assertion below sees the
+    // original published value instead of the edited one.
+    const responseP = page.waitForResponse(
+      (r) => r.request().method() === "POST" && r.ok(),
+      { timeout: 5000 },
+    );
     await page.getByRole("button", { name: "Save to draft" }).click();
+    await responseP;
     // After the invalidate-driven refetch completes, the preview
     // still shows the default value — confirming the edit didn't
     // bleed into the default config.
@@ -172,11 +182,14 @@ test.describe("CMS editor — smoke", () => {
 
   test.describe("slot palette (in tree)", () => {
     // The slot palette + reorder/remove buttons live INLINE in the
-    // tree now (not in the right field pane). The slot intermediary
-    // hosts +add-block buttons; each slot child row hosts ↑/↓/×
-    // controls. These tests pin that wiring.
+    // tree now (not in the right field pane). A slot HEADER row at
+    // the top of each slot's children carries the slot label; a
+    // slot FOOTER row at the bottom carries a `+ Block` dropdown
+    // trigger that lists the block types satisfying the slot's
+    // `allow` selector. Each slot child row hosts ↑/↓/× controls.
+    // These tests pin that wiring.
 
-    test("the slot intermediary tree row exposes +add-<type> for every registered block type", async ({
+    test("the slot footer +Block dropdown lists every block type for the slot", async ({
       page,
     }) => {
       await page.goto("/cms-edit");
@@ -185,6 +198,11 @@ test.describe("CMS editor — smoke", () => {
           "cms-edit-tree-entry-slot:cms-demo-composed:body",
         ),
       ).toBeVisible();
+      await page
+        .getByTestId(
+          "cms-edit-slot-add-trigger-cms-demo-composed-body",
+        )
+        .click();
       await expect(
         page.getByTestId("cms-edit-slot-add-cms-demo-composed-body-hero"),
       ).toBeVisible();
@@ -241,6 +259,14 @@ test.describe("CMS editor — smoke", () => {
       await expect(composedChildren).toHaveCount(3);
 
       const responseP = waitForActionResponse(page);
+      // Open the dropdown, then click the dropdown menu item for
+      // rich-text. The dropdown trigger and items live in the
+      // slot footer row.
+      await page
+        .getByTestId(
+          "cms-edit-slot-add-trigger-cms-demo-composed-body",
+        )
+        .click();
       await page
         .getByTestId("cms-edit-slot-add-cms-demo-composed-body-rich-text")
         .click();
@@ -675,29 +701,35 @@ test.describe("CMS editor — smoke", () => {
       }
     });
 
-    test("the items slot's +add palette only shows .group-item types", async ({
+    test("the items slot's +add palette lists every registered block (wildcard)", async ({
       page,
     }) => {
       await page.goto("/cms-edit");
-      // group + product-card both carry `.group-item`, so both
-      // appear in this slot's palette.
-      await expect(
-        page.getByTestId(
-          "cms-edit-slot-add-cms-demo-product-grid-items-group",
-        ),
-      ).toBeVisible();
-      await expect(
-        page.getByTestId(
-          "cms-edit-slot-add-cms-demo-product-grid-items-product-card",
-        ),
-      ).toBeVisible();
-      // A page-level-only block like `page-hero` is NOT in this
-      // slot's palette (it doesn't carry `.group-item`).
-      await expect(
-        page.getByTestId(
-          "cms-edit-slot-add-cms-demo-product-grid-items-page-hero",
-        ),
-      ).toHaveCount(0);
+      // Group's `items` slot uses `allow="*"` (wildcard) so the
+      // palette lists every registered block — group, product-card,
+      // and any page-level block too. The previous tag-restricted
+      // behavior was too narrow: a Group is meant to compose
+      // anything its enclosing slot already permits, and there's no
+      // single tag that captures that intent.
+      await page
+        .getByTestId(
+          "cms-edit-slot-add-trigger-cms-demo-product-grid-items",
+        )
+        .click();
+      for (const type of [
+        "group",
+        "product-card",
+        "page-hero",
+        "page-greeting",
+        "hero",
+        "rich-text",
+      ]) {
+        await expect(
+          page.getByTestId(
+            `cms-edit-slot-add-cms-demo-product-grid-items-${type}`,
+          ),
+        ).toBeVisible();
+      }
     });
 
     test("the preview renders all three product cards with their fields", async ({
@@ -789,6 +821,11 @@ test.describe("CMS editor — smoke", () => {
       page,
     }) => {
       await page.goto("/cms-edit");
+      // Open the page-root body slot's +Block dropdown, then
+      // assert every page-* block appears as a menu item.
+      await page
+        .getByTestId("cms-edit-slot-add-trigger-cms-demo-root-body")
+        .click();
       // The +add palette is filtered server-side by the slot's
       // `allow=".page-block"` declaration; every page-* block in
       // the catalog carries the `.page-block` shared tag.
@@ -805,6 +842,139 @@ test.describe("CMS editor — smoke", () => {
           ),
         ).toBeVisible();
       }
+    });
+  });
+
+  test.describe("regressions reported 2026-04-25", () => {
+    // The user flagged three bugs that all share the same root —
+    // selector-targeted refetches into the preview frame don't
+    // reliably re-render the targeted partial when its CMS state
+    // changed in the action that fired the refetch.
+    //
+    // The fix has to ensure the cache-mode rebuild (via
+    // `partialFromSnapshot`) sees the same CMS-scope context the
+    // streaming render had — specifically the preview frame's
+    // request URL — so the per-Partial fingerprint is computed
+    // identically on both sides of the fp-skip handshake.
+
+    test("two consecutive moves on the same slot child keep the preview content rendered", async ({
+      page,
+    }) => {
+      // Issue 1: clicking page-slug-nav, then ↓ (move down), then
+      // page-slug-nav again, then ↓ a second time — after the
+      // second move the preview pane goes blank.
+      await page.goto("/cms-edit");
+      await page.waitForLoadState("networkidle");
+
+      await page
+        .getByTestId("cms-edit-tree-entry-cms-demo-slug-nav")
+        .click();
+      await page.waitForLoadState("networkidle");
+
+      // First move: works.
+      await page
+        .locator('[aria-label="Move cms-demo-slug-nav down"]')
+        .click();
+      await page.waitForLoadState("networkidle");
+      const preview = page.getByTestId("cms-edit-preview-pane");
+      await expect(preview).toContainText("Welcome to the CMS demo");
+
+      // Re-select slug-nav, then move down again. Pre-fix: this
+      // wipes the cms-demo-root subtree from the DOM.
+      await page
+        .getByTestId("cms-edit-tree-entry-cms-demo-slug-nav")
+        .click();
+      await page.waitForLoadState("networkidle");
+      await page
+        .locator('[aria-label="Move cms-demo-slug-nav down"]')
+        .click();
+      await page.waitForLoadState("networkidle");
+
+      // The preview MUST still show the demo content. Pre-fix the
+      // cms-demo-root subtree disappears from the DOM entirely:
+      // children render as `<i hidden data-partial-id>` placeholders
+      // because the cache substitution stops at the first nested
+      // wrapper instead of recursively unfolding inner placeholders.
+      await expect(preview).toContainText("Welcome to the CMS demo");
+      await expect(preview.getByTestId("cms-demo-hero")).toBeVisible();
+      await expect(preview.getByTestId("cms-demo-greeting")).toBeVisible();
+      await expect(preview.getByTestId("product-card")).toHaveCount(3);
+    });
+
+    test("preview-frame nav doesn't lose the selected node in the field pane", async ({
+      page,
+    }) => {
+      // Issue 4: after selecting page-greeting and clicking the
+      // alpha preview-nav button, the field pane should still show
+      // the greeting form (the selection is page-scoped, the alpha
+      // click only changes the frame URL).
+      await page.goto("/cms-edit");
+      await page.waitForLoadState("networkidle");
+
+      await page
+        .getByTestId("cms-edit-tree-entry-cms-demo-greeting")
+        .click();
+      await page.waitForLoadState("networkidle");
+      // The field pane renders the node's `displayName` ("#greeting"
+      // here) when present, so we assert against that label rather
+      // than the raw cmsId.
+      await expect(
+        page.getByTestId("cms-edit-selected-id"),
+      ).toContainText("#greeting");
+
+      // Navigate the preview frame to /cms-demo/alpha.
+      await page
+        .getByTestId(
+          "cms-edit-preview-nav-/cms-demo/alpha?cms-draft=1",
+        )
+        .click({ force: true });
+      await page.waitForLoadState("networkidle");
+
+      // Selected partial should still be greeting. The form must
+      // still show its inputs (they were dropping out when the
+      // frame nav fired).
+      await expect(
+        page.getByTestId("cms-edit-selected-id"),
+      ).toContainText("#greeting");
+      await expect(
+        page.getByTestId("cms-edit-field-input-headline"),
+      ).toBeVisible();
+    });
+
+    test("save-to-draft still updates the preview after navigating the preview frame", async ({
+      page,
+    }) => {
+      // Issue 5: after clicking alpha (preview frame URL changes
+      // to /cms-demo/alpha?cms-draft=1) then selecting #hero,
+      // editing the headline and saving doesn't update the preview.
+      // Without the alpha click, the same flow works fine.
+      await page.goto("/cms-edit");
+      await page.waitForLoadState("networkidle");
+
+      await page
+        .getByTestId(
+          "cms-edit-preview-nav-/cms-demo/alpha?cms-draft=1",
+        )
+        .click({ force: true });
+      await page.waitForLoadState("networkidle");
+
+      await page
+        .getByTestId("cms-edit-tree-entry-cms-demo-hero")
+        .click();
+      await page.waitForLoadState("networkidle");
+
+      const newHeadline = "Edited via alpha-then-hero";
+      await page
+        .getByTestId("cms-edit-field-input-headline")
+        .fill(newHeadline);
+      await page.getByRole("button", { name: "Save to draft" }).click();
+
+      // Preview must reflect the new draft value. Pre-fix the
+      // preview kept rendering the old "Welcome to the CMS demo".
+      const preview = page.getByTestId("cms-edit-preview-pane");
+      await expect(preview).toContainText(newHeadline, {
+        timeout: 10000,
+      });
     });
   });
 });

@@ -11,6 +11,7 @@ import {
   buildCmsTreeEntries,
   lookupCmsNode,
   resolveCmsNode,
+  slotAddEntryId,
   slotEntryId,
   type CmsConfig,
   type CmsNode,
@@ -255,13 +256,17 @@ describe("buildCmsTreeEntries — slot intermediaries + dedupe", () => {
       },
     };
     const entries = buildCmsTreeEntries(published, {});
-    // Slot intermediary always inserted — that's where the editor
-    // hangs the +add-block palette inline in the tree.
+    // Slot intermediary always inserted (header at the top, +add
+    // palette footer at the bottom). The tree wraps each slot's
+    // children with both so authors can see what slot a child
+    // belongs to AND append new blocks at the natural "end of list"
+    // position.
     expect(entries.map((e) => ({ id: e.id, kind: e.kind, depth: e.depth })))
       .toEqual([
         { id: "parent", kind: "node", depth: 0 },
         { id: slotEntryId("parent", "body"), kind: "slot", depth: 1 },
         { id: "child-1", kind: "node", depth: 2 },
+        { id: slotAddEntryId("parent", "body"), kind: "slot-add", depth: 2 },
       ]);
   });
 
@@ -294,8 +299,14 @@ describe("buildCmsTreeEntries — slot intermediaries + dedupe", () => {
         { id: "multi", kind: "node", depth: 0 },
         { id: slotEntryId("multi", "body"), kind: "slot", depth: 1 },
         { id: "body-child", kind: "node", depth: 2 },
+        { id: slotAddEntryId("multi", "body"), kind: "slot-add", depth: 2 },
         { id: slotEntryId("multi", "sidebar"), kind: "slot", depth: 1 },
         { id: "sidebar-child", kind: "node", depth: 2 },
+        {
+          id: slotAddEntryId("multi", "sidebar"),
+          kind: "slot-add",
+          depth: 2,
+        },
       ]);
   });
 
@@ -312,6 +323,9 @@ describe("buildCmsTreeEntries — slot intermediaries + dedupe", () => {
       .toEqual([
         { id: "parent", kind: "node", depth: 0 },
         { id: slotEntryId("parent", "body"), kind: "slot", depth: 1 },
+        // Empty slot still emits the +add row so authors can drop
+        // the first block in.
+        { id: slotAddEntryId("parent", "body"), kind: "slot-add", depth: 2 },
       ]);
   });
 

@@ -13,6 +13,17 @@
       "slots": {
         "body": [
           {
+            "id": "cms-demo-slug-nav",
+            "type": "page-slug-nav",
+            "displayName": "#slug-nav",
+            "configs": [
+              {
+                "match": {},
+                "fields": {}
+              }
+            ]
+          },
+          {
             "id": "cms-demo-hero",
             "type": "page-hero",
             "displayName": "#hero",
@@ -24,17 +35,6 @@
                   "subhead": "Every field on this page is read through accessor-tracked calls. Edit src/cms/content.json and reload to see changes.",
                   "tone": "calm"
                 }
-              }
-            ]
-          },
-          {
-            "id": "cms-demo-slug-nav",
-            "type": "page-slug-nav",
-            "displayName": "#slug-nav",
-            "configs": [
-              {
-                "match": {},
-                "fields": {}
               }
             ]
           },

@@ -53,6 +53,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { CmsDemoPage } from "./cms-demo.tsx";
 import { CmsEditTreeLink } from "../components/cms-edit-tree-link.tsx";
+import { CmsEditAddBlock } from "../components/cms-edit-add-block.tsx";
 import {
   CmsEditPreviewNav,
   type PreviewNavLink,
@@ -102,7 +103,7 @@ export function CmsEditPage() {
       <div
         className="grid gap-0 -mx-8 -my-8 min-h-screen"
         style={{
-          gridTemplateColumns: "280px minmax(0, 1fr) 360px",
+          gridTemplateColumns: "320px minmax(0, 1fr) 360px",
         }}
       >
         <aside
@@ -263,28 +264,41 @@ async function TreeContents() {
     <ul className="space-y-1">
       {entries.map((entry) => {
         if (entry.kind === "slot") {
+          return (
+            <SlotHeaderRow
+              key={entry.id}
+              parentCmsId={entry.parentId!}
+              slotName={entry.slotName!}
+              depth={entry.depth}
+            />
+          );
+        }
+        if (entry.kind === "slot-add") {
           // Filter the +add palette by the slot's `allow` selector —
           // we look up the parent's block type → manifest →
           // `childSlots[slotName].allow` → keep only block types
-          // whose tags satisfy the allow tokens. If the parent has
-          // no type or no manifest entry, the palette falls back to
-          // the full block-type list (better to show too many
-          // options than zero on an unrecognized parent).
+          // whose tags satisfy the allow tokens. The wildcard token
+          // `*` short-circuits filtering (slot accepts every block).
+          // If the parent has no type or no manifest entry, the
+          // palette falls back to the full block-type list (better
+          // to show too many options than zero on an unrecognized
+          // parent).
           const parentType = parentTypeById.get(entry.parentId!);
           const parentManifest = parentType
             ? catalog[parentType]
             : undefined;
           const allow =
             parentManifest?.childSlots[entry.slotName!]?.allow ?? null;
-          const filteredTypes = allow
-            ? blockTypes.filter((type) => {
-                const m = catalog[type];
-                if (!m) return false;
-                return blockTagsSatisfyAllow(m.tags, allow);
-              })
-            : blockTypes;
+          const filteredTypes =
+            allow == null || isWildcardAllow(allow)
+              ? blockTypes
+              : blockTypes.filter((type) => {
+                  const m = catalog[type];
+                  if (!m) return false;
+                  return blockTagsSatisfyAllow(m.tags, allow);
+                });
           return (
-            <SlotTreeRow
+            <SlotAddRow
               key={entry.id}
               parentCmsId={entry.parentId!}
               slotName={entry.slotName!}
@@ -319,7 +333,9 @@ async function TreeContents() {
               testId={`cms-edit-tree-entry-${entry.id}`}
               selected={isSelected}
             >
-              <span className="flex-1 truncate">{label}</span>
+              <span className="flex-1 truncate" title={label}>
+                {label}
+              </span>
               {entry.type && (
                 <Badge
                   variant="secondary"
@@ -363,21 +379,20 @@ async function TreeContents() {
 }
 
 /**
- * Slot intermediary tree row — non-clickable label + the +add-block
- * palette inline. Hosting the palette here is what makes slot
- * intermediaries functional (not just organizational), so they exist
- * for every slot regardless of how many slots a parent has.
+ * Slot header tree row — non-clickable label rendered ABOVE the
+ * slot's children. Pure organization: makes it obvious which slot
+ * a child belongs to, especially for parents with multiple slots.
+ * The corresponding `+ add` palette lives in `<SlotAddRow>` rendered
+ * after the slot's children.
  */
-function SlotTreeRow({
+function SlotHeaderRow({
   parentCmsId,
   slotName,
   depth,
-  blockTypes,
 }: {
   parentCmsId: string;
   slotName: string;
   depth: number;
-  blockTypes: string[];
 }) {
   const id = `slot:${parentCmsId}:${slotName}`;
   return (
@@ -395,22 +410,54 @@ function SlotTreeRow({
         </span>
         <span className="flex-1 truncate">{slotName}</span>
       </span>
-      {blockTypes.map((type) => (
-        <form
-          key={type}
-          action={addBlockToSlot.bind(null, parentCmsId, slotName, type)}
-          className="contents"
-        >
-          <button
-            type="submit"
-            className="rounded px-1 text-[0.7rem] text-muted-foreground hover:bg-muted hover:text-foreground"
-            title={`Add ${type} block`}
-            data-testid={`cms-edit-slot-add-${parentCmsId}-${slotName}-${type}`}
-          >
-            + {type}
-          </button>
-        </form>
-      ))}
+    </li>
+  );
+}
+
+/**
+ * Slot footer tree row — the "+ Block" dropdown rendered AT THE END
+ * of a slot's children. New blocks naturally land at the bottom of
+ * the slot so the list grows downward (matches Shopify, WordPress,
+ * Storyblok). Indented at the same depth as the slot's children so
+ * the trigger feels like a sibling-row "add new" action.
+ *
+ * The dropdown collapses what used to be a wide row of `+ <type>`
+ * buttons (cluttered, wrapped to multiple lines for slots that
+ * accept many block types). Clicking "+ Block" opens a menu with
+ * one item per registered block type that satisfies the slot's
+ * `allow` selector. Each menu item triggers the same server action
+ * (`addBlockToSlot`) the inline buttons used to.
+ */
+function SlotAddRow({
+  parentCmsId,
+  slotName,
+  depth,
+  blockTypes,
+}: {
+  parentCmsId: string;
+  slotName: string;
+  depth: number;
+  blockTypes: string[];
+}) {
+  const id = `slot-add:${parentCmsId}:${slotName}`;
+  // Bind one action per block type on the server, then pass the
+  // bound references to the client dropdown. Bound server actions
+  // are RSC-serializable across the boundary.
+  const options = blockTypes.map((type) => ({
+    type,
+    action: addBlockToSlot.bind(null, parentCmsId, slotName, type),
+  }));
+  return (
+    <li
+      style={{ paddingLeft: `${depth * 12}px` }}
+      className="flex items-center gap-1"
+      data-testid={`cms-edit-tree-entry-${id}`}
+    >
+      <CmsEditAddBlock
+        parentCmsId={parentCmsId}
+        slotName={slotName}
+        options={options}
+      />
     </li>
   );
 }
@@ -735,6 +782,16 @@ function formatScalar(name: string, clause: ScalarOrIn): string {
  */
 function pageSearchParam(name: string): string | null {
   return new URL(getRequest().url).searchParams.get(name);
+}
+
+/**
+ * Wildcard allow — a slot that accepts every registered block. The
+ * editor's palette filter short-circuits when this returns true so
+ * the +add row lists every block type (matches the runtime, where
+ * `<Children allow="*">` declares the same intent).
+ */
+function isWildcardAllow(allow: string): boolean {
+  return allow.split(/\s+/).some((t) => t.trim() === "*");
 }
 
 /**
