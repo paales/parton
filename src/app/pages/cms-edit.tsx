@@ -35,8 +35,10 @@ import {
   CMS_DRAFT_COOKIE,
   listAllCmsNodes,
   lookupCmsNode,
+  type CmsConfig,
   type CmsNode,
   type ContentFieldKind,
+  type MatchClause,
 } from "../../framework/cms-runtime.ts";
 import {
   getCatalogManifest,
@@ -66,6 +68,8 @@ export function CmsEditPage() {
   setCookie(CMS_DRAFT_COOKIE, "1");
 
   const selected = getSearchParam("select");
+  const configIndexRaw = getSearchParam("config");
+  const configIndex = configIndexRaw != null ? Number(configIndexRaw) : null;
 
   return (
     <Partial parent={ROOT} selector="#cms-edit-root">
@@ -91,7 +95,7 @@ export function CmsEditPage() {
           className="overflow-y-auto border-l bg-muted/30 p-4"
           data-testid="cms-edit-field-pane"
         >
-          <FieldPanel selected={selected} />
+          <FieldPanel selected={selected} configIndex={configIndex} />
         </aside>
       </div>
     </Partial>
@@ -203,7 +207,13 @@ function TreeContents({ selected }: { selected: string | null }) {
 
 // ─── Field form ────────────────────────────────────────────────────────
 
-async function FieldPanel({ selected }: { selected: string | null }) {
+async function FieldPanel({
+  selected,
+  configIndex,
+}: {
+  selected: string | null;
+  configIndex: number | null;
+}) {
   if (!selected) {
     return (
       <div className="text-sm text-muted-foreground">
@@ -214,8 +224,13 @@ async function FieldPanel({ selected }: { selected: string | null }) {
   const node = lookupCmsNode(selected);
   const catalog = await getCatalogManifest();
   const manifest = node?.type ? catalog[node.type] : undefined;
-  const fieldMap = buildFieldMap(node, manifest);
-  const selectedHref = `/cms-edit?select=${encodeURIComponent(selected)}`;
+  // Default tab: the `match: {}` config if present (most permissive);
+  // else the first config. For a node without any configs yet, we
+  // render a prompt + implicit "new default" on save.
+  const configs = node?.configs ?? [];
+  const effectiveIndex = pickEffectiveConfig(configs, configIndex);
+  const currentConfig = effectiveIndex >= 0 ? configs[effectiveIndex] : null;
+  const fieldMap = buildFieldMap(currentConfig, manifest);
 
   return (
     <div className="space-y-4">
@@ -229,17 +244,26 @@ async function FieldPanel({ selected }: { selected: string | null }) {
         <p className="text-xs text-muted-foreground">id: {selected}</p>
       </div>
 
+      {configs.length > 0 && (
+        <ConfigTabs
+          selected={selected}
+          configs={configs}
+          activeIndex={effectiveIndex}
+        />
+      )}
+
       {Object.keys(fieldMap).length === 0 ? (
         <Card className="p-4">
           <CardContent className="px-0 text-sm text-muted-foreground">
-            No fields discovered for this Partial yet. Render it once
-            with accessor reads at the top of the body so the catalog
-            picks them up, or save an initial value from code.
+            No fields on this configuration yet. For block-typed
+            entries the catalog seeds the field list from the block's
+            accessor reads; for code-declared Partials, saved fields
+            appear here once written.
           </CardContent>
         </Card>
       ) : (
         <form
-          action={saveCmsFields.bind(null, selected)}
+          action={saveCmsFields.bind(null, selected, effectiveIndex)}
           className="space-y-3"
           data-testid="cms-edit-field-form"
         >
@@ -261,7 +285,7 @@ async function FieldPanel({ selected }: { selected: string | null }) {
               Save to draft
             </Button>
             <a
-              href={selectedHref}
+              href={cmsEditHref(selected, effectiveIndex)}
               className={buttonVariants({ size: "sm", variant: "ghost" })}
             >
               Discard changes
@@ -273,33 +297,159 @@ async function FieldPanel({ selected }: { selected: string | null }) {
   );
 }
 
+// ─── Config tabs ──────────────────────────────────────────────────────
+
+function pickEffectiveConfig(
+  configs: readonly CmsConfig[],
+  requested: number | null,
+): number {
+  if (configs.length === 0) return -1;
+  if (requested != null && requested >= 0 && requested < configs.length) {
+    return requested;
+  }
+  const defaultIdx = configs.findIndex(
+    (c) => Object.keys(c.match).length === 0,
+  );
+  return defaultIdx >= 0 ? defaultIdx : 0;
+}
+
+function ConfigTabs({
+  selected,
+  configs,
+  activeIndex,
+}: {
+  selected: string;
+  configs: readonly CmsConfig[];
+  activeIndex: number;
+}) {
+  return (
+    <div data-testid="cms-edit-config-tabs">
+      <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">
+        Configuration
+      </p>
+      <div className="flex flex-wrap gap-1">
+        {configs.map((cfg, idx) => {
+          const isActive = idx === activeIndex;
+          const label = formatMatchLabel(cfg.match);
+          return (
+            <a
+              key={idx}
+              href={cmsEditHref(selected, idx)}
+              className={cn(
+                "rounded-md border px-2 py-1 text-xs font-medium transition-colors",
+                isActive
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-transparent hover:bg-muted",
+              )}
+              data-testid={`cms-edit-config-tab-${idx}`}
+              data-active={isActive}
+            >
+              {label}
+            </a>
+          );
+        })}
+      </div>
+      <p className="mt-1 text-[0.7rem] text-muted-foreground">
+        Editing this configuration writes only to its field set. Other
+        configurations (and the cascade fallback) stay untouched.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Collapse a match clause into a short human label for the tab.
+ *
+ *   {}                                         → "Default"
+ *   {"url:variant": "A"}                       → "variant=A"
+ *   {"url:variant": {in: ["A","B"]}}           → "variant∈A,B"
+ *   {"pathname:/p/:slug": {slug: "alpha"}}     → "slug=alpha"
+ *   {"pathname:/p/:slug": {slug: {in:[…]}}}    → "slug∈x,y"
+ *   two or more keys                           → join with " · "
+ */
+export function formatMatchLabel(
+  match: Record<string, MatchClause>,
+): string {
+  const entries = Object.entries(match);
+  if (entries.length === 0) return "Default";
+  const parts = entries.map(([key, clause]) => formatClause(key, clause));
+  return parts.join(" · ");
+}
+
+function formatClause(key: string, clause: MatchClause): string {
+  const colonIdx = key.indexOf(":");
+  const kind = colonIdx > 0 ? key.slice(0, colonIdx) : key;
+  const name = colonIdx > 0 ? key.slice(colonIdx + 1) : "";
+
+  if (kind === "pathname") {
+    if (typeof clause === "object" && clause !== null && !Array.isArray(clause)) {
+      if ("in" in clause) return `${shortKey(name)}∈…`;
+      const paramParts = Object.entries(
+        clause as Record<string, ScalarOrIn>,
+      ).map(([p, c]) => formatScalar(p, c));
+      return paramParts.join(", ");
+    }
+    return shortKey(name);
+  }
+  return formatScalar(name, clause as ScalarOrIn);
+}
+
+type ScalarOrIn =
+  | string
+  | number
+  | boolean
+  | { in: ReadonlyArray<string | number> };
+
+function formatScalar(name: string, clause: ScalarOrIn): string {
+  if (typeof clause === "string") return `${name}=${clause}`;
+  if (typeof clause === "number") return `${name}=${clause}`;
+  if (typeof clause === "boolean") return `${name}=${clause}`;
+  if (clause && typeof clause === "object" && "in" in clause) {
+    return `${name}∈${clause.in.join(",")}`;
+  }
+  return name;
+}
+
+function shortKey(key: string): string {
+  // For `pathname:/p/:slug` the full pattern is too verbose on a
+  // tab. Strip everything but the last `:param` segment.
+  const match = key.match(/:([^/]+)$/);
+  return match ? match[1] : key;
+}
+
+function cmsEditHref(selected: string, configIndex: number): string {
+  const sp = new URLSearchParams();
+  sp.set("select", selected);
+  if (configIndex >= 0) sp.set("config", String(configIndex));
+  return `/cms-edit?${sp.toString()}`;
+}
+
 interface FieldSpec {
   kind: ContentFieldKind;
   value: unknown;
 }
 
 function buildFieldMap(
-  node: CmsNode | null,
+  config: CmsConfig | null,
   manifest: BlockManifest | undefined,
 ): Record<string, FieldSpec> {
   const out: Record<string, FieldSpec> = {};
-  const defaultConfig = node?.configs.find(
-    (c) => Object.keys(c.match).length === 0,
-  );
-  // Seed from the catalog (covers block-typed entries comprehensively).
+  // Seed from the catalog so every field the block declares shows
+  // up as an input, even when the current config hasn't set it yet
+  // (cascade fallback will apply from a less-specific config).
   if (manifest) {
     for (const [name, kind] of Object.entries(manifest.contentFields)) {
       out[name] = {
         kind,
-        value: defaultConfig?.fields[name],
+        value: config?.fields[name],
       };
     }
   }
   // Union currently-stored fields (covers code-declared Partials that
   // have a draft entry, and any fields saved before the catalog knew
   // about them).
-  if (defaultConfig) {
-    for (const [name, value] of Object.entries(defaultConfig.fields)) {
+  if (config) {
+    for (const [name, value] of Object.entries(config.fields)) {
       if (name in out) continue;
       out[name] = { kind: inferKind(value), value };
     }

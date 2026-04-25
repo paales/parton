@@ -76,6 +76,90 @@ test.describe("CMS editor — smoke", () => {
     await expect(heroEntry).toContainText("hero");
   });
 
+  test("config tabs list every match clause on a node with cascade", async ({
+    page,
+  }) => {
+    await page.goto("/cms-edit?select=cms-demo-greeting");
+    const tabs = page.getByTestId("cms-edit-config-tabs");
+    await expect(tabs).toBeVisible();
+    // cms-demo-greeting has three configs: slug=alpha, slug∈beta,gamma,
+    // and default. Labels are derived from the match clauses.
+    await expect(tabs).toContainText("slug=alpha");
+    await expect(tabs).toContainText("slug∈beta,gamma");
+    await expect(tabs).toContainText("Default");
+  });
+
+  test("default config is pre-selected on a Partial with a default entry", async ({
+    page,
+  }) => {
+    await page.goto("/cms-edit?select=cms-demo-greeting");
+    // The tab with match:{} (Default) should be the active one.
+    const defaultTab = page.locator(
+      '[data-testid^="cms-edit-config-tab-"][data-active="true"]',
+    );
+    await expect(defaultTab).toHaveText("Default");
+    // Form shows the default config's fields.
+    await expect(
+      page.getByTestId("cms-edit-field-input-headline"),
+    ).toHaveValue("Default greeting");
+  });
+
+  test("switching tabs shows that configuration's fields", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/cms-edit?select=cms-demo-greeting&config=0",
+    );
+    // Tab index 0 is the slug=alpha config.
+    await expect(
+      page.getByTestId("cms-edit-field-input-headline"),
+    ).toHaveValue("Hello, Alpha!");
+
+    await page.goto(
+      "/cms-edit?select=cms-demo-greeting&config=2",
+    );
+    // Tab index 2 is the default config (match:{}).
+    await expect(
+      page.getByTestId("cms-edit-field-input-headline"),
+    ).toHaveValue("Default greeting");
+  });
+
+  test("saving in one config doesn't bleed into another", async ({
+    page,
+  }) => {
+    await page.goto(
+      "/cms-edit?select=cms-demo-greeting&config=0",
+    );
+    await page
+      .getByTestId("cms-edit-field-input-headline")
+      .fill("Only-alpha override");
+
+    const preview = page.getByTestId("cms-edit-preview-pane");
+    // Preview is at /cms-demo (no slug). The default config isn't
+    // what we're editing, so its rendered headline should stay put
+    // across the save round-trip.
+    await expect(preview).toContainText("Default greeting");
+    await page.getByRole("button", { name: "Save to draft" }).click();
+    // After the invalidate-driven refetch completes, the preview
+    // still shows the default value — confirming the edit didn't
+    // bleed into the default config.
+    await expect(preview).toContainText("Default greeting");
+
+    // And on a slug that matches config 0, the edited value shows
+    // via the draft cookie that persists across navigation.
+    await page.goto("/cms-demo/alpha");
+    await expect(
+      page.getByTestId("cms-demo-greeting-headline"),
+    ).toHaveText("Only-alpha override");
+
+    // Default slug still shows the original published headline —
+    // the save wrote only to configs[0], not configs[2].
+    await page.goto("/cms-demo");
+    await expect(
+      page.getByTestId("cms-demo-greeting-headline"),
+    ).toHaveText("Default greeting");
+  });
+
   test("save writes to draft and the preview picks up the new value", async ({
     page,
   }) => {

@@ -22,6 +22,7 @@ import {
 
 export async function saveCmsFields(
   cmsId: string,
+  configIndex: number,
   formData: FormData,
 ): Promise<{ invalidate: { selector: string } }> {
   const existing: CmsNode = lookupCmsNode(cmsId) ?? {
@@ -39,31 +40,39 @@ export async function saveCmsFields(
     slots: existing.slots,
   };
 
-  let defaultConfig: CmsConfig | undefined = node.configs.find(
-    (c) => Object.keys(c.match).length === 0,
-  );
-  if (!defaultConfig) {
-    defaultConfig = { match: {}, fields: {} };
-    node.configs.push(defaultConfig);
+  // Index resolution: configIndex < 0 is "find or create the default
+  // (match: {}) config" — used by the UI when no explicit config is
+  // selected. A non-negative index targets that slot in `node.configs`,
+  // creating entries up to that slot if the node was freshly made.
+  let target: CmsConfig;
+  if (configIndex < 0) {
+    let existing = node.configs.find(
+      (c) => Object.keys(c.match).length === 0,
+    );
+    if (!existing) {
+      existing = { match: {}, fields: {} };
+      node.configs.push(existing);
+    }
+    target = existing;
+  } else if (configIndex < node.configs.length) {
+    target = node.configs[configIndex];
+  } else {
+    target = { match: {}, fields: {} };
+    node.configs.push(target);
   }
 
   for (const [key, raw] of formData.entries()) {
     if (key.startsWith("__")) continue; // editor-internal fields
     const value = raw;
-    // FormData values are string | File. Coerce.
     if (typeof value === "string") {
-      // Numeric-looking inputs come back as strings; store as number
-      // only when the input is typed as number AND the parse is
-      // clean. The form tells us via a sidecar `__kind:<name>`
-      // entry.
       const kind = formData.get(`__kind:${key}`);
       if (kind === "number") {
         const n = Number(value);
-        defaultConfig.fields[key] = Number.isFinite(n) ? n : 0;
+        target.fields[key] = Number.isFinite(n) ? n : 0;
       } else if (kind === "boolean") {
-        defaultConfig.fields[key] = value === "on" || value === "true";
+        target.fields[key] = value === "on" || value === "true";
       } else {
-        defaultConfig.fields[key] = value;
+        target.fields[key] = value;
       }
     }
   }
@@ -78,7 +87,7 @@ export async function saveCmsFields(
     .filter(Boolean);
   for (const name of booleanFields) {
     if (!formData.has(name)) {
-      defaultConfig.fields[name] = false;
+      target.fields[name] = false;
     }
   }
 
