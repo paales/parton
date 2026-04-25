@@ -15,6 +15,7 @@ import {
   runWithRequestAsync,
   setRequest,
 } from "./context.ts";
+import { warmCmsCache } from "./cms-runtime.ts";
 
 export type RscPayload = {
   root: React.ReactNode;
@@ -73,12 +74,20 @@ async function handler(request: Request): Promise<Response> {
       // Draft file is not scope-bucketed (it's on-disk, not in-memory);
       // always clear on both `all` and scoped calls. Tests writing to
       // the draft need a clean state per run.
-      _clearCmsDraft();
+      await _clearCmsDraft();
       return new Response("ok", { status: 200 });
     }
   }
 
   const renderRequest = parseRenderRequest(request);
+
+  // Refresh the in-memory CMS cache against the storage backend
+  // BEFORE rendering. The async backend read here means the sync
+  // accessor calls inside Partial bodies hit a hot, fresh cache —
+  // and the storage backend can be swapped (`setCmsStorage`) without
+  // the runtime having to know whether reads are sync-fast or
+  // async-only.
+  await warmCmsCache();
 
   const { result: response, cookies } = await runWithRequestAsync(
     renderRequest.request,

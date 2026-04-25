@@ -30,24 +30,7 @@
  */
 
 import type { ReactNode } from "react";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-// Bundled snapshot of the published store. In dev, the disk read in
-// `loadPublishedStore` always wins (mtime-cached, live-reloads on
-// edits); the import is just a static reference. In production the
-// file isn't shipped to `dist/`, so the disk read throws and the
-// loader falls back to this bundled value. Vite inlines the JSON at
-// build time.
-import bundledPublishedStore from "../cms/content.json" with { type: "json" };
+import { getCmsStorage, type CmsStorage, type LoadedStore } from "./cms-storage.ts";
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
@@ -178,11 +161,6 @@ export interface CmsStore {
 
 // ─── Store loader ──────────────────────────────────────────────────────
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CMS_DIR = join(__dirname, "..", "cms");
-const PUBLISHED_PATH = join(CMS_DIR, "content.json");
-const DRAFT_PATH = join(CMS_DIR, "draft.json");
-
 function emptyStore(): CmsStore {
   return { partials: {} };
 }
@@ -232,56 +210,74 @@ function buildIndex(store: CmsStore): Map<string, CmsNode> {
   return index;
 }
 
-function loadSlot(
-  path: string,
-  current: CacheSlot | null,
-): { slot: CacheSlot | null; fallback: { store: CmsStore; index: Map<string, CmsNode> } } {
-  try {
-    const mtime = statSync(path).mtimeMs;
-    if (current && current.mtime === mtime) {
-      return { slot: current, fallback: current };
-    }
-    const text = readFileSync(path, "utf8");
-    const store = JSON.parse(text) as CmsStore;
-    const index = buildIndex(store);
-    const slot: CacheSlot = { store, index, mtime };
-    return { slot, fallback: slot };
-  } catch {
-    if (current) return { slot: current, fallback: current };
-    // Fresh empty store on every fallback — writing callers
-    // (`writeDraftNode`) would otherwise mutate a shared singleton
-    // and leak entries between unrelated writes when the draft file
-    // doesn't yet exist.
-    return { slot: null, fallback: { store: emptyStore(), index: new Map() } };
-  }
+function loadedToSlot(loaded: LoadedStore): CacheSlot {
+  return { store: loaded.store, index: buildIndex(loaded.store), mtime: loaded.mtime };
 }
 
+/**
+ * Sync read from cache, with a sync-fallback to disk when the cache
+ * is cold. Partial bodies and CMS accessors call this on every
+ * render — they're synchronous, so the load HAS to be synchronous
+ * too. The async warming path (`warmCmsCache()`) refreshes the
+ * cache before each request so a hot cache is the steady state;
+ * this fallback is what saves us on cold start (test setup, first
+ * request before any warm-up has run).
+ */
 function loadPublishedStore(): { store: CmsStore; index: Map<string, CmsNode> } {
-  const { slot } = loadSlot(PUBLISHED_PATH, publishedSlot);
-  if (slot) {
-    publishedSlot = slot;
-    return slot;
-  }
-  // `loadSlot` couldn't statSync the file. In dev that's a real
-  // missing file (deleted, never created); in prod it just means
-  // the file isn't bundled into `dist/`. Either way, fall back to
-  // the static import — Vite inlines the JSON at build time, so
-  // the bundled snapshot is the ground truth in production.
   if (publishedSlot) return publishedSlot;
-  const store = bundledPublishedStore as CmsStore;
-  const slotFromBundle: CacheSlot = {
-    store,
-    index: buildIndex(store),
-    mtime: 0,
-  };
-  publishedSlot = slotFromBundle;
-  return slotFromBundle;
+  const loaded = getCmsStorage().loadPublishedSync();
+  if (loaded) {
+    publishedSlot = loadedToSlot(loaded);
+    return publishedSlot;
+  }
+  // No file. Empty-store fallback — fresh Map each call so a writer
+  // can't accidentally mutate a shared singleton and leak entries
+  // between unrelated writes.
+  return { store: emptyStore(), index: new Map() };
 }
 
 function loadDraftStore(): { store: CmsStore; index: Map<string, CmsNode> } {
-  const { slot, fallback } = loadSlot(DRAFT_PATH, draftSlot);
-  if (slot) draftSlot = slot;
-  return fallback;
+  if (draftSlot) return draftSlot;
+  const loaded = getCmsStorage().loadDraftSync();
+  if (loaded) {
+    draftSlot = loadedToSlot(loaded);
+    return draftSlot;
+  }
+  return { store: emptyStore(), index: new Map() };
+}
+
+/**
+ * Async warm-up — call from the request entry before any render.
+ * Re-reads the storage backend and refreshes the cache. The async
+ * read avoids the sync-IO penalty in the hot path. Cache invalidation
+ * uses the storage's mtime tag (file mtime for `JsonFileStorage`).
+ *
+ * Tests don't need to call this — sync lazy load via
+ * `loadPublishedStore` covers cold-start; tests typically invoke
+ * `_invalidateCmsStoreCache()` to force a re-read.
+ */
+export async function warmCmsCache(): Promise<void> {
+  const backend = getCmsStorage();
+  const [pub, draft] = await Promise.all([
+    backend.loadPublished(),
+    backend.loadDraft(),
+  ]);
+  if (pub) {
+    if (!publishedSlot || publishedSlot.mtime !== pub.mtime) {
+      publishedSlot = loadedToSlot(pub);
+    }
+  } else {
+    // Backend has no published store — clear cache so the sync
+    // path returns the empty fallback on next read.
+    publishedSlot = null;
+  }
+  if (draft) {
+    if (!draftSlot || draftSlot.mtime !== draft.mtime) {
+      draftSlot = loadedToSlot(draft);
+    }
+  } else {
+    draftSlot = null;
+  }
 }
 
 function readCookieFromRequest(request: Request, name: string): string | null {
@@ -509,46 +505,44 @@ export function lookupDraftNode(cmsId: string): CmsNode | null {
  * node shape (configs + slots) rather than diffing field-level
  * changes.
  *
- * Synchronously invalidates both in-memory store slots so the next
- * read sees the write — dev-only flow; a production writer would
- * go through a queue + store backend.
+ * Async because the storage backend's writes are async. Server
+ * actions await this; tests can `await` it inline. The in-memory
+ * cache is invalidated on return so the next sync read picks up the
+ * write.
  */
-export function writeDraftNode(cmsId: string, node: CmsNode): void {
-  const { store } = loadDraftStore();
-  store.partials[cmsId] = { ...node, id: cmsId };
-  writeStoreFile(DRAFT_PATH, store);
+export async function writeDraftNode(cmsId: string, node: CmsNode): Promise<void> {
+  // Read CURRENT draft via async load — tests sometimes mutate the
+  // file outside `cms-runtime` between writes, and the sync cache
+  // could be stale. The async backend read picks up disk-side
+  // changes the cache hasn't seen yet.
+  const backend = getCmsStorage();
+  const current = (await backend.loadDraft())?.store ?? emptyStore();
+  current.partials[cmsId] = { ...node, id: cmsId };
+  await backend.saveDraft(current);
   _invalidateCmsStoreCache();
 }
 
 /**
  * Copy draft → published, then clear the draft. Intended as the
- * editor's "publish" action. Writes both files atomically from the
- * editor's perspective (invalidates both cache slots on return so a
- * reader following the publish immediately sees the new published
- * state and an empty draft).
+ * editor's "publish" action. The two writes (published save + draft
+ * clear) are sequential — a mid-publish crash leaves draft entries
+ * still in the draft store, but published already has the merged
+ * copy. Authors can re-publish; no data loss.
  */
-export function publishDraft(): void {
-  const draft = loadDraftStore().store;
-  const published = loadPublishedStore().store;
-  for (const [id, node] of Object.entries(draft.partials)) {
-    published.partials[id] = node;
+export async function publishDraft(): Promise<void> {
+  const backend = getCmsStorage();
+  const [draft, published] = await Promise.all([
+    backend.loadDraft(),
+    backend.loadPublished(),
+  ]);
+  const draftStore = draft?.store ?? emptyStore();
+  const publishedStore = published?.store ?? emptyStore();
+  for (const [id, node] of Object.entries(draftStore.partials)) {
+    publishedStore.partials[id] = node;
   }
-  writeStoreFile(PUBLISHED_PATH, published);
-  writeStoreFile(DRAFT_PATH, { partials: {} });
+  await backend.savePublished(publishedStore);
+  await backend.saveDraft(emptyStore());
   _invalidateCmsStoreCache();
-}
-
-function writeStoreFile(path: string, store: CmsStore): void {
-  // Atomic write: serialize to a temp file in the same directory,
-  // then rename onto the target path. POSIX rename is atomic, so a
-  // mid-write crash leaves the prior file intact instead of half a
-  // truncated JSON document. The editor saves frequently and a
-  // corrupt store would brick the runtime, so the cost (one extra
-  // syscall) is well worth it.
-  mkdirSync(dirname(path), { recursive: true });
-  const tmpPath = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmpPath, JSON.stringify(store, null, 2) + "\n", "utf8");
-  renameSync(tmpPath, path);
 }
 
 /**
@@ -558,18 +552,19 @@ function writeStoreFile(path: string, store: CmsStore): void {
  * unpublished changes without touching other drafts.
  *
  * Edge case: if removing the entry empties the draft store entirely,
- * the file is unlinked rather than left as `{partials: {}}` — a
- * missing file is the canonical "no draft" state and avoids
- * confusing churn in git for would-be committers.
+ * the storage's `deleteDraft` is called rather than leaving an
+ * empty `{partials: {}}` payload — a missing draft is the canonical
+ * "no draft" state.
  */
-export function revertDraftNode(cmsId: string): void {
-  const { store } = loadDraftStore();
-  if (!(cmsId in store.partials)) return;
-  delete store.partials[cmsId];
-  if (Object.keys(store.partials).length === 0) {
-    if (existsSync(DRAFT_PATH)) unlinkSync(DRAFT_PATH);
+export async function revertDraftNode(cmsId: string): Promise<void> {
+  const backend = getCmsStorage();
+  const current = (await backend.loadDraft())?.store;
+  if (!current || !(cmsId in current.partials)) return;
+  delete current.partials[cmsId];
+  if (Object.keys(current.partials).length === 0) {
+    await backend.deleteDraft();
   } else {
-    writeStoreFile(DRAFT_PATH, store);
+    await backend.saveDraft(current);
   }
   _invalidateCmsStoreCache();
 }
@@ -590,8 +585,8 @@ export function _invalidateCmsStoreCache(): void {
  * into `/__test/clear-caches` so e2e tests see a clean draft state
  * on `beforeEach`, and usable from a debug button.
  */
-export function _clearCmsDraft(): void {
-  if (existsSync(DRAFT_PATH)) unlinkSync(DRAFT_PATH);
+export async function _clearCmsDraft(): Promise<void> {
+  await getCmsStorage().deleteDraft();
   _invalidateCmsStoreCache();
 }
 

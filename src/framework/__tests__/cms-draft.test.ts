@@ -52,8 +52,8 @@ describe("lookupCmsNode — draft / published fork", () => {
     );
   });
 
-  it("still reads published when the cookie is set but draft has no entry for this id", () => {
-    writeDraftNode("some-other-id", {
+  it("still reads published when the cookie is set but draft has no entry for this id", async () => {
+    await writeDraftNode("some-other-id", {
       id: "some-other-id",
       configs: [{ match: {}, fields: {} }],
     });
@@ -63,7 +63,7 @@ describe("lookupCmsNode — draft / published fork", () => {
     );
   });
 
-  it("prefers the draft entry when the cookie is set", () => {
+  it("prefers the draft entry when the cookie is set", async () => {
     const draftNode: CmsNode = {
       id: "cms-demo-hero",
       configs: [
@@ -73,13 +73,13 @@ describe("lookupCmsNode — draft / published fork", () => {
         },
       ],
     };
-    writeDraftNode("cms-demo-hero", draftNode);
+    await writeDraftNode("cms-demo-hero", draftNode);
     const node = lookupCmsNode("cms-demo-hero", draftRequest());
     expect(node?.configs[0].fields.headline).toBe("Draft headline");
   });
 
-  it("draft is invisible to requests without the cookie", () => {
-    writeDraftNode("cms-demo-hero", {
+  it("draft is invisible to requests without the cookie", async () => {
+    await writeDraftNode("cms-demo-hero", {
       id: "cms-demo-hero",
       configs: [{ match: {}, fields: { headline: "Draft headline" } }],
     });
@@ -91,23 +91,23 @@ describe("lookupCmsNode — draft / published fork", () => {
 });
 
 describe("writeDraftNode", () => {
-  it("round-trips through the filesystem", () => {
+  it("round-trips through the filesystem", async () => {
     const draftNode: CmsNode = {
       id: "test-write",
       configs: [{ match: {}, fields: { a: 1 } }],
     };
-    writeDraftNode("test-write", draftNode);
+    await writeDraftNode("test-write", draftNode);
     expect(existsSync(DRAFT_PATH)).toBe(true);
     const read = lookupCmsNode("test-write", draftRequest());
     expect(read?.configs[0].fields.a).toBe(1);
   });
 
-  it("overwrites prior draft entries with the same id", () => {
-    writeDraftNode("test-write", {
+  it("overwrites prior draft entries with the same id", async () => {
+    await writeDraftNode("test-write", {
       id: "test-write",
       configs: [{ match: {}, fields: { v: "first" } }],
     });
-    writeDraftNode("test-write", {
+    await writeDraftNode("test-write", {
       id: "test-write",
       configs: [{ match: {}, fields: { v: "second" } }],
     });
@@ -123,9 +123,9 @@ describe("lookupCmsNode — top-level draft wins over slot-nested copy", () => {
   // slots (stale, from whenever the parent was last written). The
   // flat index must prefer top-level so lookupCmsNode returns the
   // fresh version.
-  it("prefers a top-level draft entry over the same id nested in a parent slot", () => {
+  it("prefers a top-level draft entry over the same id nested in a parent slot", async () => {
     // Parent in draft with a stale copy of the child.
-    writeDraftNode("cms-demo-composed", {
+    await writeDraftNode("cms-demo-composed", {
       id: "cms-demo-composed",
       configs: [{ match: {}, fields: {} }],
       slots: {
@@ -139,7 +139,7 @@ describe("lookupCmsNode — top-level draft wins over slot-nested copy", () => {
       },
     });
     // Child at top-level with fresh content.
-    writeDraftNode("composed-hero-1", {
+    await writeDraftNode("composed-hero-1", {
       id: "composed-hero-1",
       type: "hero",
       configs: [{ match: {}, fields: { headline: "FRESH" } }],
@@ -165,20 +165,20 @@ describe("publishDraft", () => {
   // committed published node first, modify through draft+publish,
   // then re-publish a draft that restores the original.
 
-  it("copies draft entries into published and clears the draft", () => {
+  it("copies draft entries into published and clears the draft", async () => {
     const originalHero = lookupCmsNode("cms-demo-hero");
     expect(originalHero).not.toBeNull();
     const originalHeadline =
       originalHero!.configs[0].fields.headline;
 
     try {
-      writeDraftNode("cms-demo-hero", {
+      await writeDraftNode("cms-demo-hero", {
         id: "cms-demo-hero",
         configs: [
           { match: {}, fields: { headline: "Published via test" } },
         ],
       });
-      publishDraft();
+      await publishDraft();
       // Draft is empty after publish.
       expect(existsSync(DRAFT_PATH)).toBe(true);
       // Published now carries the new value (no cookie needed).
@@ -189,7 +189,7 @@ describe("publishDraft", () => {
     } finally {
       // Restore original committed state by publishing a draft that
       // reverts — keeps the repo tidy for the next test run.
-      writeDraftNode("cms-demo-hero", {
+      await writeDraftNode("cms-demo-hero", {
         id: "cms-demo-hero",
         displayName: "#hero",
         configs: [
@@ -204,7 +204,7 @@ describe("publishDraft", () => {
           },
         ],
       });
-      publishDraft();
+      await publishDraft();
     }
   });
 });

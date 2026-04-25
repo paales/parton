@@ -82,7 +82,7 @@ describe("saveCmsFields", () => {
   });
 
   it("writes to a specific config index without touching others", async () => {
-    writeDraftNode("multi-config", {
+    await writeDraftNode("multi-config", {
       id: "multi-config",
       configs: [
         { match: { "url:variant": "A" }, fields: { headline: "A" } },
@@ -117,7 +117,7 @@ describe("saveCmsFields", () => {
   });
 
   it("flips a boolean to false when the checkbox is missing from the form", async () => {
-    writeDraftNode("flag-test", {
+    await writeDraftNode("flag-test", {
       id: "flag-test",
       configs: [{ match: {}, fields: { active: true } }],
     });
@@ -133,7 +133,7 @@ describe("saveCmsFields", () => {
 
 describe("addBlockToSlot", () => {
   it("appends a new child to the slot with a generated id", async () => {
-    writeDraftNode("parent-add", {
+    await writeDraftNode("parent-add", {
       id: "parent-add",
       configs: [{ match: {}, fields: {} }],
       slots: { body: [] },
@@ -148,7 +148,7 @@ describe("addBlockToSlot", () => {
   });
 
   it("appends to an existing slot without disturbing prior children", async () => {
-    writeDraftNode("parent-extend", {
+    await writeDraftNode("parent-extend", {
       id: "parent-extend",
       configs: [{ match: {}, fields: {} }],
       slots: {
@@ -169,7 +169,7 @@ describe("addBlockToSlot", () => {
   });
 
   it("creates the slot if it didn't exist on the parent yet", async () => {
-    writeDraftNode("parent-new-slot", {
+    await writeDraftNode("parent-new-slot", {
       id: "parent-new-slot",
       configs: [{ match: {}, fields: {} }],
     });
@@ -179,7 +179,7 @@ describe("addBlockToSlot", () => {
   });
 
   it("throws on an unregistered block type", async () => {
-    writeDraftNode("parent-bad", {
+    await writeDraftNode("parent-bad", {
       id: "parent-bad",
       configs: [{ match: {}, fields: {} }],
     });
@@ -197,7 +197,7 @@ describe("addBlockToSlot", () => {
 
 describe("removeBlockFromSlot", () => {
   it("removes the child by id", async () => {
-    writeDraftNode("parent-remove", {
+    await writeDraftNode("parent-remove", {
       id: "parent-remove",
       configs: [{ match: {}, fields: {} }],
       slots: {
@@ -221,7 +221,7 @@ describe("removeBlockFromSlot", () => {
   });
 
   it("is idempotent on an unknown child id", async () => {
-    writeDraftNode("parent-idempotent", {
+    await writeDraftNode("parent-idempotent", {
       id: "parent-idempotent",
       configs: [{ match: {}, fields: {} }],
       slots: {
@@ -260,35 +260,35 @@ describe("moveBlockInSlot", () => {
   }
 
   it("swaps with the previous sibling on direction=up", async () => {
-    writeDraftNode("parent-move", makeParent("a", "b", "c"));
+    await writeDraftNode("parent-move", makeParent("a", "b", "c"));
     await moveBlockInSlot("parent-move", "body", "b", "up");
     const parent = lookupDraftNode("parent-move")!;
     expect(parent.slots?.body.map((c) => c.id)).toEqual(["b", "a", "c"]);
   });
 
   it("swaps with the next sibling on direction=down", async () => {
-    writeDraftNode("parent-move", makeParent("a", "b", "c"));
+    await writeDraftNode("parent-move", makeParent("a", "b", "c"));
     await moveBlockInSlot("parent-move", "body", "b", "down");
     const parent = lookupDraftNode("parent-move")!;
     expect(parent.slots?.body.map((c) => c.id)).toEqual(["a", "c", "b"]);
   });
 
   it("is a no-op at the top boundary", async () => {
-    writeDraftNode("parent-move", makeParent("a", "b", "c"));
+    await writeDraftNode("parent-move", makeParent("a", "b", "c"));
     await moveBlockInSlot("parent-move", "body", "a", "up");
     const parent = lookupDraftNode("parent-move")!;
     expect(parent.slots?.body.map((c) => c.id)).toEqual(["a", "b", "c"]);
   });
 
   it("is a no-op at the bottom boundary", async () => {
-    writeDraftNode("parent-move", makeParent("a", "b", "c"));
+    await writeDraftNode("parent-move", makeParent("a", "b", "c"));
     await moveBlockInSlot("parent-move", "body", "c", "down");
     const parent = lookupDraftNode("parent-move")!;
     expect(parent.slots?.body.map((c) => c.id)).toEqual(["a", "b", "c"]);
   });
 
   it("is a no-op for an unknown child id", async () => {
-    writeDraftNode("parent-move", makeParent("a", "b", "c"));
+    await writeDraftNode("parent-move", makeParent("a", "b", "c"));
     await moveBlockInSlot("parent-move", "body", "ghost", "up");
     const parent = lookupDraftNode("parent-move")!;
     expect(parent.slots?.body.map((c) => c.id)).toEqual(["a", "b", "c"]);
@@ -297,11 +297,11 @@ describe("moveBlockInSlot", () => {
 
 describe("resetCmsDraft", () => {
   it("removes the id's draft entry while leaving others intact", async () => {
-    writeDraftNode("keep-me", {
+    await writeDraftNode("keep-me", {
       id: "keep-me",
       configs: [{ match: {}, fields: { a: 1 } }],
     });
-    writeDraftNode("drop-me", {
+    await writeDraftNode("drop-me", {
       id: "drop-me",
       configs: [{ match: {}, fields: { b: 2 } }],
     });
@@ -311,7 +311,7 @@ describe("resetCmsDraft", () => {
   });
 
   it("removes the draft file entirely when the last id is dropped", async () => {
-    writeDraftNode("only-one", {
+    await writeDraftNode("only-one", {
       id: "only-one",
       configs: [{ match: {}, fields: {} }],
     });
@@ -321,7 +321,7 @@ describe("resetCmsDraft", () => {
   });
 
   it("is a no-op for an id without a draft entry", async () => {
-    writeDraftNode("present", {
+    await writeDraftNode("present", {
       id: "present",
       configs: [{ match: {}, fields: {} }],
     });
@@ -340,7 +340,7 @@ describe("publishCmsDraft", () => {
     const originalHero = lookupCmsNode("cms-demo-hero");
     expect(originalHero).not.toBeNull();
     try {
-      writeDraftNode("cms-demo-hero", {
+      await writeDraftNode("cms-demo-hero", {
         id: "cms-demo-hero",
         configs: [
           { match: {}, fields: { headline: "Published-test value" } },
@@ -356,7 +356,7 @@ describe("publishCmsDraft", () => {
       // Restore by re-publishing a draft that brings the node back
       // to its original committed shape.
       if (originalHero) {
-        writeDraftNode("cms-demo-hero", originalHero);
+        await writeDraftNode("cms-demo-hero", originalHero);
         await publishCmsDraft();
       }
     }

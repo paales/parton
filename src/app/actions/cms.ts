@@ -110,14 +110,14 @@ export async function saveCmsFields(
     }
   }
 
-  writeDraftNode(cmsId, node);
+  await writeDraftNode(cmsId, node);
   return invalidateEditorAround(cmsId);
 }
 
 export async function publishCmsDraft(): Promise<{
   invalidate: { selector: string };
 }> {
-  publishDraft();
+  await publishDraft();
   // Blunt: invalidate the editor page so the tree rebuilds from the
   // updated stores. A future iteration could target only the
   // previously-drafted ids.
@@ -133,7 +133,7 @@ export async function publishCmsDraft(): Promise<{
 export async function resetCmsDraft(
   cmsId: string,
 ): Promise<{ invalidate: { selector: string } }> {
-  revertDraftNode(cmsId);
+  await revertDraftNode(cmsId);
   return invalidateEditorAround(cmsId);
 }
 
@@ -209,7 +209,7 @@ export async function addBlockToSlot(
     ...slots,
     [slotName]: [...children, newChild],
   };
-  writeDraftNode(parentCmsId, parent);
+  await writeDraftNode(parentCmsId, parent);
   return invalidateEditorAround(parentCmsId);
 }
 
@@ -237,7 +237,7 @@ export async function removeBlockFromSlot(
     ...slots,
     [slotName]: children.filter((c) => c.id !== childCmsId),
   };
-  writeDraftNode(parentCmsId, parent);
+  await writeDraftNode(parentCmsId, parent);
   return invalidateEditorAround(parentCmsId);
 }
 
@@ -275,6 +275,6 @@ export async function moveBlockInSlot(
   children[idx] = children[swapIdx];
   children[swapIdx] = tmp;
   parent.slots = { ...slots, [slotName]: children };
-  writeDraftNode(parentCmsId, parent);
+  await writeDraftNode(parentCmsId, parent);
   return invalidateEditorAround(parentCmsId);
 }
