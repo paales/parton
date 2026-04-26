@@ -53,6 +53,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { CmsDemoPage } from "./cms-demo.tsx";
 import { CmsEditTreeLink } from "../components/cms-edit-tree-link.tsx";
+import { CmsEditConfigTab } from "../components/cms-edit-config-tab.tsx";
 import { CmsEditAddBlock } from "../components/cms-edit-add-block.tsx";
 import {
   CmsEditPreviewNav,
@@ -624,7 +625,17 @@ async function FieldPanel() {
           </CardContent>
         </Card>
       ) : (
+        // Form key is `selected:effectiveIndex` so switching the
+        // active config (or the selected node) remounts every
+        // input — without it, React reuses the existing
+        // `defaultValue`-driven inputs across re-renders and the
+        // live `.value` stays at whatever the user first saw, even
+        // though the new server-rendered markup carries the new
+        // values. Same fix for the FieldInput keys below: they're
+        // already keyed by `name`, but the parent remount makes
+        // sure the whole subtree gets a clean mount.
         <form
+          key={`${selected}:${effectiveIndex}`}
           action={saveCmsFields.bind(null, selected, effectiveIndex)}
           className="space-y-3"
           data-testid="cms-edit-field-form"
@@ -694,7 +705,7 @@ function ConfigTabs({
           const isActive = idx === activeIndex;
           const label = formatMatchLabel(cfg.match);
           return (
-            <a
+            <CmsEditConfigTab
               key={idx}
               href={cmsEditHref(selected, idx)}
               className={cn(
@@ -703,11 +714,11 @@ function ConfigTabs({
                   ? "border-primary bg-primary/10 text-primary"
                   : "border-transparent hover:bg-muted",
               )}
-              data-testid={`cms-edit-config-tab-${idx}`}
-              data-active={isActive}
+              testId={`cms-edit-config-tab-${idx}`}
+              active={isActive}
             >
               {label}
-            </a>
+            </CmsEditConfigTab>
           );
         })}
       </div>
