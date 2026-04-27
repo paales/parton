@@ -15,6 +15,8 @@ import {
   getRequest,
   resolveManifest,
   setCurrentFrameScope,
+  setCurrentPartialManifest,
+  type ManifestScope,
 } from "../framework/context.ts";
 import {
   cmsFingerprintContribution,
@@ -34,6 +36,7 @@ import { Cache } from "./cache.tsx";
 import type { CacheOptions } from "./cache-options.ts";
 import {
   _childContext,
+  _joinFrameChain,
   _setCurrentPartialContext,
   type PartialCtx,
 } from "./partial-context.ts";
@@ -63,7 +66,7 @@ export function PartialBoundary({
   framePath,
   frameUrl,
   cmsId,
-  varyOn,
+  manifest,
   children,
 }: {
   id: string;
@@ -88,10 +91,12 @@ export function PartialBoundary({
    *  reconstruct the Partial with the same `cmsId` and descendant
    *  content accessors resolve against the same node. */
   cmsId?: string;
-  /** Declared request-state dependencies, preserved so cache-mode
-   *  replay reconstructs the Partial with the same vary set and
-   *  re-resolves it against the current request. */
-  varyOn?: readonly string[];
+  /** Live reference to this Partial's manifest scope's `current`
+   *  set. Stored on the snapshot so the next render can resolve
+   *  the recorded keys against the current request and fold them
+   *  into the structural fingerprint. The set is mutated in place
+   *  by tracked accessors during this render. */
+  manifest?: ReadonlySet<string>;
   children: ReactNode;
 }): ReactNode {
   const route = new URL(getRequest().url).pathname;
@@ -106,7 +111,7 @@ export function PartialBoundary({
     frameUrl,
     parentPath,
     cmsId,
-    varyOn,
+    manifest,
   });
   return children;
 }
@@ -289,48 +294,6 @@ export interface PartialProps {
    * rather than relying solely on `closest`.
    */
   provides?: Readonly<Record<string, unknown>>;
-  /**
-   * Declare which request-state inputs this Partial's content depends
-   * on. Folded into the structural fingerprint so a same-route nav
-   * that changes any declared key produces a distinct fp — the
-   * fp-skip protocol then renders fresh instead of serving the
-   * cached wrapper.
-   *
-   * Each entry is the same spec syntax tracked accessors use:
-   *
-   *   "url:<param>"            — URL search param (e.g. `"url:config"`).
-   *   "cookie:<name>"          — cookie value (e.g. `"cookie:user_id"`).
-   *   "header:<name>"          — request header (lowercased internally).
-   *   "pathname:/p/:slug"      — pathname pattern; the EXTRACTED params
-   *                              are hashed (so two routes matching the
-   *                              same pattern still hash distinctly per
-   *                              extracted slug).
-   *
-   * Resolved against:
-   *   1. this Partial's own frame request, if `frame=` is set;
-   *   2. else the closest ambient frame's request, if any (looked up
-   *      from session via `parent.frameChain` — bypasses the per-
-   *      request frame-scope cell, so it's safe across sibling-
-   *      interleaving renders);
-   *   3. else the page request.
-   *
-   * Use `varyOn` whenever the Partial's content depends on URL or
-   * cookie state but you can't (or don't want to) rely on tracked
-   * accessor reads inside the body to drive fingerprinting:
-   *
-   *   - The body reads request state via `getRequest()` (typically
-   *     because the tracked accessors would hit the frame-scope-leak
-   *     sharp edge — see `notes/FRAME_SCOPING.md`).
-   *   - The body delegates rendering to a child component whose own
-   *     reads the framework can't see at fingerprint time.
-   *   - The Partial wraps a `<Cache>`-less subtree but still varies
-   *     by URL.
-   *
-   * Not needed when the Partial's body itself reads via the tracked
-   * accessor surface inside a `<Cache>` boundary — that path already
-   * folds the manifest into the cache key.
-   */
-  varyOn?: readonly string[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -563,7 +526,6 @@ export function Partial({
   frameUrl,
   cmsId,
   provides,
-  varyOn,
 }: PartialProps): ReactNode {
   if (parent == null || !Array.isArray(parent.path)) {
     throw new Error(
@@ -651,6 +613,49 @@ export function Partial({
     frame != null ? [...parent.frameChain, frame] : EMPTY_PATH;
   const frameRequest =
     frame != null ? resolveFrameRequest(framePath, frameUrl) : null;
+
+  // Frame scope reset on every Partial entry. The per-request cell is
+  // a singleton, so a sibling's `<Partial frame="X">` that ran before
+  // us will have left its frame request in the cell. Without an
+  // explicit reset, any descendant of OUR Partial that calls a
+  // tracked accessor (`getSearchParam` etc.) would resolve against
+  // the leaked sibling frame URL — that's the editor's "FieldPanel
+  // sees the preview frame's URL" sharp edge that historically forced
+  // app-level workarounds (read via `getRequest()` instead of
+  // `getSearchParam`).
+  //
+  // Resolution uses the explicitly-threaded `parent.frameChain` as
+  // the authority on what the AMBIENT frame should be (the cell is
+  // unreliable due to the sibling leak; the parent prop isn't,
+  // because authors thread it explicitly across awaits). Three
+  // cases:
+  //   - own frame: leave the cell — `FrameWrapper` (rendered via
+  //     `content` below) will set it to our own frame request.
+  //   - ambient frame: keep the cell IF it already points at the
+  //     expected ancestor (i.e. our true parent's FrameWrapper set
+  //     it correctly — preserves the outer's `frameUrl` prop on the
+  //     first render before any session URL exists). Otherwise
+  //     restore from session via `resolveFrameRequest` against the
+  //     threaded `parent.frameChain`.
+  //   - no frame: clear the cell. Descendants resolve accessors
+  //     against the page request.
+  if (frame == null) {
+    if (parent.frameChain.length > 0) {
+      const cell = getCurrentFrameScope();
+      const expected = _joinFrameChain(parent.frameChain);
+      const cellMatches =
+        cell != null && _joinFrameChain(cell.path) === expected;
+      if (!cellMatches) {
+        const ambientReq = resolveFrameRequest(parent.frameChain, undefined);
+        setCurrentFrameScope({
+          path: parent.frameChain,
+          request: ambientReq,
+        });
+      }
+    } else {
+      setCurrentFrameScope(null);
+    }
+  }
   const content: ReactNode =
     frame != null && frameRequest != null ? (
       <FrameWrapper path={framePath} request={frameRequest}>
@@ -718,57 +723,66 @@ export function Partial({
   const cmsRequest = ambientScope?.request ?? getRequest();
   const cmsKey =
     cmsId != null ? cmsFingerprintContribution(cmsId, cmsRequest) : "";
-  // varyOn fingerprint contribution — declarative dependency on
-  // request state (URL params, cookies, headers, pathname patterns)
-  // the Partial's content varies by. Resolved against the Partial's
-  // effective request:
-  //   - own frame request when the Partial declares `frame=…`
-  //     (frameRequest is already populated above);
-  //   - else the closest ambient frame's request, looked up DIRECTLY
-  //     from session via `parent.frameChain` — bypasses the leaky
-  //     per-request frame-scope cell that `getCurrentFrameScope`
-  //     reads, so the resolution is correct under sibling-interleaved
-  //     renders too;
-  //   - else the page request.
-  // Folded into BOTH `structuralFp` (so `<Cache>` baseKey
-  // differentiates per vary value — separate cache slots) and `fp`
-  // (so the fp-skip handshake refuses to skip when the declared
-  // input changed).
-  const varyKey = computeVaryKey(
-    varyOn,
+  // ── Auto-collected manifest tracking ───────────────────────────────
+  //
+  // Open a per-Partial ManifestScope and install it on the per-
+  // request cell. Descendants' tracked accessor calls
+  // (`getSearchParam`, `getCookie`, `getHeader`, `getPathname`)
+  // record into this scope's `current` set. The scope is shared by
+  // reference with the registry snapshot — accessors mutate the set
+  // in place during this render, so by the time the next render
+  // reads this snapshot's `manifest`, it has the prior render's
+  // full read pattern.
+  //
+  // `stored` is seeded from the PREVIOUS render's snapshot, so the
+  // hoisting check (`HoistingViolationError` in `trackAccess`) fires
+  // synchronously when a body adds a new key it didn't read before.
+  // First-render-of-a-Partial leaves it null (nothing to compare).
+  //
+  // The fp computation below uses the STORED set (previous render's
+  // reads) plus this Partial's varyOn — descendants' new reads in
+  // the current render don't affect THIS render's fp (chicken-and-
+  // egg), but they're recorded for the NEXT render.
+  const route = new URL(getRequest().url).pathname;
+  const previousSnap = getPreviousRouteSnapshots(route)?.get(id);
+  const manifestScope: ManifestScope = {
+    current: new Set(),
+    stored: previousSnap?.manifest ?? null,
+    partialId: id,
+  };
+  setCurrentPartialManifest(manifestScope);
+
+  // Resolve the previous render's manifest against the current
+  // request to get a fingerprint contribution capturing every
+  // tracked accessor key the Partial body + descendants read last
+  // time. A request-state change in any of those keys produces a
+  // distinct fp here, so the fp-skip handshake refuses to skip and
+  // the Partial re-renders fresh.
+  //
+  // Frame routing for resolution mirrors `cmsRequest`: own frame
+  // request if this Partial opens a frame, ambient frame request
+  // looked up directly from session via `parent.frameChain`
+  // (bypasses the leaky cell), else the page request.
+  const ownManifestKey = computeOwnManifestKey(
+    manifestScope.stored,
     frame != null ? frameRequest : null,
     parent.frameChain,
     frameUrl,
   );
-  // Transitive descendant `varyOn` — the fp must capture
-  // dependencies declared by descendants too, because fp-skip at an
-  // ancestor short-circuits descendant rendering. Without this fold
-  // an ancestor whose own JSX is unchanged would emit a placeholder,
+  // Transitive descendant manifests — the fp must capture
+  // dependencies of descendants too, because fp-skip at an ancestor
+  // short-circuits descendant rendering. Without this fold an
+  // ancestor whose own JSX is unchanged would emit a placeholder,
   // the client would reuse the cached subtree, and a descendant
-  // whose `varyOn` value changed would never re-render.
+  // whose tracked-accessor value changed would never re-render.
   //
-  // Two walks combine:
-  //   1. Static JSX walk over `rawContent` — catches `<Partial>`
-  //      elements that appear DIRECTLY in this Partial's children
-  //      JSX (no opaque function component in between). No render is
-  //      executed; we just inspect element shapes.
-  //   2. Previous-render registry walk — catches Partials registered
-  //      under this id via the `parent` prop discipline (covers
-  //      dynamic Partials inside `.map()`s and Partials wrapped in
-  //      function components that thread `parent`).
-  // Contributions are deduped by effective id, so the two walks
-  // finding the same Partial fold its varyOn exactly once.
-  //
-  // Limitation: a Partial wrapped in an opaque function component
-  // (e.g. `<TreePanel />` containing `<Partial selector="…">`) that
-  // doesn't thread `parent` is invisible to BOTH walks until it
-  // first renders and registers a snapshot. After the first render
-  // the registry knows about it, but only if its `parent` prop
-  // matches; with `parent={ROOT}` the registry can't link it back.
-  // For these Partials, declare `varyOn` on the wrapping ancestor
-  // (or thread `parent={capturePartialContext()}` so the registry
-  // can track the relationship).
-  const descendantVaryKey = computeDescendantVaryKey(
+  // Walks the previous-render registry for Partials whose
+  // `parentPath` includes this id, resolves each one's stored
+  // manifest, and folds the values in. Static JSX walk also runs
+  // for visible-but-not-yet-rendered descendants (covers the
+  // first-render case where the registry is empty for descendants
+  // that haven't run yet).
+  const descendantManifestKey = computeDescendantManifestKey(
     id,
     frame != null ? framePath : parent.frameChain,
     rawContent,
@@ -784,8 +798,8 @@ export function Partial({
     fingerprintElement(rawContent) +
       ownFrameKey +
       cmsKey +
-      varyKey +
-      descendantVaryKey,
+      ownManifestKey +
+      descendantManifestKey,
   );
   // Full fingerprint — includes ambient frame URL so descendants of
   // a frame whose URL changed get a different fp on the next render
@@ -795,8 +809,8 @@ export function Partial({
       ownFrameKey +
       ambientFrameKey +
       cmsKey +
-      varyKey +
-      descendantVaryKey,
+      ownManifestKey +
+      descendantManifestKey,
   );
 
   // ── Skip decisions ─────────────────────────────────────────────────
@@ -828,7 +842,6 @@ export function Partial({
     // unframed children (`rawContent`), not the wrapped content — on
     // refetch the wrapper re-renders fresh with the current frame
     // URL from session.
-    const route = new URL(getRequest().url).pathname;
     registerPartial(route, id, {
       content: rawContent,
       fallback: effectiveFallback,
@@ -840,7 +853,7 @@ export function Partial({
       frameUrl,
       parentPath: parent.path,
       cmsId,
-      varyOn,
+      manifest: manifestScope.current,
     });
     return placeholderFor(id);
   }
@@ -871,7 +884,7 @@ export function Partial({
         framePath={framePath}
         frameUrl={frameUrl}
         cmsId={cmsId}
-        varyOn={varyOn}
+        manifest={manifestScope.current}
       >
         <PartialErrorBoundary
           key={id}
@@ -964,7 +977,7 @@ export function Partial({
       framePath={framePath}
       frameUrl={frameUrl}
       cmsId={cmsId}
-      varyOn={varyOn}
+      manifest={manifestScope.current}
     >
       {rendered}
     </PartialBoundary>
@@ -972,10 +985,10 @@ export function Partial({
 }
 
 /**
- * Resolve a Partial's `varyOn` array against the appropriate request
- * and return a stable key string suitable for hashing into the
- * fingerprint. Returns `""` when no deps are declared (so unchanged
- * Partials hash exactly as before).
+ * Resolve a Partial's stored manifest (the previous render's
+ * tracked-accessor read keys) against the appropriate request and
+ * return a stable key string suitable for hashing into the
+ * fingerprint. Returns `""` when no manifest exists (first render).
  *
  * Request selection avoids the leaky `getCurrentFrameScope()` cell:
  *   - own frame request when set;
@@ -988,88 +1001,84 @@ export function Partial({
  * Serialization sorts the spec list so two Partials that declared
  * the same set in different order hash identically.
  */
-function computeVaryKey(
-  varyOn: readonly string[] | undefined,
+function computeOwnManifestKey(
+  storedManifest: ReadonlySet<string> | null,
   ownFrameRequest: Request | null,
   ambientFrameChain: readonly string[],
   ownFrameUrl: string | undefined,
 ): string {
-  if (varyOn == null || varyOn.length === 0) return "";
+  if (storedManifest == null || storedManifest.size === 0) return "";
   const request: Request =
     ownFrameRequest != null
       ? ownFrameRequest
       : ambientFrameChain.length > 0
         ? resolveFrameRequest(ambientFrameChain, ownFrameUrl)
         : getRequest();
-  const values = resolveManifest(new Set(varyOn), request);
-  const sorted = [...varyOn].sort();
+  const values = resolveManifest(new Set(storedManifest), request);
+  const sorted = [...storedManifest].sort();
   const parts: string[] = [];
   for (const k of sorted) parts.push(`${k}=${values[k]}`);
-  return `|vary=${parts.join("&")}`;
+  return `|own=${parts.join("&")}`;
 }
 
 /**
  * Walk the previous render's snapshots for descendants of `ownId`
- * and fold each one's resolved `varyOn` into a single key string.
+ * and fold each one's resolved manifest into a single key string.
  * The result captures the union of all transitive descendant
  * dependencies, so an ancestor's fp differs whenever ANY descendant's
- * varyOn value differs — which is the prerequisite for fp-skip at the
- * ancestor to be safe.
+ * tracked-accessor read value differs — which is the prerequisite
+ * for fp-skip at the ancestor to be safe.
  *
- * Resolution detail: each descendant's varyOn must be resolved
- * against the descendant's OWN effective request (which may be a
- * frame request distinct from the ancestor's). The descendant's
- * snapshot carries `framePath` — we use it to look the frame URL
- * up directly from session, bypassing the per-request frame-scope
- * cell (and its sibling-interleaving leak).
+ * Two walks combine, deduped by descendant effective id:
+ *
+ *   1. **Static JSX walk** of `rawContent` — finds `<Partial>`
+ *      elements directly visible in the children JSX (no opaque
+ *      function component in between). Looks up each Partial's
+ *      manifest from the previous render's snapshot. Catches the
+ *      first-render case where descendants haven't run yet AND
+ *      where the registry can't link them via parentPath because
+ *      the user passed `parent={ROOT}`.
+ *
+ *   2. **Previous-render registry walk** — finds snapshots whose
+ *      `parentPath` includes `ownId`. Catches dynamic Partials
+ *      (`.map()`-generated, function-component-wrapped) when the
+ *      author threaded `parent={capturePartialContext()}`.
+ *
+ * Resolution: each descendant's manifest is resolved against the
+ * descendant's OWN effective request (own frame, ambient frame
+ * looked up via session, or page) so a frame URL change correctly
+ * invalidates fps for Partials inside the frame.
  *
  * Empty key (`""`) on:
- *   - First-render-of-a-route (no previous snapshots).
- *   - Ancestors with no descendants that declare varyOn.
+ *   - First-render-of-a-Partial with no statically-visible
+ *     descendants and no prior registry entry.
+ *   - Ancestors with no descendants that have read tracked
+ *     accessors.
  *
  * Over-folding bias: a descendant that USED to live under this
- * ancestor but no longer does still contributes its varyOn until
- * the next render swaps in a fresh "previous" map. That makes the
- * ancestor's fp differ more often than strictly necessary — extra
- * re-renders, never stale subtrees. Acceptable trade.
+ * ancestor but no longer does still contributes until the next
+ * render swaps in a fresh "previous" map. Extra re-renders, never
+ * stale subtrees.
  */
-function computeDescendantVaryKey(
+function computeDescendantManifestKey(
   ownId: string,
   ownFrameChain: readonly string[],
   rawContent: ReactNode,
 ): string {
-  // Map<descendantEffectiveId, contributionString>. Dedupes when
-  // the static walk and the registry walk both find the same
-  // Partial (e.g. a directly-nested Partial that also registered
-  // a snapshot in the previous render).
   const contributions = new Map<string, string>();
 
-  walkJsxForDescendantVary(rawContent, ownFrameChain, contributions);
-  walkRegistryForDescendantVary(ownId, ownFrameChain, contributions);
+  walkJsxForDescendantManifest(rawContent, ownFrameChain, contributions);
+  walkRegistryForDescendantManifest(ownId, ownFrameChain, contributions);
 
   if (contributions.size === 0) return "";
   const sorted = [...contributions.entries()].sort(([a], [b]) =>
     a.localeCompare(b),
   );
   const parts = sorted.map(([id, sub]) => `${id}{${sub}}`);
-  return `|descVary=${parts.join(",")}`;
+  return `|desc=${parts.join(",")}`;
 }
 
-/**
- * Static JSX walk — descend into `node` and collect contributions
- * from every `<Partial>` element with a non-empty `varyOn` we can
- * reach without executing any function component. Tracks the frame
- * chain so each descendant's varyOn resolves against the right
- * request (the descendant's own frame if it opens one, else the
- * ancestor's chain).
- *
- * Stops at non-Partial function components (TreePanel, FieldPanel,
- * any user component) — we can't see what they'll render without
- * calling them, and calling them defeats the streaming + sync-fp
- * model. For Partials hidden behind such components, fall back to
- * the registry walk + `parent` threading.
- */
-function walkJsxForDescendantVary(
+function walkJsxForDescendantManifest(
   node: ReactNode,
   ancestorFrameChain: readonly string[],
   out: Map<string, string>,
@@ -1078,7 +1087,7 @@ function walkJsxForDescendantVary(
   if (typeof node === "string" || typeof node === "number") return;
   if (Array.isArray(node)) {
     for (const child of node) {
-      walkJsxForDescendantVary(child, ancestorFrameChain, out);
+      walkJsxForDescendantManifest(child, ancestorFrameChain, out);
     }
     return;
   }
@@ -1091,23 +1100,27 @@ function walkJsxForDescendantVary(
       localFrame != null
         ? [...ancestorFrameChain, localFrame]
         : ancestorFrameChain;
-    if (props.varyOn && props.varyOn.length > 0) {
-      const parsed = parseSelector(props.selector);
-      const id = resolveEffectiveId(parsed);
+    // Look up this Partial's previous-render manifest from the
+    // registry. If absent (first-render), it contributes nothing —
+    // but we still recurse INTO its children to collect manifests
+    // from grand-descendants that may have prior entries.
+    const parsed = parseSelector(props.selector);
+    const descId = resolveEffectiveId(parsed);
+    const route = new URL(getRequest().url).pathname;
+    const prev = getPreviousRouteSnapshots(route)?.get(descId);
+    const manifest = prev?.manifest;
+    if (manifest && manifest.size > 0) {
       const request: Request =
         childFrameChain.length > 0
           ? resolveFrameRequest(childFrameChain, props.frameUrl)
           : getRequest();
-      const values = resolveManifest(new Set(props.varyOn), request);
-      const sorted = [...props.varyOn].sort();
+      const values = resolveManifest(new Set(manifest), request);
+      const sorted = [...manifest].sort();
       const sub: string[] = [];
       for (const k of sorted) sub.push(`${k}=${values[k]}`);
-      out.set(id, sub.join("&"));
+      out.set(descId, sub.join("&"));
     }
-    // Recurse INTO this Partial's children — its descendants
-    // contribute to the OUTER ancestor's fp too. (A varyOn on a
-    // grand-descendant should propagate up through every wrapper.)
-    walkJsxForDescendantVary(
+    walkJsxForDescendantManifest(
       props.children as ReactNode,
       childFrameChain,
       out,
@@ -1115,30 +1128,13 @@ function walkJsxForDescendantVary(
     return;
   }
 
-  // Non-Partial JSX: walk through children. Function components
-  // appear as elements with `type` set to the function — we can't
-  // see what they'll render, so any inner Partial is opaque. Host
-  // elements (`div`, etc.) and Fragments expose their children
-  // directly; we descend.
   const inner = (node.props as { children?: ReactNode })?.children;
   if (inner != null) {
-    walkJsxForDescendantVary(inner, ancestorFrameChain, out);
+    walkJsxForDescendantManifest(inner, ancestorFrameChain, out);
   }
 }
 
-/**
- * Registry walk — pull Partials from the PREVIOUS render's snapshots
- * whose `parentPath` includes `ownId`. Catches dynamic Partials
- * (`.map()`-generated, function-component-wrapped) when the author
- * passed `parent={capturePartialContext()}` (or threaded the parent
- * down explicitly), so the registry knows the parent edge.
- *
- * Adds to `out` only if the static walk hasn't already registered
- * the same effective id (the static walk's contribution is fresher
- * — a deleted Partial that lingers in the previous-render registry
- * shouldn't override a current-tree contribution).
- */
-function walkRegistryForDescendantVary(
+function walkRegistryForDescendantManifest(
   ownId: string,
   ownFrameChain: readonly string[],
   out: Map<string, string>,
@@ -1151,10 +1147,10 @@ function walkRegistryForDescendantVary(
     if (descId === ownId) continue;
     if (out.has(descId)) continue;
     if (!isDescendantSnapshot(snap, ownId)) continue;
-    if (!snap.varyOn || snap.varyOn.length === 0) continue;
+    if (!snap.manifest || snap.manifest.size === 0) continue;
     const descRequest = descendantSnapshotRequest(snap, ownFrameChain);
-    const values = resolveManifest(new Set(snap.varyOn), descRequest);
-    const sorted = [...snap.varyOn].sort();
+    const values = resolveManifest(new Set(snap.manifest), descRequest);
+    const sorted = [...snap.manifest].sort();
     const sub: string[] = [];
     for (const k of sorted) sub.push(`${k}=${values[k]}`);
     out.set(descId, sub.join("&"));
@@ -1165,24 +1161,12 @@ function isDescendantSnapshot(
   snap: PartialSnapshot,
   ancestorId: string,
 ): boolean {
-  // `parentPath` is outer-first, so a Partial nested inside `ancestorId`
-  // has `ancestorId` somewhere in its path. Direct equality scan is
-  // sufficient — the path is short (depth of nesting).
   for (const id of snap.parentPath) {
     if (id === ancestorId) return true;
   }
   return false;
 }
 
-/**
- * Resolve the effective Request for a descendant snapshot's varyOn
- * resolution. Picks:
- *   - the descendant's own frame request, if its `framePath` is set
- *     (and differs from the ancestor's chain — i.e. the descendant
- *     opened a new frame);
- *   - otherwise the ancestor's ambient frame, if any;
- *   - otherwise the page request.
- */
 function descendantSnapshotRequest(
   snap: PartialSnapshot,
   ancestorFrameChain: readonly string[],

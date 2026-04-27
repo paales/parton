@@ -1,23 +1,31 @@
 /**
- * Regression cover for `<Partial varyOn>`:
+ * Auto-tracked manifest fingerprinting (formerly `<Partial varyOn>`).
  *
- *   1. A Partial declaring `varyOn=["url:foo"]` produces distinct
- *      fingerprints for two requests differing only in `?foo=`. The
- *      structural fp (used for `<Cache>` baseKey) and the full fp
- *      (used for fp-skip) must both differ.
+ * The framework opens a per-Partial manifest scope on every Partial
+ * body and writes tracked accessor reads (`getSearchParam`,
+ * `getCookie`, `getHeader`, `getPathname`) to it. The accumulated
+ * keys land on the snapshot; the NEXT render resolves them against
+ * the current request and folds the values into the structural
+ * fingerprint. Result: a same-route nav that changes any read key
+ * invalidates the fp without the author having to declare deps.
  *
- *   2. An ancestor whose JSX is unchanged but contains a descendant
- *      `<Partial varyOn=…>` propagates the descendant's resolved
- *      values into its OWN fp — so a fp-skip at the ancestor would
- *      be safe (or rather, would not happen, because the URL change
- *      bumps the ancestor's fp too). Without this propagation the
- *      ancestor short-circuits descendant rendering.
+ * Tests pin the four core invariants:
  *
- *   3. Frame-aware resolution: a Partial with `frame=` sees its own
- *      frame's URL when resolving varyOn; a Partial with no `frame`
- *      but inside a framed ancestor sees the ambient frame's URL
- *      (looked up via parent.frameChain — bypasses the leaky
- *      React.cache cell).
+ *   1. A Partial whose descendant reads `getSearchParam("foo")`
+ *      produces distinct fps for two requests differing only in
+ *      `?foo=`. (Need TWO renders — first to populate manifest,
+ *      second to fold it in.)
+ *
+ *   2. A URL change in an UNREAD param leaves the fp unchanged.
+ *
+ *   3. An ancestor's fp captures a descendant's manifest, so an
+ *      ancestor fp-skip can't short-circuit a descendant whose
+ *      tracked read changed.
+ *
+ *   4. A Partial inside a frame resolves its tracked reads against
+ *      the frame's URL — and a frame-URL change produces a distinct
+ *      fp. (Verifies the frame-leak fix lets ambient resolution
+ *      work correctly via `parent.frameChain`.)
  */
 import { describe, expect, it, beforeEach, vi } from "vitest";
 
@@ -29,8 +37,9 @@ vi.mock("../cache.tsx", () => ({
 
 import { renderWithRequest } from "../../test/rsc-server.ts";
 import { PartialRoot, Partial } from "../partial.tsx";
-import { ROOT } from "../partial-context.ts";
+import { ROOT, capturePartialContext } from "../partial-context.ts";
 import { clearRegistry } from "../partial-registry.ts";
+import { getSearchParam } from "../../framework/context.ts";
 
 beforeEach(() => {
   clearRegistry();
@@ -56,49 +65,65 @@ async function renderFp(
   return extractFingerprint(text, partialId);
 }
 
-describe("Partial fingerprint — varyOn", () => {
-  it("URL change in a declared varyOn key produces a distinct fingerprint", async () => {
+/**
+ * Render twice at the SAME url so the second render's fp folds in
+ * the manifest collected by the first. Returns the second-render fp.
+ */
+async function warmedFp(
+  url: string,
+  tree: React.ReactNode,
+  partialId: string,
+): Promise<string | null> {
+  await renderFp(url, tree, partialId);
+  return renderFp(url, tree, partialId);
+}
+
+describe("Partial fingerprint — auto-tracked manifest", () => {
+  function ReadConfig() {
+    // Hoisted at the sync top of this server component body.
+    const config = getSearchParam("config");
+    return <span>config={config ?? ""}</span>;
+  }
+
+  it("URL change in a tracked-accessor key produces a distinct fingerprint", async () => {
     const tree = (
       <PartialRoot>
-        <Partial parent={ROOT} selector="#fields" varyOn={["url:config"]}>
-          <span>body</span>
+        <Partial parent={ROOT} selector="#fields">
+          <ReadConfig />
         </Partial>
       </PartialRoot>
     );
 
-    const fpA = await renderFp(
-      "http://localhost/?config=0",
-      tree,
-      "fields",
-    );
+    // Warm so the manifest exists for the second render's fp fold.
+    const fpA = await warmedFp("http://localhost/?config=0", tree, "fields");
     clearRegistry();
-    const fpB = await renderFp(
-      "http://localhost/?config=1",
-      tree,
-      "fields",
-    );
+    const fpB = await warmedFp("http://localhost/?config=1", tree, "fields");
 
     expect(fpA).toBeTruthy();
     expect(fpB).toBeTruthy();
     expect(fpA).not.toBe(fpB);
   });
 
-  it("URL change in an UNDECLARED key leaves the fingerprint unchanged", async () => {
+  it("URL change in an UNREAD key leaves the fingerprint unchanged", async () => {
+    function ReadSelect() {
+      const select = getSearchParam("select");
+      return <span>{select ?? ""}</span>;
+    }
     const tree = (
       <PartialRoot>
-        <Partial parent={ROOT} selector="#fields" varyOn={["url:select"]}>
-          <span>body</span>
+        <Partial parent={ROOT} selector="#fields">
+          <ReadSelect />
         </Partial>
       </PartialRoot>
     );
 
-    const fpA = await renderFp(
+    const fpA = await warmedFp(
       "http://localhost/?select=a&unrelated=x",
       tree,
       "fields",
     );
     clearRegistry();
-    const fpB = await renderFp(
+    const fpB = await warmedFp(
       "http://localhost/?select=a&unrelated=y",
       tree,
       "fields",
@@ -109,37 +134,44 @@ describe("Partial fingerprint — varyOn", () => {
     expect(fpA).toBe(fpB);
   });
 
-  it("ancestor fp captures a descendant's varyOn (static-walk path)", async () => {
-    // Ancestor's own JSX shape is identical across both renders. Only
-    // the descendant's `?config=` varies. With the descendant fold in
-    // place, the ancestor's fp must differ — otherwise an ancestor
-    // fp-skip would short-circuit the descendant's re-render.
+  it("ancestor fp captures a descendant's tracked-accessor reads", async () => {
+    // Ancestor's own JSX shape is identical across both renders.
+    // Only the descendant's `?config=` varies. With the descendant
+    // manifest fold, the ancestor's fp must differ.
     const tree = (
       <PartialRoot>
         <Partial parent={ROOT} selector="#root">
           <div>
-            <Partial parent={ROOT} selector="#fields" varyOn={["url:config"]}>
-              <span>body</span>
+            <Partial parent={ROOT} selector="#fields">
+              <ReadConfig />
             </Partial>
           </div>
         </Partial>
       </PartialRoot>
     );
 
-    const fpA = await renderFp("http://localhost/?config=0", tree, "root");
+    const fpA = await warmedFp("http://localhost/?config=0", tree, "root");
     clearRegistry();
-    const fpB = await renderFp("http://localhost/?config=1", tree, "root");
+    const fpB = await warmedFp("http://localhost/?config=1", tree, "root");
 
     expect(fpA).toBeTruthy();
     expect(fpB).toBeTruthy();
     expect(fpA).not.toBe(fpB);
   });
 
-  it("ambient frame: a Partial inside a frame resolves its varyOn against the frame URL", async () => {
-    // Two renders differ only in the FRAME URL. The inner Partial
-    // (no own frame) declares `varyOn=["url:q"]`. Resolution must use
-    // the framed ancestor's URL — not the page URL — so a frame-URL
-    // query change produces a distinct fp.
+  it("ambient frame: a Partial inside a frame resolves its reads against the frame URL", async () => {
+    function ReadQ() {
+      const q = getSearchParam("q");
+      return <span>{q ?? ""}</span>;
+    }
+    function Inner() {
+      const parent = capturePartialContext();
+      return (
+        <Partial parent={parent} selector="#inner">
+          <ReadQ />
+        </Partial>
+      );
+    }
     const treeA = (
       <PartialRoot>
         <Partial
@@ -148,9 +180,7 @@ describe("Partial fingerprint — varyOn", () => {
           frame="outer"
           frameUrl="/?q=alpha"
         >
-          <Partial parent={ROOT} selector="#inner" varyOn={["url:q"]}>
-            <span>inner</span>
-          </Partial>
+          <Inner />
         </Partial>
       </PartialRoot>
     );
@@ -162,17 +192,15 @@ describe("Partial fingerprint — varyOn", () => {
           frame="outer"
           frameUrl="/?q=beta"
         >
-          <Partial parent={ROOT} selector="#inner" varyOn={["url:q"]}>
-            <span>inner</span>
-          </Partial>
+          <Inner />
         </Partial>
       </PartialRoot>
     );
 
     // Page URL identical in both renders — only the frame URL differs.
-    const fpA = await renderFp("http://localhost/", treeA, "inner");
+    const fpA = await warmedFp("http://localhost/", treeA, "inner");
     clearRegistry();
-    const fpB = await renderFp("http://localhost/", treeB, "inner");
+    const fpB = await warmedFp("http://localhost/", treeB, "inner");
 
     expect(fpA).toBeTruthy();
     expect(fpB).toBeTruthy();

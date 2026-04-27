@@ -38,7 +38,7 @@ vi.mock("../cache.tsx", () => ({
 
 import { renderWithRequest } from "../../test/rsc-server.ts";
 import { PartialRoot, Partial } from "../partial.tsx";
-import { ROOT } from "../partial-context.ts";
+import { ROOT, capturePartialContext } from "../partial-context.ts";
 import { clearRegistry } from "../partial-registry.ts";
 
 beforeEach(() => {
@@ -114,21 +114,36 @@ describe("Partial fingerprint — frame scope isolation", () => {
     // ancestor must fold the enclosing frame URL into its fp, so a
     // frame-URL change invalidates the nested fp. This is the
     // intended use of `ambientFrameKey` and should keep working.
+    //
+    // Note: ambient inheritance now requires the inner Partial to be
+    // threaded with `parent={capturePartialContext()}` (or with a
+    // `PartialCtx` whose `frameChain` includes the outer's frame
+    // name). Earlier the inheritance was implicit via the leaky
+    // `frameScopeCell`; the leak fix on Partial entry resets the
+    // cell to whatever the explicitly-threaded `parent.frameChain`
+    // says, so authors need to opt into the relationship rather
+    // than rely on a sibling having mutated the cell. Using a
+    // function-component wrapper is the canonical way to capture
+    // the ancestor's context inside its render scope.
+    function Inner() {
+      const parent = capturePartialContext();
+      return (
+        <Partial parent={parent} selector="#inner">
+          <span>inner body</span>
+        </Partial>
+      );
+    }
     const withFrameA = (
       <PartialRoot>
         <Partial parent={ROOT} selector="#outer" frame="outer" frameUrl="/a">
-          <Partial parent={ROOT} selector="#inner">
-            <span>inner body</span>
-          </Partial>
+          <Inner />
         </Partial>
       </PartialRoot>
     );
     const withFrameB = (
       <PartialRoot>
         <Partial parent={ROOT} selector="#outer" frame="outer" frameUrl="/b">
-          <Partial parent={ROOT} selector="#inner">
-            <span>inner body</span>
-          </Partial>
+          <Inner />
         </Partial>
       </PartialRoot>
     );

@@ -98,6 +98,50 @@ export interface ManifestScope {
 
 const manifestContext = new AsyncLocalStorage<ManifestScope>();
 
+// ─── Partial-level manifest (React.cache mutation cell) ──────────────
+//
+// Per-Partial manifest scope, set by every `<Partial>` body before
+// rendering its children. Sibling to the ALS-based `manifestContext`
+// that `<Cache>` opens via `runWithCacheManifest`:
+//
+//   ALS scope:  set by `<Cache>` only, propagates through Cache's
+//               Flight round-trip to descendants (the await chain
+//               carries the ALS).
+//   Cell scope: set by EVERY Partial body, read by descendants
+//               through the per-request mutation cell. Discipline-
+//               dependent (descendants must hoist their tracked
+//               accessor reads to the sync top of their body, before
+//               any await — the same rule documented for the frame
+//               cell in `notes/FRAME_SCOPING.md`).
+//
+// `trackAccess` writes to BOTH so an accessor read inside a Cache
+// inside a Partial lands in both manifests. Each layer uses its
+// manifest for its own purpose: Cache for the cache key, Partial for
+// the structural fingerprint.
+//
+// The cell can drift when descendants render after their ancestor
+// has yielded (sibling Partial's body runs in between, overwriting
+// the cell). Hoisting prevents this from causing under-attribution
+// for direct sync children: their reads happen during React's
+// synchronous call from the parent's wrapped JSX, before any sibling
+// Partial body has had a chance to run. Deeper async descendants
+// past intermediate awaits hit the same drift sharp edge as frame
+// scope — see `notes/FRAME_SCOPING.md` and the limit documented on
+// the Partial body's `descendantManifestKey` computation.
+const partialManifestCell = cache(
+  (): { current: ManifestScope | null } => ({ current: null }),
+);
+
+export function setCurrentPartialManifest(
+  scope: ManifestScope | null,
+): void {
+  partialManifestCell().current = scope;
+}
+
+export function getCurrentPartialManifest(): ManifestScope | null {
+  return partialManifestCell().current;
+}
+
 // ─── Frame scope (React.cache mutation cell) ──────────────────────
 
 /**
@@ -331,13 +375,22 @@ export class HoistingViolationError extends Error {
   readonly previousKeys: string[];
   constructor(partialId: string, newKey: string, previousKeys: string[]) {
     super(
-      `Partial "${partialId}" read "${newKey}" on this render, but its previous ` +
-        `renders didn't read it. Request accessors (getCookie / getHeader / ` +
-        `getSearchParam / getRoute) must be called unconditionally at the ` +
-        `top of the component body, like React hooks. Move the read above ` +
-        `any conditional branching, or — if the input genuinely shouldn't ` +
-        `participate in the cache key — pass it through cache.vary instead. ` +
-        `(previous keys: [${previousKeys.join(", ")}])`,
+      `Partial "${partialId}"'s manifest captured a read of "${newKey}" on ` +
+        `this render that its previous render didn't see (previous keys: ` +
+        `[${previousKeys.join(", ")}]).\n\n` +
+        `Two common causes:\n` +
+        `  1. A conditional read inside this Partial's body — move the ` +
+        `getCookie / getHeader / getSearchParam / getPathname call to the ` +
+        `top of the body, before any branching, like a React hook.\n` +
+        `  2. Cell drift: another Partial's body called a tracked accessor ` +
+        `AFTER an \`await\`, by which point the per-request manifest cell ` +
+        `had been overwritten by this Partial's body. The read got ` +
+        `attributed to "${partialId}" by accident. Find the Partial ` +
+        `actually doing the read and hoist its accessor call ABOVE the ` +
+        `await — the framework can only attribute reads correctly when ` +
+        `they happen at the synchronous top of a server component body.\n\n` +
+        `If "${partialId}" really does need to vary by "${newKey}" ` +
+        `conditionally, use \`cache.vary\` for <Cache> partials.`,
     );
     this.name = "HoistingViolationError";
     this.partialId = partialId;
@@ -347,12 +400,29 @@ export class HoistingViolationError extends Error {
 }
 
 function trackAccess(kind: string, name: string): void {
-  const scope = manifestContext.getStore();
-  if (!scope) return;
   const key = `${kind}:${name}`;
+  // ALS scope (Cache via runWithCacheManifest). Innermost Cache wins
+  // by ALS semantics, so a nested `<Cache>` inside a `<Cache>` lands
+  // in the inner cache's manifest — same as before.
+  const alsScope = manifestContext.getStore();
+  if (alsScope) recordAccess(alsScope, key);
+  // Per-request cell scope (Partial body). Distinct from the ALS
+  // scope: a single accessor read attributes to BOTH the surrounding
+  // Cache (if any) AND the surrounding Partial. Each layer folds its
+  // own manifest into its own key derivation downstream — Cache into
+  // the cache key, Partial into the structural fingerprint.
+  const cellScope = partialManifestCell().current;
+  if (cellScope && cellScope !== alsScope) recordAccess(cellScope, key);
+}
+
+function recordAccess(scope: ManifestScope, key: string): void {
   if (scope.current.has(key)) return;
   if (scope.stored !== null && !scope.stored.has(key)) {
-    throw new HoistingViolationError(scope.partialId, key, [...scope.stored].sort());
+    throw new HoistingViolationError(
+      scope.partialId,
+      key,
+      [...scope.stored].sort(),
+    );
   }
   scope.current.add(key);
 }
@@ -486,6 +556,25 @@ function currentRequest(): Request {
 export function getCookie(name: string): string | undefined {
   trackAccess("cookie", name);
   return readCookieFromRequest(currentRequest(), name);
+}
+
+/**
+ * @internal
+ *
+ * Untracked cookie read for framework code that runs INSIDE a Partial
+ * body (or any other place a manifest scope is active) but whose
+ * reads must not be attributed to the surrounding Partial. Reading
+ * the session cookie to resolve a frame URL is the canonical case —
+ * the framework always reads the session cookie regardless of what
+ * the user component does, so attributing it would push every
+ * Partial's manifest into reading `cookie:__frame_sid` and the
+ * hoisting check would refuse the first nav that introduced a frame.
+ *
+ * Always reads from the page request — frames don't carry their own
+ * cookies.
+ */
+export function _readCookieUntracked(name: string): string | undefined {
+  return readCookieFromRequest(getStore().request, name);
 }
 
 export function getHeader(name: string): string | null {

@@ -81,10 +81,18 @@ export function MagentoPage() {
 }
 
 async function CartPartial() {
+  // Hoist the tracked accessor read above ALL awaits — the manifest
+  // cell drifts after a yield (sibling Partials run in between and
+  // overwrite the per-request cell), so a `getCookie` after the
+  // `await` would attribute to the wrong Partial AND trip
+  // `HoistingViolationError` on the second render. Same discipline
+  // the framework enforces for `<Cache>` — see
+  // `notes/AUTO_TRACKED_VARY.md`.
+  const cartId = getCookie("cart_id");
+
   // Simulate slow cart API
   await new Promise((r) => setTimeout(r, 100));
 
-  const cartId = getCookie("cart_id");
   if (!cartId) return <CartBadge quantity={0} />;
 
   const data = await client.request(CartQuery, { cartId });

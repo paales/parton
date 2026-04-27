@@ -31,7 +31,11 @@
  * trample each other's session state.
  */
 
-import { getCookie, getScope, setCookie } from "./context.ts";
+import {
+  _readCookieUntracked,
+  getScope,
+  setCookie,
+} from "./context.ts";
 
 export interface FrameSessionState {
   url: string;
@@ -78,7 +82,14 @@ function generateSessionId(): string {
  * create a new session.
  */
 export function getSessionId(): string | null {
-  return getCookie(SESSION_COOKIE) ?? null;
+  // Untracked: the session cookie is framework-internal plumbing
+  // (every request that resolves a frame URL reads it). Attributing
+  // it to the Partial that triggered the lookup would force every
+  // page's manifest to include `cookie:__frame_sid`, and the
+  // hoisting check would refuse the first request that introduces
+  // any frame at all (the manifest grows). See the comment on
+  // `_readCookieUntracked` in `framework/context.ts`.
+  return _readCookieUntracked(SESSION_COOKIE) ?? null;
 }
 
 /**

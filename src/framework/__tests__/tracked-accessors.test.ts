@@ -130,7 +130,11 @@ describe("hoisting violation", () => {
     expect(e.previousKeys).toEqual(["cookie:cart"]);
     expect(e.message).toContain("cart-widget");
     expect(e.message).toContain("url:promo");
-    expect(e.message).toContain("unconditionally");
+    // Message names both common causes — the original "conditional
+    // read" path and the cell-drift case introduced when the
+    // manifest scope was lifted from `<Cache>`-only to every Partial.
+    expect(e.message).toContain("conditional");
+    expect(e.message).toContain("Cell drift");
     expect(e.message).toContain("cache.vary");
   });
 

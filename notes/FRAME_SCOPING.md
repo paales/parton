@@ -162,24 +162,39 @@ self-framing Partial (the only difference between them was the
 The split remains load-bearing for nested non-framed Partials, where
 `ambientFrameKey` carries the enclosing frame URL.
 
-## Workaround: `<Partial varyOn>` for descendants of a frame-bearing parent (2026-04-26)
+## Resolution: explicit set-on-entry per Partial (2026-04-27)
 
-The cell leak surfaces in another way for sibling subtrees that
-deliberately read the PAGE request instead of any leaked frame URL.
-The CMS editor's field panel is the canonical case: it sits next to a
-`<Partial frame="preview">` and reads `?select=` / `?config=` from the
-page URL. It can't use `getSearchParam` (would resolve against the
-preview frame's URL whenever the leak fires) so it reads via
-`getRequest()` instead. The cost: those reads don't contribute to the
-structural fingerprint, so the fp-skip handshake serves stale bytes
-across same-route navs.
+The leak is fixed. Every `<Partial>` body resets the frame cell on
+entry, using the explicitly-threaded `parent.frameChain` as the
+authority on what the ambient frame should be:
 
-`<Partial varyOn>` (added 2026-04-26) is the safety hatch — declare
-the URL deps explicitly and the framework folds them into the fp,
-resolved against the page request directly (sidesteps the cell). See
-`notes/VARY_ON.md`.
+  - **Own frame** (this Partial declares `frame=…`): leave the cell —
+    `FrameWrapper` will set it to our own frame request below.
+  - **Ambient frame** (we're a non-framed Partial INSIDE a framed
+    ancestor, threaded via `parent={capturePartialContext()}`): keep
+    the cell IF it already points at the expected ancestor (the true
+    parent's `FrameWrapper` set it correctly — preserves the outer's
+    `frameUrl` on first render before any session URL exists).
+    Otherwise restore from session via `resolveFrameRequest` against
+    `parent.frameChain`.
+  - **No frame**: clear the cell. Descendants resolve accessors
+    against the page request — no sibling leak.
 
-A "real" fix for the leak — Flight-round-trip containment of
-FrameWrapper — remains punted because it kills progressive streaming
-inside framed subtrees. As long as that constraint stands, declarative
-`varyOn` is the contract for descendants that need the page URL.
+This mirrors `_setCurrentCmsScope`'s explicit-clear pattern. The
+`parent` prop discipline is load-bearing: authors must thread parent
+correctly across awaits (already documented for partial-context
+tracking), and the framework now uses that information to defang the
+sibling leak.
+
+Behaviour change: a non-framed `<Partial parent={ROOT}>` nested
+inside a `<Partial frame="X">` no longer inherits frame X via the
+leak. The author must thread `parent={capturePartialContext()}` to
+get ambient inheritance — declaring `parent={ROOT}` now means what it
+says (no ancestor). Test fixture: `partial-frame-scope.rsc.test.tsx`
+uses a function-component wrapper around the inner Partial to capture
+the context inside the outer Partial's render scope.
+
+The combination of this fix + the auto-tracked manifest fingerprint
+(see `notes/AUTO_TRACKED_VARY.md`) lets descendants of framed Partials
+use `getSearchParam` and friends safely — no need for `getRequest()`
+workarounds or declarative dependency lists.

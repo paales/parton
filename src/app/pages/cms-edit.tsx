@@ -30,7 +30,7 @@
  *   - Draft isolation per author/session.
  */
 
-import { getRequest, setCookie } from "../../framework/context.ts";
+import { getSearchParam, setCookie } from "../../framework/context.ts";
 import {
   CMS_DRAFT_COOKIE,
   listAllCmsNodes,
@@ -122,23 +122,7 @@ export function CmsEditPage() {
           className="overflow-y-auto border-l bg-muted/30 p-4"
           data-testid="cms-edit-field-pane"
         >
-          {/* `varyOn` declares the URL deps the field panel reads
-              via `getRequest()` (FieldPanel uses `pageSearchParam`
-              for both `select` and `config` to dodge the preview
-              frame's scope-cell leak — see the comment at the top
-              of `TreeContents` for why). Folding these into the
-              structural fingerprint means a plain-anchor nav that
-              changes either param produces a distinct fp; the
-              fp-skip handshake refuses to skip and the field panel
-              re-renders with the new config's fields. Without
-              this, a `<a href="?select=…&config=N">` click would
-              flip the URL but the cached wrapper would survive the
-              skip protocol untouched. */}
-          <Partial
-            parent={ROOT}
-            selector="#cms-edit-fields"
-            varyOn={["url:select", "url:config"]}
-          >
+          <Partial parent={ROOT} selector="#cms-edit-fields">
             <FieldPanel />
           </Partial>
         </aside>
@@ -198,21 +182,8 @@ function PreviewPanel() {
 // ─── Tree ──────────────────────────────────────────────────────────────
 
 function TreePanel() {
-  // `varyOn={["url:select"]}` makes `?select=` part of the
-  // structural fingerprint — a plain-anchor nav that changes the
-  // selection invalidates the fp-skip protocol and the tree
-  // re-renders with the new highlight. (The selector-targeted
-  // refetch fired by `<CmsEditTreeLink>` is still the preferred
-  // path for tree clicks because it skips ancestor execution
-  // entirely; varyOn is the safety net for any other nav that
-  // changes the URL — e.g. a config tab click that lands on a
-  // different `?select=` somehow, or the browser URL bar.)
   return (
-    <Partial
-      parent={ROOT}
-      selector="#cms-edit-tree"
-      varyOn={["url:select"]}
-    >
+    <Partial parent={ROOT} selector="#cms-edit-tree">
       <div>
         <p className="mb-3 text-xs uppercase tracking-wide text-muted-foreground">
           Content tree
@@ -228,18 +199,15 @@ async function TreeContents() {
   // fresh `?select=` value — the snapshot's content runs again on
   // every refetch.
   //
-  // Why getRequest() and not getSearchParam(): the preview Partial's
-  // <Partial frame="preview"> mutates the per-request frame-scope
-  // cell to its own URL (`/cms-demo?cms-draft=1`). React 19's RSC
-  // renderer interleaves siblings — TreeContents/FieldPanel may run
-  // AFTER the preview's FrameWrapper has set the cell, so a tracked
-  // `getSearchParam` would resolve against the frame URL (no
-  // `?select=` param) instead of the editor's page URL. This is the
-  // sibling-interleaving sharp edge documented in CLAUDE.md /
-  // notes/FRAME_SCOPING.md. `getRequest()` returns the page request
-  // unconditionally, sidestepping the leak. The editor route has no
-  // <Partial cache>, so cache-key tracking isn't needed here.
-  const selected = pageSearchParam("select");
+  // `getSearchParam` is now safe to call from a sibling of a framed
+  // Partial: `<Partial>`'s body resets the frame cell on entry, so
+  // a leaked sibling frame URL can't pollute this read. The tracked
+  // accessor also folds the read into our manifest, so the structural
+  // fingerprint captures `?select=` automatically — a same-route nav
+  // that changes the param differs the fp and the fp-skip protocol
+  // re-renders correctly. (See `notes/FRAME_SCOPING.md` §
+  // "Workaround: explicit set-on-entry" and `notes/AUTO_TRACKED_VARY.md`.)
+  const selected = getSearchParam("select");
   const entries = listAllCmsNodes();
   const blockTypes = listBlockTypes();
   const catalog = await getCatalogManifest();
@@ -560,13 +528,15 @@ function SlotChildControls({
 // ─── Field form ────────────────────────────────────────────────────────
 
 async function FieldPanel() {
-  // Read URL state inside the Partial — selector-targeted refetches
-  // (`<CmsEditTreeLink>`) re-execute this body, so URL changes are
-  // picked up without re-running ancestors. See `pageSearchParam`
-  // for why we bypass `getSearchParam` (frame-scope leak from the
-  // sibling preview Partial).
-  const selected = pageSearchParam("select");
-  const configIndexRaw = pageSearchParam("config");
+  // Tracked accessors (sync top — required hoisting). The frame-leak
+  // fix on `<Partial>` entry means these resolve against the page
+  // request even when the sibling preview Partial has set its own
+  // frame on the cell. The reads also fold into the surrounding
+  // Partial's manifest, so the structural fingerprint differs when
+  // either param changes — a plain-anchor nav (config tab,
+  // browser URL bar, refresh) invalidates fp-skip correctly.
+  const selected = getSearchParam("select");
+  const configIndexRaw = getSearchParam("config");
   const configIndex = configIndexRaw != null ? Number(configIndexRaw) : null;
   if (!selected) {
     return (
@@ -816,18 +786,6 @@ function formatScalar(name: string, clause: ScalarOrIn): string {
     return `${name}∈${clause.in.join(",")}`;
   }
   return name;
-}
-
-/**
- * Read a search param off the page request, bypassing the frame
- * scope cell. See the comment in TreeContents for why — the preview
- * Partial leaks its frame URL into the cell when this Partial's body
- * runs after it (sibling interleaving). The editor route has no
- * `<Partial cache>` so the cache-tracking that `getSearchParam` does
- * isn't needed here.
- */
-function pageSearchParam(name: string): string | null {
-  return new URL(getRequest().url).searchParams.get(name);
 }
 
 /**

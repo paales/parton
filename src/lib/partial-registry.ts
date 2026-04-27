@@ -81,18 +81,22 @@ export interface PartialSnapshot {
    *  re-open the same CMS scope when rendering from this snapshot.
    *  Absent on Partials that aren't CMS-aware. */
   cmsId?: string;
-  /** Declared request-state dependencies (URL params, cookies,
-   *  headers, pathname patterns) the Partial's content depends on.
-   *  Each entry is a tracked-accessor spec like `"url:config"`,
-   *  `"cookie:session"`, `"header:x-foo"`, `"pathname:/p/:slug"`.
-   *  Resolved against the Partial's effective request (own frame /
-   *  ambient frame / page) to fold into the structural fingerprint —
-   *  so a same-route nav that changes any declared key produces a
-   *  distinct fp and the fp-skip handshake doesn't serve stale bytes.
-   *  Preserved on the snapshot so cache-mode replay re-resolves
-   *  with the current request. Absent / empty when the Partial
-   *  doesn't declare deps. */
-  varyOn?: readonly string[];
+  /** Auto-collected manifest of tracked-accessor reads the Partial's
+   *  body + descendants performed during the previous render. Each
+   *  entry is `"<kind>:<name>"` (e.g. `"url:config"`, `"cookie:user"`,
+   *  `"pathname:/p/:slug"`). Resolved against the current request
+   *  on the NEXT render and folded into the structural fingerprint —
+   *  same shape `<Cache>` uses for its key, lifted up so non-cached
+   *  Partials get the same auto-invalidation contract.
+   *
+   *  Empty / absent on first-render-of-a-Partial; populated as
+   *  descendants render and call `getSearchParam` / `getCookie` /
+   *  `getPathname` / `getHeader`. The `current` set lives on the
+   *  ManifestScope object the Partial body created and stored here
+   *  by reference — accessors mutate it in place during the render,
+   *  so by the time the next render reads this snapshot, the set
+   *  reflects the prior render's complete read pattern. */
+  manifest?: ReadonlySet<string>;
 }
 
 type RouteMap = Map<string, Map<string, PartialSnapshot>>;

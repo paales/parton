@@ -51,3 +51,5 @@
 - We should better handle errors whiel trying to refetch things. For example when I kill the dev server the URL still changes in the browser, I thought that the navigation API allowed us to cach that
 
 - What a bizarre situation that you would need to postpone the render of a page just to get the head title and meta description in. I'm not sure if I'd like the developer experience of everything streaming, what is the advise here? Should we make a separate stream for dumb user agents and just flush everything sync, would that even work with the title or would that still require JS?
+
+- Next.js did request deduplication by patching fetch, is that something that is still happening or solved with React.cache?

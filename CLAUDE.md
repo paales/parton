@@ -175,21 +175,27 @@ Tracked accessors must be called **unconditionally at the top of the body**, lik
 
 Dynamic Partials inside a cached region stay live via strip-on-store / reinject-on-return. Inner Partial ids are folded into the key so adding/removing one invalidates automatically.
 
-### `<Partial varyOn>` — declarative request-state dependencies
+### Auto-tracked structural fingerprint
 
-When a Partial's content depends on URL/cookie/header state but its body reads via `getRequest()` (typically because the tracked accessors would hit the frame-scope-leak sharp edge — see `notes/FRAME_SCOPING.md`), or when descendants drive variability the framework can't statically see, declare the deps so the structural fingerprint can capture them:
+Every `<Partial>` body opens a manifest scope on a per-request mutation cell. Tracked accessors (`getCookie`, `getHeader`, `getSearchParam`, `getPathname`) write the keys they read into the active scope; the keys land on the snapshot, and the next render resolves them against the current request and folds the values into the structural fingerprint. A same-route nav that changes any read input invalidates fp-skip — no `varyOn` declaration, no `getRequest()` workaround.
 
 ```tsx
-<Partial selector="#cms-edit-fields" varyOn={["url:select", "url:config"]}>
+<Partial selector="#cms-edit-fields">
   <FieldPanel />
 </Partial>
+
+async function FieldPanel() {
+  const config = getSearchParam("config");  // sync top — required hoisting
+  const select = getSearchParam("select");
+  // ... rest of body
+}
 ```
 
-`varyOn` accepts the same accessor-spec syntax tracked accessors use (`url:<name>`, `cookie:<name>`, `header:<name>`, `pathname:/p/:slug`). The framework resolves each spec against the Partial's effective request — own frame, ambient frame (looked up via `parent.frameChain` so it's leak-immune), or page request — and folds the values into both the structural and full fingerprints. A same-route nav that changes any declared key produces a distinct fp, so the fp-skip handshake renders fresh instead of serving stale cached bytes.
+Ancestor fps automatically capture descendant manifests: every Partial body walks its `rawContent` JSX (statically-visible descendants) AND the previous render's snapshot registry (descendants whose `parent` was threaded explicitly), folding each descendant's resolved manifest into its own fp. An ancestor whose own JSX is unchanged still invalidates when a descendant's URL dep changes.
 
-Ancestor Partials automatically inherit descendant varyOn contributions: every Partial body walks its `rawContent` JSX (catches statically-visible descendants) AND the previous render's snapshot registry (catches descendants whose `parent` was threaded explicitly), folding each descendant's resolved varyOn into its own fp. So an ancestor whose own JSX is unchanged still invalidates correctly when a descendant's URL dependency changes. Dedupe by descendant effective id; over-folding (stale snapshots from removed descendants) is safe — extra re-renders, never stale subtrees.
+Hoisting discipline applies (same as `<Cache>` always required, now extended to every Partial): tracked accessor calls must happen at the synchronous top of a server component body, before any `await`. After an await the per-request cell may have drifted to a sibling Partial, and reads attribute to whichever Partial set the cell most recently. `HoistingViolationError` fires on the next render when a new key appears that wasn't in the stored manifest — the message names BOTH the conditional-read case and the cell-drift case, since drift attributions are misleading (the named Partial may not be the one actually doing the read).
 
-Limitation: a Partial wrapped in an opaque function component that's never threaded `parent={capturePartialContext()}` is invisible to the static walk and unlinkable via the registry walk. Either declare `varyOn` at the wrapping ancestor or thread the parent so the registry can track the relationship. See `notes/VARY_ON.md`.
+For Partials that genuinely need to read after an await, wrap in `<Cache>` — its Flight round-trip extends the manifest scope through awaits at the cost of progressive reveal inside. See `notes/AUTO_TRACKED_VARY.md`.
 
 ### Server action invalidation
 
@@ -263,7 +269,7 @@ A running list of design follow-ups that haven't been scheduled yet. Most live w
 - **Dev-mode warning for stranded `defer={true}`.** If the app forgets to wire a reload, the Partial is dormant forever. See `notes/DEFER_ACTIVATORS.md` §Known sharp edges.
 - **Re-defer on stale.** Once activated, a Partial can't go dormant again. `{once: false}` on `useActivate` is the first step; a `<Partial unmountWhen={<WhenHidden/>}>` activator is the larger story. See `notes/IDEAS.md` §Re-defer / unmount policy.
 - **Deeper scope propagation into `<Cache>`.** Cache's inner render (`renderToReadableStream`) doesn't inherit the `React.cache`-backed frame-scope cell, so a cache-wrapped Partial inside a frame can't read `getSearchParam` to get the frame URL's query. Today's workaround: the parent reads the accessor and passes a scalar prop. A cleaner fix would propagate the frame scope into the inner render. See `notes/NAVIGATE_UNIFIED.md` §Sharp edges.
-- **Auto-tracked `varyOn`.** Today `varyOn` is declarative: the author lists `["url:select", "url:config"]` etc. and the framework folds the resolved values into the structural fingerprint. Auto-tracking via the existing manifest scope (`getSearchParam` → `trackAccess`) would be ideal but requires the manifest scope to extend to descendants' renders — which currently means a Flight round-trip (kills progressive streaming). The tractable next step is folding `<Cache>`'s already-tracked manifest into the structural fp too, closing one half of the gap. See `notes/VARY_ON.md` §"On auto-tracking".
+- **`<Partial cache>` Cache key sharing with the structural fp.** The auto-tracked manifest now drives both `<Cache>`'s cache key AND the Partial's structural fp via the dual-attribution `trackAccess` (writes to ALS scope + cell scope). Worth a pass to confirm there's no scenario where the two diverge in surprising ways — they should always be a superset/subset relation, never independently varying. — RESOLVED 2026-04-27 (auto-tracked manifest landed; cache and Partial fps share the manifest by construction).
 
 ## Tooling — `mcp-refactor-typescript`
 
