@@ -20,7 +20,7 @@ test.beforeEach(async ({ baseURL }) => {
 
 test.describe("CMS editor — smoke", () => {
   test("tree lists every node in the store", async ({ page }) => {
-    await page.goto("/cms-edit");
+    await page.goto("/cms-demo?editor=1");
     await expect(
       page.getByTestId("cms-edit-tree-entry-cms-demo-hero"),
     ).toBeVisible();
@@ -42,7 +42,7 @@ test.describe("CMS editor — smoke", () => {
   });
 
   test("field pane prompts when nothing is selected", async ({ page }) => {
-    await page.goto("/cms-edit");
+    await page.goto("/cms-demo?editor=1");
     await expect(page.getByTestId("cms-edit-field-pane")).toContainText(
       "Select a Partial",
     );
@@ -51,7 +51,7 @@ test.describe("CMS editor — smoke", () => {
   test("selecting a block-typed entry shows its fields from the catalog", async ({
     page,
   }) => {
-    await page.goto("/cms-edit?select=composed-hero-1");
+    await page.goto("/cms-demo?editor=1&select=composed-hero-1");
     await expect(
       page.getByTestId("cms-edit-selected-id"),
     ).toContainText("composed-hero-1");
@@ -71,7 +71,7 @@ test.describe("CMS editor — smoke", () => {
   test("preview frame renders the demo content inside the editor", async ({
     page,
   }) => {
-    await page.goto("/cms-edit");
+    await page.goto("/cms-demo?editor=1");
     const preview = page.getByTestId("cms-edit-preview-pane");
     await expect(preview).toContainText("Welcome to the CMS demo");
   });
@@ -79,7 +79,7 @@ test.describe("CMS editor — smoke", () => {
   test("tree entry shows block type badge for slot children", async ({
     page,
   }) => {
-    await page.goto("/cms-edit");
+    await page.goto("/cms-demo?editor=1");
     const heroEntry = page.getByTestId(
       "cms-edit-tree-entry-composed-hero-1",
     );
@@ -89,7 +89,7 @@ test.describe("CMS editor — smoke", () => {
   test("config tabs list every match clause on a node with cascade", async ({
     page,
   }) => {
-    await page.goto("/cms-edit?select=cms-demo-greeting");
+    await page.goto("/cms-demo?editor=1&select=cms-demo-greeting");
     const tabs = page.getByTestId("cms-edit-config-tabs");
     await expect(tabs).toBeVisible();
     // cms-demo-greeting has three configs: slug=alpha, slug∈beta,gamma,
@@ -102,7 +102,7 @@ test.describe("CMS editor — smoke", () => {
   test("default config is pre-selected on a Partial with a default entry", async ({
     page,
   }) => {
-    await page.goto("/cms-edit?select=cms-demo-greeting");
+    await page.goto("/cms-demo?editor=1&select=cms-demo-greeting");
     // The tab with match:{} (Default) should be the active one.
     const defaultTab = page.locator(
       '[data-testid^="cms-edit-config-tab-"][data-active="true"]',
@@ -118,7 +118,7 @@ test.describe("CMS editor — smoke", () => {
     page,
   }) => {
     await page.goto(
-      "/cms-edit?select=cms-demo-greeting&config=0",
+      "/cms-demo?editor=1&select=cms-demo-greeting&config=0",
     );
     // Tab index 0 is the slug=alpha config.
     await expect(
@@ -126,7 +126,7 @@ test.describe("CMS editor — smoke", () => {
     ).toHaveValue("Hello, Alpha!");
 
     await page.goto(
-      "/cms-edit?select=cms-demo-greeting&config=2",
+      "/cms-demo?editor=1&select=cms-demo-greeting&config=2",
     );
     // Tab index 2 is the default config (match:{}).
     await expect(
@@ -138,7 +138,7 @@ test.describe("CMS editor — smoke", () => {
     page,
   }) => {
     await page.goto(
-      "/cms-edit?select=cms-demo-greeting&config=0",
+      "/cms-demo?editor=1&select=cms-demo-greeting&config=0",
     );
     await page
       .getByTestId("cms-edit-field-input-headline")
@@ -192,7 +192,7 @@ test.describe("CMS editor — smoke", () => {
     test("the slot footer +Block dropdown lists every block type for the slot", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       // cms-demo-composed declares a single slot (`body`) so the
       // tree collapses the `▸ body` header — children render directly
       // under the parent. The +Block dropdown row is still present
@@ -215,7 +215,7 @@ test.describe("CMS editor — smoke", () => {
     test("each slot-child tree row exposes inline ↑ / ↓ / × buttons", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       await expect(
         page.locator('[aria-label="Move composed-hero-1 up"]'),
       ).toBeVisible();
@@ -242,7 +242,7 @@ test.describe("CMS editor — smoke", () => {
     test("adding a block appends it to the slot and shows in the preview", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       // Make sure the page is fully hydrated before we try to click
       // an action button — otherwise the click event can race the
       // hydration boundary and end up double-submitting (React
@@ -287,7 +287,7 @@ test.describe("CMS editor — smoke", () => {
     test("removing a block drops it from the tree and the preview", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       const responseP = waitForActionResponse(page);
       await page
         .getByTestId("cms-edit-slot-remove-composed-text-1")
@@ -306,7 +306,7 @@ test.describe("CMS editor — smoke", () => {
     });
 
     test("moving a block reorders it in the tree", async ({ page }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       const responseP = waitForActionResponse(page);
       await page
         .locator('[aria-label="Move composed-text-1 up"]')
@@ -350,7 +350,7 @@ test.describe("CMS editor — smoke", () => {
   // chase right now.
   //
   // Coverage compromise: the unit tests for `resetCmsDraft` +
-  // `revertDraftNode` (in src/app/actions/__tests__/cms.test.ts and
+  // `revertDraftNode` (in src/editor/__tests__/actions.test.ts and
   // src/framework/__tests__/cms-draft.test.ts respectively) lock in
   // the action's correctness. The button itself is covered by the
   // visibility check in the modified-badge test below — once a draft
@@ -362,7 +362,7 @@ test.describe("CMS editor — smoke", () => {
     page,
   }) => {
     await page.goto(
-      "/cms-edit?select=cms-demo-greeting&config=2",
+      "/cms-demo?editor=1&select=cms-demo-greeting&config=2",
     );
     // Before any edit: no badge on cms-demo-greeting.
     await expect(
@@ -393,7 +393,7 @@ test.describe("CMS editor — smoke", () => {
   test("save writes to draft and the preview picks up the new value", async ({
     page,
   }) => {
-    await page.goto("/cms-edit?select=composed-hero-1");
+    await page.goto("/cms-demo?editor=1&select=composed-hero-1");
 
     const preview = page.getByTestId("cms-edit-preview-pane");
     // Baseline: published default content is visible in the preview.
@@ -418,9 +418,10 @@ test.describe("CMS editor — smoke", () => {
   // })` (see `<CmsEditTreeLink>`). That keeps the URL in sync but
   // restricts the refetch to the tree + field Partials — the preview
   // never sees a navigation. Plain `<a href="?select=…">` would
-  // trigger a full page nav that re-streams `/cms-edit`, which under
-  // startTransition can briefly empty the preview cell while React
-  // reconciles the new payload (the "ping-pong" the user reported).
+  // trigger a full page nav that re-streams the previewed page,
+  // which under startTransition can briefly empty the preview cell
+  // while React reconciles the new payload (the "ping-pong" the
+  // user reported).
   //
   // We assert by inspecting the RSC request URL: a selector-targeted
   // refetch carries `?partials=cms-edit-tree,cms-edit-fields`. A
@@ -428,7 +429,7 @@ test.describe("CMS editor — smoke", () => {
   test("clicking a tree entry fires a selector-targeted refetch (preview stays put)", async ({
     page,
   }) => {
-    await page.goto("/cms-edit");
+    await page.goto("/cms-demo?editor=1");
     await expect(
       page.getByTestId("cms-edit-preview-pane"),
     ).toContainText("Welcome to the CMS demo");
@@ -447,12 +448,12 @@ test.describe("CMS editor — smoke", () => {
     // before the click avoids that.
     const seen: string[] = [];
     const onReq = (r: import("@playwright/test").Request) => {
-      if (r.url().includes("/cms-edit_.rsc")) seen.push(r.url());
+      if (r.url().includes("/cms-demo_.rsc")) seen.push(r.url());
     };
     page.on("request", onReq);
     try {
       await page.getByTestId("cms-edit-tree-entry-composed-hero-1").click();
-      await page.waitForResponse((r) => r.url().includes("/cms-edit_.rsc"), {
+      await page.waitForResponse((r) => r.url().includes("/cms-demo_.rsc"), {
         timeout: 5000,
       });
     } finally {
@@ -462,14 +463,11 @@ test.describe("CMS editor — smoke", () => {
     const reqUrl = new URL(seen[0]);
     const partials = reqUrl.searchParams.get("partials");
     expect(partials).not.toBeNull();
-    // Tree + fields ARE in the requested set, preview is not — the
-    // selector-targeted refetch carries `partials=cms-edit-tree,
-    // cms-edit-fields`. Each token is exact-matched (no substring
-    // collision: `preview` is the standalone Partial token for the
-    // preview frame, distinct from `cms-edit-preview-pane` which is a
-    // data-testid on the wrapping `<main>`).
+    // Tree + fields ARE in the requested set; the preview pane and
+    // the previewed-page root are not — the selector-targeted
+    // refetch carries `partials=cms-edit-tree,cms-edit-fields`.
     const requested = partials!.split(",");
-    expect(requested).not.toContain("preview");
+    expect(requested).not.toContain("cms-demo-root");
     expect(requested).toContain("cms-edit-tree");
     expect(requested).toContain("cms-edit-fields");
 
@@ -492,7 +490,7 @@ test.describe("CMS editor — smoke", () => {
   test("editing a slot child only renders one tree entry for the edited id", async ({
     page,
   }) => {
-    await page.goto("/cms-edit?select=composed-text-1");
+    await page.goto("/cms-demo?editor=1&select=composed-text-1");
     await page
       .getByTestId("cms-edit-field-input-body")
       .fill("Edited rich-text body");
@@ -514,7 +512,8 @@ test.describe("CMS editor — smoke", () => {
   test("save updates the preview for a slot-child rich-text block", async ({
     page,
   }) => {
-    await page.goto("/cms-edit?select=composed-text-1");
+    await page.goto("/cms-demo?editor=1&select=composed-text-1");
+    await page.waitForLoadState("networkidle");
     const preview = page.getByTestId("cms-edit-preview-pane");
     await expect(preview.getByTestId("composed-rich-text").first()).toContainText(
       "rich-text block is the second entry",
@@ -523,9 +522,20 @@ test.describe("CMS editor — smoke", () => {
     await page
       .getByTestId("cms-edit-field-input-body")
       .fill("Saved rich text body via editor");
+    // Wait for the action POST to land before asserting on the
+    // preview — otherwise the assertion races the in-flight request,
+    // and parallel-test load can push the response just past the 5s
+    // toContainText timeout. See the same pattern in the test above.
+    const responseP = page.waitForResponse(
+      (r) => r.request().method() === "POST" && r.ok(),
+      { timeout: 5000 },
+    );
     await page.getByRole("button", { name: "Save to draft" }).click();
+    await responseP;
 
-    await expect(preview).toContainText("Saved rich text body via editor");
+    await expect(preview).toContainText("Saved rich text body via editor", {
+      timeout: 10000,
+    });
   });
 
   test.describe("slot intermediary in tree", () => {
@@ -540,7 +550,7 @@ test.describe("CMS editor — smoke", () => {
     test("a single-slot parent collapses the slot header (children render directly)", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       // `cms-demo-composed` has one slot. With only one slot the
       // `▸ body` label adds no information (nothing to disambiguate
       // it from), so the tree skips the header. The slot footer
@@ -561,7 +571,7 @@ test.describe("CMS editor — smoke", () => {
     test("a multi-slot parent emits one slot intermediary per slot", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       await expect(
         page.getByTestId(
           "cms-edit-tree-entry-slot:cms-demo-multi-slot:body",
@@ -585,7 +595,7 @@ test.describe("CMS editor — smoke", () => {
     test("the slot intermediary itself is not a selectable link", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       const slotEntry = page.getByTestId(
         "cms-edit-tree-entry-slot:cms-demo-multi-slot:sidebar",
       );
@@ -602,7 +612,7 @@ test.describe("CMS editor — smoke", () => {
     test("a multi-slot parent's field pane shows its own fields, not slot panels", async ({
       page,
     }) => {
-      await page.goto("/cms-edit?select=cms-demo-multi-slot");
+      await page.goto("/cms-demo?editor=1&select=cms-demo-multi-slot");
       // Slot management isn't in the field pane anymore —
       // `cms-edit-slot-panel-*` testids no longer render.
       await expect(
@@ -614,64 +624,245 @@ test.describe("CMS editor — smoke", () => {
     });
   });
 
-  test.describe("preview frame navigation", () => {
-    // The editor's preview is a `<Partial frame="preview">` — a
-    // server-side iframe. The frame URL bar (`<CmsEditPreviewNav>`)
-    // calls `useNavigation("preview").navigate(href)` which only
-    // refetches the preview subtree; the editor's own URL stays at
-    // /cms-edit and the tree + field panels stay put.
+  test.describe("preview navigation", () => {
+    // The window URL IS the preview URL: typing or clicking in the
+    // address bar drives `useNavigation()` (window-scoped) and
+    // updates the browser URL. The editor cookie keeps the editor
+    // chrome around the page, and `?select=…&config=…` editor state
+    // is preserved across address-bar nav.
 
-    test("preview URL bar shows the current frame URL", async ({ page }) => {
-      await page.goto("/cms-edit");
-      await expect(
-        page.getByTestId("cms-edit-preview-url"),
-      ).toContainText("/cms-demo");
-      // The fallback initial URL is the same query-param-form
-      // (`?cms-draft=1`) — verify it's there before any nav.
-      await expect(
-        page.getByTestId("cms-edit-preview-url"),
-      ).toContainText("cms-draft=1");
-    });
-
-    test("clicking a preset preview-nav button navigates the frame in place", async ({
+    test("address bar shows the previewed page URL (without editor params)", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
-      await page.waitForLoadState("networkidle");
-
-      const preview = page.getByTestId("cms-edit-preview-pane");
-      // Default config — the greeting Partial shows "Default greeting".
-      await expect(preview).toContainText("Default greeting");
-
-      // Navigate to /cms-demo/alpha — the per-slug greeting config
-      // takes effect inside the preview.
-      await page
-        .getByTestId("cms-edit-preview-nav-/cms-demo/alpha?cms-draft=1")
-        .click();
-      await expect(preview).toContainText("Hello, Alpha!");
-      // URL bar reflects the new frame URL.
-      await expect(
-        page.getByTestId("cms-edit-preview-url"),
-      ).toContainText("/cms-demo/alpha");
-      // The editor's own URL stays at /cms-edit (no `?select=`, no
-      // path change). page.url() returns the page-scope URL.
-      expect(new URL(page.url()).pathname).toBe("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await expect(input).toHaveValue("/cms-demo");
+      // The bar strips editor-internal params (`editor`, `select`,
+      // `config`) — they're editor state, not part of the preview.
+      await expect(input).not.toHaveValue(/editor=1/);
     });
 
-    test("typing a custom path into the URL bar navigates the preview", async ({
+    test("typing a path and pressing Enter navigates the preview", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       await page.waitForLoadState("networkidle");
 
-      await page
-        .getByTestId("cms-edit-preview-nav-input")
-        .fill("/cms-demo/beta?cms-draft=1");
-      await page.getByRole("button", { name: "Go" }).click();
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await input.fill("/cms-demo/beta");
+      await input.press("Enter");
 
       const preview = page.getByTestId("cms-edit-preview-pane");
-      await expect(preview).toContainText("Beta/Gamma view");
-      expect(new URL(page.url()).pathname).toBe("/cms-edit");
+      await expect(preview).toContainText("Beta/Gamma view", {
+        timeout: 10000,
+      });
+      expect(new URL(page.url()).pathname).toBe("/cms-demo/beta");
+    });
+
+    test("address bar updates when navigating via window history (back/forward)", async ({
+      page,
+    }) => {
+      await page.goto("/cms-demo?editor=1");
+      await page.waitForLoadState("networkidle");
+
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await expect(input).toHaveValue("/cms-demo");
+
+      await input.fill("/cms-demo/alpha");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+      // Defocus so the post-nav sync can update the input value.
+      await page.locator("body").click({ position: { x: 0, y: 0 } });
+      await expect(input).toHaveValue("/cms-demo/alpha");
+
+      await page.goBack();
+      await page.waitForLoadState("networkidle");
+      // After back-nav, draft must reflect the previous URL — the
+      // input doubles as display + editor.
+      await expect(input).toHaveValue("/cms-demo");
+    });
+
+    test("address-bar nav preserves ?select= so selection survives across pages", async ({
+      page,
+    }) => {
+      // Selection is workspace state, not page state — typing a new
+      // path in the address bar shouldn't lose what the author was
+      // editing. Internal preview-link clicks DO drop it (those are
+      // regular page navs); this only applies to the address bar.
+      await page.goto("/cms-demo?editor=1&select=cms-demo-greeting");
+      await page.waitForLoadState("networkidle");
+      await expect(
+        page.getByTestId("cms-edit-selected-id"),
+      ).toContainText("greeting");
+
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await input.fill("/cms-demo/alpha");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+
+      // Selection still on greeting after the address-bar nav.
+      await expect(
+        page.getByTestId("cms-edit-selected-id"),
+      ).toContainText("greeting");
+      // URL preserved select=… alongside the new path.
+      expect(page.url()).toContain("select=cms-demo-greeting");
+    });
+
+    test("editor close button (×) clears editor mode on next render", async ({
+      page,
+    }) => {
+      await page.goto("/cms-demo?editor=1");
+      await page.waitForLoadState("networkidle");
+      // Editor chrome is visible.
+      await expect(page.getByTestId("cms-edit-tree-pane")).toBeVisible();
+
+      await page.getByTestId("cms-edit-close").click();
+      await page.waitForLoadState("networkidle");
+
+      // Chrome gone; the cookie was cleared by `?editor=0`. Fresh
+      // reload to confirm cookie state isn't lingering.
+      await expect(page.getByTestId("cms-edit-tree-pane")).toHaveCount(0);
+    });
+
+    test("tree filters to previewed page's CMS roots (cms-demo-root visible only on /cms-demo)", async ({
+      page,
+    }) => {
+      // The tree is page-scoped: an author on /cms-demo sees the
+      // cms-demo-root subtree; on / (Pokemon — no CMS root wired)
+      // sees an empty-state hint instead of a polluted full tree.
+      await page.goto("/cms-demo?editor=1");
+      await page.waitForLoadState("networkidle");
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
+      ).toBeVisible();
+      await expect(page.getByTestId("cms-edit-tree-empty")).toHaveCount(0);
+
+      // Direct nav to / — tree should drop cms-demo-root, show empty
+      // hint pointing the author at /cms-demo.
+      await page.goto("/?editor=1");
+      await page.waitForLoadState("networkidle");
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
+      ).toHaveCount(0);
+      await expect(page.getByTestId("cms-edit-tree-empty")).toBeVisible();
+    });
+
+    test("tree updates when address bar navigates between pages with different CMS roots", async ({
+      page,
+    }) => {
+      await page.goto("/?editor=1");
+      await page.waitForLoadState("networkidle");
+      await expect(page.getByTestId("cms-edit-tree-empty")).toBeVisible();
+
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await input.fill("/cms-demo");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+
+      // After address-bar nav, tree shows the new page's roots and
+      // the empty hint disappears — without a full page reload.
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
+      ).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId("cms-edit-tree-empty")).toHaveCount(0);
+
+      // Go back to / via address bar — tree resets.
+      await input.fill("/");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+      await expect(page.getByTestId("cms-edit-tree-empty")).toBeVisible({
+        timeout: 10000,
+      });
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
+      ).toHaveCount(0);
+    });
+
+    test("greeting config tab + form fields follow the previewed page slug", async ({
+      page,
+    }) => {
+      // The greeting node has slug=alpha, slug∈{beta,gamma}, and
+      // Default match clauses. Navigating the preview between slugs
+      // must update the active tab AND the visible field values to
+      // match the slug-specific config — without an explicit
+      // ?config= override.
+      await page.goto("/cms-demo?editor=1&select=cms-demo-greeting");
+      await page.waitForLoadState("networkidle");
+
+      const activeTab = page.locator(
+        '[data-testid^="cms-edit-config-tab-"][data-active="true"]',
+      );
+      const headline = page.getByTestId("cms-edit-field-input-headline");
+      await expect(activeTab).toHaveText("Default");
+      await expect(headline).toHaveValue("Default greeting");
+
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await input.fill("/cms-demo/alpha");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+      await expect(activeTab).toHaveText("slug=alpha", { timeout: 10000 });
+      await expect(headline).toHaveValue("Hello, Alpha!");
+
+      await input.fill("/cms-demo/beta");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+      await expect(activeTab).toHaveText("slug∈beta,gamma", {
+        timeout: 10000,
+      });
+      await expect(headline).toHaveValue("Beta/Gamma view");
+
+      await input.fill("/cms-demo/gamma");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+      // beta and gamma share the {in:[beta,gamma]} clause → same tab,
+      // same headline value.
+      await expect(activeTab).toHaveText("slug∈beta,gamma", {
+        timeout: 10000,
+      });
+      await expect(headline).toHaveValue("Beta/Gamma view");
+
+      await input.fill("/cms-demo/zulu");
+      await input.press("Enter");
+      await page.waitForLoadState("networkidle");
+      // zulu doesn't match any slug-specific clause → falls back to
+      // the Default config (and the default headline).
+      await expect(activeTab).toHaveText("Default", { timeout: 10000 });
+      await expect(headline).toHaveValue("Default greeting");
+    });
+
+    test("intersection observer (infinite scroll) still fires inside editor mode", async ({
+      page,
+    }) => {
+      // Regression: the editor used to wrap the preview in an
+      // overflow-y-auto pane that broke any IntersectionObserver
+      // defaulting to the viewport root. Pokemon's load-more-on-
+      // scroll, the trivia activator, and any defer={<WhenVisible/>}
+      // partial inside a previewed page would never fire.
+      // The shell now flows the preview content with the window's
+      // scroll axis so observers see real intersections, AND the
+      // preview Partial's children are a `<RouteSwitch />` component
+      // (not a baked-in pickRoute() return value) so cache-mode
+      // refetches re-invoke the route handler.
+      await page.goto("/?editor=1");
+      await page.waitForLoadState("networkidle");
+
+      // Page 1 is the only one rendered initially. Pokemon links use
+      // `<a href="/pokemon/N">`. Count them, scroll, and assert the
+      // count grew — load-more's observer fires and ?pages= bumps.
+      const links = page.locator('a[href^="/pokemon/"]');
+      const before = await links.count();
+      expect(before).toBeGreaterThan(0);
+
+      // Scroll to the bottom of the document — observer fires when
+      // load-more enters the viewport.
+      await page.evaluate(() =>
+        window.scrollTo(0, document.documentElement.scrollHeight),
+      );
+
+      await expect(async () => {
+        const after = await links.count();
+        expect(after).toBeGreaterThan(before);
+      }).toPass({ timeout: 10000 });
     });
   });
 
@@ -685,7 +876,7 @@ test.describe("CMS editor — smoke", () => {
     test("the product grid Group + its three cards appear in the tree", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       // The Group itself is a slot child of cms-demo-root.body, so
       // it's a regular tree entry.
       await expect(
@@ -713,7 +904,7 @@ test.describe("CMS editor — smoke", () => {
     test("the items slot's +add palette lists every registered block (wildcard)", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       // Group's `items` slot uses `allow="*"` (wildcard) so the
       // palette lists every registered block — group, product-card,
       // and any page-level block too. The previous tag-restricted
@@ -744,7 +935,7 @@ test.describe("CMS editor — smoke", () => {
     test("the preview renders all three product cards with their fields", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       const preview = page.getByTestId("cms-edit-preview-pane");
       await expect(preview.getByTestId("product-card")).toHaveCount(3);
       await expect(
@@ -764,7 +955,7 @@ test.describe("CMS editor — smoke", () => {
     test("editing a product-card field updates the preview live", async ({
       page,
     }) => {
-      await page.goto("/cms-edit?select=product-card-1");
+      await page.goto("/cms-demo?editor=1&select=product-card-1");
       await page.waitForLoadState("networkidle");
       await page
         .getByTestId("cms-edit-field-input-title")
@@ -803,7 +994,7 @@ test.describe("CMS editor — smoke", () => {
     test("the page root + its slot children appear at the top of the tree", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       await expect(
         page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
       ).toBeVisible();
@@ -831,7 +1022,7 @@ test.describe("CMS editor — smoke", () => {
     test("the page root's slot palette lists every registered page-* block type", async ({
       page,
     }) => {
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       // Open the page-root body slot's +Block dropdown, then
       // assert every page-* block appears as a menu item.
       await page
@@ -874,7 +1065,7 @@ test.describe("CMS editor — smoke", () => {
       // Issue 1: clicking page-slug-nav, then ↓ (move down), then
       // page-slug-nav again, then ↓ a second time — after the
       // second move the preview pane goes blank.
-      await page.goto("/cms-edit");
+      await page.goto("/cms-demo?editor=1");
       await page.waitForLoadState("networkidle");
 
       await page
@@ -912,14 +1103,14 @@ test.describe("CMS editor — smoke", () => {
       await expect(preview.getByTestId("product-card")).toHaveCount(3);
     });
 
-    test("preview-frame nav doesn't lose the selected node in the field pane", async ({
+    test("address-bar nav to a slug doesn't lose the selected node in the field pane", async ({
       page,
     }) => {
-      // Issue 4: after selecting page-greeting and clicking the
-      // alpha preview-nav button, the field pane should still show
-      // the greeting form (the selection is page-scoped, the alpha
-      // click only changes the frame URL).
-      await page.goto("/cms-edit");
+      // Issue 4: after selecting page-greeting and address-bar-
+      // navigating to /cms-demo/alpha, the field pane should still
+      // show the greeting form (selection is workspace state, the
+      // nav only swapped the previewed page).
+      await page.goto("/cms-demo?editor=1");
       await page.waitForLoadState("networkidle");
 
       await page
@@ -933,12 +1124,10 @@ test.describe("CMS editor — smoke", () => {
         page.getByTestId("cms-edit-selected-id"),
       ).toContainText("#greeting");
 
-      // Navigate the preview frame to /cms-demo/alpha.
-      await page
-        .getByTestId(
-          "cms-edit-preview-nav-/cms-demo/alpha?cms-draft=1",
-        )
-        .click({ force: true });
+      // Address-bar nav to /cms-demo/alpha (preserves select).
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await input.fill("/cms-demo/alpha");
+      await input.press("Enter");
       await page.waitForLoadState("networkidle");
 
       // Selected partial should still be greeting. The form must
@@ -952,21 +1141,19 @@ test.describe("CMS editor — smoke", () => {
       ).toBeVisible();
     });
 
-    test("save-to-draft still updates the preview after navigating the preview frame", async ({
+    test("save-to-draft still updates the preview after navigating the preview", async ({
       page,
     }) => {
-      // Issue 5: after clicking alpha (preview frame URL changes
-      // to /cms-demo/alpha?cms-draft=1) then selecting #hero,
-      // editing the headline and saving doesn't update the preview.
-      // Without the alpha click, the same flow works fine.
-      await page.goto("/cms-edit");
+      // Issue 5: after navigating the preview to /cms-demo/alpha
+      // then selecting #hero, editing the headline and saving
+      // doesn't update the preview. Without the alpha nav, the
+      // same flow works fine.
+      await page.goto("/cms-demo?editor=1");
       await page.waitForLoadState("networkidle");
 
-      await page
-        .getByTestId(
-          "cms-edit-preview-nav-/cms-demo/alpha?cms-draft=1",
-        )
-        .click({ force: true });
+      const input = page.getByTestId("cms-edit-preview-nav-input");
+      await input.fill("/cms-demo/alpha");
+      await input.press("Enter");
       await page.waitForLoadState("networkidle");
 
       await page

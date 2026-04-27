@@ -854,6 +854,14 @@ export function Partial({
     // unframed children (`rawContent`), not the wrapped content — on
     // refetch the wrapper re-renders fresh with the current frame
     // URL from session.
+    //
+    // Manifest preservation: the body didn't run, so `manifestScope
+    // .current` is an empty set. If we registered that, the NEXT
+    // render that DOES run the body would see stored=[] and capture
+    // (e.g.) `url:select` — `recordAccess` would treat it as a new
+    // key and throw `HoistingViolationError`. Carry the previous
+    // render's manifest forward instead so the hoisting check stays
+    // a comparison between renders that actually ran.
     registerPartial(route, id, {
       content: rawContent,
       fallback: effectiveFallback,
@@ -865,7 +873,7 @@ export function Partial({
       frameUrl,
       parentPath: parent.path,
       cmsId,
-      manifest: manifestScope.current,
+      manifest: manifestScope.stored ?? manifestScope.current,
     });
     return placeholderFor(id);
   }

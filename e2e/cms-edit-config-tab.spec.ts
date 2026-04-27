@@ -36,7 +36,7 @@ test.beforeEach(async ({ baseURL }) => {
 test("click greeting → click slug=alpha config tab — form reflects alpha config", async ({
   page,
 }) => {
-  await page.goto("/cms-edit");
+  await page.goto("/cms-demo?editor=1");
   await page.waitForLoadState("networkidle");
 
   await page.getByTestId("cms-edit-tree-entry-cms-demo-greeting").click();
@@ -62,7 +62,7 @@ test("click greeting → click slug=alpha config tab — form reflects alpha con
 test("switching back to default config restores default fields", async ({
   page,
 }) => {
-  await page.goto("/cms-edit?select=cms-demo-greeting&config=0");
+  await page.goto("/cms-demo?editor=1&select=cms-demo-greeting&config=0");
   await page.waitForLoadState("networkidle");
 
   await expect(page.getByTestId("cms-edit-field-input-headline")).toHaveValue(

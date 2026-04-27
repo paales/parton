@@ -1,16 +1,29 @@
 /**
- * CMS editor — MVE (minimum viable editor).
+ * Editor shell — the chrome that wraps every page render when editor
+ * mode is on (cookie-gated; see `Root` in `src/app/root.tsx`).
  *
  * Three-pane layout:
  *   - Left: tree of every Partial currently in the CMS store (draft
  *     merged over published). Click an entry to select it (adds
- *     `?select=<cmsId>` to the editor URL).
- *   - Center: `<Partial frame="preview">` rendering the real site at
- *     `/cms-demo` with `?cms-draft=1` so the runtime reads drafts.
+ *     `?select=<cmsId>` to the URL).
+ *   - Center: an address bar plus the previewed page (`children`).
+ *     The preview IS the window URL — navigating the address bar
+ *     updates the window URL, and Root re-runs `pickRoute` against
+ *     the new path. Browser back/forward, deep links, refresh —
+ *     everything just works.
  *   - Right: form for the selected Partial. Inputs derive from the
  *     catalog manifest (for block-typed entries) unioned with the
  *     currently stored fields (so code-declared Partials that have
  *     a draft entry are also editable).
+ *
+ * Editor state on the URL: `?select=…&config=N`. The address bar
+ * preserves them on every nav (the editor is a workspace, selection
+ * persists across page changes); preview-internal `<a>` clicks drop
+ * them by default — fresh browse, fresh selection.
+ *
+ * The matching config tab is auto-picked from the previewed page's
+ * URL (e.g. visiting `/cms-demo/alpha` highlights the `slug=alpha`
+ * tab). Authors can still override via explicit `?config=N`.
  *
  * Save: a server action (`saveCmsFields`) merges form data into the
  * selected node's default config and writes to draft. Returns an
@@ -22,42 +35,43 @@
  * reflects the merge.
  *
  * Scope deferred to later iterations (see notes/CMS_EDITOR.md):
- *   - Per-configuration match tabs — v1 edits only the default
- *     (`match: {}`) config.
- *   - Block palette — authors can't add new slot entries yet.
+ *   - Block palette — authors can't add new slot entries beyond
+ *     what the slot's `allow` permits.
  *   - Drag-drop.
  *   - Rich entity pickers.
  *   - Draft isolation per author/session.
  */
 
-import { getSearchParam, setCookie } from "../../framework/context.ts";
+import type { ReactNode } from "react";
 import {
-  CMS_DRAFT_COOKIE,
+  getPathname,
+  getRequest,
+  getSearchParam,
+} from "../framework/context.ts";
+import {
   listAllCmsNodes,
   listBlockTypes,
   lookupDraftNode,
   parseSlotEntryId,
+  pickBestConfigIndex,
   type CmsConfig,
   type ContentFieldKind,
   type MatchClause,
-} from "../../framework/cms-runtime.ts";
+} from "../framework/cms-runtime.ts";
 import {
   getCatalogManifest,
   type BlockManifest,
-} from "../../framework/cms-prerender.ts";
-import { Partial } from "../../lib";
-import { ROOT } from "../../lib/partial-context.ts";
+} from "../framework/cms-prerender.ts";
+import { setSessionFrameUrl } from "../framework/session.ts";
+import { Partial } from "../lib/index.ts";
+import { ROOT } from "../lib/partial-context.ts";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { CmsDemoPage } from "./cms-demo.tsx";
-import { CmsEditTreeLink } from "../components/cms-edit-tree-link.tsx";
-import { CmsEditAddBlock } from "../components/cms-edit-add-block.tsx";
-import {
-  CmsEditPreviewNav,
-  type PreviewNavLink,
-} from "../components/cms-edit-preview-nav.tsx";
+import { CmsEditTreeLink } from "./components/tree-link.tsx";
+import { CmsEditAddBlock } from "./components/add-block.tsx";
+import { CmsEditAddressBar } from "./components/address-bar.tsx";
 import {
   addBlockToSlot,
   moveBlockInSlot,
@@ -65,117 +79,234 @@ import {
   removeBlockFromSlot,
   resetCmsDraft,
   saveCmsFields,
-} from "../actions/cms.ts";
+} from "./actions.ts";
 
-const PREVIEW_FRAME_URL = "/cms-demo?cms-draft=1";
+/**
+ * Query-string params that belong to the editor (not the previewed
+ * page) and must be stripped from the preview URL before scoring CMS
+ * configs or showing the URL bar. The cookie-driven `editor` toggle
+ * is still here too — it can land via the one-shot `?editor=1` URL
+ * before the cookie has round-tripped, and we don't want it leaking
+ * into accessor reads inside the previewed page.
+ */
+const EDITOR_RESERVED_PARAMS = ["editor", "select", "config"] as const;
 
-/** Quick-nav targets in the preview pane's URL bar — mirrors the
- *  demo page's slug nav so authors have obvious entry points without
- *  typing paths by hand. */
-const PREVIEW_NAV_LINKS: ReadonlyArray<PreviewNavLink> = [
-  { href: "/cms-demo?cms-draft=1", label: "Default" },
-  { href: "/cms-demo/alpha?cms-draft=1", label: "alpha" },
-  { href: "/cms-demo/beta?cms-draft=1", label: "beta" },
-  { href: "/cms-demo/gamma?cms-draft=1", label: "gamma" },
-  { href: "/cms-demo/zulu?cms-draft=1", label: "zulu" },
+/**
+ * Page-scoped CMS roots: which top-level cmsIds compose each route.
+ * The tree filters to the listed roots when the previewed URL
+ * matches the corresponding pattern, so an author on `/cms-demo`
+ * sees only the cms-demo-root subtree (not magento-root or other
+ * unrelated content). Routes with no entry here surface an empty
+ * tree with a hint to navigate to a CMS-aware page.
+ *
+ * Authors register new pages by adding to this list; ideally this
+ * becomes a generated manifest from `<Partial cmsId>` calls in the
+ * route handlers, but the explicit map covers the demo until the
+ * runtime tracking lands.
+ */
+const PAGE_CMS_ROOTS: ReadonlyArray<readonly [pattern: string, roots: readonly string[]]> = [
+  ["/cms-demo", ["cms-demo-root"]],
+  ["/cms-demo/:slug", ["cms-demo-root"]],
 ];
 
-export function CmsEditPage() {
-  // Draft mode is authoritative here. Belt-and-suspenders:
-  //   - Cookie (set for this response + sent on every subsequent
-  //     request, including server-action POSTs + cache-mode refetches
-  //     of CMS-aware Partials inside the preview frame). The frame
-  //     scope doesn't survive cache-mode snapshot reconstruction,
-  //     so the page request's cookie is what the CMS read falls
-  //     back to.
-  //   - Query param on the frame URL (wins on the initial page
-  //     render because the cookie hasn't round-tripped yet).
-  setCookie(CMS_DRAFT_COOKIE, "1");
+/**
+ * Probe every entry in `PAGE_CMS_ROOTS` via tracked `getPathname`
+ * so the manifest captures every pattern. First match wins.
+ *
+ * Why probe all (not short-circuit on first match): the auto-tracked
+ * manifest hoisting check throws when a render captures a key its
+ * previous render didn't see. If we returned on first match, a nav
+ * from `/cms-demo` (matched on entry 0) to `/` (no match — needs to
+ * probe BOTH entries to confirm) would add `pathname:/cms-demo/:slug`
+ * as a "new" key and trip the check. Probing all unconditionally
+ * keeps the read pattern stable across navs.
+ */
+function rootCmsIdsForPreviewedPage(): readonly string[] {
+  let firstMatch: readonly string[] | null = null;
+  for (const [pattern, roots] of PAGE_CMS_ROOTS) {
+    const matched = getPathname(pattern) != null;
+    if (matched && firstMatch === null) firstMatch = roots;
+  }
+  return firstMatch ?? [];
+}
 
+/**
+ * Framework-internal query params that ride along on RSC fetches but
+ * should never persist on the visible window URL. `getRequest().url`
+ * sees them when a refetch hits the server, and we strip them before
+ * computing tree/config-tab hrefs so a click doesn't bake them into
+ * the next page entry. Same shape as the strip we do for the
+ * preview URL display — they're noise in both places.
+ */
+const FRAMEWORK_INTERNAL_PARAMS = [
+  "partials",
+  "cached",
+  "__frame",
+  "__frameUrl",
+  "disableTransition",
+] as const;
+
+
+/**
+ * Strip editor- AND framework-internal params from the page URL to
+ * get the URL the preview is "really" looking at. Used both as the
+ * initial value for the address bar and as the synthetic Request's
+ * URL for config-tab scoring (config tabs match against the
+ * previewed page, not the full editor-state URL).
+ */
+function derivePreviewUrl(): string {
+  const url = new URL(getRequest().url);
+  stripEditorAndInternalParams(url);
+  return url.pathname + (url.search ? url.search : "");
+}
+
+/**
+ * Build a Request whose URL strips editor-internal params — used for
+ * config-tab match scoring so a tab labeled `slug=alpha` highlights
+ * when the previewed page is `/cms-demo/alpha`, regardless of any
+ * `?select=…&config=…` editor state riding along on the URL.
+ */
+function previewRequest(): Request {
+  const page = getRequest();
+  const url = new URL(page.url);
+  stripEditorAndInternalParams(url);
+  return new Request(url, { headers: page.headers, method: "GET" });
+}
+
+function stripEditorAndInternalParams(url: URL): void {
+  for (const p of EDITOR_RESERVED_PARAMS) url.searchParams.delete(p);
+  for (const p of FRAMEWORK_INTERNAL_PARAMS) url.searchParams.delete(p);
+}
+
+export function EditorShell({ children }: { children: ReactNode }) {
   // NOTE: `?select=` and `?config=` are read INSIDE TreeContents and
   // FieldPanel (not here). That way a cache-mode refetch of
   // `#cms-edit-tree` / `#cms-edit-fields` triggered by selector-
   // targeted nav (`<CmsEditTreeLink>`) re-resolves the URL state
   // freshly — the snapshots can't bake in a stale `selected` closure.
+  //
+  // Frame-URL ↔ window-URL sync: we want the address bar to drive
+  // window navigation (so URLs are bookmarkable, browser back/forward
+  // works, and `pickRoute` against the page request runs against the
+  // user-typed path), AND we want the `<Partial frame="preview">`
+  // scope so tracked accessor reads inside the previewed page (e.g.
+  // a search Partial reading `url:q`) don't see editor-state params
+  // like `?select=` from the page URL. The two are reconciled by
+  // overwriting the session frame URL on every Root render with the
+  // window URL minus editor params. The frame's accessors then see
+  // a clean URL; the editor chrome's accessors (outside the frame)
+  // see the full page URL with editor state. No cross-contamination.
+  //
+  // Side effect: `useNavigation("preview").navigate(...)` writes to
+  // session, but the next Root render overwrites it. There is no
+  // explicit caller of that handle today; the address bar uses
+  // `useNavigation()` (window-scoped) which goes through normal
+  // page navigation. If a future component wants frame-isolated
+  // navigation, this sync needs to be relaxed.
+  const previewUrl = derivePreviewUrl();
+  // Sync the preview frame's session URL to the window URL — but
+  // ONLY when this isn't itself a frame refetch. A frame refetch
+  // arrives with `?__frame=preview&__frameUrl=…` query params;
+  // `PartialRoot` already wrote the new URL to the session before
+  // we got here. Overwriting it now would clobber the frame nav
+  // (e.g. LoadMore's `?pages=2` bump on the Pokemon page would
+  // round-trip but the session URL would snap back to `/` and the
+  // server would render against the unchanged URL — infinite scroll
+  // appears broken).
+  const incomingUrl = new URL(getRequest().url);
+  const isPreviewFrameRefetch = incomingUrl.searchParams
+    .getAll("__frame")
+    .includes("preview");
+  if (!isPreviewFrameRefetch) {
+    setSessionFrameUrl(["preview"], previewUrl);
+  }
 
+  // Layout: 3-column grid where the LEFT and RIGHT columns are
+  // sticky+scroll-internal, and the CENTER column flows with the
+  // window. Two reasons:
+  //   1. IntersectionObserver activators (`<WhenVisible>`) inside
+  //      the previewed page default their root to the window
+  //      viewport. If the preview pane scrolled internally instead,
+  //      observers would never fire — the trivia partial / infinite
+  //      scroll on the Pokemon homepage break.
+  //   2. Browser-native scroll experience: page-down / mouse wheel
+  //      scrolls the previewed content as expected, the editor
+  //      sidebars stay pinned where the author left them.
   return (
-    <Partial parent={ROOT} selector="#cms-edit-root">
-      <div
-        className="grid gap-0 -mx-8 -my-8 min-h-screen"
-        style={{
-          gridTemplateColumns: "320px minmax(0, 1fr) 360px",
-        }}
+    <div
+      className="grid gap-0 min-h-screen items-start"
+      style={{
+        gridTemplateColumns: "320px minmax(0, 1fr) 360px",
+      }}
+    >
+      <aside
+        className="sticky top-0 h-screen overflow-y-auto border-r bg-muted/30 p-4"
+        data-testid="cms-edit-tree-pane"
       >
-        <aside
-          className="overflow-y-auto border-r bg-muted/30 p-4"
-          data-testid="cms-edit-tree-pane"
-        >
-          <TreePanel />
-        </aside>
-        <main
-          className="overflow-y-auto p-4"
-          data-testid="cms-edit-preview-pane"
-        >
-          <PreviewPanel />
-        </main>
-        <aside
-          className="overflow-y-auto border-l bg-muted/30 p-4"
-          data-testid="cms-edit-field-pane"
-        >
-          <Partial parent={ROOT} selector="#cms-edit-fields">
-            <FieldPanel />
-          </Partial>
-        </aside>
-      </div>
-    </Partial>
+        <TreePanel />
+      </aside>
+      <main className="min-h-screen" data-testid="cms-edit-preview-pane">
+        <PreviewPanel previewUrl={previewUrl}>{children}</PreviewPanel>
+      </main>
+      <aside
+        className="sticky top-0 h-screen overflow-y-auto border-l bg-muted/30 p-4"
+        data-testid="cms-edit-field-pane"
+      >
+        <Partial parent={ROOT} selector="#cms-edit-fields">
+          <FieldPanel />
+        </Partial>
+      </aside>
+    </div>
   );
 }
 
 // ─── Preview ───────────────────────────────────────────────────────────
 
-function PreviewPanel() {
+function PreviewPanel({
+  previewUrl,
+  children,
+}: {
+  previewUrl: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            Preview
-          </p>
-          {/* Frame-scoped URL bar lets the author navigate the
-              previewed page in place — the editor's own URL stays at
-              /cms-edit. The bar reads/writes the preview frame's
-              session URL via `useNavigation("preview")`. */}
-          <CmsEditPreviewNav
-            initialUrl={PREVIEW_FRAME_URL}
-            links={PREVIEW_NAV_LINKS}
-          />
-        </div>
+    <>
+      {/* Sticky address bar pins to the top of the preview column
+          while content scrolls under it. `top: 0` aligns with the
+          two side aside panels for visual continuity. */}
+      <div
+        className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/95 px-4 py-3 backdrop-blur"
+        data-testid="cms-edit-preview-chrome"
+      >
+        <CmsEditAddressBar initialUrl={previewUrl} />
         <form action={publishCmsDraft}>
           <Button type="submit" size="sm" variant="outline">
-            Publish draft → live
+            Publish
           </Button>
         </form>
       </div>
-      <div className="rounded-xl border bg-background p-4">
-        {/* Selector token MUST match the `frame` name (`#preview` /
-            `frame="preview"`). The framework's frame-nav refetch
-            (`_dispatchFrameRefetch`) targets `partials=<frameLocalName>`
-            so the parent's fp-skip doesn't shadow the actual refetch
-            — the dispatched id has to resolve to this Partial's
-            effective id (the `#`-token name). Mismatched names cause
-            the page-root Partial to fp-match the cached fingerprint
-            and skip, leaving the preview frame untouched on
-            navigation. */}
+      <div className="p-4">
+        {/* `<Partial frame="preview">` opens a frame scope so tracked
+            accessor reads inside the previewed page (`getSearchParam`,
+            `getCookie`, etc.) resolve against the frame's request —
+            which carries the WINDOW URL minus editor-internal params.
+            Without this isolation, the search Partial inside the
+            preview would see the editor's `?select=` on the page URL
+            and pick it up as a manifest read, throwing
+            `HoistingViolationError` once the user clicks a tree
+            entry and `select` appears for the first time.
+            Selector token `#preview` matches the `frame="preview"`
+            name so frame refetches dispatch through it correctly. */}
         <Partial
           parent={ROOT}
           selector="#preview"
           frame="preview"
-          frameUrl={PREVIEW_FRAME_URL}
+          frameUrl={previewUrl}
         >
-          <CmsDemoPage />
+          {children}
         </Partial>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -197,18 +328,16 @@ function TreePanel() {
 async function TreeContents() {
   // Read URL state INSIDE the Partial so cache-mode refetches see the
   // fresh `?select=` value — the snapshot's content runs again on
-  // every refetch.
-  //
-  // `getSearchParam` is now safe to call from a sibling of a framed
-  // Partial: `<Partial>`'s body resets the frame cell on entry, so
-  // a leaked sibling frame URL can't pollute this read. The tracked
-  // accessor also folds the read into our manifest, so the structural
-  // fingerprint captures `?select=` automatically — a same-route nav
-  // that changes the param differs the fp and the fp-skip protocol
-  // re-renders correctly. (See `notes/FRAME_SCOPING.md` §
-  // "Workaround: explicit set-on-entry" and `notes/AUTO_TRACKED_VARY.md`.)
+  // every refetch. Tracked accessor folds the read into the manifest,
+  // so the structural fingerprint captures `?select=` automatically:
+  // a same-route nav that changes the param differs the fp and the
+  // fp-skip protocol re-renders correctly.
   const selected = getSearchParam("select");
-  const entries = listAllCmsNodes();
+  // Filter the tree to the previewed page's CMS roots. Probing the
+  // route patterns also folds them into the manifest, so a nav
+  // between pages invalidates the tree's fp and refilters.
+  const rootIds = rootCmsIdsForPreviewedPage();
+  const entries = listAllCmsNodes(rootIds);
   const blockTypes = listBlockTypes();
   const catalog = await getCatalogManifest();
 
@@ -222,36 +351,26 @@ async function TreeContents() {
 
   if (entries.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        The store is empty. Partials appear here once they're saved to
-        the draft or committed to <code>content.json</code>.
+      <p
+        className="text-sm text-muted-foreground"
+        data-testid="cms-edit-tree-empty"
+      >
+        {rootIds.length === 0
+          ? "This page has no CMS-aware content. Navigate to a page with a CMS root (e.g. /cms-demo) to see its tree."
+          : "The store is empty for this page. Partials appear here once they're saved to the draft or committed to content.json."}
       </p>
     );
   }
 
-  // Pre-compute per-slot child index lists so each slot-child row knows
-  // its position (for ↑ / ↓ disable state).
-  const slotPositions = new Map<string, { index: number; count: number }>();
-  for (const entry of entries) {
-    if (entry.kind === "node" && entry.parentId && entry.slotName) {
-      const slotKey = `${entry.parentId}:${entry.slotName}`;
-      const seen = slotPositions.get(slotKey);
-      if (seen) {
-        slotPositions.set(slotKey, { index: seen.count, count: seen.count + 1 });
-      } else {
-        slotPositions.set(slotKey, { index: 0, count: 1 });
-      }
-    }
-  }
-  // Reset and re-walk to assign per-row positions correctly (the count
-  // pass above produced totals, but each row's `index` overwrote the
-  // previous). Compute per-row indexes by scanning entries in order.
+  // Per-row slot index (for ↑ / ↓ disable state). Single pass: walk
+  // entries in order and assign each slot child its position within
+  // its slot.
   const rowIndex = new Map<string, number>();
   const slotCounts = new Map<string, number>();
   for (const entry of entries) {
     if (entry.kind === "node" && entry.parentId && entry.slotName) {
       const slotKey = `${entry.parentId}:${entry.slotName}`;
-      const next = (slotCounts.get(slotKey) ?? 0);
+      const next = slotCounts.get(slotKey) ?? 0;
       rowIndex.set(entry.id, next);
       slotCounts.set(slotKey, next + 1);
     }
@@ -320,7 +439,7 @@ async function TreeContents() {
             className="flex items-center gap-1"
           >
             <CmsEditTreeLink
-              href={`/cms-edit?select=${encodeURIComponent(entry.id)}`}
+              href={cmsEditHref({ select: entry.id })}
               className={cn(
                 "flex flex-1 items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors min-w-0",
                 isSelected
@@ -418,12 +537,10 @@ function SlotHeaderRow({
  * Storyblok). Indented at the same depth as the slot's children so
  * the trigger feels like a sibling-row "add new" action.
  *
- * The dropdown collapses what used to be a wide row of `+ <type>`
- * buttons (cluttered, wrapped to multiple lines for slots that
- * accept many block types). Clicking "+ Block" opens a menu with
- * one item per registered block type that satisfies the slot's
- * `allow` selector. Each menu item triggers the same server action
- * (`addBlockToSlot`) the inline buttons used to.
+ * Clicking "+ Block" opens a menu with one item per registered block
+ * type that satisfies the slot's `allow` selector. Each menu item
+ * triggers the same server action (`addBlockToSlot`) the inline
+ * buttons used to.
  */
 function SlotAddRow({
   parentCmsId,
@@ -461,8 +578,6 @@ function SlotAddRow({
 
 /**
  * Per-slot-child inline action buttons in the tree — ↑ / ↓ / ×.
- * Replaces the standalone SlotPanel rows that used to live in the
- * right-pane field panel.
  */
 function SlotChildControls({
   parentCmsId,
@@ -528,16 +643,23 @@ function SlotChildControls({
 // ─── Field form ────────────────────────────────────────────────────────
 
 async function FieldPanel() {
-  // Tracked accessors (sync top — required hoisting). The frame-leak
-  // fix on `<Partial>` entry means these resolve against the page
-  // request even when the sibling preview Partial has set its own
-  // frame on the cell. The reads also fold into the surrounding
-  // Partial's manifest, so the structural fingerprint differs when
-  // either param changes — a plain-anchor nav (config tab,
-  // browser URL bar, refresh) invalidates fp-skip correctly.
+  // Tracked accessors (sync top — required hoisting). Reads also fold
+  // into the surrounding Partial's manifest, so the structural
+  // fingerprint differs when either param changes — a plain-anchor
+  // nav (config tab, browser URL bar, refresh) invalidates fp-skip
+  // correctly.
   const selected = getSearchParam("select");
   const configIndexRaw = getSearchParam("config");
   const configIndex = configIndexRaw != null ? Number(configIndexRaw) : null;
+  // Probe the previewed-page path patterns into this Partial's
+  // manifest so a cross-page nav (e.g. /cms-demo → /cms-demo/alpha)
+  // invalidates the fp and forces a re-render. Without this, the
+  // auto-picked config tab (computed via `pickBestConfigIndex`
+  // against the synthetic preview request) doesn't follow the URL.
+  // `pickBestConfigIndex` matches internally without going through
+  // tracked accessors, so the manifest wouldn't see the path
+  // dependency on its own.
+  rootCmsIdsForPreviewedPage();
   if (!selected) {
     return (
       <div className="text-sm text-muted-foreground">
@@ -571,9 +693,6 @@ async function FieldPanel() {
   const hasDraft = listAllCmsNodes().some(
     (e) => e.id === selected && e.hasDraft,
   );
-  // Default tab: the `match: {}` config if present (most permissive);
-  // else the first config. For a node without any configs yet, we
-  // render a prompt + implicit "new default" on save.
   const configs = node?.configs ?? [];
   const effectiveIndex = pickEffectiveConfig(configs, configIndex);
   const currentConfig = effectiveIndex >= 0 ? configs[effectiveIndex] : null;
@@ -624,14 +743,11 @@ async function FieldPanel() {
         </Card>
       ) : (
         // Form key is `selected:effectiveIndex` so switching the
-        // active config (or the selected node) remounts every
-        // input — without it, React reuses the existing
-        // `defaultValue`-driven inputs across re-renders and the
-        // live `.value` stays at whatever the user first saw, even
-        // though the new server-rendered markup carries the new
-        // values. Same fix for the FieldInput keys below: they're
-        // already keyed by `name`, but the parent remount makes
-        // sure the whole subtree gets a clean mount.
+        // active config (or the selected node) remounts every input.
+        // Without it, React reuses the existing `defaultValue`-driven
+        // inputs across re-renders and the live `.value` stays at
+        // whatever the user first saw, even though the new server-
+        // rendered markup carries the new values.
         <form
           key={`${selected}:${effectiveIndex}`}
           action={saveCmsFields.bind(null, selected, effectiveIndex)}
@@ -656,7 +772,7 @@ async function FieldPanel() {
               Save to draft
             </Button>
             <a
-              href={cmsEditHref(selected, effectiveIndex)}
+              href={cmsEditHref({ select: selected, config: effectiveIndex })}
               className={buttonVariants({ size: "sm", variant: "ghost" })}
             >
               Discard changes
@@ -670,6 +786,18 @@ async function FieldPanel() {
 
 // ─── Config tabs ──────────────────────────────────────────────────────
 
+/**
+ * Pick the config tab to show by default.
+ *
+ * Order:
+ *   1. Explicit `?config=N` from the URL — author override.
+ *   2. The highest-scoring config for the previewed page URL —
+ *      navigating the preview to `/cms-demo/alpha` highlights the
+ *      `slug=alpha` tab automatically without an explicit override.
+ *   3. The empty-match (`{}`) config — the cascade default.
+ *   4. Index 0 — falls back to whatever's there for empty-config
+ *      nodes that the author is just starting on.
+ */
 function pickEffectiveConfig(
   configs: readonly CmsConfig[],
   requested: number | null,
@@ -678,6 +806,8 @@ function pickEffectiveConfig(
   if (requested != null && requested >= 0 && requested < configs.length) {
     return requested;
   }
+  const best = pickBestConfigIndex(configs, previewRequest());
+  if (best != null) return best;
   const defaultIdx = configs.findIndex(
     (c) => Object.keys(c.match).length === 0,
   );
@@ -702,17 +832,10 @@ function ConfigTabs({
         {configs.map((cfg, idx) => {
           const isActive = idx === activeIndex;
           const label = formatMatchLabel(cfg.match);
-          // Plain anchor — relies on the `cms-edit-fields` Partial's
-          // `varyOn={["url:select", "url:config"]}` to invalidate the
-          // structural fingerprint when the active config changes.
-          // The full streaming render fp-skips everything else
-          // (preview, tree, page chrome) so the network payload is
-          // small even though the request goes through the page-nav
-          // path. See `notes/VARY_ON.md`.
           return (
             <a
               key={idx}
-              href={cmsEditHref(selected, idx)}
+              href={cmsEditHref({ select: selected, config: idx })}
               className={cn(
                 "rounded-md border px-2 py-1 text-xs font-medium transition-colors",
                 isActive
@@ -824,16 +947,6 @@ function blockTagsSatisfyAllow(
     if (token.startsWith(".") && tags.includes(token as `.${string}`)) {
       return true;
     }
-    // `#`-tokens in allow target a specific block-type name. Block
-    // types don't currently expose a unique token directly, but the
-    // type name itself is a useful proxy — `#group` means "only
-    // accept the group block type".
-    if (token.startsWith("#")) {
-      // Type-name match handled by the caller's filter (we don't
-      // have the type name here, only tags). Caller should also
-      // check `blockType === token.slice(1)` if needed. For now,
-      // `.`-tokens cover every demo-fixture allow expression.
-    }
   }
   return false;
 }
@@ -845,11 +958,37 @@ function shortKey(key: string): string {
   return match ? match[1] : key;
 }
 
-function cmsEditHref(selected: string, configIndex: number): string {
-  const sp = new URLSearchParams();
-  sp.set("select", selected);
-  if (configIndex >= 0) sp.set("config", String(configIndex));
-  return `/cms-edit?${sp.toString()}`;
+/**
+ * Build an editor-state href that keeps the user on the currently
+ * previewed page (`getRequest().url`'s pathname + user-meaningful
+ * search params) and updates only the editor params (`select`,
+ * `config`).
+ *
+ * Editor-state lives on the window URL: tree clicks and config-tab
+ * clicks change `?select=…&config=…` while the previewed page path
+ * stays put. That way browser back/forward walks selection history
+ * AND a plain reload preserves the workspace.
+ *
+ * Strips framework-internal refetch params (`partials`, `cached`,
+ * etc.) — `getRequest().url` sees them on RSC fetches but they're
+ * ephemeral; if we copied them onto the href, the next nav would
+ * pin them onto the browser URL and the next refetch would carry
+ * stale fingerprint hints.
+ */
+function cmsEditHref(opts: { select: string; config?: number }): string {
+  const url = new URL(getRequest().url);
+  url.searchParams.set("select", opts.select);
+  if (opts.config != null && opts.config >= 0) {
+    url.searchParams.set("config", String(opts.config));
+  } else {
+    url.searchParams.delete("config");
+  }
+  // The cookie keeps editor mode on; URL flag would just be noise.
+  url.searchParams.delete("editor");
+  for (const p of FRAMEWORK_INTERNAL_PARAMS) {
+    url.searchParams.delete(p);
+  }
+  return url.pathname + url.search;
 }
 
 interface FieldSpec {

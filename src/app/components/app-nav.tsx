@@ -11,7 +11,10 @@ const LINKS: Array<[href: string, label: string]> = [
   ["/sentinels-demo", "Sentinels Demo"],
   ["/frames-demo", "Frames Demo"],
   ["/cms-demo", "CMS Demo"],
-  ["/cms-edit", "CMS Edit"],
+  // One-shot toggle: lands on the CMS demo with the editor chrome
+  // wrapped around it. The cookie persists editor mode across nav,
+  // so subsequent links don't need to carry `?editor=1`.
+  ["/cms-demo?editor=1", "Open Editor"],
 ];
 
 /**

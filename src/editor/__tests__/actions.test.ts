@@ -1,5 +1,5 @@
 /**
- * Unit tests for the editor server actions in `src/app/actions/cms.ts`.
+ * Unit tests for the editor server actions in `src/editor/actions.ts`.
  *
  * Each test exercises one action against the real disk-backed store
  * — the file-level beforeEach/afterEach removes any draft.json
@@ -25,7 +25,7 @@ import {
   registerBlock,
   writeDraftNode,
   type CmsNode,
-} from "../../../framework/cms-runtime.ts";
+} from "../../framework/cms-runtime.ts";
 import {
   addBlockToSlot,
   moveBlockInSlot,
@@ -33,11 +33,10 @@ import {
   removeBlockFromSlot,
   resetCmsDraft,
   saveCmsFields,
-} from "../cms.ts";
+} from "../actions.ts";
 
 const DRAFT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
-  "..",
   "..",
   "..",
   "cms",

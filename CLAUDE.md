@@ -6,11 +6,12 @@ Research project: a React CMS data layer inspired by Shopify Liquid. Pages are c
 
 ## Project Structure
 
-**Reading this repo:** the load-bearing code lives in `src/test/`, `src/lib/`, `src/framework/`, and `src/app/` — treat everything else as ignorable for understanding. For design decisions, read `notes/` **fully** (not just the README).
+**Reading this repo:** the load-bearing code lives in `src/test/`, `src/lib/`, `src/framework/`, `src/editor/`, and `src/app/` — treat everything else as ignorable for understanding. For design decisions, read `notes/` **fully** (not just the README).
 
 - `notes/` — current design notes. Read fully. Historical docs live in `archive/` (top-level).
 - `src/lib/` — Partials library (`partial.tsx`, `partial-component.tsx`, `partial-client.tsx`, `partial-registry.ts`, `partial-request-state.ts`, `partial-error-boundary.tsx`, `cache.tsx`, `hash.ts`, `multipart.ts`, `partial-cache.ts`). Activator components (`WhenVisible`, `WhenStored`) live in userspace at `src/app/components/`.
 - `src/framework/` — RSC plumbing (vite-plugin-rsc, Vite 8, React 19)
+- `src/editor/` — CMS editor UI (the three-pane authoring shell). Top-level package boundary in prep for a monorepo split. Subdirs: `shell.tsx` (entry component, takes `children` = the previewed page), `actions.ts` (server actions), `components/` (address-bar, tree-link, add-block).
 - `src/app/` — Example application (PokeAPI + Magento backends)
 - `src/test/` — In-process RSC test harness (`rsc-server.ts`) and cross-tier fixtures.
 - `proxy-design/` — legacy proxy data layer (see `proxy-design/README.md`).
@@ -256,6 +257,14 @@ nav.reload({ selector: "#stage-1 #stage-2 #stage-3", disableTransition: true });
 ```
 
 `disableTransition` has a second use: concurrent refetches across disjoint ids. Transitions can collapse overlapping refetches — a newer pending transition can supersede an older one whose bytes have arrived but haven't committed yet. For same-id rapid-fire (search-as-you-type), the transition wrapper is the right default (no stale-data flash). For disjoint-id fan-outs (refresh cart + live price + next page from independent event handlers), pass `disableTransition: true` on each so every response commits on arrival. See `e2e/defer-concurrent-refetches.spec.ts` and `archive/BARE_KEY_REFETCH.md`.
+
+### Editor mode (`?editor=1`)
+
+The CMS editor is a cookie-gated chrome around the entire app, not a separate route. Visiting any URL with `?editor=1` sets the `__editor` cookie and renders the page inside `<EditorShell>` (`src/editor/shell.tsx`); subsequent navs keep the chrome on without the URL flag. `?editor=0` clears the cookie. Visitors without the cookie pay no editor cost.
+
+The editor's preview pane IS the window URL — the address bar (`src/editor/components/address-bar.tsx`) drives `useNavigation()` (window-scoped), and `pickRoute` re-renders the new page inside the shell. Selection state (`?select=…&config=…`) is preserved across address-bar navs so the workspace survives moving between pages; preview-internal `<a>` clicks drop those params (regular page-nav semantics). Config-tab default follows the previewed page URL via `pickBestConfigIndex` in `src/framework/cms-runtime.ts` — visiting `/cms-demo/alpha` highlights the `slug=alpha` tab automatically.
+
+The shell does NOT wrap itself in a `<Partial>` — the inner page Partial (e.g. `cms-demo-root`) needs to fp-differ when its CMS-resolved bytes change, and a wrapping Partial would fp-match (no URL-dependent reads in editor chrome) and short-circuit the inner re-render. See `notes/CMS_EDITOR.md` Update 2026-04-27b for the full reasoning.
 
 ## Future tasks
 

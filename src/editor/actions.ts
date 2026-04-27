@@ -20,7 +20,7 @@ import {
   writeDraftNode,
   type CmsConfig,
   type CmsNode,
-} from "../../framework/cms-runtime.ts";
+} from "../framework/cms-runtime.ts";
 
 /**
  * Mutations that change slot structure (add/remove/reorder) need to

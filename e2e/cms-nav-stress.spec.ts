@@ -219,42 +219,41 @@ test("rapid multi-click survives — last URL wins, blocks all present", async (
   await expectAllBlocks(page);
 });
 
-test("/cms-edit frame nav preserves tree + field-form across slug switches", async ({
+test("editor preview nav preserves tree + field-form across slug switches", async ({
   page,
 }) => {
-  await page.goto("/cms-edit");
+  await page.goto("/cms-demo?editor=1");
   await page.waitForLoadState("networkidle");
 
-  // Select a node — sidebar URL becomes /cms-edit?select=... and the
-  // field form for cms-demo-greeting renders on the right.
+  // Select a node — sidebar URL becomes ?select=... and the field
+  // form for cms-demo-greeting renders on the right.
   await page.getByTestId("cms-edit-tree-entry-cms-demo-greeting").click();
   await expect(page).toHaveURL(/select=cms-demo-greeting/);
   await expect(page.getByTestId("cms-edit-field-input-headline")).toBeVisible();
 
-  // Frame nav through alpha → beta → gamma in the preview pane. The
-  // tree + field panel are nested inside cms-edit-root; if the prune
-  // wipes their cache entries, the right pane goes blank and tree
-  // clicks break.
-  for (const path of [
-    "/cms-demo/alpha?cms-draft=1",
-    "/cms-demo/beta?cms-draft=1",
-    "/cms-demo/gamma?cms-draft=1",
-  ]) {
-    await page.getByTestId(`cms-edit-preview-nav-${path}`).click();
+  // Address-bar nav through alpha → beta → gamma. The tree + field
+  // panel must stay visible at every step — earlier prune bugs
+  // wiped their cache entries, leaving the right pane blank and
+  // tree clicks broken. Address-bar nav preserves `?select=…`, so
+  // selection is still greeting at every step.
+  const input = page.getByTestId("cms-edit-preview-nav-input");
+  for (const path of ["/cms-demo/alpha", "/cms-demo/beta", "/cms-demo/gamma"]) {
+    await input.fill(path);
+    await input.press("Enter");
     await expect(
       page.getByTestId("cms-edit-field-input-headline"),
     ).toBeVisible();
     await expect(page.getByTestId("cms-edit-selected-id")).toContainText(
       /greeting/i,
     );
-    // Tree entries still clickable after every frame nav.
+    // Tree entries still clickable after every nav.
     const heroEntry = page.getByTestId(
       "cms-edit-tree-entry-cms-demo-hero",
     );
     await expect(heroEntry).toBeVisible();
   }
 
-  // Selection still on greeting AFTER all frame navs.
+  // Selection still on greeting AFTER all preview navs.
   await expect(
     page.getByTestId("cms-edit-tree-entry-cms-demo-greeting"),
   ).toHaveAttribute("data-selected", "true");

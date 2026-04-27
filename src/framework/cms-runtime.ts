@@ -173,6 +173,18 @@ function emptyStore(): CmsStore {
  */
 export const CMS_DRAFT_COOKIE = "cms-draft";
 
+/**
+ * Name of the cookie that flips the runtime into editor mode — i.e.
+ * the editor chrome wraps every page render. Toggled via `?editor=1`
+ * (set) or `?editor=0` (clear) one-shot URL params; once set, every
+ * subsequent request renders inside the editor without URL pollution.
+ *
+ * Editor mode implies draft mode (the author wants to see their
+ * unpublished changes in the preview), so `isDraftRequest` treats
+ * the editor cookie as draft-on.
+ */
+export const EDITOR_COOKIE = "__editor";
+
 interface CacheSlot {
   store: CmsStore;
   /** Flat `cmsId → node` index covering root entries AND recursive
@@ -294,7 +306,29 @@ function isDraftRequest(request: Request | undefined): boolean {
   // mutate Set-Cookie inside the request).
   const url = new URL(request.url);
   if (url.searchParams.get("cms-draft") === "1") return true;
-  return readCookieFromRequest(request, CMS_DRAFT_COOKIE) === "1";
+  if (url.searchParams.get("editor") === "1") return true;
+  if (readCookieFromRequest(request, CMS_DRAFT_COOKIE) === "1") return true;
+  // Editor cookie implies draft visibility — authors want to see
+  // unpublished changes in the preview without managing a separate
+  // draft toggle.
+  return readCookieFromRequest(request, EDITOR_COOKIE) === "1";
+}
+
+/**
+ * Editor mode: the editor chrome wraps every page render, gated by
+ * either a sticky cookie OR a one-shot `?editor=1` query param.
+ * `?editor=0` is treated as "off" regardless of cookie (the toggle
+ * always wins so a user can leave editor mode by URL alone).
+ *
+ * Read this OUTSIDE of any tracked-accessor / Partial-manifest scope
+ * — it's a routing-level decision, not per-Partial cache state.
+ */
+export function isEditorRequest(request: Request): boolean {
+  const url = new URL(request.url);
+  const flag = url.searchParams.get("editor");
+  if (flag === "1") return true;
+  if (flag === "0") return false;
+  return readCookieFromRequest(request, EDITOR_COOKIE) === "1";
 }
 
 /**
@@ -376,6 +410,15 @@ export function parseSlotEntryId(
 export function buildCmsTreeEntries(
   published: Record<string, CmsNode>,
   draft: Record<string, CmsNode>,
+  /**
+   * Optional page-scope filter. When provided, only the listed
+   * top-level cmsIds (and their nested slot descendants) appear in
+   * the tree. Lets the editor's tree follow the previewed page —
+   * an author on `/cms-demo` sees the cms-demo-root subtree, on
+   * `/magento` sees nothing (no CMS roots wired), without polluting
+   * the tree with content that isn't on the page being edited.
+   */
+  rootIds?: ReadonlyArray<string>,
 ): CmsTreeEntry[] {
   const merged: Record<string, CmsNode> = { ...published };
   for (const [id, node] of Object.entries(draft)) {
@@ -511,10 +554,15 @@ export function buildCmsTreeEntries(
       });
     }
   };
+  const rootFilter = rootIds ? new Set(rootIds) : null;
   for (const node of Object.values(merged)) {
     // Skip ids that show up as a slot child of some other node —
     // they are emitted by the parent's slot walk above.
     if (slotChildIds.has(node.id)) continue;
+    // Page-scope filter: skip top-level nodes the caller didn't
+    // include in `rootIds`. Slot descendants of an included root
+    // still appear via the recursive walk.
+    if (rootFilter && !rootFilter.has(node.id)) continue;
     walk(node, 0, undefined, undefined);
   }
   return entries;
@@ -538,10 +586,13 @@ function deriveLabelFromConfigs(configs: readonly CmsConfig[]): string | undefin
   return undefined;
 }
 
-export function listAllCmsNodes(): CmsTreeEntry[] {
+export function listAllCmsNodes(
+  rootIds?: ReadonlyArray<string>,
+): CmsTreeEntry[] {
   return buildCmsTreeEntries(
     loadPublishedStore().store.partials,
     loadDraftStore().store.partials,
+    rootIds,
   );
 }
 
@@ -776,6 +827,38 @@ export function resolveCmsNode(
   request: Request,
 ): Record<string, unknown> {
   return mergeMatchingConfigs(node.configs, request);
+}
+
+/**
+ * Editor helper: return the index of the highest-scoring config for
+ * the given request, or `null` if no config matches.
+ *
+ * Same scoring as `mergeMatchingConfigs` (more matched dimensions →
+ * higher specificity; tie-break by array order). Used by the field
+ * panel to pre-select a config tab matching the previewed page —
+ * navigating the preview to `/cms-demo/alpha` highlights the
+ * `slug=alpha` tab without the author having to click.
+ *
+ * Differences from `mergeMatchingConfigs`:
+ *   - returns the BEST single index, not a merge of all matching configs
+ *   - returns null when nothing matches (caller falls back to the
+ *     `match: {}` config, then to index 0)
+ */
+export function pickBestConfigIndex(
+  configs: readonly CmsConfig[],
+  request: Request,
+): number | null {
+  let bestIdx = -1;
+  let bestLen = -1;
+  for (let i = 0; i < configs.length; i++) {
+    const score = evaluateMatch(configs[i].match, request);
+    if (score === null) continue;
+    if (score.length > bestLen) {
+      bestLen = score.length;
+      bestIdx = i;
+    }
+  }
+  return bestIdx >= 0 ? bestIdx : null;
 }
 
 /**

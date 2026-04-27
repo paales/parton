@@ -21,3 +21,6 @@ playwright-report/
 # CMS — author-local draft overrides; created on-demand by the editor.
 # Published content lives in `src/cms/content.json` (committed).
 src/cms/draft.json
+
+# Claude Code harness runtime artifacts.
+.claude/

@@ -11,6 +11,31 @@
 - "Selecting page-greeting then clicking the alpha frame nav loses the field form" (same cache-substitution miss surfacing on the editor's right pane)
 The fix: on every substitution (placeholder → wrapper, OR wrapper → fresh wrapper), recurse into the result with the substituted id as the new `skipId` so a self-pointing reference can't loop.
 
+**Update 2026-04-27c:** preview parity round.
+
+- **Address bar is now a single editable input** (`src/editor/components/address-bar.tsx`). Browser-style: the input shows the current URL, accepts direct editing, hits Enter to navigate. No preset buttons (the `magento` / `cache demo` / etc. shortcuts are gone — type the path). The input syncs to the live URL on external navs unless it's focused, so a user mid-typing isn't clobbered.
+- **`RouteSwitch` component** (`src/app/root.tsx`). Editor mode passes `<RouteSwitch />` (a component reference) as the preview's children, not `pickRoutedPage()` (a function call's return value). Cache-mode refetches reuse the snapshot's `content` JSX wholesale; with the function-call form, the route handler's output got baked into the snapshot at registration time and frame navs (e.g. LoadMore's `?pages=2` bump) re-rendered the same stale page-1 markup. With the component form React re-invokes the handler against the current request on every render. Non-editor mode keeps `{pickRoutedPage()}` inline so synchronous `notFound()` / `redirect()` throws still bubble to Root's try/catch.
+- **Skip session URL sync on frame refetches.** EditorShell calls `setSessionFrameUrl(["preview"], previewUrl)` to align the frame URL with the window URL — but a frame refetch (`?__frame=preview&__frameUrl=…`) arrives with a session update already applied by `PartialRoot`. Overwriting it would clobber the frame nav (LoadMore's `?pages=2` round-trips, then the sync snaps the URL back to `/`). EditorShell now reads the request's `__frame` params and skips the sync when this request is itself a preview-frame refetch.
+- **Layout rework: window-scrolled preview, sticky sidebars.** The tree and field panels are `position: sticky; top: 0; h-screen; overflow-y-auto`. The preview column flows naturally with the window's scroll axis. Two reasons:
+  1. IntersectionObserver activators (`<WhenVisible>`, `LoadMore`'s sentinel) inside the previewed page default `root: viewport`. The previous `overflow-y-auto` preview wrapper made every observer non-firing — Pokemon's infinite scroll, the trivia activator, any `defer={<WhenVisible/>}` partial broke silently.
+  2. Browser-native scroll experience — page-down / mouse wheel does what users expect.
+- **Tree follows the previewed page.** `listAllCmsNodes` accepts an optional `rootIds` filter; `buildCmsTreeEntries` walks only the listed top-level nodes. The editor maps routes → root cmsIds via `PAGE_CMS_ROOTS` in `src/editor/shell.tsx` (today: `/cms-demo` → `cms-demo-root`, expandable). On routes without a registered root, the tree shows an empty hint pointing the author at `/cms-demo`. The probe loop calls `getPathname` for every pattern unconditionally so the tree's manifest captures the path dependency and a cross-page nav invalidates the fp.
+- **Field panel auto-pick now invalidates on cross-page nav.** `FieldPanel` calls `rootCmsIdsForPreviewedPage()` purely for the manifest side-effect — `pickBestConfigIndex` matches internally without going through tracked accessors, so without the explicit probe the panel's fp wouldn't see the path change and the auto-picked config tab would serve stale on a `/cms-demo → /cms-demo/alpha` nav.
+- **Address-bar nav uses selector targeting.** Every `Enter` on the URL bar navigates with `selector: "#preview #cms-edit-fields #cms-edit-tree"` so the editor sidebars refetch alongside the page content. Without explicit selectors, the page partial would refetch but tree/fields would fp-skip — they're explicit-included now and always re-render.
+
+**Update 2026-04-27b:** editor-as-shell. The editor moved from a `/cms-edit` route to a cookie-gated chrome that wraps every page render.
+
+- **`?editor=1`** sets a `__editor` cookie; **`?editor=0`** clears it. After the toggle, every URL renders inside the editor without the flag riding along (`syncEditorCookie()` in `src/app/root.tsx`). Visitors without the cookie pay no editor cost.
+- The address bar (`src/editor/components/address-bar.tsx`) drives `useNavigation()` (window-scoped). Window URL == previewed-page URL — bookmarkable, browser back/forward walks preview history. Editor selection (`?select=…&config=…`) is preserved across address-bar navs so the workspace survives moving between previewed pages; preview-internal `<a>` clicks DO drop those params (regular page-nav semantics).
+- **Preview frame retained, with session sync.** `<Partial selector="#preview" frame="preview" frameUrl={previewUrl}>` wraps the previewed page. The frame's session URL is **overwritten on every Root render** (`setSessionFrameUrl(["preview"], previewUrl)` from EditorShell) with the window URL minus editor-internal params. This reconciles two goals that look opposed:
+  - **Address-bar drives window navigation** — the URL must be bookmarkable and browser-back must walk preview history.
+  - **Frame scopes accessor reads** — without the frame, page-internal Partials (e.g. PokemonPage's `<Partial selector="#search">`) read the page URL directly and pick up the editor's `?select=` as a manifest read. The hoisting check throws `HoistingViolationError` the moment the user clicks a tree entry (a previously-empty manifest grows the `url:select` key for a Partial that has no business reading it).
+  - The sync resolves both: the window URL is the source of truth; the frame URL is a clean projection (no editor params) that page-internal Partials see. `useNavigation("preview").navigate(...)` writes session, but the next Root render overwrites it — there is no explicit caller of that handle today; the address bar uses `useNavigation()` (window) which goes through normal page navigation. Future code that wants frame-isolated navigation needs to relax this sync.
+- Config-tab default now follows the previewed page URL: `pickEffectiveConfig` calls `pickBestConfigIndex(configs, previewRequest())` to highlight the best-matching config tab automatically. Visiting `/cms-demo/alpha` with `?select=cms-demo-greeting` highlights the `slug=alpha` tab without an explicit override; explicit `?config=N` still wins. Implementation in `src/framework/cms-runtime.ts` (`pickBestConfigIndex`).
+- Editor UI moved from `src/app/pages/cms-edit.tsx` + `src/app/components/cms-edit-*` + `src/app/actions/cms.ts` to `src/editor/{shell,actions,components/}` — top-level package boundary in prep for a monorepo split.
+
+**Framework fix folded in:** fp-skip on a Partial used to register an empty manifest (`manifestScope.current` is freshly-empty when the body doesn't run). The next render that DID run the body would compare its real reads against that empty stored manifest and throw `HoistingViolationError` — every key looked "new." `partial-component.tsx` now stores `manifestScope.stored ?? manifestScope.current` on the fp-skip path, so the stored manifest is whatever the previous render-that-actually-ran captured. Without this fix, navigating between pages while editor mode was on threw violations on every accessor whose Partial had been fp-skipped on the prior request — the fp churn from frame-URL changes made it pervasive.
+
 **Update 2026-04-25d:** streaming-mode prune fix + single-slot header collapse.
 
 1. **Cache prune now keeps nested partials.** Streaming-mode pruning in `PartialsClient` derived its "live ids" from `collectTemplateIds(deriveTemplate(...))`, but `deriveTemplate` stops at any partial wrapper — nested partial ids were never visited and got deleted from `_cache` on every full render. Same hole for `_fingerprints.clear()`: the up-front clear plus a walk that only re-sets fresh wrappers wiped fingerprints for fp-skipped partials. Three reported regressions trace back to this:
@@ -24,7 +49,7 @@ The fix: on every substitution (placeholder → wrapper, OR wrapper → fresh wr
 
 ## One-liner
 
-The editor is the existing `<PartialsDebug/>` overlay expanded with forms + drag-drop, rendering the site being edited inside a `<Partial frame="preview">` with the draft cookie set. No new runtime, no iframe, no parallel architecture. The debug panel already enumerates Partials, knows their selectors, their parent chain, and their frame scopes; the editor extends it with CMS manifest sections and an invalidation-driven save loop.
+The editor is a cookie-gated chrome around the whole app — when `__editor=1` is set, every page render is wrapped in a three-pane shell (tree / preview / fields). The previewed page **is** the window URL — typing in the address bar navigates the browser, and the same RSC pipeline that serves real visitors fills the preview. No iframe, no separate URL space, no parallel architecture. The "frame" name lives in test selectors and component naming; no `<Partial frame="preview">` is involved (see Update 2026-04-27b).
 
 ## Layout — Shopify-inspired three-pane
 
@@ -32,31 +57,33 @@ Following the Shopify theme editor shape, which works because it matches the men
 
 | Pane | Role | Source of truth |
 |---|---|---|
-| Left sidebar | **Structure tree.** Hierarchy of Partials on the current page. Expandable. Shows slot contents nested under their host Partial. Click to select. | Route-scoped registry, grouped by `parentPath`. |
-| Center | **Preview.** The site being edited, rendered live inside a `<Partial frame="preview" frameUrl="/the/page">`. Navigable — the author moves between pages by navigating the frame. | Actual render, served through the normal RSC pipeline, with draft cookie set. |
-| Right sidebar | **Fields.** Form for the selected Partial: content fields, references, slot contents, and "varies by" dimensions from the request-input manifest. Tabbed per configuration match. | CMS store for the selected Partial. |
+| Left sidebar | **Structure tree.** Hierarchy of Partials in the CMS store. Expandable. Shows slot contents nested under their host Partial. Click to select. | CMS store (draft merged over published). |
+| Center | **Address bar + preview.** The site being edited, rendered as the window URL's page. Authors browse between pages by typing in the bar or clicking presets — selection state is preserved across navs so the workspace survives moving around. | `pickRoute([...])` against the window URL — same code path real visitors hit. |
+| Right sidebar | **Fields.** Form for the selected Partial: content fields, references, slot contents, and "varies by" dimensions from the request-input manifest. Tabbed per configuration match; the matching tab is auto-selected by the previewed page URL. | CMS store for the selected Partial. |
 
-No on-canvas drag-drop initially. Selection is click-on-preview (the preview frame's click handler identifies the hit Partial and highlights it in the tree). Reordering/adding/removing blocks happens in the tree sidebar.
+No on-canvas drag-drop initially. Selection is via tree clicks (`?select=…` on the URL). Reordering/adding/removing blocks happens in the tree sidebar via inline ↑/↓/× and the slot-add `+ Block` dropdown.
 
-## Preview via `<Partial frame="preview">`, not an iframe
+## Preview is the window URL
 
-The framework primitive already does the job:
+There's no separate URL space for the preview. The editor's address bar drives `useNavigation()` (window-scoped) — every nav updates the window URL, and `pickRoute` re-renders the new path inside the editor chrome. Browser back/forward, deep linking, and refresh all "just work."
 
 ```tsx
-<Partial
-  parent={ROOT}
-  selector="#preview"
-  frame="preview"
-  frameUrl="/products/bulbasaur"
->
-  <SitePreview />
-</Partial>
+// src/app/root.tsx — when editor cookie is set, wrap whatever
+// `pickRoute` returned in the editor shell.
+{editorOn ? (
+  <EditorShell>{pickRoutedPage()}</EditorShell>
+) : (
+  <>
+    <AppNav />
+    {pickRoutedPage()}
+  </>
+)}
 ```
 
-- The preview's navigation is independent — authors navigate inside the frame without affecting the editor's own URL.
-- The frame's session carries a `cms-draft=<id>` cookie that blocks read via `getCookie("cms-draft")`; that cookie dimensions CMS storage to the draft tree.
-- No postMessage, no double rendering, no cookie-isolation workarounds. Same React tree as the editor chrome.
-- DevTools stay one-level — no "switch context to the iframe."
+- **No iframe**, no postMessage, no cookie-isolation workarounds.
+- The `__editor` cookie persists across nav so URLs stay clean (no `?editor=1` riding along after the toggle).
+- Editor selection state (`?select=…&config=…`) is preserved on address-bar navs but dropped by preview-internal links — those are regular page navs.
+- DevTools stay one-level.
 
 ### Container queries, not viewport media queries
 
@@ -164,19 +191,21 @@ Explicit list so nobody rebuilds these expecting them to exist.
 
 | Piece | File |
 |---|---|
-| Editor route | `src/app/pages/editor.tsx` (new) |
-| Tree sidebar | extends `src/lib/partial-debug.tsx` |
-| Preview frame | `<Partial frame="preview">` inside editor route |
-| Field sidebar | `src/app/components/cms-field-panel.tsx` (new) |
-| CMS store (v1: big JSON file) | `src/framework/cms-store.ts` (new) |
-| Draft save server action | `src/app/cms-actions.ts` (new) |
-| Content accessors (`getText` etc.) | `src/framework/context.ts` (extend) |
-| `<Children>` / `<Child>` primitive | `src/lib/slot.tsx` (new) |
-| `provides` prop on `<Partial>` | `src/lib/partial-component.tsx` (extend) + `partial-context.ts` (extend `PartialCtx`) |
-| Block catalog | `src/blocks/catalog.ts` (new) |
-| Dev-time field-manifest prerender | `src/framework/cms-prerender.ts` (new) |
-| Picker widget registry | `src/framework/cms-widgets.ts` (new) |
-| Manifest-section split (5 kinds) | `src/framework/context.ts` (refactor `ManifestScope`) |
+| Editor shell (entry component) | `src/editor/shell.tsx` |
+| Tree sidebar | inline in `src/editor/shell.tsx` (TreePanel / TreeContents) |
+| Address bar (preview URL bar) | `src/editor/components/address-bar.tsx` |
+| Selector-targeted tree-link | `src/editor/components/tree-link.tsx` |
+| Slot-add dropdown | `src/editor/components/add-block.tsx` |
+| Field sidebar | inline in `src/editor/shell.tsx` (FieldPanel) |
+| CMS store backend | `src/framework/cms-storage.ts` (`JsonFileStorage`) |
+| CMS runtime + resolver | `src/framework/cms-runtime.ts` |
+| Draft save / publish server actions | `src/editor/actions.ts` |
+| Editor-mode toggle (cookie + Root wiring) | `src/app/root.tsx` (`syncEditorCookie`, `isEditorRequest` from `cms-runtime.ts`) |
+| Content accessors (`getText` etc.) | `src/framework/context.ts` |
+| `<Children>` / `<Child>` primitive | `src/lib/slot.tsx` |
+| `provides` prop on `<Partial>` | `src/lib/partial-component.tsx` + `partial-context.ts` |
+| Block catalog | `src/app/blocks/catalog.ts` |
+| Dev-time field-manifest prerender | `src/framework/cms-prerender.ts` |
 
 Nothing requires changes to the RSC pipeline, the Flight runtime, or the navigation surface. Every extension point is additive.
 
