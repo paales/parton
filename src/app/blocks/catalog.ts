@@ -21,6 +21,8 @@ import { PageMultiSlotBlock } from "./page-multi-slot.tsx";
 import { GroupBlock } from "./group.tsx";
 import { ProductCardBlock } from "./product-card.tsx";
 import { PageRootBlock } from "./page-root.tsx";
+import { NavRootBlock } from "./nav-root.tsx";
+import { NavLinkBlock } from "./nav-link.tsx";
 
 // Slot-level blocks (used inside `<Children>` slots within page-level
 // blocks like the composed section).
@@ -41,6 +43,22 @@ registerBlock("rich-text", {
 registerBlock("page-root", {
   tags: [],
   component: PageRootBlock,
+});
+
+// App nav root — the styled `<nav>` chrome around the global links
+// list. Same role as `page-root`: surfaces the `links` slot's
+// `allow=".nav-item"` to the manifest so the editor's `+ Block`
+// palette filters to nav-eligible blocks.
+registerBlock("nav-root", {
+  tags: [],
+  component: NavRootBlock,
+});
+
+// Nav link — single anchor with editable `href` / `label`. Tagged
+// `.nav-item` so it satisfies `nav-root`'s links slot allow filter.
+registerBlock("nav-link", {
+  tags: [".nav-item"],
+  component: NavLinkBlock,
 });
 
 // Page-level blocks (slot children of the page root, `cms-demo-root`).

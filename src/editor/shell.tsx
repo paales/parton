@@ -44,7 +44,6 @@
 
 import type { ReactNode } from "react";
 import {
-  getPathname,
   getRequest,
   getSearchParam,
 } from "../framework/context.ts";
@@ -62,6 +61,10 @@ import {
   getCatalogManifest,
   type BlockManifest,
 } from "../framework/cms-prerender.ts";
+import {
+  getPreviousRouteSnapshots,
+  getRouteSnapshots,
+} from "../lib/partial-registry.ts";
 import { setSessionFrameUrl } from "../framework/session.ts";
 import { Partial } from "../lib/index.ts";
 import { ROOT } from "../lib/partial-context.ts";
@@ -92,42 +95,45 @@ import {
 const EDITOR_RESERVED_PARAMS = ["editor", "select", "config"] as const;
 
 /**
- * Page-scoped CMS roots: which top-level cmsIds compose each route.
- * The tree filters to the listed roots when the previewed URL
- * matches the corresponding pattern, so an author on `/cms-demo`
- * sees only the cms-demo-root subtree (not magento-root or other
- * unrelated content). Routes with no entry here surface an empty
- * tree with a hint to navigate to a CMS-aware page.
+ * Tree scope: every cmsId that rendered for the previewed page,
+ * derived from the route-scoped partial registry.
  *
- * Authors register new pages by adding to this list; ideally this
- * becomes a generated manifest from `<Partial cmsId>` calls in the
- * route handlers, but the explicit map covers the demo until the
- * runtime tracking lands.
- */
-const PAGE_CMS_ROOTS: ReadonlyArray<readonly [pattern: string, roots: readonly string[]]> = [
-  ["/cms-demo", ["cms-demo-root"]],
-  ["/cms-demo/:slug", ["cms-demo-root"]],
-];
-
-/**
- * Probe every entry in `PAGE_CMS_ROOTS` via tracked `getPathname`
- * so the manifest captures every pattern. First match wins.
+ * `<Partial cmsId="…">` self-registers under its route at render
+ * time — so "what cmsIds belong on this page" is already a runtime
+ * fact the framework tracks. The editor reads it. Chrome that
+ * renders on every page (e.g. `<AppNav>`'s `app-nav`) appears in
+ * every route's snapshot bucket; per-page roots (`cms-demo-root`)
+ * appear only where they render. CMS_VISION.md Principle #1 —
+ * runtime discovery over static analysis — applies directly.
  *
- * Why probe all (not short-circuit on first match): the auto-tracked
- * manifest hoisting check throws when a render captures a key its
- * previous render didn't see. If we returned on first match, a nav
- * from `/cms-demo` (matched on entry 0) to `/` (no match — needs to
- * probe BOTH entries to confirm) would add `pathname:/cms-demo/:slug`
- * as a "new" key and trip the check. Probing all unconditionally
- * keeps the read pattern stable across navs.
+ * Union of current + previous render buckets:
+ *   - PREVIOUS = the last completed render of this route — the
+ *     steady-state source of truth.
+ *   - CURRENT = whatever has self-registered so far in the
+ *     in-progress render. Cold-start fallback: previous is empty
+ *     before the first completed render, but sibling Partials
+ *     under EditorShell self-register before TreeContents resumes
+ *     from its `await getCatalogManifest()`, so the current bucket
+ *     covers most cases.
+ *
+ * Cold start truly empty (process boot OR a route never rendered
+ * before): an empty list returns and the tree shows the empty-state
+ * hint. The next render of this route warms previous and the tree
+ * fills in.
  */
 function rootCmsIdsForPreviewedPage(): readonly string[] {
-  let firstMatch: readonly string[] | null = null;
-  for (const [pattern, roots] of PAGE_CMS_ROOTS) {
-    const matched = getPathname(pattern) != null;
-    if (matched && firstMatch === null) firstMatch = roots;
+  const route = new URL(getRequest().url).pathname;
+  const ids = new Set<string>();
+  for (const bucket of [
+    getRouteSnapshots(route),
+    getPreviousRouteSnapshots(route),
+  ]) {
+    if (!bucket) continue;
+    for (const snap of bucket.values()) {
+      if (snap.cmsId != null) ids.add(snap.cmsId);
+    }
   }
-  return firstMatch ?? [];
+  return [...ids];
 }
 
 /**
@@ -145,7 +151,6 @@ const FRAMEWORK_INTERNAL_PARAMS = [
   "__frameUrl",
   "disableTransition",
 ] as const;
-
 
 /**
  * Strip editor- AND framework-internal params from the page URL to
@@ -333,9 +338,10 @@ async function TreeContents() {
   // a same-route nav that changes the param differs the fp and the
   // fp-skip protocol re-renders correctly.
   const selected = getSearchParam("select");
-  // Filter the tree to the previewed page's CMS roots. Probing the
-  // route patterns also folds them into the manifest, so a nav
-  // between pages invalidates the tree's fp and refilters.
+  // Tree shows what `<Partial cmsId>` rendered for this page —
+  // derived from the route-scoped partial registry, not a hardcoded
+  // map. Chrome (app-nav) appears on every page because it renders
+  // on every page; per-page roots only appear on their pages.
   const rootIds = rootCmsIdsForPreviewedPage();
   const entries = listAllCmsNodes(rootIds);
   const blockTypes = listBlockTypes();
@@ -356,8 +362,8 @@ async function TreeContents() {
         data-testid="cms-edit-tree-empty"
       >
         {rootIds.length === 0
-          ? "This page has no CMS-aware content. Navigate to a page with a CMS root (e.g. /cms-demo) to see its tree."
-          : "The store is empty for this page. Partials appear here once they're saved to the draft or committed to content.json."}
+          ? "Loading content tree… the registry is cold for this route. Refresh once to populate."
+          : "The CMS store is empty. Partials appear here once they're saved to the draft or committed to content.json."}
       </p>
     );
   }
@@ -400,9 +406,7 @@ async function TreeContents() {
           // to show too many options than zero on an unrecognized
           // parent).
           const parentType = parentTypeById.get(entry.parentId!);
-          const parentManifest = parentType
-            ? catalog[parentType]
-            : undefined;
+          const parentManifest = parentType ? catalog[parentType] : undefined;
           const allow =
             parentManifest?.childSlots[entry.slotName!]?.allow ?? null;
           const filteredTypes =
@@ -442,9 +446,7 @@ async function TreeContents() {
               href={cmsEditHref({ select: entry.id })}
               className={cn(
                 "flex flex-1 items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors min-w-0",
-                isSelected
-                  ? "bg-primary/10 text-primary"
-                  : "hover:bg-muted",
+                isSelected ? "bg-primary/10 text-primary" : "hover:bg-muted",
               )}
               testId={`cms-edit-tree-entry-${entry.id}`}
               selected={isSelected}
@@ -595,7 +597,13 @@ function SlotChildControls({
   return (
     <span className="flex shrink-0 items-center">
       <form
-        action={moveBlockInSlot.bind(null, parentCmsId, slotName, childCmsId, "up")}
+        action={moveBlockInSlot.bind(
+          null,
+          parentCmsId,
+          slotName,
+          childCmsId,
+          "up",
+        )}
         className="contents"
       >
         <button
@@ -609,7 +617,13 @@ function SlotChildControls({
         </button>
       </form>
       <form
-        action={moveBlockInSlot.bind(null, parentCmsId, slotName, childCmsId, "down")}
+        action={moveBlockInSlot.bind(
+          null,
+          parentCmsId,
+          slotName,
+          childCmsId,
+          "down",
+        )}
         className="contents"
       >
         <button
@@ -623,7 +637,12 @@ function SlotChildControls({
         </button>
       </form>
       <form
-        action={removeBlockFromSlot.bind(null, parentCmsId, slotName, childCmsId)}
+        action={removeBlockFromSlot.bind(
+          null,
+          parentCmsId,
+          slotName,
+          childCmsId,
+        )}
         className="contents"
       >
         <button
@@ -651,15 +670,6 @@ async function FieldPanel() {
   const selected = getSearchParam("select");
   const configIndexRaw = getSearchParam("config");
   const configIndex = configIndexRaw != null ? Number(configIndexRaw) : null;
-  // Probe the previewed-page path patterns into this Partial's
-  // manifest so a cross-page nav (e.g. /cms-demo → /cms-demo/alpha)
-  // invalidates the fp and forces a re-render. Without this, the
-  // auto-picked config tab (computed via `pickBestConfigIndex`
-  // against the synthetic preview request) doesn't follow the URL.
-  // `pickBestConfigIndex` matches internally without going through
-  // tracked accessors, so the manifest wouldn't see the path
-  // dependency on its own.
-  rootCmsIdsForPreviewedPage();
   if (!selected) {
     return (
       <div className="text-sm text-muted-foreground">
@@ -678,9 +688,8 @@ async function FieldPanel() {
   if (parseSlotEntryId(selected)) {
     return (
       <div className="text-sm text-muted-foreground">
-        Slots aren't selectable. Use the inline buttons in the tree to
-        add, reorder, or remove blocks; click a block to edit its
-        fields here.
+        Slots aren't selectable. Use the inline buttons in the tree to add,
+        reorder, or remove blocks; click a block to edit its fields here.
       </div>
     );
   }
@@ -735,10 +744,9 @@ async function FieldPanel() {
       {Object.keys(fieldMap).length === 0 ? (
         <Card className="p-4">
           <CardContent className="px-0 text-sm text-muted-foreground">
-            No fields on this configuration yet. For block-typed
-            entries the catalog seeds the field list from the block's
-            accessor reads; for code-declared Partials, saved fields
-            appear here once written.
+            No fields on this configuration yet. For block-typed entries the
+            catalog seeds the field list from the block's accessor reads; for
+            code-declared Partials, saved fields appear here once written.
           </CardContent>
         </Card>
       ) : (
@@ -868,9 +876,7 @@ function ConfigTabs({
  *   {"pathname:/p/:slug": {slug: {in:[…]}}}    → "slug∈x,y"
  *   two or more keys                           → join with " · "
  */
-export function formatMatchLabel(
-  match: Record<string, MatchClause>,
-): string {
+export function formatMatchLabel(match: Record<string, MatchClause>): string {
   const entries = Object.entries(match);
   if (entries.length === 0) return "Default";
   const parts = entries.map(([key, clause]) => formatClause(key, clause));
@@ -883,7 +889,11 @@ function formatClause(key: string, clause: MatchClause): string {
   const name = colonIdx > 0 ? key.slice(colonIdx + 1) : "";
 
   if (kind === "pathname") {
-    if (typeof clause === "object" && clause !== null && !Array.isArray(clause)) {
+    if (
+      typeof clause === "object" &&
+      clause !== null &&
+      !Array.isArray(clause)
+    ) {
       if ("in" in clause) return `${shortKey(name)}∈…`;
       const paramParts = Object.entries(
         clause as Record<string, ScalarOrIn>,
@@ -1045,9 +1055,7 @@ function FieldInput({
       className="mb-1 block text-xs font-medium text-muted-foreground"
     >
       {name}
-      <span className="ml-2 text-[0.65rem] uppercase opacity-60">
-        {kind}
-      </span>
+      <span className="ml-2 text-[0.65rem] uppercase opacity-60">{kind}</span>
     </label>
   );
   const commonClass =

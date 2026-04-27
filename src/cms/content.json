@@ -1,5 +1,150 @@
 {
   "partials": {
+    "app-nav": {
+      "id": "app-nav",
+      "type": "nav-root",
+      "displayName": "Navigation",
+      "configs": [
+        {
+          "match": {},
+          "fields": {}
+        }
+      ],
+      "slots": {
+        "links": [
+          {
+            "id": "app-nav-link-pokemon",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/",
+                  "label": "Pokemon"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-magento",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/magento",
+                  "label": "Magento Store"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-bare",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/bare",
+                  "label": "Bare Stream"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-cache-demo",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/cache-demo",
+                  "label": "Cache Demo"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-defer-demo",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/defer-demo",
+                  "label": "Defer Demo"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-selector-demo",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/selector-demo",
+                  "label": "Selector Demo"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-sentinels-demo",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/sentinels-demo",
+                  "label": "Sentinels Demo"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-frames-demo",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/frames-demo",
+                  "label": "Frames Demo"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-cms-demo",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/cms-demo",
+                  "label": "CMS Demo"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-open-editor",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/cms-demo?editor=1",
+                  "label": "Open Editor"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
     "cms-demo-root": {
       "id": "cms-demo-root",
       "type": "page-root",

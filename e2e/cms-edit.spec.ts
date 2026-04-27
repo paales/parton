@@ -724,58 +724,32 @@ test.describe("CMS editor — smoke", () => {
       await expect(page.getByTestId("cms-edit-tree-pane")).toHaveCount(0);
     });
 
-    test("tree filters to previewed page's CMS roots (cms-demo-root visible only on /cms-demo)", async ({
+    test("tree shows every CMS root regardless of the previewed page", async ({
       page,
     }) => {
-      // The tree is page-scoped: an author on /cms-demo sees the
-      // cms-demo-root subtree; on / (Pokemon — no CMS root wired)
-      // sees an empty-state hint instead of a polluted full tree.
+      // Every page is a CMS page: the tree is the global content
+      // workspace, not a per-route filter. Both `app-nav` (chrome)
+      // and `cms-demo-root` (page) appear in the tree on every
+      // route — authors browse to a page via the address bar, but
+      // can edit any CMS root from any page.
       await page.goto("/cms-demo?editor=1");
       await page.waitForLoadState("networkidle");
       await expect(
         page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
       ).toBeVisible();
-      await expect(page.getByTestId("cms-edit-tree-empty")).toHaveCount(0);
+      await expect(
+        page.getByTestId("cms-edit-tree-entry-app-nav"),
+      ).toBeVisible();
 
-      // Direct nav to / — tree should drop cms-demo-root, show empty
-      // hint pointing the author at /cms-demo.
+      // Same tree on / — neither root drops out.
       await page.goto("/?editor=1");
       await page.waitForLoadState("networkidle");
       await expect(
         page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
-      ).toHaveCount(0);
-      await expect(page.getByTestId("cms-edit-tree-empty")).toBeVisible();
-    });
-
-    test("tree updates when address bar navigates between pages with different CMS roots", async ({
-      page,
-    }) => {
-      await page.goto("/?editor=1");
-      await page.waitForLoadState("networkidle");
-      await expect(page.getByTestId("cms-edit-tree-empty")).toBeVisible();
-
-      const input = page.getByTestId("cms-edit-preview-nav-input");
-      await input.fill("/cms-demo");
-      await input.press("Enter");
-      await page.waitForLoadState("networkidle");
-
-      // After address-bar nav, tree shows the new page's roots and
-      // the empty hint disappears — without a full page reload.
+      ).toBeVisible();
       await expect(
-        page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
-      ).toBeVisible({ timeout: 10000 });
-      await expect(page.getByTestId("cms-edit-tree-empty")).toHaveCount(0);
-
-      // Go back to / via address bar — tree resets.
-      await input.fill("/");
-      await input.press("Enter");
-      await page.waitForLoadState("networkidle");
-      await expect(page.getByTestId("cms-edit-tree-empty")).toBeVisible({
-        timeout: 10000,
-      });
-      await expect(
-        page.getByTestId("cms-edit-tree-entry-cms-demo-root"),
-      ).toHaveCount(0);
+        page.getByTestId("cms-edit-tree-entry-app-nav"),
+      ).toBeVisible();
     });
 
     test("greeting config tab + form fields follow the previewed page slug", async ({

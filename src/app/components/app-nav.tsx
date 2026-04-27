@@ -1,42 +1,21 @@
 import { Partial, capturePartialContext } from "../../lib";
-import { buttonVariants } from "@/components/ui/button";
-
-const LINKS: Array<[href: string, label: string]> = [
-  ["/", "Pokemon"],
-  ["/magento", "Magento Store"],
-  ["/bare", "Bare Stream"],
-  ["/cache-demo", "Cache Demo"],
-  ["/defer-demo", "Defer Demo"],
-  ["/selector-demo", "Selector Demo"],
-  ["/sentinels-demo", "Sentinels Demo"],
-  ["/frames-demo", "Frames Demo"],
-  ["/cms-demo", "CMS Demo"],
-  // One-shot toggle: lands on the CMS demo with the editor chrome
-  // wrapped around it. The cookie persists editor mode across nav,
-  // so subsequent links don't need to carry `?editor=1`.
-  ["/cms-demo?editor=1", "Open Editor"],
-];
+import { NavRootBlock } from "../blocks/nav-root.tsx";
 
 /**
- * Shared cross-page nav. Self-contained — wraps its own content in
- * `<Partial selector="#nav">` so every page gets a fingerprint-skippable
- * nav just by rendering `<AppNav/>`.
+ * Shared cross-page nav. CMS-aware: the link list lives in the CMS
+ * store under `cmsId="app-nav"`, with each link a `nav-link` block
+ * in the `links` slot. Authors edit href/label, reorder, add, and
+ * remove links via the editor; visitors see the rendered output.
+ *
+ * The `<nav>` chrome itself stays in code (`NavRootBlock`) — same
+ * pattern `cms-demo-root` uses with `PageRootBlock`. Code defines
+ * the grammar; data fills it (CMS_VISION.md Principle #5).
  */
 export function AppNav() {
   const parent = capturePartialContext();
   return (
-    <Partial parent={parent} selector="#nav">
-      <nav className="mb-6 flex flex-wrap gap-1 border-b pb-3">
-        {LINKS.map(([href, label]) => (
-          <a
-            key={href}
-            href={href}
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            {label}
-          </a>
-        ))}
-      </nav>
+    <Partial parent={parent} selector="#app-nav" cmsId="app-nav">
+      <NavRootBlock />
     </Partial>
   );
 }

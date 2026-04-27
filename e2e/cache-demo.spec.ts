@@ -14,6 +14,19 @@ import { test, expect } from "./fixtures";
  * it the cached content is served — server work skipped entirely.
  */
 
+// Match the render-count value in either HTML attribute form
+// (`data-render-count="N"`) or RSC Flight JSON form
+// (`"data-render-count":N`) — depending on streaming order React may
+// emit the resolved Suspense content as either a `<template>` chunk
+// or only via the Flight payload, and both are valid representations
+// of the same render output.
+function extractRenderCount(body: string): string | undefined {
+  return (
+    body.match(/data-render-count="(\d+)"/)?.[1] ??
+    body.match(/"data-render-count":(\d+)/)?.[1]
+  );
+}
+
 test("cache hit serves stored subtree without re-running the server component", async ({
   page,
   request,
@@ -21,27 +34,23 @@ test("cache hit serves stored subtree without re-running the server component", 
   // Use raw requests rather than browser navigation for precise control.
   // First request establishes the cache.
   const first = await request.get("/cache-demo?flavor=vanilla-a");
-  const firstHtml = await first.text();
-  const firstCount = firstHtml.match(/data-render-count="(\d+)"/)?.[1];
+  const firstCount = extractRenderCount(await first.text());
   expect(firstCount, "initial render must include a count").toBeDefined();
 
   // Second request for the same dep should NOT bump the render count.
   const second = await request.get("/cache-demo?flavor=vanilla-a");
-  const secondHtml = await second.text();
-  const secondCount = secondHtml.match(/data-render-count="(\d+)"/)?.[1];
+  const secondCount = extractRenderCount(await second.text());
   expect(secondCount).toBe(firstCount);
 
   // A different dep should MISS, bumping the count.
   const third = await request.get("/cache-demo?flavor=vanilla-b");
-  const thirdHtml = await third.text();
-  const thirdCount = thirdHtml.match(/data-render-count="(\d+)"/)?.[1];
+  const thirdCount = extractRenderCount(await third.text());
   expect(thirdCount).toBeDefined();
   expect(Number(thirdCount)).toBeGreaterThan(Number(firstCount));
 
   // Revisiting the original dep still hits and serves the original body.
   const fourth = await request.get("/cache-demo?flavor=vanilla-a");
-  const fourthHtml = await fourth.text();
-  const fourthCount = fourthHtml.match(/data-render-count="(\d+)"/)?.[1];
+  const fourthCount = extractRenderCount(await fourth.text());
   expect(fourthCount).toBe(firstCount);
 });
 
@@ -50,27 +59,20 @@ test("partial refetch targeting a cached partial skips server work", async ({
 }) => {
   // Seed the cache.
   const seed = await request.get("/cache-demo?flavor=vanilla-c");
-  const seedCount = seed.text().then((t) =>
-    t.match(/data-render-count="(\d+)"/)?.[1],
-  );
-  const beforeCount = await seedCount;
+  const beforeCount = extractRenderCount(await seed.text());
 
   // Refetch only the slow partial. A flight response comes back; count
   // in the response should still match the seed.
   const refetch = await request.get(
     "/cache-demo_.rsc?flavor=vanilla-c&partials=slow",
   );
-  const refetchBody = await refetch.text();
-  // The RSC Flight body encodes the attr as JSON: "data-render-count":N
-  const refetchCount = refetchBody.match(/"data-render-count":(\d+)/)?.[1];
+  const refetchCount = extractRenderCount(await refetch.text());
   expect(refetchCount).toBeDefined();
   expect(refetchCount).toBe(beforeCount);
 
   // Full page load again — still the same count.
   const revisit = await request.get("/cache-demo?flavor=vanilla-c");
-  const revisitCount = (await revisit.text()).match(
-    /data-render-count="(\d+)"/,
-  )?.[1];
+  const revisitCount = extractRenderCount(await revisit.text());
   expect(revisitCount).toBe(beforeCount);
 });
 
