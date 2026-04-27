@@ -10,7 +10,7 @@
  * per-Partial *access manifest* held in a second ALS slot. A cached
  * Partial uses that manifest as its cache key surface — so the author
  * doesn't have to re-declare which cookies/headers/URL params their
- * content depends on. See `notes/AUTO_TRACKED_CACHE_KEYS.md`.
+ * content depends on. See `docs/cache.md`.
  *
  * ── Frame scoping (2026-04-21) ─────────────────────────────────────
  * Accessors also consult a per-request **frame cache** — a mutable
@@ -58,7 +58,7 @@ interface RequestStore {
    * send a distinct value per worker so concurrent test runs don't
    * contend on the process-wide state maps (`<Cache>` store,
    * partial registry, session store, GraphQL cache). See
-   * `getScope()` below and `notes/SERVER_ISOLATION.md`.
+   * `getScope()` below and `docs-dev/server-isolation.md`.
    */
   scope: string;
   /**
@@ -131,7 +131,7 @@ const manifestContext = new AsyncLocalStorage<ManifestScope>();
 //               dependent (descendants must hoist their tracked
 //               accessor reads to the sync top of their body, before
 //               any await — the same rule documented for the frame
-//               cell in `notes/FRAME_SCOPING.md`).
+//               cell in `docs-dev/frame-scope.md`).
 //
 // `trackAccess` writes to BOTH so an accessor read inside a Cache
 // inside a Partial lands in both manifests. Each layer uses its
@@ -145,7 +145,7 @@ const manifestContext = new AsyncLocalStorage<ManifestScope>();
 // synchronous call from the parent's wrapped JSX, before any sibling
 // Partial body has had a chance to run. Deeper async descendants
 // past intermediate awaits hit the same drift sharp edge as frame
-// scope — see `notes/FRAME_SCOPING.md` and the limit documented on
+// scope — see `docs-dev/frame-scope.md` and the limit documented on
 // the Partial body's `descendantManifestKey` computation.
 const partialManifestCell = cache(
   (): { current: ManifestScope | null } => ({ current: null }),
@@ -225,7 +225,7 @@ function frameRequest(): Request | null {
  * Discipline: content accessors, like frame / cache-manifest
  * accessors, must be called BEFORE any `await` in a server component
  * body. After an await the cell may have been mutated by a sibling
- * Partial's render. See `notes/CMS_MANIFEST.md`.
+ * Partial's render. See `docs/cms.md`.
  *
  * The `<Partial>` component is responsible for pushing a null scope
  * when it runs WITHOUT `cmsId` — otherwise a CMS-aware ancestor's
@@ -650,7 +650,7 @@ export function getPathname(
 //
 // Hoisting discipline: call these at the top of the component body,
 // before any `await`, for the same reason tracked accessors and
-// frame-scope reads do. See `notes/CMS_MANIFEST.md`.
+// frame-scope reads do. See `docs/cms.md`.
 //
 // First-render rule: every accessor resolves to SOMETHING even when
 // the store has no matching config — empty string, 0, false,
@@ -756,7 +756,7 @@ export function getImage(name: string): ImageValue {
  * `"closest"` fallback — blocks still compose via ancestor context
  * even when not CMS-authored.
  *
- * See `notes/CMS_MANIFEST.md` § Reference accessors.
+ * See `docs/cms.md` § Reference accessors.
  */
 export function getReference<T extends string>(
   name: string,

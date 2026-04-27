@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by
+> [`docs-dev/server-isolation.md`](../docs-dev/server-isolation.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Server request isolation — module state audit
 
 **Added:** 2026-04-19

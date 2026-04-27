@@ -28,7 +28,7 @@
  * A, another touches cookie B — would produce different manifests
  * across requests, thrashing the cache. We throw a hoisting-violation
  * error when a render's manifest disagrees with the stored one. See
- * `notes/AUTO_TRACKED_CACHE_KEYS.md`.
+ * `docs/cache.md`.
  *
  * ── Composition with <Partial> ────────────────────────────────────
  *
@@ -136,7 +136,7 @@ class MemoryCacheStore implements CacheStore {
   }
 }
 
-// CATEGORY C (notes/SERVER_ISOLATION.md) — all five pieces of shared
+// CATEGORY C (docs-dev/server-isolation.md) — all five pieces of shared
 // cache state (render-output store, dynamic-snapshot side-table,
 // manifest side-table, SWR in-flight guard, cold-miss dedupe) are
 // bundled per scope. `getScope()` maps each request to a bucket.
@@ -223,7 +223,7 @@ function manifestsEqual(a: Set<string>, b: Set<string>): boolean {
 // `createFromReadableStream` returns a tree whose nested chunks may
 // still be represented as Flight lazy refs. We force resolution here
 // so both cache-hit and cache-miss paths return an equivalent, fully
-// materialized tree. See `notes/SERVER_CACHE_NOTES.md` for the full
+// materialized tree. See `archive/SERVER_CACHE_NOTES.md` for the full
 // explanation.
 
 const LAZY_SYMBOL_STR = "Symbol(react.lazy)";

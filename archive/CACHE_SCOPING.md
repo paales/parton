@@ -1,3 +1,8 @@
+> **Superseded 2026-04-27** by [`docs/cache.md`](../docs/cache.md)
+> § Storage tiers. Historical design proposal preserved for context.
+
+---
+
 # Cache scoping — where state lives
 
 **Added:** 2026-04-20

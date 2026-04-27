@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by
+> [`docs/frames-navigation.md`](../docs/frames-navigation.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Frames — server iframes on Partials
 
 **Status:** implemented. Demo + e2e at `/frames-demo`. Scoping

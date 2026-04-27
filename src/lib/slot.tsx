@@ -30,7 +30,7 @@
  * `cmsId`) the slot silently renders nothing — the primitive is
  * CMS-scope-gated, same as the content accessors.
  *
- * See `notes/CMS_MANIFEST.md` § Slot accessors.
+ * See `docs/cms.md` § Slot accessors.
  */
 
 import React, { type ReactNode } from "react";

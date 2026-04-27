@@ -1,3 +1,8 @@
+> **Superseded 2026-04-27** by [`docs/partial.md`](../docs/partial.md)
+> § defer. Historical design proposal preserved for context.
+
+---
+
 # `defer` + activators — design notes
 
 **Added:** 2026-04-18

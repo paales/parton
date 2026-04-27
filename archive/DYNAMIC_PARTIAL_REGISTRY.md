@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by
+> [`docs-dev/render-pipeline.md`](../docs-dev/render-pipeline.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Dynamic Partial Registry — design notes
 
 **Added:** 2026-04-16

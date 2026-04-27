@@ -1,3 +1,9 @@
+> **Archived 2026-04-27.** The bounded `<Piece>` + compaction pattern
+> is shipped (`src/app/chat/`). This doc captures the design rationale
+> and trade-offs; the pattern itself lives in code.
+
+---
+
 # Streaming chat — bounded `<Piece>` + compaction — design note
 
 **Added:** 2026-04-22

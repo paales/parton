@@ -152,4 +152,4 @@ describe("session store basics", () => {
 // React.cache-backed mutation cell (see `context.ts` frame-scope
 // section) — works under plain vitest once Partial has mounted,
 // but the full session→session-aware-Partial loop needs the dev
-// server. See `notes/FRAMES.md`.
+// server. See `docs/frames-navigation.md`.

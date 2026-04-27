@@ -34,7 +34,7 @@
  * the draft file. Editor invalidates the tree Partial so the list
  * reflects the merge.
  *
- * Scope deferred to later iterations (see notes/CMS_EDITOR.md):
+ * Scope deferred to later iterations (see docs/cms.md):
  *   - Block palette — authors can't add new slot entries beyond
  *     what the slot's `allow` permits.
  *   - Drag-drop.

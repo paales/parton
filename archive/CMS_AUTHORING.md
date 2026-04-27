@@ -1,3 +1,8 @@
+> **Superseded 2026-04-27** by [`docs/cms.md`](../docs/cms.md)
+> § Authoring a block. Historical design proposal preserved for context.
+
+---
+
 # CMS authoring — block + content guide
 
 **Added:** 2026-04-25

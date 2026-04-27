@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by
+> [`docs-dev/frame-scope.md`](../docs-dev/frame-scope.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Frame scoping — what holds the scope
 
 **Status:** `React.cache` mutation cell (current).

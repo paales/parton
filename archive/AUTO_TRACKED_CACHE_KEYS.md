@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by [`docs/cache.md`](../docs/cache.md) and
+> [`docs-dev/manifest-internals.md`](../docs-dev/manifest-internals.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Auto-tracked cache keys + Cache-Control surface
 
 **Status:** implemented (2026-04-19).

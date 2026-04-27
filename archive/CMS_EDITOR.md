@@ -1,3 +1,8 @@
+> **Superseded 2026-04-27** by [`docs/cms.md`](../docs/cms.md)
+> § Editor mode. Historical design proposal preserved for context.
+
+---
+
 # CMS editor — the debug panel, expanded
 
 **Added:** 2026-04-25

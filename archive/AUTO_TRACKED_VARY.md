@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by [`docs/cache.md`](../docs/cache.md) and
+> [`docs-dev/manifest-internals.md`](../docs-dev/manifest-internals.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Auto-tracked manifest fingerprinting
 
 **Added 2026-04-27.** Replaces declarative `<Partial varyOn>` (introduced and removed same week) with auto-tracking via the existing tracked-accessor manifest. Closes the editor's "config tab click leaves the form stale" regression at the framework level.

@@ -20,7 +20,7 @@
  * resolver evaluates them against the request URL the same way it
  * does for any CMS-aware Partial.
  *
- * See `notes/CMS_VISION.md` / `notes/CMS_MANIFEST.md` / `notes/CMS_EDITOR.md`.
+ * See `docs/cms.md`.
  */
 
 import { Children, Partial } from "../../lib";

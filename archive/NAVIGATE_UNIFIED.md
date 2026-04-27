@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by
+> [`docs/frames-navigation.md`](../docs/frames-navigation.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Unified navigation surface — design note
 
 **Added:** 2026-04-21

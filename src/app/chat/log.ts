@@ -37,7 +37,30 @@ const STREAM_BUDGET_MS = 10_000;
 // reveal chunks one at a time (so the compaction seam is observable).
 const CHUNK_DELAY_MS_TEST = 5;
 const STREAM_BUDGET_MS_TEST = 3_000;
-const NOTES_DIR = resolve(process.cwd(), "notes");
+
+// Files are addressed by basename (no .md). The producer searches
+// these directories in order; first match wins. Lets the demo stream
+// any markdown in the project — current docs, framework internals,
+// active research, archived design proposals — without the chat
+// overlay having to hardcode where each file lives.
+const SEARCH_DIRS = [
+  resolve(process.cwd(), "notes"),
+  resolve(process.cwd(), "docs"),
+  resolve(process.cwd(), "docs-dev"),
+  resolve(process.cwd(), "archive"),
+];
+
+async function readMarkdown(fileId: string): Promise<string> {
+  let firstError: unknown = null;
+  for (const dir of SEARCH_DIRS) {
+    try {
+      return await readFile(resolve(dir, `${fileId}.md`), "utf8");
+    } catch (err) {
+      if (firstError == null) firstError = err;
+    }
+  }
+  throw firstError ?? new Error(`chat log: no markdown for '${fileId}'`);
+}
 
 interface MessageLog {
   chunks: string[];
@@ -93,7 +116,7 @@ async function runProducer(
 ): Promise<void> {
   const start = Date.now();
   try {
-    const text = await readFile(resolve(NOTES_DIR, `${fileId}.md`), "utf8");
+    const text = await readMarkdown(fileId);
     // Hard-slice into fixed-length chunks so the stream feels like
     // token-by-token reveal rather than paragraph drops. A word-boundary
     // splitter would look nicer but variable chunk sizes make compaction

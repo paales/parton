@@ -8,7 +8,7 @@
  * - `vary` carries already-resolved scalar values that identify *which
  *   snapshot of the content* this is — typically route params like
  *   `sku` that can't be read from cookies / headers / URL params by
- *   the tracked-accessor surface (see `notes/AUTO_TRACKED_CACHE_KEYS.md`).
+ *   the tracked-accessor surface (see `docs/cache.md`).
  *   Scalar-only by TS so authors can't pass a whole object and miss
  *   the key surface silently — they have to extract the identifying
  *   field (`{sku: product.sku}`).

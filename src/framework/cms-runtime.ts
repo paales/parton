@@ -26,7 +26,7 @@
  *   - No draft/published split yet; that's a follow-up (`CMS_EDITOR.md`
  *     §Draft and published — cookie-driven).
  *
- * See `notes/CMS_MANIFEST.md` for the full design context.
+ * See `docs/cms.md` for the full design context.
  */
 
 import type { ReactNode } from "react";

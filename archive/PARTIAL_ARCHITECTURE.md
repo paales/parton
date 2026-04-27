@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by [`docs/intro.md`](../docs/intro.md) and
+> [`docs/partial.md`](../docs/partial.md). Historical design proposal
+> preserved for context; do not consult for how the code works today.
+
+---
+
 # Partial architecture — the north star
 
 **Last updated:** 2026-04-21 (post `usePartial`/`__inputs` removal; see `NAVIGATE_UNIFIED.md` for the unified client surface)

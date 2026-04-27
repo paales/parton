@@ -11,23 +11,34 @@ import {
 } from "./chat-controls.tsx";
 
 /**
- * Ordered pool of notes files streamable into the chat.
+ * Ordered pool of markdown files streamable into the chat. The
+ * server-side producer in `log.ts` searches `notes/`, `docs/`,
+ * `docs-dev/`, and `archive/` for each id; this list curates which
+ * ids the +new-message picker offers.
  */
 export const AVAILABLE_FILES = [
+  // Lead with the framework reference — the chat demo doubles as a
+  // way to read the docs.
   "AA_CHAT_STREAMING",
-  "README",
+  "intro",
+  "partial",
+  "frames-navigation",
+  "cache",
+  "cms",
+  "prior-art",
+  // Internals.
+  "render-pipeline",
+  "cache-internals",
+  "frame-scope",
+  "manifest-internals",
+  "server-isolation",
+  "flight-gotchas",
+  "testing",
+  // Active research.
+  "IDEAS",
+  // Archived design retrospectives — useful chat content.
   "STREAMING_CHAT",
   "PARTIAL_ARCHITECTURE",
-  "SELECTOR_API",
-  "NAVIGATE_UNIFIED",
-  "AUTO_TRACKED_CACHE_KEYS",
-  "DYNAMIC_PARTIAL_REGISTRY",
-  "DEFER_ACTIVATORS",
-  "SERVER_ISOLATION",
-  "FRAME_SCOPING",
-  "FRAMES",
-  "CACHE_SCOPING",
-  "IDEAS",
 ];
 
 const DEFAULT_MSG = "AA_CHAT_STREAMING";

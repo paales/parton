@@ -1,3 +1,8 @@
+> **Superseded 2026-04-27** by [`docs/partial.md`](../docs/partial.md)
+> § parent. Historical design proposal preserved for context.
+
+---
+
 # Parent context — tracking the tree across RSC async boundaries
 
 **Status:** implemented.

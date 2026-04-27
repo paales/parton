@@ -24,7 +24,7 @@
  *                     to via `frame.back()`; `future[0]` is where
  *                     `frame.forward()` advances to. Kept per-entry so
  *                     browser-level navigation doesn't pollute frame
- *                     history and vice versa — see `notes/FRAMES.md`
+ *                     history and vice versa — see `docs/frames-navigation.md`
  *                     §"Two history axes".
  *   __frameState    — per-frame user-provided state bag (namespaced so
  *                     multiple frames on one entry can't collide)
@@ -89,7 +89,7 @@ export type NavigateTarget = string | URL | ((current: URL) => URL | string);
  * Explicit `"push"` / `"replace"` on either handle use the browser's
  * `nav.navigate()` path — for a frame, this means a new/replaced
  * browser entry AND a push on the per-frame stack. See the decision
- * matrix in `notes/FRAMES.md` §"Two history axes".
+ * matrix in `docs/frames-navigation.md` §"Two history axes".
  */
 export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
   /**

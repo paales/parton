@@ -1,3 +1,8 @@
+> **Superseded 2026-04-27** by [`docs-dev/testing.md`](../docs-dev/testing.md).
+> Historical design proposal preserved for context.
+
+---
+
 # Testing architecture
 
 **Added:** 2026-04-22.

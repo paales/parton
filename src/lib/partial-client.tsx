@@ -558,7 +558,7 @@ export function registerClientPartial(id: string, fingerprint: string): void {
  * `_fingerprints` means the skip-on-unchanged optimization applies
  * uniformly across the entire tree; deep Partials that live inside
  * an ancestor's `_cache` entry (rather than as a standalone key) are
- * reported correctly. See `notes/PARTIAL_ARCHITECTURE.md`.
+ * reported correctly. See `docs/partial.md`.
  */
 export function getCachedPartialIds(): string[] {
   const out: string[] = [];
@@ -767,7 +767,7 @@ function joinFramePath(path: readonly string[]): string {
  * Multi-frame URL snapshot carried on each navigation entry. Every
  * pushed entry stores the URL of every known frame so browser
  * back/forward can diff two entries and dispatch refetches for the
- * frames that changed. See `notes/FRAMES.md`.
+ * frames that changed. See `docs/frames-navigation.md`.
  */
 const FRAMES_KEY = "__frames";
 

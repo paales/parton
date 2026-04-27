@@ -8,7 +8,7 @@
  * so nested frames live alongside each other without name collisions.
  * The session is the **source of truth** for "what scene is the user
  * looking at" — the window URL is a shareable projection over it
- * (see `notes/FRAME_SCOPING.md`).
+ * (see `docs-dev/frame-scope.md`).
  *
  *   cookie `__frame_sid=abc123` → store[abc123] = {
  *     frames: {
@@ -59,7 +59,7 @@ function pathKey(path: readonly string[]): string {
 
 const SESSION_COOKIE = "__frame_sid";
 
-// CATEGORY C (notes/SERVER_ISOLATION.md) — intentional shared map,
+// CATEGORY C (docs-dev/server-isolation.md) — intentional shared map,
 // now nested under a per-scope bucket. Inner map keyed by opaque
 // session ID; different users don't collide within a scope.
 const scopes = new Map<string, Map<string, SessionState>>();

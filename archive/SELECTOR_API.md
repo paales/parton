@@ -1,3 +1,8 @@
+> **Superseded 2026-04-27** by [`docs/partial.md`](../docs/partial.md)
+> § selector. Historical design proposal preserved for context.
+
+---
+
 # Selector API — design note
 
 **Added:** 2026-04-21

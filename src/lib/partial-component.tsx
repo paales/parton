@@ -204,7 +204,7 @@ export interface PartialProps {
    * automatically from request state the Partial body reads through
    * the tracked accessor surface (`getCookie`, `getHeader`,
    * `getSearchParam`, `getPathname`) plus any scalar values passed as
-   * `cache.vary`. See `notes/AUTO_TRACKED_CACHE_KEYS.md`.
+   * `cache.vary`. See `docs/cache.md`.
    */
   cache?: CacheOptions;
   /**
@@ -242,7 +242,7 @@ export interface PartialProps {
    *   2. `frameUrl` prop (author-provided initial URL).
    *   3. The page URL (identity — the frame and page agree).
    *
-   * See `notes/FRAME_SCOPING.md` for why this is a React Context and
+   * See `docs-dev/frame-scope.md` for why this is a React Context and
    * not an ALS scope. The hoisting rule (read accessors before any
    * `await`) applies the same way it does for the cache manifest.
    */
@@ -264,7 +264,7 @@ export interface PartialProps {
    * Independent of `selector`: the selector is a mutable presentation
    * token authors can rename at any time; the `cmsId` is the
    * permanent storage anchor — rename-safe by construction. See
-   * `notes/CMS_MANIFEST.md` § cmsId.
+   * `docs/cms.md` § cmsId.
    *
    * When absent (the common case for today's Partials), the Partial
    * is NOT CMS-aware: any content accessor called inside returns its
@@ -463,7 +463,7 @@ function resolveFrameRequest(
  * actually nested inside.
  *
  * The fingerprint consequence of that leak is addressed in two
- * layers (see `notes/FRAME_SCOPING.md` §Sharp edge): `<Partial
+ * layers (see `docs-dev/frame-scope.md` §Sharp edge): `<Partial
  * cache>`'s cache key uses `structuralFp` which excludes ambient,
  * and a Partial that opens its own frame skips `ambientFrameKey`
  * entirely — the sibling leak can't corrupt its own fp.
@@ -606,7 +606,7 @@ export function Partial({
   //      it's computed per-render against (session → frameUrl prop
   //      → page URL).
   //
-  // See `notes/FRAME_SCOPING.md` — RSC rules out React Context (no
+  // See `docs-dev/frame-scope.md` — RSC rules out React Context (no
   // `createContext` in the react-server build), so the nested scope
   // has to be ALS-with-containment (Flight round-trip keeps the
   // scope from leaking to siblings).
@@ -815,7 +815,7 @@ export function Partial({
   );
   // Full fingerprint — includes ambient frame URL so descendants of
   // a frame whose URL changed get a different fp on the next render
-  // and skip the fingerprint-match path (see notes/FRAMES.md).
+  // and skip the fingerprint-match path (see docs/frames-navigation.md).
   const fp = hashFingerprint(
     fingerprintElement(rawContent) +
       ownFrameKey +

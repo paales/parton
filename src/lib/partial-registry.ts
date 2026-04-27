@@ -101,7 +101,7 @@ export interface PartialSnapshot {
 
 type RouteMap = Map<string, Map<string, PartialSnapshot>>;
 
-// CATEGORY C (notes/SERVER_ISOLATION.md) — route-scoped snapshot store,
+// CATEGORY C (docs-dev/server-isolation.md) — route-scoped snapshot store,
 // outer key is the per-request `scope` (test-worker isolation; always
 // "default" in prod). Inner: route → partial id → snapshot. Rebuilt on
 // HMR / process restart; cleared on full streaming renders via

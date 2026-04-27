@@ -1,3 +1,9 @@
+> **Superseded 2026-04-27** by [`docs/cms.md`](../docs/cms.md) and
+> [`docs/prior-art.md`](../docs/prior-art.md). Historical design
+> proposal preserved for context.
+
+---
+
 # CMS vision — where this framework is going
 
 **Added:** 2026-04-25
