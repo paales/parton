@@ -229,6 +229,25 @@ export function getPreviousRouteSnapshots(
 }
 
 /**
+ * Drop one Partial's snapshot from the CURRENT-render registry (so
+ * `clearRoute` won't move a poisoned manifest into the previous slot
+ * on the next render). Called by the Partial body's manifest-scope
+ * `onViolation` hook when `trackAccess` throws — without it, the bad
+ * manifest captured before the throw would persist as the "stored"
+ * set on every subsequent render and the same comparison would loop
+ * forever (HMR clears state, but a plain reload doesn't fire HMR).
+ */
+export function invalidateSnapshot(route: string, partialId: string): void {
+  scopeMap().get(route)?.delete(partialId);
+  // Also clear from previous: if the throw happened before the
+  // current render had a chance to register a fresh snapshot, the
+  // PREVIOUS map still holds the manifest that fed the violating
+  // `stored` set. Clearing both halves guarantees the next render
+  // starts with no `stored` for this Partial.
+  previousScopeMap().get(route)?.delete(partialId);
+}
+
+/**
  * Clear registry entries. No argument (or `"all"`): every scope is
  * wiped — used by HMR dispose hooks. Pass a scope to target a single
  * worker's entries.

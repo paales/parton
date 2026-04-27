@@ -25,6 +25,7 @@ import {
 import { getSessionFrameUrl } from "../framework/session.ts";
 import {
   getPreviousRouteSnapshots,
+  invalidateSnapshot,
   registerPartial,
   type PartialSnapshot,
 } from "./partial-registry.ts";
@@ -749,6 +750,17 @@ export function Partial({
     current: new Set(),
     stored: previousSnap?.manifest ?? null,
     partialId: id,
+    onViolation: () => {
+      // Self-recover: drop this Partial's snapshot from BOTH halves of
+      // the registry so the next render starts with `stored = null`.
+      // Otherwise the manifest captured before the throw stays sticky
+      // and every reload re-trips the same hoisting check (a plain
+      // browser refresh doesn't fire HMR's `clearRegistry`). The
+      // throw still surfaces to the dev — they fix the underlying
+      // post-await read or restructure — but the framework no longer
+      // requires a server restart to recover.
+      invalidateSnapshot(route, id);
+    },
   };
   setCurrentPartialManifest(manifestScope);
 

@@ -154,6 +154,38 @@ describe("hoisting violation", () => {
     expect([...scope.current].sort()).toEqual(["url:page", "url:q"]);
   });
 
+  it("calls onViolation hook AND clears stored before throwing (self-recovery)", async () => {
+    let recoveryFired = false;
+    const scope: ManifestScope = {
+      current: new Set(),
+      stored: new Set(["cookie:cart"]),
+      partialId: "cart-widget",
+      onViolation: () => {
+        recoveryFired = true;
+      },
+    };
+    await runWithRequestAsync(
+      fakeRequest("http://localhost/", { cookie: "cart=abc" }),
+      async () => {
+        await runWithCacheManifest(scope, async () => {
+          try {
+            getSearchParam("promo");
+          } catch {
+            // expected
+          }
+          // After the throw, stored has been nulled out so the next
+          // accessor read in the SAME render doesn't keep throwing —
+          // just records the new key into current. Without this, a
+          // body that reads multiple unhoisted keys would throw on
+          // every one and spam the error log.
+          expect(scope.stored).toBe(null);
+          expect(() => getCookie("session")).not.toThrow();
+        });
+      },
+    );
+    expect(recoveryFired).toBe(true);
+  });
+
   it("does NOT re-throw when the same key is read twice", async () => {
     const scope: ManifestScope = {
       current: new Set(),

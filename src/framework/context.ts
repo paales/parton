@@ -94,6 +94,25 @@ export interface ManifestScope {
   current: Set<string>;
   stored: ReadonlySet<string> | null;
   partialId: string;
+  /**
+   * Called by `trackAccess` immediately before throwing a
+   * `HoistingViolationError`. The framework uses this to invalidate
+   * the offending Partial's previous-render snapshot so the next
+   * render starts with `stored = null` instead of looping the same
+   * comparison. Without this hook the throw becomes "sticky": the
+   * partial manifest from the failed render persists in the
+   * registry, every subsequent reload re-trips the same check, and
+   * the dev has to restart the server to recover.
+   *
+   * Optional: `<Cache>`'s manifest scopes don't set it (Cache's
+   * Flight round-trip + reliable attribution mean a hoisting
+   * violation there really is the author's bug — recovery via HMR
+   * after the fix is the right model). The per-Partial cell scope
+   * sets it because cell-drift attributions can blame the wrong
+   * Partial, and the violation becomes unrecoverable without an
+   * automatic clear.
+   */
+  onViolation?: () => void;
 }
 
 const manifestContext = new AsyncLocalStorage<ManifestScope>();
@@ -418,11 +437,14 @@ function trackAccess(kind: string, name: string): void {
 function recordAccess(scope: ManifestScope, key: string): void {
   if (scope.current.has(key)) return;
   if (scope.stored !== null && !scope.stored.has(key)) {
-    throw new HoistingViolationError(
-      scope.partialId,
-      key,
-      [...scope.stored].sort(),
-    );
+    const prevKeys = [...scope.stored].sort();
+    // Capture the violation handler BEFORE clearing — see scope.onViolation
+    // doc for why. Clearing stored locally also stops a chain of further
+    // throws inside this same render (one violation surfaces, rest are
+    // recorded as new keys until the render ends).
+    scope.onViolation?.();
+    scope.stored = null;
+    throw new HoistingViolationError(scope.partialId, key, prevKeys);
   }
   scope.current.add(key);
 }
