@@ -582,10 +582,17 @@ export function matchRoutePattern(
 ): Record<string, string> | null {
   const pathSegs = pathname.split("/").filter(Boolean)
   const patSegs = pattern.split("/").filter(Boolean)
-  if (pathSegs.length !== patSegs.length) return null
   const params: Record<string, string> = {}
   for (let i = 0; i < patSegs.length; i++) {
     const pat = patSegs[i]
+    if (pat === "*") {
+      // Tail catch-all: matches the remaining path segments
+      // (zero or more). The captured rest is exposed as `*`.
+      // Must be the LAST segment in the pattern; nothing after.
+      params["*"] = pathSegs.slice(i).map(decodeURIComponent).join("/")
+      return params
+    }
+    if (i >= pathSegs.length) return null
     const seg = pathSegs[i]
     if (pat.startsWith(":")) {
       params[pat.slice(1)] = decodeURIComponent(seg)
@@ -593,6 +600,7 @@ export function matchRoutePattern(
       return null
     }
   }
+  if (pathSegs.length !== patSegs.length) return null
   return params
 }
 

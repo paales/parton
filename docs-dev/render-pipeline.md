@@ -63,13 +63,29 @@ cache), so a body that adds a new tracked-accessor read mid-flight
 trips a `HoistingViolationError` on the very next render — not
 silently waits for a later streaming render to surface the
 regression. This requires authoring discipline: read every
-tracked accessor at the sync top of the body, before any branching
-or early return, the same rule React enforces for hooks.
+tracked accessor at the sync top of a `<Partial>` body, before any
+branching or early return, the same way React enforces hook order.
 
-The conditional-read-after-early-return idiom (e.g. reading
-`url:q` only when `?search=` is set) is misuse; the framework will
-throw on the second-and-later render. Hoist all reads to the top
-of the body and branch on values, not on whether to read.
+**Page handlers are wrapped in `<Partial selector="#page">`.** Page
+handlers wired through `pickRoute` are not themselves `<Partial>`
+bodies — they're function components rendered between sibling
+Partials. Their top-level tracked-accessor reads would otherwise
+attribute to the last-rendered sibling's manifest cell (typically a
+nav-link inside `<AppNav/>`). The wrap in `src/app/root.tsx` opens
+a manifestScope for the page handler's body to land its reads
+correctly. Any author writing a page handler with top-level reads
+relies on this wrap; reads must still be hoisted to the sync top of
+the handler's body, before any branching.
+
+**Memory at scale — known sharp edge.** Content storage is keyed
+by literal pathname. `/p/abc` and `/p/def` get separate entries.
+For high-cardinality routes (50k product pages) this scales
+linearly with traffic shape. The intended fix is pattern-keyed
+content storage (`/p/:slug` as the key, one entry per pattern) —
+this requires Partials to use `getPathname(pattern)` inside their
+bodies instead of closure-capturing route params, so snapshots
+collide intentionally on the pattern key. Master had the same
+issue; we haven't regressed.
 
 Per-request isolation lives in an ALS-bound context opened by
 `<PartialRoot>` with `pendingIdentity` and `pendingContent` buffers.

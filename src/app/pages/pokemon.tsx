@@ -156,6 +156,21 @@ function TypeBadge({ type, className }: { type: string; className?: string }) {
 const POKEMON_GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"
 
 export function PokemonPage() {
+  // Wrap in our own Partial so top-level tracked-accessor reads
+  // attribute to `#pokemon-page`'s manifestScope rather than
+  // drifting onto whichever sibling Partial last set the per-request
+  // manifest cell (typically a nav-link inside `<AppNav/>`). Page
+  // handlers wired through `pickRoute` aren't themselves `<Partial>`
+  // bodies, so without this wrap their reads land on a sibling's
+  // manifest and trip `HoistingViolationError` on the next nav.
+  return (
+    <Partial parent={ROOT} selector="#pokemon-page">
+      <PokemonPageBody />
+    </Partial>
+  )
+}
+
+function PokemonPageBody() {
   // `/pokemon/:id` extracted via the framework's tracked accessor.
   // Only consume the result if the id is numeric — the pattern matches
   // any non-slash segment, so `/pokemon/nav` would otherwise leak

@@ -44,6 +44,16 @@ function PageBlock({ page }: { page: number }) {
 }
 
 export function BarePage() {
+  // Wrap in own Partial — see `PokemonPage` for why page-level
+  // reads need a per-page manifestScope.
+  return (
+    <Partial parent={ROOT} selector="#bare-page">
+      <BarePageBody />
+    </Partial>
+  )
+}
+
+function BarePageBody() {
   const end = Math.max(1, Number(getSearchParam("end")) || 1)
 
   const pages = Array.from({ length: end }, (_, i) => {

@@ -38,7 +38,8 @@ function pickRoutedPage() {
     ["/redirect-demo", () => redirect("/cache-demo")],
     ["/magento", MagentoPage],
     ["/magento/*", MagentoPage],
-    ["/*", PokemonPage],
+    ["/pokemon/:id", PokemonPage],
+    ["/", PokemonPage],
   ])
 }
 
@@ -118,15 +119,43 @@ export function Root() {
                 refetches; non-editor inlines the function call so
                 synchronous `notFound()` / `redirect()` throws bubble
                 directly to Root's try/catch. */}
+            {/* Two layers of `<Partial>` wrapping for routing:
+                  - Outer `#page`: opens a manifestScope for the
+                    tracked-accessor reads in `pickRoute`'s
+                    phase-1 pattern probe. Every render reads every
+                    pattern, so this manifest is stable across
+                    navigations between pages — the resolved values
+                    differ, the keys don't.
+                  - Inner per-page Partial (declared by each page
+                    handler — `<PokemonPage/>` returns
+                    `<Partial selector="#pokemon-page">…</Partial>`):
+                    captures the page-specific tracked-accessor
+                    reads. Different pages → different Partial ids
+                    → independent manifests, so navigating between
+                    pages can't trip the hoisting check.
+                Tradeoff: synchronous `notFound()` / `redirect()`
+                throws from inside `<RouteSwitch/>` no longer bubble
+                to Root's try/catch — they propagate up through
+                React's render machinery instead. The framework-
+                control channel set by `notFound()` / `redirect()`
+                themselves is the surviving signal; the `<Redirect>`
+                client component fallback is wired off that. Keeping
+                the wrap consistent across both modes is the
+                priority; the redirect path needs a re-think to use
+                the control channel everywhere. */}
             {editorOn ? (
               <EditorShell>
                 <AppNav />
-                <RouteSwitch />
+                <Partial parent={ROOT} selector="#page">
+                  <RouteSwitch />
+                </Partial>
               </EditorShell>
             ) : (
               <>
                 <AppNav />
-                {pickRoutedPage()}
+                <Partial parent={ROOT} selector="#page">
+                  <RouteSwitch />
+                </Partial>
               </>
             )}
             <ChatOverlay />

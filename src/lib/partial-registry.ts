@@ -562,6 +562,13 @@ export function commitRequestRegistry(ctx: RequestRegistry): void {
   // next render — not silently waits for a later streaming render
   // to surface the regression.
   //
+  // Page-level reads must run inside a `<Partial>` body to attribute
+  // correctly. Page handlers wired through `pickRoute` are wrapped
+  // in `<Partial selector="#page">` (see `src/app/root.tsx`) so their
+  // top-level reads land on `#page`'s manifestScope rather than
+  // drifting onto the LAST sibling Partial that ran (typically a
+  // nav-link inside `<AppNav/>`).
+  //
   // The undefined fall-throughs handle fp-skip register paths
   // (`manifest: stored ?? undefined`): no body ran this render, so
   // there's no fresh manifest to commit; preserve whatever identity

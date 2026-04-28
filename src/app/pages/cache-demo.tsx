@@ -68,7 +68,17 @@ function Clock() {
   )
 }
 
-export async function CacheDemoPage() {
+export function CacheDemoPage() {
+  // Wrap in own Partial — see `PokemonPage` for why page-level
+  // reads need a per-page manifestScope.
+  return (
+    <Partial parent={ROOT} selector="#cache-demo-page">
+      <CacheDemoPageBody />
+    </Partial>
+  )
+}
+
+async function CacheDemoPageBody() {
   const flavor = getSearchParam("flavor") ?? "vanilla"
   const stats = await _cacheStats()
 
