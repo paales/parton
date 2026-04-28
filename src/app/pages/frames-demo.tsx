@@ -187,9 +187,17 @@ function CartCheckoutView() {
 }
 
 function CartFrameContent() {
-  if (getPathname("/cart/closed")) return <CartClosedView />
-  if (getPathname("/cart/open")) return <CartOpenView />
-  if (getPathname("/cart/checkout")) return <CartCheckoutView />
+  // Hoist every `getPathname` call to the sync top of the body —
+  // each `if` short-circuits and would otherwise leave the later
+  // patterns unread on URLs that match early. The body's dependency
+  // surface is the UNION of every accessor it could read across
+  // every URL state, so register all three unconditionally.
+  const closed = getPathname("/cart/closed")
+  const open = getPathname("/cart/open")
+  const checkout = getPathname("/cart/checkout")
+  if (closed) return <CartClosedView />
+  if (open) return <CartOpenView />
+  if (checkout) return <CartCheckoutView />
   return <div data-testid="cart-unknown">Unknown cart URL.</div>
 }
 
@@ -267,10 +275,15 @@ function MenuSettingsView() {
 }
 
 function MenuFrameContent() {
-  if (getPathname("/menu/closed")) return <MenuClosedView />
-  if (getPathname("/menu/about")) return <MenuAboutView />
-  if (getPathname("/menu/settings")) return <MenuSettingsView />
-  if (getPathname("/menu/slow")) return <MenuSlowView />
+  // Hoisted unconditionally — see CartFrameContent for the why.
+  const closed = getPathname("/menu/closed")
+  const about = getPathname("/menu/about")
+  const settings = getPathname("/menu/settings")
+  const slow = getPathname("/menu/slow")
+  if (closed) return <MenuClosedView />
+  if (about) return <MenuAboutView />
+  if (settings) return <MenuSettingsView />
+  if (slow) return <MenuSlowView />
   return <div data-testid="menu-unknown">Unknown menu URL.</div>
 }
 

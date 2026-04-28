@@ -250,9 +250,17 @@ export function PokemonPage() {
  */
 function SearchArea({ scope }: { scope: "page" | "frame" }) {
   const parent = capturePartialContext()
+  // Hoist BOTH tracked-accessor reads above any branching — same
+  // rule as React hooks. The dependency surface a Partial declares
+  // is the union of every accessor key its body could touch, not
+  // just the ones taken on this particular render. Conditionally
+  // calling `getSearchParam("q")` only when `isOpen` made the
+  // first-render-while-closed snapshot record only `url:search`,
+  // and the next render-while-open would trip the hoisting check
+  // by trying to add `url:q` mid-flight.
   const isOpen = getSearchParam("search") != null
-  if (!isOpen) return null
   const q = getSearchParam("q") ?? ""
+  if (!isOpen) return null
   return (
     <SearchDialog open>
       <SearchInput query={q} />

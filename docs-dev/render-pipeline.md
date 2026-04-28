@@ -56,11 +56,20 @@ Each layer has both `live` and `baseline` flavors:
   Read by `lookupPartial` / `getRouteSnapshots`.
 - `baseline` — snapshot of `live` taken AT the start of the last
   streaming render. Bodies see this as `manifestScope.stored`;
-  `getPreviousRouteSnapshots` returns it. Cache-mode commits do NOT
-  rotate the manifest baseline, mirroring master's permissive
-  behavior — `<SearchArea>`-style after-conditional reads (only
-  reading `url:q` when `?search=` is set) keep working without a
-  per-Partial audit.
+  `getPreviousRouteSnapshots` returns it.
+
+The manifest baseline rotates on EVERY commit (streaming and
+cache), so a body that adds a new tracked-accessor read mid-flight
+trips a `HoistingViolationError` on the very next render — not
+silently waits for a later streaming render to surface the
+regression. This requires authoring discipline: read every
+tracked accessor at the sync top of the body, before any branching
+or early return, the same rule React enforces for hooks.
+
+The conditional-read-after-early-return idiom (e.g. reading
+`url:q` only when `?search=` is set) is misuse; the framework will
+throw on the second-and-later render. Hoist all reads to the top
+of the body and branch on values, not on whether to read.
 
 Per-request isolation lives in an ALS-bound context opened by
 `<PartialRoot>` with `pendingIdentity` and `pendingContent` buffers.

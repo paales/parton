@@ -552,21 +552,26 @@ export function commitRequestRegistry(ctx: RequestRegistry): void {
   const cr = contentRoute(ctx.scope, ctx.route)
 
   // Apply identity writes — manifests frozen by value.
+  //
+  // Strict rotation: BOTH live and baseline catch up to the captured
+  // manifest on every commit (streaming or cache). Bodies on
+  // subsequent renders see the latest dependency surface as
+  // `manifestScope.stored`, so a body that adds a new tracked-
+  // accessor read mid-flight (the conditional-read-after-early-
+  // return idiom) trips a `HoistingViolationError` on the very
+  // next render — not silently waits for a later streaming render
+  // to surface the regression.
+  //
+  // The undefined fall-throughs handle fp-skip register paths
+  // (`manifest: stored ?? undefined`): no body ran this render, so
+  // there's no fresh manifest to commit; preserve whatever identity
+  // already had.
   for (const [id, write] of ctx.pendingIdentity) {
     if (ctx.invalidations.has(id)) continue
     const existing = store.identity.get(id)
     const frozenLive = freezeManifestSet(write.identity.liveManifest)
-    let nextBaseline = existing?.baselineManifest
-    if (ctx.mode === "streaming") {
-      // Rotate baseline := live for ids this streaming render
-      // produced. If this id wasn't seen in the baseline at request
-      // entry, we still seed baseline with the captured manifest so
-      // a follow-up cache-mode render sees a correct `stored`
-      // (rather than null, which would let new conditional reads
-      // accumulate without surfacing as hoisting violations until
-      // a much later streaming render rotates them in).
-      nextBaseline = frozenLive
-    }
+    const nextLive = frozenLive ?? existing?.liveManifest
+    const nextBaseline = frozenLive ?? existing?.baselineManifest
     store.identity.set(id, {
       uniqueTokens: write.identity.uniqueTokens,
       sharedTokens: write.identity.sharedTokens,
@@ -575,7 +580,7 @@ export function commitRequestRegistry(ctx: RequestRegistry): void {
       frameUrl: write.identity.frameUrl,
       parentPath: write.identity.parentPath,
       cmsId: write.identity.cmsId,
-      liveManifest: frozenLive,
+      liveManifest: nextLive,
       baselineManifest: nextBaseline,
     })
   }

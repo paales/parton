@@ -70,12 +70,16 @@ export function ChatOverlay() {
 
 function ChatOverlayBody() {
   const parent = capturePartialContext()
+  // Hoist BOTH tracked-accessor reads to the sync top of the body —
+  // same rule as React hooks. The dependency surface is the union
+  // of every key the body could touch, not just the ones the open
+  // branch happens to read.
   const chatParam = getSearchParam("chat")
+  const msgsParam = getSearchParam("msgs")
   const open = chatParam != null ? chatParam === "open" : false
 
   if (!open) return <ChatOpenPill />
 
-  const msgsParam = getSearchParam("msgs")
   const msgIds = parseMsgs(msgsParam)
   const nextHref = computeNextHref(msgIds)
 
