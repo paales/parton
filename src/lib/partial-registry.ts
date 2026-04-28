@@ -1,50 +1,66 @@
 /**
- * Route-scoped Partial snapshot registry.
+ * Partial snapshot registry — split into two layers along the
+ * **what's stable across routes vs. what isn't** seam.
  *
- * Two-layer model:
+ * ── Two-layer storage ─────────────────────────────────────────────
  *
- *   - **Canonical tree** (module-global, mutated only by atomic
- *     `commitRequestRegistry` calls). Source of truth for what
- *     Partials have ever rendered on a given route. Cache-mode
- *     refetches and the editor tree pane read from it.
- *   - **Per-request view** (ALS-isolated, opened by `<PartialRoot>`).
- *     Holds a frozen `previousView` snapshot of the canonical tree
- *     taken at request entry, plus a `pendingWrites` buffer for
- *     this render's registrations. On commit, pendingWrites merge
- *     into canonical based on the request's mode.
+ * Per-id **identity** (global, route-independent): everything that
+ * follows from a Partial's declaration in code — its selector tokens,
+ * cache options, frame path, parent chain, cmsId, tracked-accessor
+ * manifest. Stable per id by stance: two declarations of `#cart` with
+ * structurally different shapes is misuse, not a feature to support.
  *
- * Why per-request: with two concurrent requests on the same route,
- * mutating one shared map made "previous" reads observe in-flight
- * writes from the other request. The shared manifest sets aliased
- * across requests, which races against accessor mutations and
- * fingerprint compares against an empty (or wrong) stored manifest.
- * Per-request isolation gives each request a point-in-time view to
- * compare against, regardless of what other requests are doing.
+ * Per-(route, id) **content** (route-keyed): the JSX that captures the
+ * Partial's rendered children, with closures bound to that render's
+ * inputs. `<ProductHero sku="abc"/>` registered on `/p/abc` can't be
+ * replayed on `/p/def`, so this layer stays route-scoped.
  *
- * Two commit modes:
+ * The public `PartialSnapshot` type is the union — every caller still
+ * sees one fact-bag per id-on-route. Reads combine identity + content;
+ * writes decompose the snapshot into the two stores.
  *
- *   - **streaming** — pendingWrites *replace* canonical[route]. The
- *     full tree was just rendered; ids that didn't re-register are
- *     stale and should disappear. Subsumes the old `clearRoute`.
- *   - **cache** — pendingWrites *overlay* canonical[route]. Only some
- *     ids re-rendered (the explicitly-requested ones); preserve the
- *     rest.
+ * ── Why split ────────────────────────────────────────────────────
  *
- * Commit timing: `entry.rsc.tsx` wraps the response stream so the
- * commit fires when the stream is fully consumed (i.e. after every
- * `<PartialBoundary>` registration has fired). `runWithRequestAsync`
- * provides a fallback auto-commit for callers that finish synchronous
- * rendering without producing a stream (test fixtures).
+ * The client `_cache` is keyed by partial id alone (no route). Server-
+ * side a route-keyed registry meant the same Partial appearing on two
+ * routes had two separate manifest entries. First-render-on-route-B
+ * for an id whose body has URL deps would see `stored = null` (B's
+ * route bucket was empty) — and if the client's cached fp from route A
+ * happened to match B's structural-only fp, the fp-skip path
+ * registered an empty manifest and poisoned the next render with a
+ * bogus hoisting violation. Carrying identity globally eliminates the
+ * mismatch by construction.
+ *
+ * ── Per-request transactional view ───────────────────────────────
+ *
+ * Both layers expose a per-request ALS context with `pendingWrites`
+ * (ALS-isolated buffers) so concurrent requests on the same route
+ * can't observe each other's mid-render state. Commit at end of
+ * render atomically merges pendingWrites into the canonical layers.
+ *
+ *   - **streaming commit** — content for this route is replaced
+ *     wholesale; ids that didn't re-register on this route disappear
+ *     from `content[route].live`. Identity for those ids has its
+ *     manifest baseline rotated (live → baseline) so the next render
+ *     compares against a stable point-in-time view, not a moving
+ *     target. Identity for OTHER ids (not in this route) is untouched.
+ *   - **cache commit** — content overlays onto `content[route].live`,
+ *     identity entries get their `liveManifest` updated for any
+ *     newly-discovered keys. Manifest *baselines* are NOT rotated by
+ *     cache commits, mirroring master's permissive behavior so the
+ *     conditional-read-after-early-return idiom (e.g. `<SearchArea>`
+ *     reading `url:q` only when `?search=` is set) keeps working.
  *
  * ── Scoping ─────────────────────────────────────────────────────────
- * Keyed by `getScope()` — Playwright workers > 1 get isolated route
- * maps so snapshots registered by worker A don't resolve for worker
- * B. Production uses the default scope for every request.
+ * Keyed by `getScope()` — Playwright workers > 1 get isolated maps so
+ * snapshots registered by worker A don't resolve for worker B.
  */
 import { AsyncLocalStorage } from "node:async_hooks"
 import type { ReactNode } from "react"
 import { _deferRegistryCommit, _setRegistryCommit, getScope } from "../framework/context.ts"
 import type { CacheOptions } from "./cache-options.ts"
+
+// ─── Public snapshot shape (caller-facing) ─────────────────────────
 
 export interface PartialSnapshot {
   /** Content JSX as it appeared inside `<Partial>` at capture time. */
@@ -70,107 +86,180 @@ export interface PartialSnapshot {
    *  frames thus resolve to distinct paths (`"products.list"` vs
    *  `"blog.list"`), which the session store, navigation state, and
    *  `?__frame=` wire param all key off. Empty array means the
-   *  Partial doesn't open a frame. */
+   *  Partial doesn't open a frame.
+   *
+   *  Per-id identity. Same id appearing on multiple routes must have
+   *  the same frame path (otherwise it's a structural misuse). */
   framePath: readonly string[]
   /** The author-provided `frameUrl` fallback. Session overrides it
    *  when present; kept here as the cold-session default. */
   frameUrl?: string
   /** Outer-first chain of ancestor partial ids, captured from the
-   *  Partial's `parent` prop. `[]` for top-level Partials. Lets
-   *  server-side logic reason about the full hierarchy (nested
-   *  frames, selector scoping, invalidation cascades) without the
-   *  client-side tree reconstruction that was necessary while the
-   *  hierarchy could only be inferred post-render. */
+   *  Partial's `parent` prop. `[]` for top-level Partials. Per-id
+   *  identity — same Partial declared in different ancestor chains
+   *  on different routes is misuse. */
   parentPath: readonly string[]
   /** Stable storage key for CMS-authored content, from the Partial's
-   *  `cmsId` prop. Preserved in the snapshot so cache-mode refetches
-   *  re-open the same CMS scope when rendering from this snapshot.
-   *  Absent on Partials that aren't CMS-aware. */
+   *  `cmsId` prop. Per-id identity. */
   cmsId?: string
-  /** Auto-collected manifest of tracked-accessor reads the Partial's
-   *  body + descendants performed during the previous render. Each
-   *  entry is `"<kind>:<name>"` (e.g. `"url:config"`, `"cookie:user"`,
-   *  `"pathname:/p/:slug"`). Resolved against the current request
-   *  on the NEXT render and folded into the structural fingerprint —
-   *  same shape `<Cache>` uses for its key, lifted up so non-cached
-   *  Partials get the same auto-invalidation contract.
-   *
-   *  In `pendingWrites` (the request-scoped buffer) the field may
-   *  alias the rendering Partial's live `manifestScope.current` Set
-   *  — that's safe because pendingWrites is only ever read by the
-   *  request that wrote it, and only AFTER the registering body's
-   *  descendants have completed. At commit time, manifests are
-   *  copied by value into canonical so other requests' subsequent
-   *  `previousView` snapshots see immutable Sets. */
+  /** Tracked-accessor read pattern. The body's reads are determined
+   *  by the component function — same on every route — so this is
+   *  per-id identity, not per-(route, id). For the snapshot returned
+   *  by `getPreviousRouteSnapshots`, this is the BASELINE manifest
+   *  (rotated only at streaming-mode commits) — what a body sees as
+   *  `manifestScope.stored`. For `lookupPartial` / `getRouteSnapshots`
+   *  this is the LIVE manifest (updated on every commit). */
   manifest?: ReadonlySet<string>
 }
 
-type RouteMap = Map<string, PartialSnapshot>
+// ─── Internal storage shapes ──────────────────────────────────────
 
-// ─── Canonical tree (module-global) ────────────────────────────────────
-//
-// CATEGORY C (docs-dev/server-isolation.md). Outer key is the per-request
-// `scope`. Two parallel inner maps:
-//
-//   - `live`: state including this scope/route's most recent commit
-//     (streaming or cache). What `lookupPartial` /
-//     `getRouteSnapshots` resolve through. Cache-mode commits overlay
-//     here without disturbing the baseline.
-//   - `baseline`: snapshot of `live` taken AT a streaming commit,
-//     before the new streaming render replaces it. What request
-//     bodies see as `manifestScope.stored` and what
-//     `getPreviousRouteSnapshots` returns.
-//
-// Why two: cache-mode bodies' hoisting check needs to compare against
-// a manifest that "doesn't move" mid-flight as concurrent cache
-// renders accumulate keys. Master's `previousScopes` (only updated by
-// streaming-render `clearRoute`) had this property by accident; we
-// preserve it deliberately so a Partial whose `<SearchArea>`-style
-// dependency-after-conditional pattern stayed accidentally-correct
-// on master keeps working on the per-request-isolated registry.
-//
-// The strictness improvement (cache-mode also enforces the full
-// manifest discovered by prior cache renders) is left for a follow-
-// up — turning it on requires auditing every `<Partial>` body for
-// the conditional-read-after-early-return idiom.
-//
-// Mutated ONLY by `commitRequestRegistry` — every other path either
-// reads via the per-request view or registers into pendingWrites.
-interface RouteState {
-  live: RouteMap
-  baseline: RouteMap
-}
-const canonical = new Map<string, Map<string, RouteState>>()
-
-const EMPTY_VIEW: ReadonlyMap<string, PartialSnapshot> = new Map()
-
-function canonicalRouteState(scope: string, route: string): RouteState {
-  let routes = canonical.get(scope)
-  if (!routes) {
-    routes = new Map()
-    canonical.set(scope, routes)
-  }
-  let state = routes.get(route)
-  if (!state) {
-    state = { live: new Map(), baseline: new Map() }
-    routes.set(route, state)
-  }
-  return state
+/** Per-(route, id) facts. Closure-bearing JSX that can't be replayed
+ *  across routes. */
+interface PartialContent {
+  content: ReactNode
+  fallback: ReactNode
+  errorWith: ReactNode | undefined
 }
 
-function snapshotBaseline(scope: string, route: string): ReadonlyMap<string, PartialSnapshot> {
-  const state = canonical.get(scope)?.get(route)
-  if (!state || state.baseline.size === 0) return EMPTY_VIEW
-  // Shallow-copy so subsequent commits (concurrent requests) don't
-  // disturb this view. Snapshot manifests are immutable post-commit
-  // via `freezeManifest`, so reference-sharing the inner snapshots
-  // is safe.
-  return new Map(state.baseline)
+/** Per-id facts. Stable across routes (by the
+ *  "two-declarations-with-different-shapes-is-misuse" stance). */
+interface PartialIdentity {
+  uniqueTokens: string[]
+  sharedTokens: string[]
+  cache?: CacheOptions
+  framePath: readonly string[]
+  frameUrl?: string
+  parentPath: readonly string[]
+  cmsId?: string
+  /** Latest captured tracked-accessor read pattern. Updated on every
+   *  commit (streaming or cache). Frozen-by-value to avoid aliasing
+   *  any request's still-mutating manifestScope. */
+  liveManifest?: ReadonlySet<string>
+  /** Snapshot of `liveManifest` rotated at streaming-mode commits.
+   *  What `getPreviousRouteSnapshots` returns as `snap.manifest`, and
+   *  what bodies see as `manifestScope.stored`. Cache-mode commits
+   *  do NOT rotate this — preserves master's permissive behavior so
+   *  conditional-read-after-early-return Partials don't throw
+   *  retroactively. */
+  baselineManifest?: ReadonlySet<string>
+}
+
+interface ContentRoute {
+  /** Latest content for ids on this route. Streaming commits replace
+   *  wholesale; cache commits overlay. */
+  live: Map<string, PartialContent>
+  /** Snapshot of `live` taken AT a streaming entry, before this
+   *  render's pendingWrites are applied. Read by
+   *  `getPreviousRouteSnapshots` to reconstitute baseline-era
+   *  PartialSnapshots for descendant-fold + body's `previousSnap`
+   *  lookup. */
+  baseline: Map<string, PartialContent>
+}
+
+interface ScopeStore {
+  identity: Map<string, PartialIdentity>
+  content: Map<string, ContentRoute>
+}
+
+// ─── Module-global canonical state ────────────────────────────────
+
+const canonical = new Map<string, ScopeStore>()
+
+function scopeStore(scope: string): ScopeStore {
+  let store = canonical.get(scope)
+  if (!store) {
+    store = { identity: new Map(), content: new Map() }
+    canonical.set(scope, store)
+  }
+  return store
+}
+
+function contentRoute(scope: string, route: string): ContentRoute {
+  const store = scopeStore(scope)
+  let cr = store.content.get(route)
+  if (!cr) {
+    cr = { live: new Map(), baseline: new Map() }
+    store.content.set(route, cr)
+  }
+  return cr
+}
+
+// ─── Decompose / combine ──────────────────────────────────────────
+
+function decomposeSnapshot(snap: PartialSnapshot): {
+  identity: PartialIdentity
+  content: PartialContent
+} {
+  return {
+    identity: {
+      uniqueTokens: snap.uniqueTokens,
+      sharedTokens: snap.sharedTokens,
+      cache: snap.cache,
+      framePath: snap.framePath,
+      frameUrl: snap.frameUrl,
+      parentPath: snap.parentPath,
+      cmsId: snap.cmsId,
+      liveManifest: snap.manifest,
+    },
+    content: {
+      content: snap.content,
+      fallback: snap.fallback,
+      errorWith: snap.errorWith,
+    },
+  }
+}
+
+function combineLive(identity: PartialIdentity, content: PartialContent): PartialSnapshot {
+  return {
+    content: content.content,
+    fallback: content.fallback,
+    errorWith: content.errorWith,
+    uniqueTokens: identity.uniqueTokens,
+    sharedTokens: identity.sharedTokens,
+    cache: identity.cache,
+    framePath: identity.framePath,
+    frameUrl: identity.frameUrl,
+    parentPath: identity.parentPath,
+    cmsId: identity.cmsId,
+    manifest: identity.liveManifest,
+  }
+}
+
+function combineBaseline(identity: PartialIdentity, content: PartialContent): PartialSnapshot {
+  return {
+    content: content.content,
+    fallback: content.fallback,
+    errorWith: content.errorWith,
+    uniqueTokens: identity.uniqueTokens,
+    sharedTokens: identity.sharedTokens,
+    cache: identity.cache,
+    framePath: identity.framePath,
+    frameUrl: identity.frameUrl,
+    parentPath: identity.parentPath,
+    cmsId: identity.cmsId,
+    manifest: identity.baselineManifest,
+  }
+}
+
+function freezeManifestSet(m: ReadonlySet<string> | undefined): ReadonlySet<string> | undefined {
+  if (m === undefined) return undefined
+  return new Set(m)
 }
 
 // ─── Per-request registry context (ALS) ─────────────────────────────────
 
 export type RegistryMode = "streaming" | "cache"
+
+interface RequestIdentityWrite {
+  identity: PartialIdentity
+  /** True iff this id had no liveManifest in the canonical baseline
+   *  view at request entry — drives the streaming-commit decision
+   *  about whether to seed `baselineManifest` for this id (so the
+   *  next render's `stored` reflects this render's discovery rather
+   *  than a stale empty value). */
+  baselineSeen: boolean
+}
 
 export interface RequestRegistry {
   scope: string
@@ -179,66 +268,85 @@ export interface RequestRegistry {
   route: string
   /** Streaming or cache mode. Decides commit semantics. */
   mode: RegistryMode
-  /** Frozen view of `canonical[scope][route]` at context entry.
-   *  Reads are stable for the duration of this request even if other
-   *  requests commit in the meantime. */
-  previousView: ReadonlyMap<string, PartialSnapshot>
-  /** Snapshots written during this render. Each may alias a live
-   *  `manifestScope.current` Set; the commit step copies them by
-   *  value before transferring to canonical. */
-  pendingWrites: Map<string, PartialSnapshot>
-  /** Ids that this request invalidated (typically via the manifest
-   *  scope's `onViolation` self-recovery hook). Excluded from
-   *  canonical at commit. */
+  /** Frozen view of identity (id → baseline-era PartialIdentity) at
+   *  context entry. Reads stay stable for the duration of this
+   *  request. */
+  identityPreview: ReadonlyMap<string, PartialIdentity>
+  /** Frozen view of content[route].baseline at context entry. */
+  contentPreview: ReadonlyMap<string, PartialContent>
+  /** Identity writes accumulated during this render, keyed by id. */
+  pendingIdentity: Map<string, RequestIdentityWrite>
+  /** Content writes accumulated during this render, keyed by id. */
+  pendingContent: Map<string, PartialContent>
+  /** Ids invalidated by the manifest-scope `onViolation` self-recovery
+   *  hook. Excluded from canonical at commit. */
   invalidations: Set<string>
-  /** Set true once `commitRequestRegistry` has run. Subsequent calls
-   *  no-op. */
   committed: boolean
-  /** Set by callers (entry.rsc.tsx's stream wrapper) that take
-   *  ownership of when to commit — `runWithRequestAsync`'s fallback
-   *  auto-commit honors this flag and stays out of the way. */
   deferred: boolean
 }
 
 const registryAls = new AsyncLocalStorage<RequestRegistry>()
 
+const EMPTY_IDENTITY_VIEW: ReadonlyMap<string, PartialIdentity> = new Map()
+const EMPTY_CONTENT_VIEW: ReadonlyMap<string, PartialContent> = new Map()
+
+function snapshotIdentityPreview(scope: string): ReadonlyMap<string, PartialIdentity> {
+  const store = canonical.get(scope)
+  if (!store || store.identity.size === 0) return EMPTY_IDENTITY_VIEW
+  // Return a baseline-flavored identity map: each entry has
+  // `liveManifest` set to its `baselineManifest` so combineLive +
+  // combineBaseline both produce the baseline-era view that
+  // master's `previousScopes` returned. Other identity fields are
+  // route-stable; copy as-is.
+  const out = new Map<string, PartialIdentity>()
+  for (const [id, ident] of store.identity) {
+    out.set(id, {
+      ...ident,
+      // Both flavors collapse to baseline for the preview.
+      liveManifest: ident.baselineManifest,
+    })
+  }
+  return out
+}
+
+function snapshotContentPreview(scope: string, route: string): ReadonlyMap<string, PartialContent> {
+  const cr = canonical.get(scope)?.content.get(route)
+  if (!cr || cr.baseline.size === 0) return EMPTY_CONTENT_VIEW
+  return new Map(cr.baseline)
+}
+
 /**
  * Open a request-scoped registry context bound to `route` in `mode`.
  * Called by `<PartialRoot>` once it has resolved the request.
  *
- * Uses `enterWith` (not `run`) so React's rendering of the returned
- * tree — happening in the caller's continuation, outside any single
- * `run`'s scope — inherits the context.
- *
- * Returns the context object so the caller can pass it to
- * `commitRequestRegistry` later (e.g. from a stream-flush hook).
+ * Streaming entries rotate the per-route `content.baseline := live`
+ * so this render's `previousView` captures whatever's been registered
+ * since the last streaming render of this route. Cache entries skip
+ * that rotation; their bodies see the older streaming-baseline.
  */
 export function enterRequestRegistry(route: string, mode: RegistryMode): RequestRegistry {
   const scope = getScope()
   if (mode === "streaming") {
-    // Rotate baseline := snapshot of current live AT this entry —
-    // the equivalent of master's `clearRoute(route)` moving current
-    // into previous before a new streaming render begins. Cache-mode
-    // entries skip this; their bodies should still see the older
-    // streaming baseline (the one that survived the conditional-
-    // read-after-early-return idiom on master).
-    const state = canonicalRouteState(scope, route)
-    state.baseline = new Map(state.live)
+    // Snapshot live → baseline for this route's content. Per-id
+    // identity baselines are rotated lazily at streaming COMMIT (so
+    // we're only rotating ids that this streaming render is
+    // responsible for, not every id seen in the previous canonical).
+    const cr = contentRoute(scope, route)
+    cr.baseline = new Map(cr.live)
   }
   const ctx: RequestRegistry = {
     scope,
     route,
     mode,
-    previousView: snapshotBaseline(scope, route),
-    pendingWrites: new Map(),
+    identityPreview: snapshotIdentityPreview(scope),
+    contentPreview: snapshotContentPreview(scope, route),
+    pendingIdentity: new Map(),
+    pendingContent: new Map(),
     invalidations: new Set(),
     committed: false,
     deferred: false,
   }
   registryAls.enterWith(ctx)
-  // Register the commit callback on the request store so
-  // `runWithRequestAsync` fires it on exit. Stream-based callers
-  // call `deferRequestRegistryCommit()` to take ownership.
   _setRegistryCommit(() => commitRequestRegistry(ctx))
   return ctx
 }
@@ -262,177 +370,237 @@ export function deferRequestRegistryCommit(): void {
 }
 
 // ─── Public registry API ────────────────────────────────────────────────
-//
-// All operations check the ALS context first and fall back to direct
-// canonical access. The fallback exists for code paths that run outside
-// a request context (test fixtures that registerPartial directly,
-// module-init code, HMR hooks).
-
-function freezeManifest(snap: PartialSnapshot): PartialSnapshot {
-  if (snap.manifest === undefined) return snap
-  return { ...snap, manifest: new Set(snap.manifest) }
-}
 
 export function registerPartial(route: string, id: string, snapshot: PartialSnapshot): void {
   const ctx = registryAls.getStore()
   if (ctx && ctx.route === route) {
     ctx.invalidations.delete(id)
-    // Store the snapshot AS-IS in pendingWrites (manifest may alias
-    // the body's still-mutating manifestScope.current). Per-request
-    // isolation makes the alias safe here; commit copies by value.
-    ctx.pendingWrites.set(id, snapshot)
+    const { identity, content } = decomposeSnapshot(snapshot)
+    // Was this id known in the streaming baseline at request entry?
+    // Drives whether streaming commit should seed `baselineManifest`
+    // (first-time-seen ids) or only update `liveManifest` (already
+    // had a baseline from a prior streaming render).
+    const baselineSeen = ctx.identityPreview.has(id)
+    ctx.pendingIdentity.set(id, { identity, baselineSeen })
+    ctx.pendingContent.set(id, content)
     return
   }
   // Outside a request context (or wrong route): write directly to
-  // canonical with a frozen manifest. Test fixtures hit this path.
+  // canonical with frozen manifests. Test fixtures hit this path.
   const scope = ctx?.scope ?? getScope()
-  canonicalRouteState(scope, route).live.set(id, freezeManifest(snapshot))
+  const { identity, content } = decomposeSnapshot(snapshot)
+  const store = scopeStore(scope)
+  const existing = store.identity.get(id)
+  store.identity.set(id, {
+    ...identity,
+    liveManifest: freezeManifestSet(identity.liveManifest),
+    // Direct writes (no streaming context) seed both layers
+    // identically — there's nothing to roll back.
+    baselineManifest:
+      identity.liveManifest !== undefined
+        ? freezeManifestSet(identity.liveManifest)
+        : existing?.baselineManifest,
+  })
+  contentRoute(scope, route).live.set(id, content)
 }
 
 export function lookupPartial(route: string, id: string): PartialSnapshot | undefined {
   const ctx = registryAls.getStore()
   if (ctx && ctx.route === route) {
     if (ctx.invalidations.has(id)) return undefined
-    // In-request: pendingWrites overrides everything; otherwise fall
-    // through to the canonical live map (which holds prior streaming
-    // + cache-mode overlays this request might want to see). Note
-    // this is DIFFERENT from `previousView` — `previousView` is the
-    // older streaming-baseline; `live` is everything-so-far including
-    // the latest cache overlays.
-    if (ctx.pendingWrites.has(id)) return ctx.pendingWrites.get(id)
-    const live = canonical.get(ctx.scope)?.get(route)?.live
-    return live?.get(id)
+    const pendingIdent = ctx.pendingIdentity.get(id)?.identity
+    const pendingCont = ctx.pendingContent.get(id)
+    const liveContent = pendingCont ?? canonical.get(ctx.scope)?.content.get(route)?.live.get(id)
+    if (!liveContent) return undefined
+    const liveIdent = pendingIdent ?? canonical.get(ctx.scope)?.identity.get(id)
+    if (!liveIdent) return undefined
+    return combineLive(liveIdent, liveContent)
   }
   const scope = ctx?.scope ?? getScope()
-  return canonical.get(scope)?.get(route)?.live.get(id)
+  const store = canonical.get(scope)
+  const cont = store?.content.get(route)?.live.get(id)
+  if (!cont) return undefined
+  const ident = store?.identity.get(id)
+  if (!ident) return undefined
+  return combineLive(ident, cont)
 }
 
 /**
- * Union view of pending + previous snapshots for the given route.
- * Used by selector resolution and the editor tree pane to enumerate
- * "what Partials live on this page."
- *
- * pendingWrites override previousView on key collision; entries in
- * `invalidations` are excluded.
- *
- * Returns `undefined` when the union is empty (preserves callers
- * that distinguish "no entries yet" from "empty Map").
+ * Live view: every id with content registered on this route, combined
+ * with that id's current identity. Used by selector resolution and
+ * the editor tree pane.
  */
 export function getRouteSnapshots(route: string): Map<string, PartialSnapshot> | undefined {
   const ctx = registryAls.getStore()
   if (ctx && ctx.route === route) {
-    // Live view = canonical.live + this request's pendingWrites,
-    // minus invalidations. Mirrors master's `getRouteSnapshots`
-    // which read the single shared current map (current = prior
-    // streaming + cache overlays).
-    const live = canonical.get(ctx.scope)?.get(route)?.live
-    if ((!live || live.size === 0) && ctx.pendingWrites.size === 0) return undefined
-    const merged: Map<string, PartialSnapshot> = live ? new Map(live) : new Map()
+    const liveContentMap = canonical.get(ctx.scope)?.content.get(route)?.live
+    const haveLive = liveContentMap && liveContentMap.size > 0
+    if (!haveLive && ctx.pendingContent.size === 0) return undefined
+    const merged = new Map<string, PartialContent>()
+    if (liveContentMap) {
+      for (const [id, content] of liveContentMap) merged.set(id, content)
+    }
     for (const id of ctx.invalidations) merged.delete(id)
-    for (const [id, snap] of ctx.pendingWrites) merged.set(id, snap)
-    return merged.size > 0 ? merged : undefined
+    for (const [id, content] of ctx.pendingContent) merged.set(id, content)
+    if (merged.size === 0) return undefined
+    const result = new Map<string, PartialSnapshot>()
+    const liveIdentMap = canonical.get(ctx.scope)?.identity
+    for (const [id, content] of merged) {
+      const ident = ctx.pendingIdentity.get(id)?.identity ?? liveIdentMap?.get(id)
+      if (!ident) continue
+      result.set(id, combineLive(ident, content))
+    }
+    return result.size > 0 ? result : undefined
   }
   const scope = ctx?.scope ?? getScope()
-  const live = canonical.get(scope)?.get(route)?.live
-  if (!live || live.size === 0) return undefined
-  return new Map(live)
+  const store = canonical.get(scope)
+  const liveContentMap = store?.content.get(route)?.live
+  if (!liveContentMap || liveContentMap.size === 0) return undefined
+  const result = new Map<string, PartialSnapshot>()
+  for (const [id, content] of liveContentMap) {
+    const ident = store?.identity.get(id)
+    if (!ident) continue
+    result.set(id, combineLive(ident, content))
+  }
+  return result.size > 0 ? result : undefined
 }
 
 /**
- * Snapshots from before this request's render started — the
- * structural-fingerprint pass folds these in to capture descendant
- * URL/cookie deps inside an ancestor's fp.
- *
- * Inside a request context: returns the frozen `previousView`.
- * Outside: returns the canonical state (no in-flight render to
- * distinguish a "previous" from a "current").
- *
- * Over-folding bias: a descendant that USED to live under an
- * ancestor but no longer does still contributes to the ancestor's fp
- * until the next streaming-mode commit replaces canonical. Extra
- * re-renders, never stale subtrees.
+ * Baseline view: snapshots as they were at the start of this
+ * render (streaming) or the last streaming render (cache). Bodies
+ * read this for `manifestScope.stored`; the descendant-manifest
+ * fold reads it to capture transitive URL deps.
  */
 export function getPreviousRouteSnapshots(route: string): Map<string, PartialSnapshot> | undefined {
   const ctx = registryAls.getStore()
   if (ctx && ctx.route === route) {
-    if (ctx.previousView.size === 0) return undefined
-    return new Map(ctx.previousView)
+    if (ctx.contentPreview.size === 0) return undefined
+    const result = new Map<string, PartialSnapshot>()
+    for (const [id, content] of ctx.contentPreview) {
+      const ident = ctx.identityPreview.get(id)
+      if (!ident) continue
+      // identityPreview already collapses liveManifest →
+      // baselineManifest, so combineLive returns the baseline view.
+      result.set(id, combineLive(ident, content))
+    }
+    return result.size > 0 ? result : undefined
   }
   const scope = ctx?.scope ?? getScope()
-  const baseline = canonical.get(scope)?.get(route)?.baseline
-  if (!baseline || baseline.size === 0) return undefined
-  return new Map(baseline)
+  const store = canonical.get(scope)
+  const cr = store?.content.get(route)
+  if (!cr || cr.baseline.size === 0) return undefined
+  const result = new Map<string, PartialSnapshot>()
+  for (const [id, content] of cr.baseline) {
+    const ident = store?.identity.get(id)
+    if (!ident) continue
+    result.set(id, combineBaseline(ident, content))
+  }
+  return result.size > 0 ? result : undefined
 }
 
 /**
- * Drop one Partial's snapshot from this request's view. Called by
- * the manifest-scope `onViolation` hook when `recordAccess` throws —
- * without it, the bad manifest captured before the throw would
- * persist as the "stored" set on every subsequent render and the
- * same comparison would loop.
- *
- * Inside a request context: removes from pendingWrites AND records
- * an invalidation so commit excludes the id from canonical.
- *
- * Outside a request context (test cleanup): drops directly from
- * canonical.
+ * Drop a Partial's snapshot from this request's view. Called by the
+ * manifest-scope `onViolation` hook when `recordAccess` throws — the
+ * bad manifest captured before the throw must not survive into the
+ * next render's `stored` baseline. Inside a request context: removes
+ * from pendingWrites and records an invalidation. Outside: drops
+ * from canonical directly.
  */
 export function invalidateSnapshot(route: string, partialId: string): void {
   const ctx = registryAls.getStore()
   if (ctx && ctx.route === route) {
-    ctx.pendingWrites.delete(partialId)
+    ctx.pendingIdentity.delete(partialId)
+    ctx.pendingContent.delete(partialId)
     ctx.invalidations.add(partialId)
     return
   }
   const scope = ctx?.scope ?? getScope()
-  const state = canonical.get(scope)?.get(route)
-  if (state) {
-    state.live.delete(partialId)
-    state.baseline.delete(partialId)
+  const store = canonical.get(scope)
+  if (!store) return
+  store.identity.delete(partialId)
+  for (const cr of store.content.values()) {
+    cr.live.delete(partialId)
+    cr.baseline.delete(partialId)
   }
 }
 
 /**
  * Atomically merge this request's pendingWrites into the canonical
- * tree. Idempotent.
+ * stores. Idempotent.
  *
- *   - **streaming mode**: canonical[route] is *replaced* by
- *     pendingWrites. Snapshots that didn't re-register are dropped.
- *     Subsumes the old `clearRoute(route)`-then-write pattern.
- *   - **cache mode**: pendingWrites *overlay* canonical[route]. Ids
- *     that didn't re-render keep their prior snapshots intact.
+ * Streaming commit (this render produced the full tree for `route`):
+ *   - content[route].live ← pendingContent (replace; ids that didn't
+ *     re-register on this route are dropped).
+ *   - identity[id].liveManifest ← pendingIdentity[id].liveManifest
+ *     (frozen-by-value).
+ *   - identity[id].baselineManifest ← pendingIdentity[id].liveManifest
+ *     (rotation: each rendered id's baseline catches up to live, so
+ *     the next render's `stored` reflects what this render saw).
  *
- * Manifests are copied by value during the merge so canonical's
- * snapshots don't alias any request's still-live `manifestScope`.
+ * Cache commit (only some ids re-rendered):
+ *   - content[route].live overlaid with pendingContent.
+ *   - identity[id].liveManifest updated.
+ *   - identity[id].baselineManifest UNTOUCHED — preserves master's
+ *     permissive behavior so conditional-read-after-early-return
+ *     bodies don't throw retroactively.
  */
 export function commitRequestRegistry(ctx: RequestRegistry): void {
   if (ctx.committed) return
   ctx.committed = true
 
-  const state = canonicalRouteState(ctx.scope, ctx.route)
+  const store = scopeStore(ctx.scope)
+  const cr = contentRoute(ctx.scope, ctx.route)
 
-  if (ctx.mode === "streaming") {
-    // baseline was already rotated at `enterRequestRegistry`. Replace
-    // live wholesale with this render's pendingWrites — ids that
-    // didn't re-register are stale and should disappear.
-    state.live = new Map()
-    for (const [id, snap] of ctx.pendingWrites) {
-      if (ctx.invalidations.has(id)) continue
-      state.live.set(id, freezeManifest(snap))
+  // Apply identity writes — manifests frozen by value.
+  for (const [id, write] of ctx.pendingIdentity) {
+    if (ctx.invalidations.has(id)) continue
+    const existing = store.identity.get(id)
+    const frozenLive = freezeManifestSet(write.identity.liveManifest)
+    let nextBaseline = existing?.baselineManifest
+    if (ctx.mode === "streaming") {
+      // Rotate baseline := live for ids this streaming render
+      // produced. If this id wasn't seen in the baseline at request
+      // entry, we still seed baseline with the captured manifest so
+      // a follow-up cache-mode render sees a correct `stored`
+      // (rather than null, which would let new conditional reads
+      // accumulate without surfacing as hoisting violations until
+      // a much later streaming render rotates them in).
+      nextBaseline = frozenLive
     }
-    return
+    store.identity.set(id, {
+      uniqueTokens: write.identity.uniqueTokens,
+      sharedTokens: write.identity.sharedTokens,
+      cache: write.identity.cache,
+      framePath: write.identity.framePath,
+      frameUrl: write.identity.frameUrl,
+      parentPath: write.identity.parentPath,
+      cmsId: write.identity.cmsId,
+      liveManifest: frozenLive,
+      baselineManifest: nextBaseline,
+    })
   }
 
-  // Cache mode: overlay onto live; baseline untouched. Cache-mode
-  // bodies on subsequent requests still see the older streaming
-  // baseline as `manifestScope.stored` — which is what master did,
-  // and what keeps the conditional-read-after-early-return idiom
-  // (e.g. `<SearchArea>`) working. The strictness improvement
-  // (cache-mode also enforces the latest manifest) is left for a
-  // follow-up.
-  for (const id of ctx.invalidations) state.live.delete(id)
-  for (const [id, snap] of ctx.pendingWrites) {
-    state.live.set(id, freezeManifest(snap))
+  // Apply content writes for this route.
+  if (ctx.mode === "streaming") {
+    cr.live = new Map()
+    for (const [id, content] of ctx.pendingContent) {
+      if (ctx.invalidations.has(id)) continue
+      cr.live.set(id, content)
+    }
+  } else {
+    for (const id of ctx.invalidations) cr.live.delete(id)
+    for (const [id, content] of ctx.pendingContent) {
+      cr.live.set(id, content)
+    }
+  }
+
+  // Identity-only invalidations (no pending write but in invalidations
+  // set) — drop the identity entry too. Rare path; surfaces when a
+  // body throws a HoistingViolationError before re-registering.
+  for (const id of ctx.invalidations) {
+    if (!ctx.pendingIdentity.has(id)) {
+      store.identity.delete(id)
+    }
   }
 }
 
@@ -440,10 +608,6 @@ export function commitRequestRegistry(ctx: RequestRegistry): void {
  * Clear registry entries. No argument (or `"all"`): every scope is
  * wiped — used by HMR dispose hooks. Pass a scope to target a single
  * worker's entries.
- *
- * Doesn't touch any active per-request registry contexts: those
- * stay valid for their owning render. New contexts opened after
- * the clear simply see an empty `previousView`.
  */
 export function clearRegistry(scope?: string | "all"): void {
   if (scope === undefined || scope === "all") {
@@ -460,14 +624,14 @@ export function _registryStats(): {
 } {
   const byRoute: Record<string, string[]> = {}
   let partials = 0
-  const m = canonical.get(getScope())
-  if (m) {
-    for (const [route, state] of m) {
-      byRoute[route] = [...state.live.keys()]
-      partials += state.live.size
+  const store = canonical.get(getScope())
+  if (store) {
+    for (const [route, cr] of store.content) {
+      byRoute[route] = [...cr.live.keys()]
+      partials += cr.live.size
     }
   }
-  return { routes: m?.size ?? 0, partials, byRoute }
+  return { routes: store?.content.size ?? 0, partials, byRoute }
 }
 
 // HMR: snapshotted React elements reference component functions whose

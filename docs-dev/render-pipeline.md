@@ -34,43 +34,51 @@ those that happen during lazy stream consumption).
 
 ## Registry isolation
 
-The route-scoped Partial snapshot store is split into two layers
-(`partial-registry.ts`):
+The Partial snapshot store splits along the **what's stable across
+routes vs. what isn't** seam (`partial-registry.ts`):
 
-- **Canonical** (module-global, mutated only by atomic commits):
-  - `live` — current state, including all committed cache overlays.
-    `lookupPartial` / `getRouteSnapshots` / cache-mode reads resolve
-    through here.
-  - `baseline` — snapshot of `live` taken AT the start of the last
-    streaming render. Both modes' bodies see this as
-    `manifestScope.stored` and `getPreviousRouteSnapshots`.
-- **Per-request context** (ALS-bound, opened by `<PartialRoot>`):
-  - `previousView` — frozen copy of `baseline` at request entry.
-    Reads stay stable for the duration of this request.
-  - `pendingWrites` — registrations buffered in this render. Cache-
-    mode commits overlay onto `live`; streaming-mode commits replace
-    `live` wholesale.
-  - `invalidations` — ids dropped via the `<Partial>` body's
-    manifest-scope `onViolation` hook. Excluded from `live` on
-    commit.
+- **Per-id identity** (`Map<scope, Map<id, PartialIdentity>>`,
+  global / route-independent): selector tokens, cache options, frame
+  path, parent chain, cmsId, tracked-accessor manifest. Stable per id
+  by stance — two declarations of `#cart` with structurally different
+  shapes is misuse, not a feature to support. The client `_cache` is
+  keyed by partial id alone (no route); identity-keyed server storage
+  matches that view.
+- **Per-(route, id) content** (`Map<scope, Map<route, ContentRoute>>`):
+  the JSX that captures the Partial's rendered children, with closures
+  bound to that render's inputs. `<ProductHero sku="abc"/>` registered
+  on `/p/abc` can't be replayed on `/p/def`, so this layer stays
+  route-scoped.
 
-Why per-request: the previous design mutated one shared map for both
-"current" and "previous" reads, so concurrent requests on the same
-route observed each other's in-flight writes — a sibling render's
-mid-mutation manifest set could land in another request's `stored`,
-producing spurious `HoistingViolationError`s on fast nav. Per-request
-isolation gives every request a stable point-in-time view, regardless
-of what other requests are doing.
+Each layer has both `live` and `baseline` flavors:
 
-Why `baseline` doesn't update on cache-mode commits: master's
-`previousScopes` was only updated by `clearRoute` at the start of
-streaming renders. Cache-mode bodies never saw subsequent cache-
-mode-committed manifests as `stored`. The example app relies on this
-permissiveness — `<SearchArea>` reads `url:q` only when `?search=` is
-set, an after-conditional read that would throw if cache-mode bodies
-saw the latest manifest. Mirroring master's "baseline updates only at
-streaming start" preserves the latent-tolerance until each Partial is
-audited and the strictness can be turned on incrementally.
+- `live` — latest committed state, including all cache overlays.
+  Read by `lookupPartial` / `getRouteSnapshots`.
+- `baseline` — snapshot of `live` taken AT the start of the last
+  streaming render. Bodies see this as `manifestScope.stored`;
+  `getPreviousRouteSnapshots` returns it. Cache-mode commits do NOT
+  rotate the manifest baseline, mirroring master's permissive
+  behavior — `<SearchArea>`-style after-conditional reads (only
+  reading `url:q` when `?search=` is set) keep working without a
+  per-Partial audit.
+
+Per-request isolation lives in an ALS-bound context opened by
+`<PartialRoot>` with `pendingIdentity` and `pendingContent` buffers.
+Concurrent requests on the same route can't observe each other's
+in-flight writes; commits at end of render atomically merge into the
+canonical layers. Streaming commits replace `content[route].live`
+wholesale and rotate `identity[id].baselineManifest := liveManifest`
+for ids this render produced; cache commits overlay onto `live` and
+update `liveManifest` only.
+
+The first-render-fp-skip empty-manifest poisoning is structurally
+gone: the same Partial id rendered on two different routes shares
+identity, so navigating from `/editor/A` to `/editor/B` doesn't see
+`stored = null` for `cms-edit-fields` — it sees the manifest captured
+on `/editor/A`'s last streaming render. The fp-skip register path
+still defensively writes `manifest: stored ?? undefined` (never an
+empty Set), but the underlying scenario can't arise the way it used
+to.
 
 ## Action handling
 
