@@ -1,7 +1,6 @@
 import { Suspense } from "react"
 import { readLog, readLogPrefix } from "./log.ts"
 import { ResumeTail } from "./resume-tail.tsx"
-import { getSearchParam } from "../../framework/context.ts"
 
 /**
  * Bounded linear recursion that emits a streaming message.
@@ -49,9 +48,6 @@ function ChunkText({ text }: { text: string }) {
   )
 }
 
-/**
- * Synchronously rendered prefix for a message resumed past cursor > 0.
- */
 export function FlatPrefix({ fileId, cursor }: { fileId: string; cursor: number }) {
   if (cursor <= 0) return null
   const chunks = readLogPrefix(fileId, cursor)
@@ -64,9 +60,8 @@ export function FlatPrefix({ fileId, cursor }: { fileId: string; cursor: number 
   )
 }
 
-export function ChatMessage({ fileId }: { fileId: string }) {
-  const cursorParam = getSearchParam(`cursor-${fileId}`)
-  const startCursor = Math.max(0, Number(cursorParam) || 0)
+export function ChatMessage({ fileId, cursor }: { fileId: string; cursor: number }) {
+  const startCursor = Math.max(0, cursor)
   return (
     <article
       data-testid={`chat-msg-${fileId}`}

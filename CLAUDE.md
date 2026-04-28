@@ -2,8 +2,9 @@
 
 A research project: a React CMS data layer for pages composed of
 independently re-renderable, addressable, cacheable subtrees built
-on RSC. The primitive is `<Partial>`; the contract and full surface
-live in [`docs/`](./docs/).
+on RSC. The primitive is `ReactCms.partial(Render, options)` — a
+define-step constructor that returns a placeable React component;
+the contract and full surface live in [`docs/`](./docs/).
 
 This file is for working in this repo — structure, tooling,
 workflow. For framework architecture and APIs, read the docs.
@@ -21,8 +22,8 @@ workflow. For framework architecture and APIs, read the docs.
 
 | Path | Role |
 |---|---|
-| `src/lib/` | Partials library — `partial.tsx`, `partial-component.tsx`, `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `slot.tsx`, `hash.ts`, `multipart.ts`. Public surface in `index.ts`. |
-| `src/framework/` | RSC plumbing — `entry.{rsc,browser,ssr}.tsx`, `context.ts` (request ALS + tracked accessors + scopes), `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`. |
+| `src/lib/` | Partials library — `partial.tsx` (constructor + PartialRoot + render runtime), `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `flight-runtime.ts` (env-aware Flight encode/decode shim), `slot.tsx`, `hash.ts`, `multipart.ts`. Public surface in `index.ts`. |
+| `src/framework/` | RSC plumbing — `entry.{rsc,browser,ssr}.tsx`, `context.ts` (request ALS + cookies + matchRoutePattern), `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`. |
 | `src/editor/` | CMS editor UI — three-pane shell. `shell.tsx`, `actions.ts`, `components/{address-bar,tree-link,add-block}.tsx`. Top-level package boundary in prep for a monorepo split. |
 | `src/app/` | Example application — pages, blocks, components, GraphQL clients (PokeAPI + Magento). |
 | `src/cms/` | CMS content store — `content.json` (committed) + `draft.json` (gitignored). |
@@ -102,6 +103,29 @@ are in [`docs-dev/testing.md`](./docs-dev/testing.md).
 `yarn test:e2e` auto-starts `yarn dev` if nothing's on port 5173.
 HMR dispose hooks clear cache + registry on edits, so server
 restart is rarely needed during dev.
+
+## Spec authoring rules
+
+- Specs are constructed once at module scope:
+  `const MyPage = ReactCms.partial(MyRender, '/path')` (string
+  shorthand) or `ReactCms.partial(MyRender, {match, vary, ...})`
+  (full options).
+- `vary` is sync and must be pure; CMS reads (`cms.text(...)`,
+  `cms.enum(...)`, `cms.reference(...)`) live inside `vary`. Async
+  loaders run in `render`.
+- **Wrapper specs need a `vary` that captures their descendants'
+  URL deps**, otherwise fp-skip on the wrapper blocks descendant
+  re-renders. The default behavior (no `vary`) folds the request
+  URL search string into the dependency surface — leaf specs that
+  legitimately don't depend on the URL can declare an explicit
+  `vary` returning a stable shape.
+- **Slot blocks** (specs with `tags: [".x"]`) are catalog-registered
+  by `type` so slots can look them up. Page specs (with `selector`
+  or auto-derived from Render name) are not slot-listable.
+- `parent: PartialCtx` is required on every spec call site. The
+  spec's render function receives `{...vary, parent, cmsId}` —
+  pass `parent` to descendant `<SpecComponent>` calls and `cmsId`
+  to `<Children hostCmsId>` / `<Child hostCmsId>`.
 
 ## Workflow — after a task is done
 

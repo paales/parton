@@ -2,7 +2,7 @@
 
 import { client } from "../../magento-data.ts"
 import { graphql } from "../../magento-graphql.ts"
-import { getCookie, setCookie } from "../../../framework/context.ts"
+import { readCookie, setCookie } from "../../../framework/context.ts"
 
 const CreateEmptyCart = graphql(`
   mutation CreateEmptyCart {
@@ -24,15 +24,9 @@ const AddToCart = graphql(`
   }
 `)
 
-/**
- * Server action: get or create a cart.
- * Reads cart_id from cookie; creates a new cart if none exists.
- * Persists the cart ID in a cookie for subsequent requests.
- */
 export async function getOrCreateCart(): Promise<string> {
-  const existing = getCookie("cart_id")
+  const existing = readCookie("cart_id")
   if (existing) return existing
-
   const data = await client.request(CreateEmptyCart)
   const cartId = data.createEmptyCart
   if (!cartId) throw new Error("createEmptyCart returned null")
@@ -40,34 +34,24 @@ export async function getOrCreateCart(): Promise<string> {
   return cartId
 }
 
-/**
- * Server action: add a product to cart.
- * Ensures a cart exists (cookie-backed), then adds the item.
- */
 export async function addToCart(
   sku: string,
   quantity: number,
 ): Promise<{ revalidate: { selector: string } }> {
   const cartId = await getOrCreateCart()
-
   const data = await client.request(AddToCart, { cartId, sku, quantity })
-
   const result = data.addProductsToCart
   if (!result) throw new Error("addProductsToCart returned null")
   const errors = result.user_errors.filter((e) => e != null)
   if (errors.length > 0) {
     throw new Error(errors.map((e) => e.message).join("; "))
   }
-
   return { revalidate: { selector: ".cart" } }
 }
 
-/**
- * Read the cart ID from the cookie (for server components).
- */
 export async function getCartId(): Promise<string | undefined> {
   try {
-    return getCookie("cart_id")
+    return readCookie("cart_id")
   } catch {
     return undefined
   }

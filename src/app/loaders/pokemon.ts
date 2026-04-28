@@ -16,7 +16,6 @@
  * own entity types. Commerce apps add `getProduct`, CMS-heavy apps
  * add `getPage`, etc.
  */
-import { getClosest } from "../../framework/context.ts"
 import type { Reference } from "../../framework/cms-runtime.ts"
 import { client } from "../data.ts"
 import { graphql } from "../pokeapi-graphql.ts"
@@ -64,8 +63,9 @@ export async function getPokemon(ref: Reference<"pokemon">): Promise<Pokemon | n
       spriteUrl: extractSprite(p.pokemon_v2_pokemonsprites[0]?.sprites),
     }
   }
-  if (ref.fallback === "closest") {
-    return getClosest<Pokemon>("pokemon")
-  }
+  // ancestor-`closest` fallback is deferred; the constructor API
+  // currently passes per-instance data via render props rather than
+  // through an ALS-backed provides chain. Loaders that need it should
+  // accept the entity as a prop until the successor design lands.
   return null
 }

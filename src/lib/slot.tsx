@@ -1,68 +1,37 @@
 /**
  * Slot primitives — `<Children>` and `<Child>`.
  *
- * A slot declares a named opening in a CMS-aware Partial's content
- * where CMS-contributed blocks plug in. At render time:
+ * Slots render store-contributed blocks. Each block instance is a spec
+ * registered via `ReactCms.partial(...)` with an explicit `type` tag.
+ * The slot looks up the host node (`hostCmsId`) in the CMS store, reads
+ * its `slots[name]` array, and renders each entry by mapping
+ * `entry.type → spec.Component`.
  *
- *   1. The slot records itself into the ambient CMS scope's
- *      `childSlots` map so the future editor knows "this Partial
- *      accepts blocks here, constrained by this `allow` selector."
- *   2. It looks up the host node (`scope.cmsId`) in the store and
- *      reads its `slots[name]` array.
- *   3. For each entry, it resolves the `type` tag through the block
- *      registry (`getBlockSpec`) and renders the block's component
- *      inside a `<Partial cmsId={entry.id}>` wrapper. The Partial's
- *      selector is `[#<cmsId>, ...spec.tags]` — a unique `#`-token
- *      per instance plus the block's registered shared tokens.
- *
- * The `allow` prop is metadata for the editor today; the runtime
- * doesn't enforce it. If an author's store contains a block the slot
- * wouldn't accept, it still renders — the editor is where that
- * invariant gets policed.
- *
- * Slots are recursive: a block's own content can declare more
- * `<Children>` against its own node's `slots`, composing arbitrarily
- * deep. The existing dynamic-Partial registry + cache-mode refetch
- * machinery handles nested Partials produced inside `.map()`-style
- * loops as first-class, so there's no special case here.
- *
- * Outside a CMS scope (a slot rendered inside a Partial without
- * `cmsId`) the slot silently renders nothing — the primitive is
- * CMS-scope-gated, same as the content accessors.
- *
- * See `docs/cms.md` § Slot accessors.
+ * Slots take `host` (the parent's PartialCtx for descendants) and
+ * `hostCmsId` (the CMS id whose `slots[name]` to read) as props. No
+ * ALS / cell reads — explicit threading.
  */
 
 import React, { type ReactNode } from "react"
-import { Partial } from "./partial-component.tsx"
-import { capturePartialContext } from "./partial-context.ts"
-import { getCurrentCmsScope, getRequest } from "../framework/context.ts"
-import { getBlockSpec, lookupCmsNode, type CmsNode } from "../framework/cms-runtime.ts"
+import type { PartialCtx } from "./partial-context.ts"
+import { lookupCmsNode, getSpecByType, type CmsNode } from "../framework/cms-runtime.ts"
+import { getRequest } from "../framework/context.ts"
 
 export interface ChildrenProps {
   /** Slot key — matches `node.slots[name]` in the store. */
   name: string
-  /**
-   * Selector grammar constraining which block types the editor should
-   * allow into this slot. Not enforced at runtime; surfaced to the
-   * editor via the CMS scope's `childSlots` metadata.
-   */
+  /** Selector grammar constraining which block types the editor's
+   *  +add palette offers. Not enforced at runtime. */
   allow: string
+  /** PartialCtx of the host spec (passed from its render fn's
+   *  `parent`). Slot-rendered blocks become its descendants. */
+  host: PartialCtx
+  /** cmsId of the host whose `slots[name]` to read. */
+  hostCmsId: string
 }
 
-export interface ChildProps {
-  name: string
-  allow: string
-}
+export interface ChildProps extends ChildrenProps {}
 
-/**
- * Brand used to identify slot components from outside. The catalog
- * prerender walks the JSX tree to find slot declarations and call
- * them so they side-effect into `scope.childSlots` — but importing
- * `Children` / `Child` directly into the prerender pulls in
- * `partial-component.tsx`, which the node-tier vitest project can't
- * resolve. The prerender keys off this brand symbol instead.
- */
 export const SLOT_KIND_BRAND = Symbol.for("cms.slotKind")
 export type SlotKind = "multi" | "single"
 
@@ -71,81 +40,54 @@ interface SlotComponent {
   [SLOT_KIND_BRAND]?: SlotKind
 }
 
-/**
- * Multi-entry slot — renders every block in `node.slots[name]` in the
- * order stored. Each block is wrapped in its own `<Partial>` so it
- * participates in the fingerprint-skip / invalidation graph like any
- * other Partial.
- */
 export const Children: SlotComponent = function Children({
   name,
-  allow,
+  host,
+  hostCmsId,
 }: ChildrenProps): ReactNode {
-  const scope = getCurrentCmsScope()
-  if (!scope) return null
-  scope.childSlots.set(name, { multi: true, allow })
-
-  const node = lookupCmsNode(scope.cmsId, getRequest())
+  const node = lookupCmsNode(hostCmsId, getRequest())
   const entries = node?.slots?.[name] ?? []
   if (entries.length === 0) return null
-
-  return renderSlotEntries(entries)
+  return renderSlotEntries(entries, host)
 }
 Children[SLOT_KIND_BRAND] = "multi"
 
-/**
- * Singleton slot — renders at most one block. If the store has more
- * than one entry (author mistake, migration), only the first is
- * rendered; the editor is responsible for preventing accumulation.
- */
-export const Child: SlotComponent = function Child({ name, allow }: ChildProps): ReactNode {
-  const scope = getCurrentCmsScope()
-  if (!scope) return null
-  scope.childSlots.set(name, { multi: false, allow })
-
-  const node = lookupCmsNode(scope.cmsId, getRequest())
+export const Child: SlotComponent = function Child({
+  name,
+  host,
+  hostCmsId,
+}: ChildProps): ReactNode {
+  const node = lookupCmsNode(hostCmsId, getRequest())
   const entries = node?.slots?.[name] ?? []
   const entry = entries[0]
   if (!entry) return null
-
-  return renderSlotEntries([entry])
+  return renderSlotEntries([entry], host)
 }
 Child[SLOT_KIND_BRAND] = "single"
 
-function renderSlotEntries(entries: readonly CmsNode[]): ReactNode {
-  const parent = capturePartialContext()
+function renderSlotEntries(entries: readonly CmsNode[], host: PartialCtx): ReactNode {
   return entries.map((entry) => {
     const type = entry.type
     if (!type) return null
-    const spec = getBlockSpec(type)
+    const spec = getSpecByType(type)
     if (!spec) {
       if (import.meta.env?.DEV) {
         console.warn(
           `[cms] slot entry "${entry.id}" has type "${type}" which is not registered. ` +
-            `Register with registerBlock("${type}", …) or remove the entry from content.json.`,
+            `Register with ReactCms.partial(...) {type: "${type}"}.`,
         )
       }
       return null
     }
-    const Component = spec.component
-    // Selector: `#<cmsId>` unique-token + the block's registered
-    // class-tokens. The `#`-token ensures uniqueness across the page
-    // (the Partial runtime enforces `#`-token page-wide uniqueness;
-    // `cmsId`s are author-controlled so they're already unique within
-    // the store).
-    const selector = [`#${entry.id}` as `#${string}`, ...spec.tags]
-    // Fragment-wrap so the array's `key` lives on a transparent
-    // wrapper instead of the Partial. `<Partial key={entry.id}>`
-    // would composite with the Partial's inner `<Suspense key={id}>`
-    // on the Flight wire (`"id,id"`) and the client would reconcile
-    // it as a different identity than the plain `"id"` emitted in
-    // other render paths — breaking client state inside the block.
-    // Same trick as `cache.tsx::reinjectDynamic`.
+    const Component = spec.Component
     return (
       <React.Fragment key={entry.id}>
-        <Partial parent={parent} selector={selector} cmsId={entry.id}>
-          <Component />
-        </Partial>
+        {/* Per-instance cmsId override — the spec is registered with
+            its `type` (e.g. "page-greeting") and a class-only
+            selector. Each slot entry has its own cmsId; the override
+            makes that entry's effective id `cmsId`, and the CMS read
+            surface inside vary resolves against `cmsId`'s configs. */}
+        <Component parent={host} cmsId={entry.id} />
       </React.Fragment>
     )
   })

@@ -1,3 +1,43 @@
+## Define-step constructor — SHIPPED 2026-04-28
+
+The implicit access-pattern manifest, the per-Partial frame/CMS/
+manifest ALS cells, and the `<Partial>` JSX wrapper are all gone.
+The new primitive is `ReactCms.partial(Render, options)` — a
+module-scope constructor that returns a placeable React component.
+Every dependency a spec has on the request, route, or CMS lives in
+a single sync `vary` callback whose result is also the cache-key
+surface. See [`docs/partial.md`](../docs/partial.md) and the
+design rationale in [`partial-define-step-api.md`](./partial-define-step-api.md).
+
+What landed:
+
+- `<Partial>` + tracked accessors (`getCookie`, `getSearchParam`,
+  `getPathname`, `getHeader`, `getText`, …) → deleted. ~1,200 lines
+  of manifest / cell / hoisting machinery removed.
+- `ReactCms.partial(Render, options)` constructor — pattern-as-router
+  via `match`, declarative deps via `vary`, sync CMS read surface
+  inside `vary`, slot block + page spec dual mode.
+- `registerBlock` removed — slot blocks self-register on
+  construction when they declare `tags: [".x"]`.
+- `<Children>` / `<Child>` slots take explicit `host` + `hostCmsId`
+  props (no ambient cell read).
+- `flight-runtime.ts` shim — runtime-aware Flight encode/decode that
+  uses `@vitejs/plugin-rsc/rsc` in production (real client manifest)
+  and the vendored bundles with stub manifests in test mode (so
+  `cache.tsx`'s import doesn't leak `virtual:` URLs to Vitest's
+  bare-Node loader).
+
+Test status at landing: 18/18 unit tests + 109/127 e2e tests passing.
+Remaining 9 e2e failures are concentrated in two design-gap areas:
+(1) per-SKU dynamic Partials in the Magento demo (the old `<Partial
+selector="#price-{sku}">` pattern doesn't fit the constructor model;
+either restore via a different mechanism or rewrite the tests), and
+(2) a navigation-api / chat-overlay frame interaction where silent
+URL bumps from infinite-scroll pollute the chat-overlay frame's
+session URL, breaking back-nav.
+
+---
+
 ## Continuous streaming content — SHIPPED as bounded `<Piece>` + compaction (2026-04-22)
 
 `user-ideas.md:35` asked how to implement AI-chat-style trickling content. Landed as a demo at `/chat-notes`: recursive `<Piece>` server component, each chunk its own Suspense reveal, `MAX_DEPTH` cap with a client-side `<ResumeTail>` firing a targeted refetch at the bound. Server re-renders as `<FlatPrefix>` (synchronous chunks `[0..cursor)`) + fresh depth-0 Piece chain. Durable per-message log decouples source production from client reconnects; cursor lives in the URL so reloads/back-forward resume correctly. See `STREAMING_CHAT.md` for the full write-up, including why SSE / unbounded recursion / multipart-redirect were passed over, and the two gotchas that turned into generalizable lessons (React fiber reuse across targeted refetches requires per-value `useEffect` guards, not booleans; `disableTransition: true` is load-bearing for per-chunk reveals).

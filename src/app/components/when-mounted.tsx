@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { useActivate } from "../../lib/partial-client.tsx"
-import type { ActivatorProps } from "../../lib/partial-component.tsx"
+import type { ActivatorProps } from "../../lib"
 
 /**
  * Activator: fires immediately when the enclosing Partial mounts.

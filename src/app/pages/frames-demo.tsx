@@ -1,167 +1,105 @@
-import { Partial } from "../../lib/partial.tsx"
-import { ROOT, capturePartialContext } from "../../lib/partial-context.ts"
-import { getPathname, getSearchParam } from "../../framework/context.ts"
+/**
+ * /frames-demo — two server-iframes (`cart`, `menu`) with their own
+ * URL scopes plus a window-scoped main listing. Each frame can host
+ * a nested frame (`cart.tab`, `menu.tab`).
+ */
+
+import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
 import { FrameNavigateButton, UpdateEntryStateButton } from "../components/frames-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
-/**
- * `/frames-demo` — two server-iframes on a normal page.
- *
- *   • The main listing is plain page content. Product clicks drive
- *     `useNavigation().navigate("/frames-demo?product=alpha")`,
- *     which falls through to `window.navigation.navigate()` (no
- *     ambient frame in scope). Browser URL updates, browser back
- *     works, shareable link works. No inline nav bar needed — the
- *     browser is the nav bar.
- *   • `cart`  — drawer-shaped: `/cart/closed` / `/cart/open` /
- *     `/cart/checkout`.
- *   • `menu`  — `/menu/closed` / `/menu/about` / `/menu/settings`.
- *
- * Buttons inside a frame use `useNavigation()` without a name,
- * defaulting to the ambient frame. Buttons outside (e.g. product
- * buttons) do the same, getting the window-scoped handle. See
- * `docs/frames-navigation.md`.
- */
+// ─── Main listing (page-scoped) ─────────────────────────────────────────
 
-// ── Main listing (plain page content — no frame) ──────────────────
-
-function ListView() {
-  const skus = ["alpha", "beta", "gamma"]
-  return (
-    <div data-testid="main-list">
-      <h3 className="mb-2 text-base font-semibold">Product list</h3>
-      <ul className="list-none space-y-1 p-0">
-        {skus.map((sku) => (
-          <li key={sku}>
-            <FrameNavigateButton
-              url={`/frames-demo?product=${sku}`}
-              label={`Open ${sku}`}
-              testId={`main-open-${sku}`}
-            />
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-function DetailView({ sku }: { sku: string }) {
-  const renderedAt = Date.now()
-  return (
-    <div data-testid="main-detail" data-sku={sku} data-rendered-at={renderedAt}>
-      <h3 className="mb-2 text-base font-semibold">Product: {sku}</h3>
-      <p className="mb-3 text-muted-foreground">
-        Window URL:{" "}
-        <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-          ?product={sku}
-        </code>{" "}
-        · rendered {new Date(renderedAt).toLocaleTimeString()}
-      </p>
-      <FrameNavigateButton url="/frames-demo" label="← back to list" testId="main-back-to-list" />
-    </div>
-  )
-}
-
-function MainContent() {
-  const sku = getSearchParam("product")
-  return sku ? <DetailView sku={sku} /> : <ListView />
-}
-
-// ── Cart frame content ─────────────────────────────────────────────
-
-function CartClosedView() {
-  return (
-    <div
-      data-testid="cart-closed"
-      className="flex flex-wrap items-center gap-2 text-muted-foreground"
-    >
-      <span>Cart is closed.</span>
-      <FrameNavigateButton url="/cart/open" label="Open cart" testId="cart-open-btn" />
-    </div>
-  )
-}
-
-function CartOpenView() {
-  const parent = capturePartialContext()
-  return (
-    <div data-testid="cart-open" className="rounded-lg border bg-card p-4 text-card-foreground">
-      <h3 className="mb-2 text-base font-semibold">Cart</h3>
-      <p className="mb-3 text-muted-foreground">
-        0 items · rendered at {new Date().toLocaleTimeString()}
-      </p>
-      <div className="mb-4 flex flex-wrap gap-2">
-        <FrameNavigateButton
-          url="/cart/checkout"
-          label="Go to checkout"
-          testId="cart-checkout-btn"
-        />
-        <FrameNavigateButton url="/cart/closed" label="Close" testId="cart-close-btn" />
-        <UpdateEntryStateButton
-          patch={{ itemsReady: true }}
-          label="Mark ready"
-          testId="cart-mark-ready"
-        />
+export const FramesMainListPartial = ReactCms.partial(
+  function FramesMainListRender({
+    sku,
+  }: {
+    sku: string | null
+  } & RenderArgs) {
+    if (sku) {
+      const renderedAt = Date.now()
+      return (
+        <div data-testid="main-detail" data-sku={sku} data-rendered-at={renderedAt}>
+          <h3 className="mb-2 text-base font-semibold">Product: {sku}</h3>
+          <p className="mb-3 text-muted-foreground">Window URL: ?product={sku}</p>
+          <FrameNavigateButton
+            url="/frames-demo"
+            label="← back to list"
+            testId="main-back-to-list"
+          />
+        </div>
+      )
+    }
+    const skus = ["alpha", "beta", "gamma"]
+    return (
+      <div data-testid="main-list">
+        <h3 className="mb-2 text-base font-semibold">Product list</h3>
+        <ul className="list-none space-y-1 p-0">
+          {skus.map((sku) => (
+            <li key={sku}>
+              <FrameNavigateButton
+                url={`/frames-demo?product=${sku}`}
+                label={`Open ${sku}`}
+                testId={`main-open-${sku}`}
+              />
+            </li>
+          ))}
+        </ul>
       </div>
+    )
+  },
+  {
+    match: "/frames-demo",
+    selector: "#frames-main-list",
+    vary: ({ request }) => ({
+      sku: new URL(request.url).searchParams.get("product"),
+    }),
+  },
+)
 
-      {/*
-        NESTED FRAME — path `cart.tab`. Identical local name `tab`
-        exists in `menu.tab` (inside MenuAboutView) but they don't
-        collide: session, navigation state, and `?__frame=` all key
-        off the full dotted path. Each nested frame has its own
-        back/forward stack, independent of its parent's.
-      */}
-      <Partial parent={parent} selector="#cart-tab" frame="tab" frameUrl="/items">
-        <NestedFrameShell label="cart.tab">
-          <CartTabContent />
-        </NestedFrameShell>
-      </Partial>
-    </div>
-  )
-}
+// ─── Cart tab content (nested frame) ────────────────────────────────────
 
-/** Routes the nested `cart.tab` frame by its own URL. */
-function CartTabContent() {
-  return (
-    <div data-testid="cart-tab">
-      <div className="mb-2 flex flex-wrap gap-2">
-        <FrameNavigateButton url="/items" label="Items" testId="cart-tab-items" />
-        <FrameNavigateButton url="/coupons" label="Coupons" testId="cart-tab-coupons" />
-        <FrameNavigateButton url="/summary" label="Summary" testId="cart-tab-summary" />
+export const CartTabPartial = ReactCms.partial(
+  function CartTabRender({
+    pathname,
+  }: {
+    pathname: string
+  } & RenderArgs) {
+    return (
+      <div data-testid="cart-tab">
+        <div className="mb-2 flex flex-wrap gap-2">
+          <FrameNavigateButton url="/items" label="Items" testId="cart-tab-items" />
+          <FrameNavigateButton url="/coupons" label="Coupons" testId="cart-tab-coupons" />
+          <FrameNavigateButton url="/summary" label="Summary" testId="cart-tab-summary" />
+        </div>
+        {pathname === "/items" && (
+          <div data-testid="cart-tab-items-body" className="rounded-md border border-dashed p-3">
+            3 items in your cart. Fresh render @ {new Date().toLocaleTimeString()}
+          </div>
+        )}
+        {pathname === "/coupons" && (
+          <div data-testid="cart-tab-coupons-body" className="rounded-md border border-dashed p-3">
+            Apply coupon — none active. Fresh render @ {new Date().toLocaleTimeString()}
+          </div>
+        )}
+        {pathname === "/summary" && (
+          <div data-testid="cart-tab-summary-body" className="rounded-md border border-dashed p-3">
+            Subtotal $0.00 · tax $0.00. Fresh render @ {new Date().toLocaleTimeString()}
+          </div>
+        )}
       </div>
-      <TabBody
-        path="/items"
-        testId="cart-tab-items-body"
-        body="3 items in your cart. Fresh render @"
-      />
-      <TabBody
-        path="/coupons"
-        testId="cart-tab-coupons-body"
-        body="Apply coupon — none active. Fresh render @"
-      />
-      <TabBody
-        path="/summary"
-        testId="cart-tab-summary-body"
-        body="Subtotal $0.00 · tax $0.00. Fresh render @"
-      />
-    </div>
-  )
-}
+    )
+  },
+  {
+    selector: "#cart-tab",
+    frame: "tab",
+    frameUrl: "/items",
+    vary: ({ request }) => ({ pathname: new URL(request.url).pathname }),
+  },
+)
 
-/** Renders only when the ambient frame URL matches `path`. */
-function TabBody({ path, testId, body }: { path: string; testId: string; body: string }) {
-  if (getPathname(path) == null) return null
-  return (
-    <div
-      data-testid={testId}
-      className="rounded-md border border-dashed bg-muted/20 p-3 text-sm text-muted-foreground"
-    >
-      {body} {new Date().toLocaleTimeString()}
-    </div>
-  )
-}
+// ─── Cart frame content ────────────────────────────────────────────────
 
-/** Shell around any nested frame — label only; the dev debugger
- *  renders the URL / back / forward overlay. */
 function NestedFrameShell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="rounded-lg border-l-2 border-sky-500/50 bg-muted/20 p-3">
@@ -173,207 +111,267 @@ function NestedFrameShell({ label, children }: { label: string; children: React.
   )
 }
 
-function CartCheckoutView() {
-  return (
-    <div
-      data-testid="cart-checkout"
-      className="rounded-lg border border-emerald-600/40 bg-emerald-950/30 p-4 text-emerald-100"
-    >
-      <h3 className="mb-2 text-base font-semibold">Checkout</h3>
-      <p className="mb-3">Payment form would go here.</p>
-      <FrameNavigateButton url="/cart/open" label="← back to cart" testId="cart-back-to-open" />
-    </div>
-  )
-}
-
-function CartFrameContent() {
-  // Hoist every `getPathname` call to the sync top of the body —
-  // each `if` short-circuits and would otherwise leave the later
-  // patterns unread on URLs that match early. The body's dependency
-  // surface is the UNION of every accessor it could read across
-  // every URL state, so register all three unconditionally.
-  const closed = getPathname("/cart/closed")
-  const open = getPathname("/cart/open")
-  const checkout = getPathname("/cart/checkout")
-  if (closed) return <CartClosedView />
-  if (open) return <CartOpenView />
-  if (checkout) return <CartCheckoutView />
-  return <div data-testid="cart-unknown">Unknown cart URL.</div>
-}
-
-// ── Menu frame content ─────────────────────────────────────────────
-
-function MenuClosedView() {
-  return (
-    <div
-      data-testid="menu-closed"
-      className="flex flex-wrap items-center gap-2 text-muted-foreground"
-    >
-      <span>Menu is closed.</span>
-      <FrameNavigateButton url="/menu/about" label="About" testId="menu-about-btn" />
-      <FrameNavigateButton url="/menu/settings" label="Settings" testId="menu-settings-btn" />
-      <FrameNavigateButton url="/menu/slow" label="Slow (streaming)" testId="menu-slow-btn" />
-    </div>
-  )
-}
-
-function MenuAboutView() {
-  const parent = capturePartialContext()
-  return (
-    <div data-testid="menu-about" className="rounded-lg border bg-card p-4 text-card-foreground">
-      <h3 className="mb-2 text-base font-semibold">About</h3>
-      <p className="mb-3">Demo of the Frame primitive — two server-iframes on a normal page.</p>
-      <div className="mb-4">
-        <FrameNavigateButton url="/menu/closed" label="Close" testId="menu-close-btn" />
-      </div>
-
-      {/*
-        NESTED FRAME — path `menu.tab`. Same LOCAL name `tab` as the
-        one inside CartOpenView (path `cart.tab`) — they coexist
-        because the framework keys every frame by its full dotted
-        path, not its local name. Each has its own independent
-        back/forward stack.
-      */}
-      <Partial parent={parent} selector="#menu-tab" frame="tab" frameUrl="/general">
-        <NestedFrameShell label="menu.tab">
-          <MenuTabContent />
-        </NestedFrameShell>
-      </Partial>
-    </div>
-  )
-}
-
-function MenuTabContent() {
-  return (
-    <div data-testid="menu-tab">
-      <div className="mb-2 flex flex-wrap gap-2">
-        <FrameNavigateButton url="/general" label="General" testId="menu-tab-general" />
-        <FrameNavigateButton url="/advanced" label="Advanced" testId="menu-tab-advanced" />
-      </div>
-      <TabBody
-        path="/general"
-        testId="menu-tab-general-body"
-        body="General preferences. Fresh render @"
-      />
-      <TabBody
-        path="/advanced"
-        testId="menu-tab-advanced-body"
-        body="Advanced knobs. Fresh render @"
-      />
-    </div>
-  )
-}
-
-function MenuSettingsView() {
-  return (
-    <div data-testid="menu-settings" className="rounded-lg border bg-card p-4 text-card-foreground">
-      <h3 className="mb-2 text-base font-semibold">Settings</h3>
-      <p className="mb-3">(no settings yet)</p>
-      <FrameNavigateButton url="/menu/closed" label="Close" testId="menu-close-from-settings" />
-    </div>
-  )
-}
-
-function MenuFrameContent() {
-  // Hoisted unconditionally — see CartFrameContent for the why.
-  const closed = getPathname("/menu/closed")
-  const about = getPathname("/menu/about")
-  const settings = getPathname("/menu/settings")
-  const slow = getPathname("/menu/slow")
-  if (closed) return <MenuClosedView />
-  if (about) return <MenuAboutView />
-  if (settings) return <MenuSettingsView />
-  if (slow) return <MenuSlowView />
-  return <div data-testid="menu-unknown">Unknown menu URL.</div>
-}
-
-/**
- * Menu view that includes a slow async component behind a Suspense
- * boundary. Used to verify that streaming INSIDE a framed Partial
- * works — the fallback is painted first, then the delayed content
- * replaces it as the frame's Flight chunk arrives.
- */
-async function SlowInsideFrame() {
-  await new Promise((r) => setTimeout(r, 400))
-  return (
-    <div data-testid="menu-slow-content" className="p-2 text-emerald-400">
-      Slow content loaded at {new Date().toLocaleTimeString()}
-    </div>
-  )
-}
-
-function MenuSlowView() {
-  const parent = capturePartialContext()
-  return (
-    <div data-testid="menu-slow" className="rounded-lg border bg-card p-4 text-card-foreground">
-      <h3 className="mb-2 text-base font-semibold">Slow menu view (streaming)</h3>
-      <Partial
-        parent={parent}
-        selector="#menu-slow-inner"
-        fallback={
-          <div data-testid="menu-slow-fallback" className="text-muted-foreground">
-            Loading slow content…
+export const CartFramePartial = ReactCms.partial(
+  function CartFrameRender({
+    state,
+    parent,
+  }: {
+    state: "closed" | "open" | "checkout" | "unknown"
+  } & RenderArgs) {
+    switch (state) {
+      case "closed":
+        return (
+          <div
+            data-testid="cart-closed"
+            className="flex flex-wrap items-center gap-2 text-muted-foreground"
+          >
+            <span>Cart is closed.</span>
+            <FrameNavigateButton url="/cart/open" label="Open cart" testId="cart-open-btn" />
           </div>
-        }
-      >
-        <SlowInsideFrame />
-      </Partial>
-      <div className="mt-3">
-        <FrameNavigateButton url="/menu/closed" label="Close" testId="menu-close-from-slow" />
+        )
+      case "open":
+        return (
+          <div data-testid="cart-open" className="rounded-lg border bg-card p-4">
+            <h3 className="mb-2 text-base font-semibold">Cart</h3>
+            <p className="mb-3 text-muted-foreground">
+              0 items · rendered at {new Date().toLocaleTimeString()}
+            </p>
+            <div className="mb-4 flex flex-wrap gap-2">
+              <FrameNavigateButton
+                url="/cart/checkout"
+                label="Go to checkout"
+                testId="cart-checkout-btn"
+              />
+              <FrameNavigateButton url="/cart/closed" label="Close" testId="cart-close-btn" />
+              <UpdateEntryStateButton
+                patch={{ itemsReady: true }}
+                label="Mark ready"
+                testId="cart-mark-ready"
+              />
+            </div>
+            <NestedFrameShell label="cart.tab">
+              <CartTabPartial parent={parent} />
+            </NestedFrameShell>
+          </div>
+        )
+      case "checkout":
+        return (
+          <div
+            data-testid="cart-checkout"
+            className="rounded-lg border border-emerald-600/40 bg-emerald-950/30 p-4"
+          >
+            <h3 className="mb-2 text-base font-semibold">Checkout</h3>
+            <p className="mb-3">Payment form would go here.</p>
+            <FrameNavigateButton
+              url="/cart/open"
+              label="← back to cart"
+              testId="cart-back-to-open"
+            />
+          </div>
+        )
+      default:
+        return <div data-testid="cart-unknown">Unknown cart URL.</div>
+    }
+  },
+  {
+    match: "/frames-demo",
+    selector: "#cart",
+    frame: "cart",
+    frameUrl: "/cart/closed",
+    vary: ({ request }) => {
+      const pn = new URL(request.url).pathname
+      const state: "closed" | "open" | "checkout" | "unknown" =
+        pn === "/cart/closed"
+          ? "closed"
+          : pn === "/cart/open"
+            ? "open"
+            : pn === "/cart/checkout"
+              ? "checkout"
+              : "unknown"
+      return { state }
+    },
+  },
+)
+
+// ─── Menu tab + slow ────────────────────────────────────────────────────
+
+export const MenuTabPartial = ReactCms.partial(
+  function MenuTabRender({
+    pathname,
+  }: {
+    pathname: string
+  } & RenderArgs) {
+    return (
+      <div data-testid="menu-tab">
+        <div className="mb-2 flex flex-wrap gap-2">
+          <FrameNavigateButton url="/general" label="General" testId="menu-tab-general" />
+          <FrameNavigateButton url="/advanced" label="Advanced" testId="menu-tab-advanced" />
+        </div>
+        {pathname === "/general" && (
+          <div data-testid="menu-tab-general-body" className="rounded-md border border-dashed p-3">
+            General preferences. Fresh render @ {new Date().toLocaleTimeString()}
+          </div>
+        )}
+        {pathname === "/advanced" && (
+          <div data-testid="menu-tab-advanced-body" className="rounded-md border border-dashed p-3">
+            Advanced knobs. Fresh render @ {new Date().toLocaleTimeString()}
+          </div>
+        )}
       </div>
-    </div>
-  )
-}
+    )
+  },
+  {
+    selector: "#menu-tab",
+    frame: "tab",
+    frameUrl: "/general",
+    vary: ({ request }) => ({ pathname: new URL(request.url).pathname }),
+  },
+)
 
-// ── Page ────────────────────────────────────────────────────────────
+export const MenuSlowInnerPartial = ReactCms.partial(
+  async function MenuSlowInnerRender({}: RenderArgs) {
+    await new Promise((r) => setTimeout(r, 400))
+    return (
+      <div data-testid="menu-slow-content" className="p-2 text-emerald-400">
+        Slow content loaded at {new Date().toLocaleTimeString()}
+      </div>
+    )
+  },
+  {
+    selector: "#menu-slow-inner",
+    fallback: (
+      <div data-testid="menu-slow-fallback" className="text-muted-foreground">
+        Loading slow content…
+      </div>
+    ),
+  },
+)
 
-export function FramesDemoPage() {
-  return (
-    <main className="py-4">
-      <title>Frames Demo</title>
-      <h1 className="mb-4 text-2xl font-semibold">Frames demo</h1>
-      <p className="mb-6 text-muted-foreground">
-        The main listing is plain page content — product clicks update the window URL via{" "}
-        <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-          useNavigation()
-        </code>
-        , and the browser back/forward buttons handle navigation natively. Two frames (cart and
-        menu) live alongside with their own URL scopes and inline nav bars. <strong>Open</strong>{" "}
-        the cart or menu to see the <strong>nested</strong> frame inside — both use the local frame
-        name <code>tab</code>, but resolve to the distinct paths <code>cart.tab</code> and{" "}
-        <code>menu.tab</code> and keep independent back/forward stacks.
-      </p>
+export const MenuFramePartial = ReactCms.partial(
+  function MenuFrameRender({
+    state,
+    parent,
+  }: {
+    state: "closed" | "about" | "settings" | "slow" | "unknown"
+  } & RenderArgs) {
+    switch (state) {
+      case "closed":
+        return (
+          <div
+            data-testid="menu-closed"
+            className="flex flex-wrap items-center gap-2 text-muted-foreground"
+          >
+            <span>Menu is closed.</span>
+            <FrameNavigateButton url="/menu/about" label="About" testId="menu-about-btn" />
+            <FrameNavigateButton url="/menu/settings" label="Settings" testId="menu-settings-btn" />
+            <FrameNavigateButton
+              url="/menu/slow"
+              label="Slow (streaming)"
+              testId="menu-slow-btn"
+            />
+          </div>
+        )
+      case "about":
+        return (
+          <div data-testid="menu-about" className="rounded-lg border bg-card p-4">
+            <h3 className="mb-2 text-base font-semibold">About</h3>
+            <p className="mb-3">Demo of the Frame primitive.</p>
+            <FrameNavigateButton url="/menu/closed" label="Close" testId="menu-close-btn" />
+            <NestedFrameShell label="menu.tab">
+              <MenuTabPartial parent={parent} />
+            </NestedFrameShell>
+          </div>
+        )
+      case "settings":
+        return (
+          <div data-testid="menu-settings" className="rounded-lg border bg-card p-4">
+            <h3 className="mb-2 text-base font-semibold">Settings</h3>
+            <p className="mb-3">(no settings yet)</p>
+            <FrameNavigateButton
+              url="/menu/closed"
+              label="Close"
+              testId="menu-close-from-settings"
+            />
+          </div>
+        )
+      case "slow":
+        return (
+          <div data-testid="menu-slow" className="rounded-lg border bg-card p-4">
+            <h3 className="mb-2 text-base font-semibold">Slow menu view (streaming)</h3>
+            <MenuSlowInnerPartial parent={parent} />
+            <div className="mt-3">
+              <FrameNavigateButton
+                url="/menu/closed"
+                label="Close"
+                testId="menu-close-from-slow"
+              />
+            </div>
+          </div>
+        )
+      default:
+        return <div data-testid="menu-unknown">Unknown menu URL.</div>
+    }
+  },
+  {
+    match: "/frames-demo",
+    selector: "#menu",
+    frame: "menu",
+    frameUrl: "/menu/closed",
+    vary: ({ request }) => {
+      const pn = new URL(request.url).pathname
+      const state: "closed" | "about" | "settings" | "slow" | "unknown" =
+        pn === "/menu/closed"
+          ? "closed"
+          : pn === "/menu/about"
+            ? "about"
+            : pn === "/menu/settings"
+              ? "settings"
+              : pn === "/menu/slow"
+                ? "slow"
+                : "unknown"
+      return { state }
+    },
+  },
+)
 
-      <Card className="mb-4 p-5">
-        <CardHeader className="px-0">
-          <CardTitle className="text-base">Main listing (page-scoped)</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0">
-          <MainContent />
-        </CardContent>
-      </Card>
+// ─── Chrome ─────────────────────────────────────────────────────────────
 
-      <Card className="mb-4 p-5">
-        <CardHeader className="px-0">
-          <CardTitle className="text-base">Cart frame</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0">
-          <Partial parent={ROOT} selector="#cart" frame="cart" frameUrl="/cart/closed">
-            <CartFrameContent />
-          </Partial>
-        </CardContent>
-      </Card>
+export const FramesDemoChromePartial = ReactCms.partial(
+  function FramesDemoChromeRender({ parent }: RenderArgs) {
+    return (
+      <main className="py-4">
+        <title>Frames Demo</title>
+        <h1 className="mb-4 text-2xl font-semibold">Frames demo</h1>
+        <Card className="mb-4 p-5">
+          <CardHeader className="px-0">
+            <CardTitle className="text-base">Main listing (page-scoped)</CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            <FramesMainListPartial parent={parent} />
+          </CardContent>
+        </Card>
+        <Card className="mb-4 p-5">
+          <CardHeader className="px-0">
+            <CardTitle className="text-base">Cart frame</CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            <CartFramePartial parent={parent} />
+          </CardContent>
+        </Card>
+        <Card className="mb-4 p-5">
+          <CardHeader className="px-0">
+            <CardTitle className="text-base">Menu frame</CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            <MenuFramePartial parent={parent} />
+          </CardContent>
+        </Card>
+      </main>
+    )
+  },
+  { match: "/frames-demo", selector: "#frames-demo-chrome" },
+)
 
-      <Card className="mb-4 p-5">
-        <CardHeader className="px-0">
-          <CardTitle className="text-base">Menu frame</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0">
-          <Partial parent={ROOT} selector="#menu" frame="menu" frameUrl="/menu/closed">
-            <MenuFrameContent />
-          </Partial>
-        </CardContent>
-      </Card>
-    </main>
-  )
+export function FramesDemoPagePlacements({ parent }: { parent: PartialCtx }) {
+  return <FramesDemoChromePartial parent={parent} />
 }

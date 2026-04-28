@@ -1,21 +1,31 @@
-import { Partial, capturePartialContext } from "../../lib"
-import { NavRootBlock } from "../blocks/nav-root.tsx"
-
 /**
- * Shared cross-page nav. CMS-aware: the link list lives in the CMS
- * store under `cmsId="app-nav"`, with each link a `nav-link` block
- * in the `links` slot. Authors edit href/label, reorder, add, and
- * remove links via the editor; visitors see the rendered output.
+ * Static cross-page nav.
  *
- * The `<nav>` chrome itself stays in code (`NavRootBlock`) — same
- * pattern `cms-demo-root` uses with `PageRootBlock`. Code defines
- * the grammar; data fills it (CMS_VISION.md Principle #5).
+ * The CMS-driven version (links from `cmsId="app-nav"`) is deferred
+ * until the block migration lands. Static link list keeps the demo
+ * navigable in the meantime.
  */
+
+const LINKS = [
+  { href: "/", label: "Pokedex" },
+  { href: "/cache-demo", label: "Cache Demo" },
+  { href: "/defer-demo", label: "Defer Demo" },
+  { href: "/selector-demo", label: "Selector Demo" },
+  { href: "/sentinels-demo", label: "Sentinels Demo" },
+  { href: "/frames-demo", label: "Frames Demo" },
+  { href: "/cms-demo", label: "CMS Demo" },
+  { href: "/magento", label: "Magento" },
+  { href: "/bare", label: "Bare" },
+]
+
 export function AppNav() {
-  const parent = capturePartialContext()
   return (
-    <Partial parent={parent} selector="#app-nav" cmsId="app-nav">
-      <NavRootBlock />
-    </Partial>
+    <nav className="mb-6 flex flex-wrap gap-3 text-sm text-muted-foreground">
+      {LINKS.map((l) => (
+        <a key={l.href} href={l.href} className="hover:text-foreground">
+          {l.label}
+        </a>
+      ))}
+    </nav>
   )
 }

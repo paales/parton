@@ -1,7 +1,7 @@
 "use client"
 
 import { useActivate, useNavigation } from "../../lib/partial-client.tsx"
-import type { ActivatorProps } from "../../lib/partial-component.tsx"
+import type { ActivatorProps } from "../../lib"
 
 export interface WhenStoredProps extends ActivatorProps {
   /** The storage key to watch. */

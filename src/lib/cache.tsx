@@ -1,49 +1,22 @@
 /**
  * Server-side render-output caching.
  *
- * `<Cache>` wraps a subtree; on miss it renders the children to Flight
- * bytes (via plugin-rsc's `renderToReadableStream`), stores the bytes
- * keyed by a hash derived from the Partial's access manifest (the set
- * of request-state keys the content reads through tracked accessors)
- * plus any `vary` scalars declared on the cache options. The bytes are
- * also decoded back into a React element tree (via
- * `createFromReadableStream`) which it returns to the outer render.
- * On hit it retrieves the stored bytes, decodes into a tree, and
- * returns that.
+ * `<Cache>` wraps a spec's body with the spec's `varyResult` as the
+ * cache-key surface. On miss it renders to Flight bytes and stores
+ * them; on hit it decodes the stored bytes back into a tree.
  *
- * Cache is an internal detail of `<Partial cache={...}>`: authors
- * don't render it directly.
+ * Cache is an internal detail of `ReactCms.partial(...)` when the
+ * spec sets `cache={…}`. Authors don't render `<Cache>` directly.
  *
- * ── Access manifest ────────────────────────────────────────────────
- *
- * The manifest is a per-`<Cache>` Set<string> populated during render
- * by tracked accessors (`getCookie`, `getHeader`, `getSearchParam`,
- * `getPathname` — see `src/framework/context.ts`). Each call pushes
- * `"kind:name"` into the manifest. The manifest is the cache key
- * surface: on subsequent requests we resolve the same keys against
- * the current request, hash the values, and look up the entry.
- *
- * Manifest membership must be stable across renders of the same
- * `(id, fingerprint)`. Conditional reads — one render touches cookie
- * A, another touches cookie B — would produce different manifests
- * across requests, thrashing the cache. We throw a hoisting-violation
- * error when a render's manifest disagrees with the stored one. See
- * `docs/cache.md`.
- *
- * ── Composition with <Partial> ────────────────────────────────────
+ * ── Composition with partials ─────────────────────────────────────
  *
  * Cached Flight bytes capture the rendered subtree as-is. If the
- * subtree contains a `<Partial>`, the partial's content would be
- * frozen in those bytes — refetching the partial wouldn't refresh
- * until the Cache entry expires. To make Cache and Partial compose
- * orthogonally, Cache strips inner partials to placeholders before
- * serializing. On output, Cache re-injects the *current* live partial
- * elements. Result: Cache captures the stable scaffolding, partials
- * stay live.
- *
- * Partial ids that live inside the subtree are folded into the cache
- * key so adding/removing a partial inside a Cache invalidates
- * automatically.
+ * subtree contains a `<PartialBoundary>`, the partial's content gets
+ * frozen in the bytes — refetching the partial wouldn't refresh until
+ * the cache entry expires. To make Cache and Partial compose, we strip
+ * inner partials to placeholders before serializing and re-inject the
+ * current live elements on the way out. Result: cache captures the
+ * stable scaffolding, partials stay live.
  */
 
 import {
@@ -55,18 +28,10 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react"
-import { createFromReadableStream, renderToReadableStream } from "@vitejs/plugin-rsc/rsc"
+import { createFromReadableStream, renderToReadableStream } from "./flight-runtime.ts"
 import { djb2 } from "./hash.ts"
-import { Partial, PartialBoundary } from "./partial-component.tsx"
-import {
-  getCurrentCacheManifest,
-  getCurrentFrameScope,
-  getRequest,
-  getScope,
-  resolveManifest,
-  runWithCacheManifest,
-  type ManifestScope,
-} from "../framework/context.ts"
+import { PartialBoundary, getSpecComponentById } from "./partial.tsx"
+import { getRequest, getScope } from "../framework/context.ts"
 import { lookupPartial, registerPartial, type PartialSnapshot } from "./partial-registry.ts"
 import type { CacheOptions } from "./cache-options.ts"
 
@@ -74,11 +39,7 @@ import type { CacheOptions } from "./cache-options.ts"
 
 interface Entry {
   bytes: Uint8Array
-  /** Fresh until this timestamp (ms epoch); Infinity = never expire. */
   expiresAt: number
-  /** Servable (as stale) until this timestamp. If > expiresAt, we have
-   *  a stale-while-revalidate window: serve cached, kick off async
-   *  refresh. */
   staleUntil: number
 }
 
@@ -129,26 +90,15 @@ class MemoryCacheStore implements CacheStore {
   }
 }
 
-// CATEGORY C (docs-dev/server-isolation.md) — all five pieces of shared
-// cache state (render-output store, dynamic-snapshot side-table,
-// manifest side-table, SWR in-flight guard, cold-miss dedupe) are
-// bundled per scope. `getScope()` maps each request to a bucket.
-// Production: every request → `"default"` → one bucket, same
-// semantics as before. Dev with `x-test-scope` header (Playwright
-// workers > 1): one bucket per worker so they don't contend.
 const SNAPSHOT_INDEX_MAX = 10_000
 
 interface ScopeState {
   store: CacheStore
   snapshotIndex: Map<string, Map<string, PartialSnapshot>>
-  manifestStore: Map<string, Set<string>>
   refreshing: Set<string>
   inFlightMiss: Map<
     string,
-    Promise<{
-      liveTree: ReactNode
-      dynamicSnapshots: Map<string, PartialSnapshot>
-    }>
+    Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }>
   >
 }
 
@@ -160,7 +110,6 @@ function state(scope: string = getScope()): ScopeState {
     s = {
       store: new MemoryCacheStore(),
       snapshotIndex: new Map(),
-      manifestStore: new Map(),
       refreshing: new Set(),
       inFlightMiss: new Map(),
     }
@@ -181,10 +130,8 @@ function setSnapshots(key: string, snaps: Map<string, PartialSnapshot>): void {
 }
 
 function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value)
-  if (Array.isArray(value)) {
-    return "[" + value.map(stableStringify).join(",") + "]"
-  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? ""
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]"
   const keys = Object.keys(value as Record<string, unknown>).sort()
   return (
     "{" +
@@ -199,23 +146,7 @@ function hashParts(...parts: unknown[]): string {
   return djb2(stableStringify(parts))
 }
 
-function manifestToSorted(m: Set<string>): string[] {
-  return [...m].sort()
-}
-
-function manifestsEqual(a: Set<string>, b: Set<string>): boolean {
-  if (a.size !== b.size) return false
-  for (const x of a) if (!b.has(x)) return false
-  return true
-}
-
 // ─── Lazy-ref resolution ───────────────────────────────────────────────
-//
-// `createFromReadableStream` returns a tree whose nested chunks may
-// still be represented as Flight lazy refs. We force resolution here
-// so both cache-hit and cache-miss paths return an equivalent, fully
-// materialized tree. See `archive/SERVER_CACHE_NOTES.md` for the full
-// explanation.
 
 const LAZY_SYMBOL_STR = "Symbol(react.lazy)"
 
@@ -295,9 +226,7 @@ function isExistingPlaceholder(node: ReactElement): boolean {
 
 function placeholderIdOf(node: ReactElement): string | null {
   const props = node.props as { ["data-partial-id"]?: unknown }
-  if (typeof props["data-partial-id"] === "string") {
-    return props["data-partial-id"]
-  }
+  if (typeof props["data-partial-id"] === "string") return props["data-partial-id"]
   return node.key != null ? String(node.key) : null
 }
 
@@ -395,9 +324,7 @@ function reinject(node: ReactNode, partials: Map<string, ReactElement>): ReactNo
 function renderedWrapperId(node: ReactElement): string | null {
   const props = node.props as { partialId?: unknown }
   if (typeof props.partialId === "string") return props.partialId
-  if (node.type === Suspense && node.key != null) {
-    return String(node.key)
-  }
+  if (node.type === Suspense && node.key != null) return String(node.key)
   return null
 }
 
@@ -461,47 +388,14 @@ function reinjectDynamic(node: ReactNode, snapshots: Map<string, PartialSnapshot
     if (id) {
       const snap = snapshots.get(id)
       if (snap) {
-        // Reconstruct the selector in array form — each element is a
-        // single token that the parser won't split on whitespace. A
-        // `#`-token like `#Province Flag Socks (Dropdown Test)` (Magento
-        // SKU with spaces) survives the round-trip intact.
-        const selector = [
-          ...snap.uniqueTokens.map((t): `#${string}` => `#${t}`),
-          ...snap.sharedTokens.map((t): `.${string}` => `.${t}`),
-        ]
-        // Reconstruct parent (path + frameChain) from the snapshot's
-        // stored paths — the render-time cell is long gone by the
-        // time cached bytes are reinjected, so we rely on what we
-        // recorded during the original render.
-        const frameChain: readonly string[] =
-          snap.framePath.length > 0 ? snap.framePath.slice(0, snap.framePath.length - 1) : []
-        // Wrap in a keyed Fragment to preserve the placeholder's array
-        // slot identity without compositing a key onto the Partial's
-        // own rendered output. A bare `<Partial>` in an array without a
-        // key trips React's "each child in a list needs a key" warning;
-        // putting `key={id}` directly on the Partial would composite
-        // with its inner `<Suspense key={id}>` on the Flight wire as
-        // `"id,id"`, which the client reconciles as a different
-        // identity than the `"id"` emitted in streaming mode and
-        // remounts client state inside the partial (see
-        // `partialFromSnapshot`). Fragments are transparent — their
-        // key only affects sibling identity, it doesn't composite into
-        // children's keys.
-        return createElement(
-          Fragment,
-          { key: node.key ?? id },
-          createElement(
-            Partial,
-            {
-              parent: { path: snap.parentPath, frameChain, provides: {} },
-              selector,
-              fallback: snap.fallback ?? undefined,
-              errorWith: snap.errorWith,
-              cache: snap.cache,
-            },
-            snap.content,
-          ),
-        )
+        // Use the spec component registry to reconstruct.
+        const Component = getSpecComponentById(id)
+        if (Component) {
+          const frameChain: readonly string[] =
+            snap.framePath.length > 0 ? snap.framePath.slice(0, -1) : []
+          const parent = { path: snap.parentPath, frameChain }
+          return createElement(Fragment, { key: node.key ?? id }, createElement(Component, { parent }))
+        }
       }
     }
     return node
@@ -515,20 +409,17 @@ function reinjectDynamic(node: ReactNode, snapshots: Map<string, PartialSnapshot
 }
 
 function registerDynamicSnapshots(route: string, snapshots: Map<string, PartialSnapshot>): void {
-  for (const [sId, snap] of snapshots) {
-    registerPartial(route, sId, snap)
-  }
+  for (const [sId, snap] of snapshots) registerPartial(route, sId, snap)
 }
 
 // ─── Cache component ────────────────────────────────────────────────────
 
 interface CacheProps {
-  /** Partial id. Forms the stable half of the cache key. */
   id: string
-  /** Structural fingerprint of the Partial's children (from Partial). */
   fingerprint: string
-  /** Cache-Control-shaped options: maxAge, swr, vary, bypass. */
   options: CacheOptions
+  /** vary result from the spec — IS the cache-key surface. */
+  varyResult: unknown
   children: ReactNode
 }
 
@@ -569,198 +460,78 @@ export async function Cache({
   id,
   fingerprint,
   options,
+  varyResult,
   children,
 }: CacheProps): Promise<ReactNode> {
-  // Cache can run inside a frame scope (set by
-  // `<Partial frame="name">`'s Flight round-trip). When it does,
-  // cache keys for any url/pathname manifest entries should resolve
-  // against the FRAME's URL, not the page's. ALS is populated by the
-  // enclosing `runInFrameScope` if we're in a frame.
-  const frameRequest = getCurrentFrameScope()?.request
-
   if (options.bypass) return children
-
-  // Pre-compute the stored manifest so accessor calls can throw
-  // synchronously when a new key is introduced (vs. the stored set).
-  const baseKeyPrefix = `${id}:${fingerprint}:`
-  const scope: ManifestScope = {
-    current: new Set(),
-    stored: null,
-    partialId: id,
-  }
-  // We can't know the baseKey (which includes `ids` hash) until
-  // stripPartials runs, but the `(id, fp)` prefix is enough to find
-  // the stored manifest for this Partial. The `ids` component only
-  // changes when partials inside are added/removed, which would
-  // produce a different stored manifest entry — fall through to miss
-  // either way.
-  const prior = findStoredManifestByPrefix(baseKeyPrefix)
-  if (prior) scope.stored = prior
-
-  return runWithCacheManifest(scope, async () =>
-    cacheImpl(id, fingerprint, options, children, scope, frameRequest),
-  )
-}
-
-function findStoredManifestByPrefix(prefix: string): Set<string> | undefined {
-  for (const [k, v] of state().manifestStore) {
-    if (k.startsWith(prefix)) return v
-  }
-  return undefined
+  return cacheImpl(id, fingerprint, options, varyResult, children)
 }
 
 async function cacheImpl(
   id: string,
   fingerprint: string,
   options: CacheOptions,
+  varyResult: unknown,
   children: ReactNode,
-  scope: ManifestScope,
-  frameRequest: Request | undefined,
 ): Promise<ReactNode> {
-  const { store, snapshotIndex, manifestStore, refreshing, inFlightMiss } = state()
-  const manifest = scope.current
-  // Strip statically-visible partials. Placeholders go into the cached
-  // bytes; live elements are re-injected on the way out so partials
-  // stay live inside a cached region.
-  const { stripped, partials, ids } = stripPartials(children)
+  const { store, snapshotIndex, refreshing, inFlightMiss } = state()
 
-  // The "stable" half of the key — same across all snapshots of this
-  // Partial. Includes ids so adding/removing an inner Partial
-  // invalidates automatically.
+  const { stripped, partials, ids } = stripPartials(children)
   const baseKey = `${id}:${fingerprint}:${djb2(ids.join(","))}`
+  const key = `${baseKey}:${hashParts(varyResult, options.vary ?? null)}`
   const now = Date.now()
   const route = new URL(getRequest().url).pathname
 
-  const storedManifest = manifestStore.get(baseKey)
-  // `scope.stored` was set eagerly by `Cache` (without knowing the
-  // `ids`-component); narrow it to the exact base-key entry here so
-  // the synchronous hoisting check matches the post-render one.
-  scope.stored = storedManifest ?? null
-
-  // ── Hit path ────────────────────────────────────────────────────
-  //
-  // Only reachable when we have a stored manifest: without it we don't
-  // know which request-state values participate in the key, so we
-  // can't look anything up. First render of a Partial is always a
-  // miss in this sense.
-  if (storedManifest) {
-    const values = resolveManifest(storedManifest, frameRequest)
-    const key = `${baseKey}:${hashParts(values, options.vary ?? null)}`
-
-    const existing = await store.get(key)
-    const existingSnapshots = existing ? snapshotIndex.get(key) : undefined
-    if (existing && existingSnapshots) {
-      if (existing.expiresAt > now || existing.staleUntil > now) {
-        registerDynamicSnapshots(route, existingSnapshots)
-        if (existing.expiresAt <= now && !refreshing.has(key)) {
-          refreshing.add(key)
-          void refreshEntry(baseKey, key, stripped, ids, options, id, frameRequest)
-            .catch((err) => console.error(`[cache] SWR refresh failed for ${key}:`, err))
-            .finally(() => refreshing.delete(key))
-        }
-        const decoded = await createFromReadableStream<ReactNode>(bytesToStream(existing.bytes))
-        const resolved = await resolveLazies(decoded)
-        const withStatic = reinject(resolved, partials)
-        return reinjectDynamic(withStatic, existingSnapshots)
+  // ── Hit path ──
+  const existing = await store.get(key)
+  const existingSnapshots = existing ? snapshotIndex.get(key) : undefined
+  if (existing && existingSnapshots) {
+    if (existing.expiresAt > now || existing.staleUntil > now) {
+      registerDynamicSnapshots(route, existingSnapshots)
+      if (existing.expiresAt <= now && !refreshing.has(key)) {
+        refreshing.add(key)
+        void refreshEntry(baseKey, key, stripped, ids, options, varyResult)
+          .catch((err) => console.error(`[cache] SWR refresh failed for ${key}:`, err))
+          .finally(() => refreshing.delete(key))
       }
+      const decoded = await createFromReadableStream<ReactNode>(bytesToStream(existing.bytes))
+      const resolved = await resolveLazies(decoded)
+      const withStatic = reinject(resolved, partials)
+      return reinjectDynamic(withStatic, existingSnapshots)
     }
-    // Entry past staleUntil, absent, or lost its snapshots → miss.
   }
 
-  // ── Miss path ───────────────────────────────────────────────────
-  //
-  // Render the stripped subtree. The manifest ALS is already active
-  // (opened in the `Cache` wrapper above); tracked accessor calls
-  // inside the render populate `manifest`. After the render finishes
-  // we verify the manifest matches any previously-stored one and
-  // store the entry under the key derived from its resolved values.
+  // ── Miss path ──
   const staticIdSet = new Set(ids)
-
-  // Dedupe concurrent misses for the same Partial (same baseKey). The
-  // first caller renders; others await the same result.
   let pending = inFlightMiss.get(baseKey)
   if (!pending) {
-    pending = renderMissAndStore(
-      baseKey,
-      id,
-      stripped,
-      staticIdSet,
-      ids,
-      options,
-      manifest,
-      storedManifest,
-      frameRequest,
-    ).finally(() => inFlightMiss.delete(baseKey))
+    pending = renderMissAndStore(key, stripped, staticIdSet, options).finally(() =>
+      inFlightMiss.delete(baseKey),
+    )
     inFlightMiss.set(baseKey, pending)
   }
   const { liveTree } = await pending
-
   return reinject(liveTree, partials)
 }
 
-// ─── Miss helpers ──────────────────────────────────────────────────────
-//
-// The cold-miss dedupe map lives on `ScopeState.inFlightMiss` — multiple
-// requests hitting the same cold key within a scope share one in-flight
-// render Promise.
-
 async function renderMissAndStore(
-  baseKey: string,
-  id: string,
+  key: string,
   stripped: ReactNode,
   staticIds: Set<string>,
-  ids: string[],
   options: CacheOptions,
-  manifest: Set<string>,
-  storedManifest: Set<string> | undefined,
-  frameRequest: Request | undefined,
-): Promise<{
-  liveTree: ReactNode
-  dynamicSnapshots: Map<string, PartialSnapshot>
-}> {
-  const { store, manifestStore } = state()
-  // Render to Flight ONCE, then tee:
-  //   • user branch → decoded immediately, returned to outer render.
-  //     Inner Suspense boundaries stay lazy so the client paints
-  //     fallbacks until they stream in.
-  //   • storage branch → buffered, fully resolved, stripped of dynamic
-  //     partial wrappers, re-encoded, stored. Runs in the background.
-  //
-  // The manifest ALS was opened in the `Cache` wrapper, so tracked
-  // accessor calls inside the inner render populate `manifest` via
-  // async_hooks inheritance even though the consumer of the stream
-  // (this function) sits outside the immediate `als.run` scope.
+): Promise<{ liveTree: ReactNode; dynamicSnapshots: Map<string, PartialSnapshot> }> {
+  const { store } = state()
   const stream = renderToReadableStream(stripped)
   const [userBranch, storageBranch] = stream.tee()
 
   const storagePromise = (async () => {
     const rawBytes = await readAll(storageBranch)
-    // At this point the inner render has completed — every accessor
-    // call has fired — so `manifest` is final. Verify against any
-    // stored manifest. Added-key violations already threw synchronously
-    // during render; here we catch the "missing-key" case (stored had
-    // X, current didn't touch X). That's a soft failure: log + preserve
-    // the old entry. Overwriting would flip the cache shape.
-    if (storedManifest && !manifestsEqual(storedManifest, manifest)) {
-      console.error(`[cache] manifest mismatch on miss for "${id}" — preserving old entry.`, {
-        previous: manifestToSorted(storedManifest),
-        current: manifestToSorted(manifest),
-      })
-      return new Map<string, PartialSnapshot>()
-    }
-
     const rawDecoded = await createFromReadableStream<ReactNode>(bytesToStream(rawBytes))
     const rawResolved = await resolveLazies(rawDecoded)
 
     const { stripped: holeTree, snapshots } = stripDynamicWrappers(rawResolved, staticIds)
-
     const cleanBytes = await renderAndBuffer(holeTree)
 
-    // Derive the entry key from the (now verified) manifest.
-    const values = resolveManifest(manifest, frameRequest)
-    const key = `${baseKey}:${hashParts(values, options.vary ?? null)}`
-
-    manifestStore.set(baseKey, new Set(manifest))
     await store.set(
       key,
       freshEntry(cleanBytes, options.maxAge, options.staleWhileRevalidate, Date.now()),
@@ -770,68 +541,33 @@ async function renderMissAndStore(
   })()
 
   storagePromise.catch((err) => {
-    console.error(`[cache] storage finalize failed for ${baseKey}:`, err)
+    console.error(`[cache] storage finalize failed for ${key}:`, err)
   })
 
   const liveTree = await createFromReadableStream<ReactNode>(userBranch)
-  // `ids` kept around so TS doesn't prune the parameter — it's folded
-  // into baseKey by the caller before we're invoked.
-  void ids
   return { liveTree, dynamicSnapshots: new Map() }
 }
 
 async function refreshEntry(
-  baseKey: string,
-  _oldKey: string,
+  _baseKey: string,
+  key: string,
   stripped: ReactNode,
   ids: string[],
   options: CacheOptions,
-  partialId: string,
-  frameRequest: Request | undefined,
+  _varyResult: unknown,
 ): Promise<void> {
-  const { store, manifestStore } = state()
-  // SWR refresh runs in a separate async chain; open its own manifest
-  // scope so accessor calls during re-render go into the right bucket.
-  const storedManifest = manifestStore.get(baseKey)
-  const scope: ManifestScope = {
-    current: new Set(),
-    stored: storedManifest ?? null,
-    partialId,
-  }
-
-  await runWithCacheManifest(scope, async () => {
-    const stream = renderToReadableStream(stripped)
-    const bytes = await readAll(stream)
-
-    const manifest = scope.current
-    if (storedManifest && !manifestsEqual(storedManifest, manifest)) {
-      // Log and preserve the existing entry rather than overwriting
-      // with the conflicting one.
-      console.error(
-        `[cache] SWR refresh for ${baseKey}: manifest mismatch, preserving old entry.`,
-        {
-          previous: manifestToSorted(storedManifest),
-          current: manifestToSorted(manifest),
-        },
-      )
-      return
-    }
-
-    const decoded = await createFromReadableStream<ReactNode>(bytesToStream(bytes))
-    const resolved = await resolveLazies(decoded)
-    const { stripped: holeTree, snapshots } = stripDynamicWrappers(resolved, new Set(ids))
-    const cleanBytes = await renderAndBuffer(holeTree)
-
-    const values = resolveManifest(manifest, frameRequest)
-    const key = `${baseKey}:${hashParts(values, options.vary ?? null)}`
-
-    manifestStore.set(baseKey, new Set(manifest))
-    await store.set(
-      key,
-      freshEntry(cleanBytes, options.maxAge, options.staleWhileRevalidate, Date.now()),
-    )
-    setSnapshots(key, snapshots)
-  })
+  const { store } = state()
+  const stream = renderToReadableStream(stripped)
+  const bytes = await readAll(stream)
+  const decoded = await createFromReadableStream<ReactNode>(bytesToStream(bytes))
+  const resolved = await resolveLazies(decoded)
+  const { stripped: holeTree, snapshots } = stripDynamicWrappers(resolved, new Set(ids))
+  const cleanBytes = await renderAndBuffer(holeTree)
+  await store.set(
+    key,
+    freshEntry(cleanBytes, options.maxAge, options.staleWhileRevalidate, Date.now()),
+  )
+  setSnapshots(key, snapshots)
 }
 
 function freshEntry(
@@ -845,18 +581,10 @@ function freshEntry(
   return { bytes, expiresAt, staleUntil }
 }
 
-// ─── Dev / debugging helpers ────────────────────────────────────────────
-
 export function _cacheStats(): Promise<{ size: number; keys: string[] }> {
   return state().store.stats()
 }
 
-/**
- * Clear cache state. No argument (or `"all"`): every scope — used by
- * HMR dispose hooks and the debug toolbar's flush button. Pass a
- * specific scope to target a single worker's entries (e.g. what
- * `/__test/clear-caches` does per-request).
- */
 export async function _clearCache(scope?: string | "all"): Promise<void> {
   if (scope === undefined || scope === "all") {
     const all = [...scopes.values()]
@@ -878,6 +606,3 @@ if (import.meta.hot) {
     void _clearCache()
   })
 }
-
-// `getCurrentCacheManifest` is re-exported so tests can introspect.
-export { getCurrentCacheManifest }

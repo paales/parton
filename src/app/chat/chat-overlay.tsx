@@ -1,6 +1,13 @@
-import { Partial } from "../../lib/partial.tsx"
-import { ROOT, capturePartialContext } from "../../lib/partial-context.ts"
-import { getSearchParam } from "../../framework/context.ts"
+/**
+ * Chat overlay — streaming notes demo.
+ *
+ * Frame-scoped (`frame="chat-overlay"`) so the open/close state lives
+ * separately from the page URL. Each message in `?msgs=…` becomes a
+ * pre-built per-fileId message spec; the slot lookup wraps `ChatMessage`
+ * once per id.
+ */
+
+import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
 import { ChatMessage } from "./piece.tsx"
 import {
   AutoScrollToBottom,
@@ -10,15 +17,7 @@ import {
   ResetChatButton,
 } from "./chat-controls.tsx"
 
-/**
- * Ordered pool of markdown files streamable into the chat. The
- * server-side producer in `log.ts` searches `notes/`, `docs/`,
- * `docs-dev/`, and `archive/` for each id; this list curates which
- * ids the +new-message picker offers.
- */
 export const AVAILABLE_FILES = [
-  // Lead with the framework reference — the chat demo doubles as a
-  // way to read the docs.
   "AA_CHAT_STREAMING",
   "intro",
   "partial",
@@ -26,7 +25,6 @@ export const AVAILABLE_FILES = [
   "cache",
   "cms",
   "prior-art",
-  // Internals.
   "render-pipeline",
   "cache-internals",
   "frame-scope",
@@ -34,9 +32,7 @@ export const AVAILABLE_FILES = [
   "server-isolation",
   "flight-gotchas",
   "testing",
-  // Active research.
   "IDEAS",
-  // Archived design retrospectives — useful chat content.
   "STREAMING_CHAT",
   "PARTIAL_ARCHITECTURE",
 ]
@@ -60,60 +56,99 @@ function computeNextHref(msgIds: string[]): string | null {
   return `?${params.toString()}`
 }
 
-export function ChatOverlay() {
-  return (
-    <Partial parent={ROOT} selector="#chat-overlay" frame="chat-overlay">
-      <ChatOverlayBody />
-    </Partial>
-  )
-}
+// Pre-built message specs — one per fileId. Each gates by checking
+// whether its fileId is in the `?msgs=` list.
+const MessagePartials = AVAILABLE_FILES.map((fileId) =>
+  ReactCms.partial(
+    function MessageRender({ cursor }: { cursor: number } & RenderArgs) {
+      return <ChatMessage fileId={fileId} cursor={cursor} />
+    },
+    {
+      selector: `#chat-msg-${fileId}`,
+      vary: ({ request }) => {
+        const sp = new URL(request.url).searchParams
+        const msgs = parseMsgs(sp.get("msgs"))
+        if (!msgs.includes(fileId)) return null
+        const cursor = Math.max(0, Number(sp.get(`cursor-${fileId}`)) || 0)
+        return { cursor }
+      },
+    },
+  ),
+)
 
-function ChatOverlayBody() {
-  const parent = capturePartialContext()
-  // Hoist BOTH tracked-accessor reads to the sync top of the body —
-  // same rule as React hooks. The dependency surface is the union
-  // of every key the body could touch, not just the ones the open
-  // branch happens to read.
-  const chatParam = getSearchParam("chat")
-  const msgsParam = getSearchParam("msgs")
-  const open = chatParam != null ? chatParam === "open" : false
+export const ChatListPartial = ReactCms.partial(
+  function ChatListRender({ msgIds, parent }: { msgIds: string[] } & RenderArgs) {
+    return (
+      <div data-testid="chat-list" className="min-h-30 flex-1 overflow-y-auto px-3 py-2">
+        {msgIds.length === 0 ? (
+          <div data-testid="chat-empty" className="text-xs italic text-muted-foreground">
+            No messages. Click "stream next note" to start.
+          </div>
+        ) : (
+          msgIds.map((fileId) => {
+            const idx = AVAILABLE_FILES.indexOf(fileId)
+            if (idx < 0) return null
+            const Spec = MessagePartials[idx]
+            return <Spec key={fileId} parent={parent} />
+          })
+        )}
+      </div>
+    )
+  },
+  {
+    selector: "#chat-list",
+    vary: ({ request }) => {
+      const msgIds = parseMsgs(new URL(request.url).searchParams.get("msgs"))
+      return { msgIds }
+    },
+  },
+)
 
-  if (!open) return <ChatOpenPill />
+export const ChatOverlayPartial = ReactCms.partial(
+  function ChatOverlayRender({
+    open,
+    msgIds,
+    nextHref,
+    parent,
+  }: {
+    open: boolean
+    msgIds: string[]
+    nextHref: string | null
+  } & RenderArgs) {
+    if (!open) return <ChatOpenPill />
+    return (
+      <aside
+        data-testid="chat-box"
+        className="fixed right-4 bottom-4 z-100 flex max-h-[70vh] w-150 flex-col rounded-xl border bg-card text-card-foreground shadow-2xl"
+      >
+        <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
+          <strong className="text-sm">notes stream</strong>
+          <div className="flex gap-1.5">
+            <ResetChatButton />
+            <ChatClosePill />
+          </div>
+        </header>
+        <AutoScrollToBottom containerTestId="chat-list" />
+        <ChatListPartial parent={parent} />
+        <footer className="border-t px-3 py-2">
+          <NewMessageLink nextHref={nextHref} />
+        </footer>
+      </aside>
+    )
+  },
+  {
+    selector: "#chat-overlay",
+    frame: "chat-overlay",
+    vary: ({ request }) => {
+      const sp = new URL(request.url).searchParams
+      const open = sp.get("chat") === "open"
+      const msgIds = parseMsgs(sp.get("msgs"))
+      const nextHref = computeNextHref(msgIds)
+      return { open, msgIds, nextHref }
+    },
+  },
+)
 
-  const msgIds = parseMsgs(msgsParam)
-  const nextHref = computeNextHref(msgIds)
-
-  return (
-    <aside
-      data-testid="chat-box"
-      className="fixed right-4 bottom-4 z-100 flex max-h-[70vh] w-150 flex-col rounded-xl border bg-card text-card-foreground shadow-2xl"
-    >
-      <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <strong className="text-sm">notes stream</strong>
-        <div className="flex gap-1.5">
-          <ResetChatButton />
-          <ChatClosePill />
-        </div>
-      </header>
-      <AutoScrollToBottom containerTestId="chat-list" />
-      <Partial parent={parent} selector="#chat-list">
-        <div data-testid="chat-list" className="min-h-30 flex-1 overflow-y-auto px-3 py-2">
-          {msgIds.length === 0 ? (
-            <div data-testid="chat-empty" className="text-xs italic text-muted-foreground">
-              No messages. Click “stream next note” to start.
-            </div>
-          ) : (
-            msgIds.map((fileId) => (
-              <Partial parent={parent} key={`chat-msg-${fileId}`} selector={`#chat-msg-${fileId}`}>
-                <ChatMessage fileId={fileId} />
-              </Partial>
-            ))
-          )}
-        </div>
-      </Partial>
-      <footer className="border-t px-3 py-2">
-        <NewMessageLink nextHref={nextHref} />
-      </footer>
-    </aside>
-  )
+export function ChatOverlay({ parent }: { parent: PartialCtx }) {
+  return <ChatOverlayPartial parent={parent} />
 }

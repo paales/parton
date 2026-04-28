@@ -1,105 +1,647 @@
 /**
- * PartialRoot Architecture
+ * `ReactCms.partial(Render, ...)` — define-step constructor.
  *
- * Pages are composed of independently re-renderable partials declared
- * with the <Partial> wrapper:
+ * Replaces the old `<Partial>` JSX wrapper, the tracked-accessor
+ * manifest, the per-Partial frame/CMS/manifest ALS cells, and
+ * `registerBlock`. One spec call at module scope produces a placeable
+ * React component. Every dependency the spec has on the request,
+ * route, or CMS lives in a single sync `vary` function whose result is
+ * also the cache-key surface.
  *
- *   <PartialRoot>
- *     <html>
- *       <Partial selector="#head"><head>...</head></Partial>
- *       <body>
- *         <Partial selector="#nav"><nav>...</nav></Partial>
- *         <Partial selector="#cart .cart" fallback={<Spinner/>}>
- *           <CartBadge/>
- *         </Partial>
- *       </body>
- *     </html>
- *   </PartialRoot>
+ *   const PokemonPage = ReactCms.partial(PokemonRender, '/pokemon/:id')
+ *   <PokemonPage parent={ROOT} />
  *
- * `<PartialRoot>` is a thin orchestrator: it parses the request
- * params, sets up the request-scoped state that each `<Partial>`
- * reads during render, decides whether we're in streaming mode (full
- * page) or cache mode (partial refetch, served from snapshots), and
- * wraps the output in `<PartialsClient>`.
+ * Slot block instances pass `cmsId={entry.id}` to override the spec's
+ * baked-in cmsId — same Component renders with per-instance content.
  *
- * Every decision about an individual partial — "render fresh?",
- * "emit placeholder because the fingerprint matched?" — lives in the
- * `Partial` component itself. There is no static walker; each Partial
- * discovers itself by running. Deep Partials produced inside `.map()`
- * loops or other opaque component bodies are first-class: they
- * register themselves via `<PartialBoundary>` on every render.
- *
- * Snapshots stored by `<PartialBoundary>` are captured JSX from the
- * ancestor's most recent execution. Cache-mode refetches render that
- * snapshot directly through a fresh `<Partial>` body — the Partial
- * re-evaluates its fingerprint, opens any frame scope, and
- * re-registers the snapshot. All request-varying state flows through
- * tracked accessors (`getSearchParam`, `getCookie`, `getPathname`,
- * frame URLs), not props.
+ * See `notes/partial-define-step-api.md`.
  */
 
-import React, { type ReactNode } from "react"
-import { PartialsClient } from "./partial-client.tsx"
-import { Partial, PartialBoundary, type PartialProps } from "./partial-component.tsx"
+import React, {
+  Suspense,
+  cloneElement,
+  isValidElement,
+  type FC,
+  type ReactElement,
+  type ReactNode,
+} from "react"
+import { djb2 } from "./hash.ts"
+import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
-import { getRequest } from "../framework/context.ts"
+import { FrameNameProvider, PartialsClient } from "./partial-client.tsx"
+import { Cache } from "./cache.tsx"
+import type { CacheOptions } from "./cache-options.ts"
 import {
   enterRequestRegistry,
   getRouteSnapshots,
   lookupPartial,
+  registerPartial,
   type PartialSnapshot,
 } from "./partial-registry.ts"
-import { enterPartialState, type PartialRequestState } from "./partial-request-state.ts"
-import { setSessionFrameUrl } from "../framework/session.ts"
+import { enterPartialState, getPartialState, type PartialRequestState } from "./partial-request-state.ts"
+import {
+  cmsFingerprintContribution,
+  createCmsReadSurface,
+  getSpecByCmsId,
+  getSpecByType,
+  registerSpec,
+  type CmsReadSurface,
+} from "../framework/cms-runtime.ts"
+import { getRequest, matchRoutePattern } from "../framework/context.ts"
+import { getSessionFrameUrl, setSessionFrameUrl } from "../framework/session.ts"
 
-export { Partial, type PartialProps }
+export { ROOT, type PartialCtx } from "./partial-context.ts"
+
+// ─── Types ─────────────────────────────────────────────────────────────
+
+export type SelectorToken = `${"#" | "."}${string}`
+export type SelectorTokens = SelectorToken | SelectorToken[]
+
+export interface ActivatorProps {
+  partialId?: string
+  children?: ReactNode
+}
+
+export type DeferSpec = true | ReactElement<ActivatorProps>
+
+export interface VaryScope {
+  request: Request
+  params: Record<string, string>
+  cms: CmsReadSurface
+}
+
+export interface RenderArgs {
+  /** PartialCtx for THIS spec's descendants — pass to slot host props
+   *  and nested Spec components' `parent` prop. */
+  parent: PartialCtx
+  /** Effective cmsId for THIS render (override-aware) — pass to slots'
+   *  `hostCmsId`. */
+  cmsId: string
+  /** Outer `children` passed to the spec component, when used as a
+   *  JSX wrapper. `undefined` when the spec was placed without
+   *  children. */
+  children?: ReactNode
+}
+
+export interface PartialOptions<V> {
+  match?: string
+  vary?: (scope: VaryScope) => V | null
+  /** Class-only selector tokens (e.g. `[".hero"]`). When set, the spec
+   *  is usable as a slot block — slot entries form effective selectors
+   *  as `[#<entry.id>, ...tags]` and override the spec's cmsId per
+   *  instance. */
+  tags?: ReadonlyArray<`.${string}`>
+  /** Selector for non-slot (page-position) specs. Auto-derived from
+   *  `Render.name` when omitted. */
+  selector?: SelectorTokens
+  /** Fallback CMS storage key. Slot instances override via the
+   *  Component's `cmsId` prop. */
+  cmsId?: string
+  /** Spec catalog tag (slot lookup). Defaults to the auto-derived id. */
+  type?: string
+  cache?: CacheOptions
+  frame?: string
+  frameUrl?: string
+  defer?: DeferSpec
+  fallback?: ReactNode
+  errorWith?: ReactNode
+}
+
+export interface PartialComponentProps {
+  parent: PartialCtx
+  /** Per-instance cmsId override (used by slots). */
+  cmsId?: string
+  /** Pass-through children — surfaced to `Render` as `children` in
+   *  its props bag. Lets specs act as JSX wrappers (e.g. opening a
+   *  frame around author content). */
+  children?: ReactNode
+}
+
+// ─── Selector parsing & id derivation ─────────────────────────────────
+
+interface ParsedSelector {
+  uniqueTokens: string[]
+  sharedTokens: string[]
+}
+
+function parseSelector(input: SelectorTokens): ParsedSelector {
+  const tokens = Array.isArray(input)
+    ? input.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean)
+    : input.split(/\s+/).map((t) => t.trim()).filter(Boolean)
+  if (tokens.length === 0) {
+    throw new Error("ReactCms.partial: selector is empty")
+  }
+  const uniqueTokens: string[] = []
+  const sharedTokens: string[] = []
+  for (const tok of tokens) {
+    if (tok.startsWith("#")) {
+      const name = tok.slice(1)
+      if (!name) throw new Error('Empty "#" token')
+      if (!uniqueTokens.includes(name)) uniqueTokens.push(name)
+    } else if (tok.startsWith(".")) {
+      const name = tok.slice(1)
+      if (!name) throw new Error('Empty "." token')
+      if (!sharedTokens.includes(name)) sharedTokens.push(name)
+    } else {
+      throw new Error(`Unprefixed token "${tok}" — must start with "#" or "."`)
+    }
+  }
+  return { uniqueTokens, sharedTokens }
+}
+
+function effectiveIdFromSelector(parsed: ParsedSelector): string {
+  const { uniqueTokens, sharedTokens } = parsed
+  if (uniqueTokens.length === 1) return uniqueTokens[0]
+  if (uniqueTokens.length > 1) return [...uniqueTokens].sort().join(",")
+  return `__anon:${[...sharedTokens].sort().join(",")}`
+}
+
+const STRIP_SUFFIXES = ["Render", "Page", "Block", "Partial", "Component"]
+
+function autoSelector(render: (...args: never[]) => unknown): SelectorTokens {
+  const raw = (render as { displayName?: string; name?: string }).displayName ?? render.name ?? ""
+  let stem = raw
+  for (const suf of STRIP_SUFFIXES) {
+    if (stem.endsWith(suf) && stem.length > suf.length) {
+      stem = stem.slice(0, -suf.length)
+      break
+    }
+  }
+  if (!stem) stem = "anon"
+  const kebab = stem
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[_\s]+/g, "-")
+    .toLowerCase()
+  return `#${kebab}` as SelectorToken
+}
+
+// ─── Frame request resolution ─────────────────────────────────────────
+
+function resolveFrameRequest(
+  framePath: readonly string[],
+  initialUrl: string | undefined,
+): Request {
+  const pageRequest = getRequest()
+  const sessionUrl = getSessionFrameUrl(framePath)
+  const effective = sessionUrl ?? initialUrl
+  if (effective == null) return pageRequest
+  const resolved = new URL(effective, pageRequest.url).toString()
+  return new Request(resolved, { headers: pageRequest.headers, method: "GET" })
+}
+
+// ─── Stable hash helpers ──────────────────────────────────────────────
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? ""
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]"
+  const keys = Object.keys(value as Record<string, unknown>).sort()
+  return (
+    "{" +
+    keys
+      .map((k) => JSON.stringify(k) + ":" + stableStringify((value as Record<string, unknown>)[k]))
+      .join(",") +
+    "}"
+  )
+}
+
+// ─── PartialBoundary — registers + passes children through ────────────
+
+interface PartialBoundaryProps {
+  id: string
+  type: string
+  parentPath: readonly string[]
+  uniqueTokens: string[]
+  sharedTokens: string[]
+  framePath: readonly string[]
+  frameUrl?: string
+  cmsId?: string
+  cache?: CacheOptions
+  fallback: ReactNode
+  errorWith: ReactNode | undefined
+  varyResult: unknown
+  children: ReactNode
+}
+
+export function PartialBoundary({
+  id,
+  type,
+  parentPath,
+  uniqueTokens,
+  sharedTokens,
+  framePath,
+  frameUrl,
+  cmsId,
+  cache,
+  fallback,
+  errorWith,
+  varyResult,
+  children,
+}: PartialBoundaryProps): ReactNode {
+  const route = new URL(getRequest().url).pathname
+  registerPartial(route, id, {
+    type,
+    fallback,
+    errorWith,
+    uniqueTokens,
+    sharedTokens,
+    framePath,
+    frameUrl,
+    parentPath,
+    cmsId,
+    cache,
+    varyResult,
+  })
+  return children
+}
+
+// ─── Registry of spec components, keyed by effective id ────────────────
+
+const componentById = new Map<string, FC<PartialComponentProps>>()
+
+// ─── The constructor ──────────────────────────────────────────────────
+
+interface InternalSpec<V> {
+  /** Spec's own id (when no cmsId override). */
+  id: string
+  /** Spec's own cmsId fallback (used when no override). */
+  cmsId: string
+  /** Spec catalog type tag (slot lookup). */
+  type: string
+  parsed: ParsedSelector
+  options: PartialOptions<V>
+  Render: (props: V & RenderArgs) => ReactNode
+  /** True iff `options.tags` was set — spec is usable as slot block. */
+  isSlotBlock: boolean
+}
+
+function placeholderFor(id: string): ReactElement {
+  return <i key={id} hidden data-partial data-partial-id={id} />
+}
+
+function effectiveIdForInstance(spec: InternalSpec<unknown>, cmsIdOverride: string | undefined): {
+  id: string
+  parsed: ParsedSelector
+} {
+  if (cmsIdOverride == null || cmsIdOverride === spec.cmsId) {
+    return { id: spec.id, parsed: spec.parsed }
+  }
+  // Slot-block instance — selector is `[#<cmsId>, ...spec.tags]`
+  const uniqueTokens = [cmsIdOverride]
+  const sharedTokens = spec.parsed.sharedTokens
+  return {
+    id: cmsIdOverride,
+    parsed: { uniqueTokens, sharedTokens },
+  }
+}
+
+function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps> {
+  const Component: FC<PartialComponentProps> = ({
+    parent,
+    cmsId: cmsIdOverride,
+    children: outerChildren,
+  }) => {
+    const opts = spec.options
+    const effectiveCmsId = cmsIdOverride ?? spec.cmsId
+    const { id, parsed } = effectiveIdForInstance(
+      spec as InternalSpec<unknown>,
+      cmsIdOverride,
+    )
+    // ── Match phase ──
+    // `match` runs against the PAGE URL — it's a page-level "should
+    // this spec render on this route" gate. The frame URL is
+    // internal state, not a page-level concern. `vary` (below) sees
+    // the frame-resolved URL when the spec is framed; `match` does
+    // not.
+    let params: Record<string, string> = {}
+    if (opts.match) {
+      const pageUrl = new URL(getRequest().url)
+      const matched = matchRoutePattern(pageUrl.pathname, opts.match)
+      if (matched === null) return null
+      params = matched
+    }
+
+    // ── Frame phase ──
+    const ourFrameChain: readonly string[] = opts.frame
+      ? [...parent.frameChain, opts.frame]
+      : parent.frameChain
+    const ourRequest =
+      opts.frame != null
+        ? resolveFrameRequest(ourFrameChain, opts.frameUrl)
+        : ourFrameChain.length > 0
+          ? resolveFrameRequest(ourFrameChain, undefined)
+          : getRequest()
+
+    // ── Vary phase ──
+    const cms = createCmsReadSurface(effectiveCmsId, ourRequest)
+    let varyResult: unknown
+    if (opts.vary) {
+      const v = opts.vary({ request: ourRequest, params, cms })
+      if (v === null) return null
+      varyResult = v
+    } else {
+      // No `vary` declared. Default: fold match params + the full
+      // request URL search string into the dependency surface. This
+      // keeps "wrapper" specs (chrome with no own state) reactive to
+      // URL changes their descendants might depend on. If a spec
+      // wants to fp-skip across URL changes, it must declare a vary
+      // that returns a stable shape.
+      varyResult = {
+        ...params,
+        __search: new URL(ourRequest.url).search,
+      }
+    }
+
+    // ── Fingerprint ──
+    const cmsKey = effectiveCmsId
+      ? cmsFingerprintContribution(effectiveCmsId, ourRequest)
+      : ""
+    const ownFrameKey = opts.frame ? `|frame=${ourFrameChain.join(".")}:${ourRequest.url}` : ""
+    const ambientFrameKey =
+      opts.frame == null && ourFrameChain.length > 0
+        ? `|inFrame=${ourFrameChain.join(".")}:${ourRequest.url}`
+        : ""
+    const structuralFp = djb2(
+      `${id}|vary=${stableStringify(varyResult)}${cmsKey}${ownFrameKey}`,
+    )
+    const fp = djb2(
+      `${id}|vary=${stableStringify(varyResult)}${cmsKey}${ownFrameKey}${ambientFrameKey}`,
+    )
+
+    // ── Skip decisions ──
+    const state = getPartialState() ?? null
+
+    const isExplicit = state?.explicitIds.has(id) ?? false
+    const cachedFp = state?.cachedFingerprints.get(id)
+    const fingerprintMatches = cachedFp != null && cachedFp === fp
+    const shouldSkip = state ? !isExplicit && fingerprintMatches : false
+
+    if (state) {
+      for (const tok of parsed.uniqueTokens) {
+        if (state.seenUniqueTokens.has(tok)) {
+          throw new Error(
+            `Duplicate "#${tok}" selector. Tokens starting with "#" must be unique per page.`,
+          )
+        }
+        state.seenUniqueTokens.add(tok)
+      }
+      if (state.seenIds.has(id)) {
+        throw new Error(`Duplicate partial id "${id}".`)
+      }
+      state.seenIds.add(id)
+    }
+
+    const childCtx = _childContext(parent, id, opts.frame)
+    const renderProps = {
+      ...(varyResult as object),
+      parent: childCtx,
+      cmsId: effectiveCmsId,
+      children: outerChildren,
+    } as V & RenderArgs
+    const fallback = opts.fallback ?? null
+
+    if (shouldSkip) {
+      return (
+        <PartialBoundary
+          id={id}
+          type={spec.type}
+          parentPath={parent.path}
+          uniqueTokens={parsed.uniqueTokens}
+          sharedTokens={parsed.sharedTokens}
+          framePath={ourFrameChain}
+          frameUrl={opts.frameUrl}
+          cmsId={effectiveCmsId}
+          cache={opts.cache}
+          fallback={fallback}
+          errorWith={opts.errorWith}
+          varyResult={varyResult}
+        >
+          {placeholderFor(id)}
+        </PartialBoundary>
+      )
+    }
+
+    if (opts.defer && !isExplicit) {
+      const defer = opts.defer
+      const dormant =
+        defer === true
+          ? fallback
+          : isValidElement(defer)
+            ? cloneElement(
+                defer as ReactElement<ActivatorProps>,
+                { partialId: id },
+                fallback,
+              )
+            : fallback
+      return (
+        <PartialBoundary
+          id={id}
+          type={spec.type}
+          parentPath={parent.path}
+          uniqueTokens={parsed.uniqueTokens}
+          sharedTokens={parsed.sharedTokens}
+          framePath={ourFrameChain}
+          frameUrl={opts.frameUrl}
+          cmsId={effectiveCmsId}
+          cache={opts.cache}
+          fallback={fallback}
+          errorWith={opts.errorWith}
+          varyResult={varyResult}
+        >
+          <PartialErrorBoundary
+            key={id}
+            partialId={id}
+            partialFingerprint={fp}
+            debugUniqueTokens={parsed.uniqueTokens}
+            debugSharedTokens={parsed.sharedTokens}
+            debugFramePath={ourFrameChain}
+            debugParentPath={parent.path}
+            fallback={opts.errorWith}
+          >
+            {dormant}
+          </PartialErrorBoundary>
+        </PartialBoundary>
+      )
+    }
+
+    let body: ReactNode = spec.Render(renderProps)
+
+    if (opts.cache !== undefined) {
+      body = (
+        <Cache id={id} fingerprint={structuralFp} options={opts.cache} varyResult={varyResult}>
+          {body}
+        </Cache>
+      )
+    }
+
+    if (opts.frame != null) {
+      const url = new URL(ourRequest.url)
+      const initialUrl = url.pathname + url.search
+      body = (
+        <FrameNameProvider path={ourFrameChain} initialUrl={initialUrl}>
+          {body}
+        </FrameNameProvider>
+      )
+    }
+
+    if (fallback != null) {
+      // With fallback: outer Suspense carries the key (wrapper
+      // detection: keyed Suspense). Inner PartialErrorBoundary
+      // carries partialId/fingerprint for fp registration.
+      body = (
+        <Suspense
+          key={id}
+          fallback={
+            <PartialErrorBoundary
+              partialId={id}
+              partialFingerprint={fp}
+              fallback={opts.errorWith}
+            >
+              {fallback}
+            </PartialErrorBoundary>
+          }
+        >
+          <PartialErrorBoundary
+            partialId={id}
+            partialFingerprint={fp}
+            debugUniqueTokens={parsed.uniqueTokens}
+            debugSharedTokens={parsed.sharedTokens}
+            debugFramePath={ourFrameChain}
+            debugParentPath={parent.path}
+            fallback={opts.errorWith}
+          >
+            {body}
+          </PartialErrorBoundary>
+        </Suspense>
+      )
+    } else {
+      // No fallback: the PartialErrorBoundary IS the wrapper. Key it
+      // so the client's `isPartialWrapper` walker (which checks
+      // `node.key != null`) detects it.
+      body = (
+        <PartialErrorBoundary
+          key={id}
+          partialId={id}
+          partialFingerprint={fp}
+          debugUniqueTokens={parsed.uniqueTokens}
+          debugSharedTokens={parsed.sharedTokens}
+          debugFramePath={ourFrameChain}
+          debugParentPath={parent.path}
+          fallback={opts.errorWith}
+        >
+          {body}
+        </PartialErrorBoundary>
+      )
+    }
+
+    return (
+      <PartialBoundary
+        id={id}
+        type={spec.type}
+        parentPath={parent.path}
+        uniqueTokens={parsed.uniqueTokens}
+        sharedTokens={parsed.sharedTokens}
+        framePath={ourFrameChain}
+        frameUrl={opts.frameUrl}
+        cmsId={effectiveCmsId}
+        cache={opts.cache}
+        fallback={fallback}
+        errorWith={opts.errorWith}
+        varyResult={varyResult}
+      >
+        {body}
+      </PartialBoundary>
+    )
+  }
+  Component.displayName = `Partial(${spec.id})`
+  return Component
+}
+
+// ─── Public constructor ───────────────────────────────────────────────
+
+export const ReactCms = {
+  partial<V extends object>(
+    Render: (props: V & RenderArgs) => ReactNode,
+    matchOrOpts: string | PartialOptions<V> = {},
+  ): FC<PartialComponentProps> {
+    const options: PartialOptions<V> =
+      typeof matchOrOpts === "string" ? { match: matchOrOpts } : matchOrOpts
+
+    const isSlotBlock = options.tags != null && options.tags.length > 0
+
+    let parsed: ParsedSelector
+    let id: string
+    if (isSlotBlock) {
+      // Slot-block specs have no #-token by default; their effective
+      // selector is materialized per-instance from the entry's cmsId.
+      // For catalog purposes we use the type tag.
+      parsed = {
+        uniqueTokens: [],
+        sharedTokens: (options.tags ?? []).map((t) => t.slice(1)),
+      }
+      id = options.type ?? options.cmsId ?? autoSelector(Render).toString().slice(1)
+    } else {
+      const selectorInput = options.selector ?? autoSelector(Render)
+      parsed = parseSelector(selectorInput)
+      id = effectiveIdFromSelector(parsed)
+    }
+
+    const cmsId = options.cmsId ?? id
+    const type = options.type ?? id
+
+    const spec: InternalSpec<V> = {
+      id,
+      cmsId,
+      type,
+      parsed,
+      options,
+      Render,
+      isSlotBlock,
+    }
+
+    const Component = createSpecComponent(spec)
+    componentById.set(id, Component)
+
+    registerSpec({
+      id,
+      cmsId,
+      type,
+      selectorTokens: parsed,
+      Component,
+      isSlotBlock,
+      vary: options.vary as ((scope: VaryScope) => unknown) | undefined,
+      displayName:
+        (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
+    })
+
+    return Component
+  },
+}
+
+// ─── PartialRoot ──────────────────────────────────────────────────────
 
 interface PartialRootProps {
   children: ReactNode
 }
-
-// ─── Helpers ────────────────────────────────────────────────────────────
 
 function parseCachedFingerprints(raw: string | null): Map<string, string | null> {
   const out = new Map<string, string | null>()
   if (!raw) return out
   for (const token of raw.split(",").map((s) => s.trim())) {
     if (!token) continue
-    const colonIdx = token.indexOf(":")
-    if (colonIdx > 0) {
-      out.set(token.slice(0, colonIdx), token.slice(colonIdx + 1))
-    } else {
-      out.set(token, null)
-    }
+    // Use lastIndexOf — anonymous ids contain `:` (e.g. `__anon:product`).
+    // The fingerprint comes after the LAST colon.
+    const colonIdx = token.lastIndexOf(":")
+    if (colonIdx > 0) out.set(token.slice(0, colonIdx), token.slice(colonIdx + 1))
+    else out.set(token, null)
   }
   return out
 }
 
 function parseCsvTokens(raw: string | null): string[] {
   if (!raw) return []
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return raw.split(",").map((s) => s.trim()).filter(Boolean)
 }
 
-/**
- * Resolve requested selector tokens (from `?partials=` and `?tags=`)
- * to the set of effective ids to refetch.
- *
- *   - `?partials=cart,header` — unique (`#`) token names (sans `#`),
- *     OR anonymous / multi-`#` effective ids sent by activators that
- *     only know the Partial's effective id (e.g. `__anon:.ad-slot`,
- *     `cart,primary-cart`). Direct-lookup first, scan for `#`-token
- *     match second.
- *   - `?tags=price,product` — shared (`.`) token names (sans `.`).
- *     Scans snapshots' `sharedTokens`.
- *
- * Union semantics across both params and across multiple tokens in
- * either param. Returns `null` if no filter was requested OR if a
- * filter was requested but nothing matched (caller distinguishes
- * via `hasGlobalFilter`, which treats those as registry-miss).
- */
 function resolveSelectorToIds(
   uniqueParam: string | null,
   sharedParam: string | null,
@@ -113,19 +655,9 @@ function resolveSelectorToIds(
   if (!snapshots) return null
 
   const ids = new Set<string>()
-
-  // Pass 1: direct effective-id lookup for each `partials=` token.
-  // Covers activator refetches (`useActivate(partialId)` sends the
-  // effective id, which equals the `#`-token name in the canonical
-  // case but is `__anon:…` for anonymous Partials and a comma-join
-  // for multi-`#` Partials).
   for (const name of uniqueNames) {
     if (snapshots.has(name)) ids.add(name)
   }
-
-  // Pass 2: scan for `#`-token matches not caught by direct lookup.
-  // Handles the multi-`#` case where the client sent `#cart` but the
-  // snapshot's effective id is `cart,primary-cart`.
   if (uniqueNames.length > 0) {
     for (const [id, snap] of snapshots) {
       if (ids.has(id)) continue
@@ -137,8 +669,6 @@ function resolveSelectorToIds(
       }
     }
   }
-
-  // Pass 3: scan for `.`-token (shared) matches.
   if (sharedNames.length > 0) {
     for (const [id, snap] of snapshots) {
       if (ids.has(id)) continue
@@ -150,80 +680,35 @@ function resolveSelectorToIds(
       }
     }
   }
-
   return ids.size > 0 ? ids : null
 }
 
-/**
- * Reconstruct a `<Partial>` element from a registry snapshot. Used in
- * cache mode to render each explicitly-requested partial without
- * re-executing any ancestor component.
- */
-function partialFromSnapshot(_id: string, snap: PartialSnapshot): ReactNode {
-  // NOTE: no explicit `key` on the Partial element even though it's
-  // placed in an array. Flight composites the outer element's `key`
-  // with inner element keys — if this element had `key="slow"` and
-  // its rendered output is `<Suspense key="slow">`, the wire format
-  // emits a composite `"slow,slow"` which React reconciles as a
-  // different key than the `"slow"` rendered during streaming mode,
-  // forcing a remount that resets client state inside the partial
-  // (see cache-demo click counter). Relying on position-based
-  // reconciliation is safe here: `activeIds` is stable per refetch
-  // and each id resolves its own internally-keyed Suspense wrapper.
-  //
-  // Reconstruct the selector in array form — the parser treats each
-  // element as one token (so `#`-tokens containing spaces, e.g. SKUs
-  // with whitespace, survive the round-trip intact).
-  const selector = [
-    ...snap.uniqueTokens.map((t): `#${string}` => `#${t}`),
-    ...snap.sharedTokens.map((t): `.${string}` => `.${t}`),
-  ]
-  // Reconstruct the parent context from the stored path. The cell
-  // can't be trusted for this call — we're rendering snapshots as
-  // flat siblings in cache-mode, not through their original tree.
-  // We reconstruct `frameChain` from the snapshot's `framePath` so
-  // that if this Partial is itself a frame, its own FrameWrapper
-  // re-computes the full dotted frame path identically to the
-  // original render.
+function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
+  // Try direct id lookup (page specs).
+  let Component = componentById.get(id)
+  let cmsIdOverride: string | undefined
+  if (!Component && snap.type) {
+    // Slot block — look up by spec type.
+    const spec = getSpecByType(snap.type)
+    if (spec) {
+      Component = spec.Component
+      cmsIdOverride = snap.cmsId
+    }
+  }
+  if (!Component) return null
   const frameChain: readonly string[] =
-    snap.framePath.length > 0 ? snap.framePath.slice(0, snap.framePath.length - 1) : []
-  const frameLocalName: string | undefined =
-    snap.framePath.length > 0 ? snap.framePath[snap.framePath.length - 1] : undefined
-  return React.createElement(
-    Partial,
-    {
-      // Cache-mode refetches render snapshots as flat siblings with
-      // no surviving ancestor chain — `provides` from the original
-      // render's ancestors are gone (see `Partial.provides` docs).
-      // Descendants relying on `getClosest(key)` for an ancestor-
-      // provided value should also carry a concrete `getReference`
-      // value in the store so the refetch still resolves.
-      parent: { path: snap.parentPath, frameChain, provides: {} },
-      selector,
-      fallback: snap.fallback ?? undefined,
-      errorWith: snap.errorWith,
-      cache: snap.cache,
-      frame: frameLocalName,
-      frameUrl: snap.frameUrl,
-      cmsId: snap.cmsId,
-    },
-    snap.content,
-  )
+    snap.framePath.length > 0 ? snap.framePath.slice(0, -1) : []
+  const parent: PartialCtx = { path: snap.parentPath, frameChain }
+  return <Component parent={parent} cmsId={cmsIdOverride} />
 }
 
-// ─── PartialRoot ───────────────────────────────────────────────────────
-
-export async function PartialRoot({ children }: PartialRootProps) {
+export async function PartialRoot({ children }: PartialRootProps): Promise<ReactNode> {
   const requestUrl = new URL(getRequest().url)
   const partialsParam = requestUrl.searchParams.get("partials")
   const tagsParam = requestUrl.searchParams.get("tags")
   const cachedParam = requestUrl.searchParams.get("cached")
   const populateCache = requestUrl.searchParams.has("__populateCache")
 
-  // Frame navigation: `?__frame=a.b.c&__frameUrl=/path` carries the
-  // next URL for a frame at a dotted path. Write it to the session
-  // before any `<Partial frame=…>` runs — its `resolveFrameRequest`
-  // will pick up the new URL from the session.
   const frameNames = requestUrl.searchParams.getAll("__frame")
   const frameUrls = requestUrl.searchParams.getAll("__frameUrl")
   if (frameNames.length > 0 && frameNames.length === frameUrls.length) {
@@ -234,37 +719,13 @@ export async function PartialRoot({ children }: PartialRootProps) {
   }
 
   const route = requestUrl.pathname
-
-  // Selector resolution scans the registry populated by PRIOR requests.
-  // `?partials=` carries `#`-token names (sans `#`); `?tags=` carries
-  // `.`-token names (sans `.`). Union semantics across both.
-  //
-  // `?__frame=name&__frameUrl=...` is deliberately NOT a filter
-  // contributor — it only updates the session. Whether the refetch
-  // narrows to a specific Partial vs. does a full render is decided
-  // by the client: `_dispatchFrameRefetch` adds `partials=<name>` to
-  // narrow (frame nav), while the `urlChanged` browser-traverse
-  // handler omits it to get a full render with session updates.
   const combinedRequestedIds = resolveSelectorToIds(partialsParam, tagsParam, route)
-
   const hasGlobalFilter = partialsParam != null || tagsParam != null
   const isPartialRefetch = hasGlobalFilter || populateCache
 
-  // Explicit ids are never skipped on a fingerprint match or filter —
-  // they're what the caller asked for. Seed from the resolver output
-  // when possible; on a cold registry (no prior streaming render) the
-  // scan can't resolve `?partials=` tokens to effective ids, so also
-  // include the raw `#`-token names from the wire. A Partial body
-  // whose effective id matches a raw name will take the explicit
-  // path (e.g. render through a `defer` branch) even during the
-  // streaming fallback.
   const explicitIds = new Set<string>()
-  if (combinedRequestedIds) {
-    for (const id of combinedRequestedIds) explicitIds.add(id)
-  }
-  if (partialsParam) {
-    for (const name of parseCsvTokens(partialsParam)) explicitIds.add(name)
-  }
+  if (combinedRequestedIds) for (const id of combinedRequestedIds) explicitIds.add(id)
+  if (partialsParam) for (const name of parseCsvTokens(partialsParam)) explicitIds.add(name)
 
   const state: PartialRequestState = {
     requestedIds: populateCache ? null : combinedRequestedIds,
@@ -276,22 +737,11 @@ export async function PartialRoot({ children }: PartialRootProps) {
     seenUniqueTokens: new Set(),
   }
 
-  // Registry-miss fallback: if any requested `#`-token doesn't match a
-  // registered snapshot (either nothing matched at all, or a new
-  // `#`-token was introduced by a navigation that expanded the range
-  // — e.g. infinite scroll bumping `?end=N+1` before `page-{N+1}`
-  // was ever rendered), drop the filter and do a full streaming
-  // render so ancestors re-execute and the client reconciles against
-  // a fresh tree. `.class` tokens don't participate in this check —
-  // a selector that only resolves to a subset of known snapshots is
-  // valid (that's how unions work).
   const requestedUniqueNames = parseCsvTokens(partialsParam)
   let registryMiss = state.isPartialRefetch && hasGlobalFilter && !combinedRequestedIds
   if (state.isPartialRefetch && !registryMiss && requestedUniqueNames.length > 0) {
     const snapshots = getRouteSnapshots(route)
     for (const name of requestedUniqueNames) {
-      // Direct lookup (effective id). If it's not a direct id match,
-      // check whether any snapshot declares the name as a `#`-token.
       if (snapshots?.has(name)) continue
       let foundAsToken = false
       if (snapshots) {
@@ -309,21 +759,6 @@ export async function PartialRoot({ children }: PartialRootProps) {
     }
   }
 
-  // ── Streaming mode (full render) ──────────────────────────────────
-  //
-  // Every Partial runs; its body handles fingerprint-skip vs render.
-  // Ancestors re-execute, so snapshots registered during this render
-  // carry fresh closures — no refreshing walk required.
-  //
-  // Open the request registry context BEFORE `enterPartialState` so
-  // descendants' `<Partial>` registrations land in pendingWrites
-  // (not canonical). The context's previousView captures the prior
-  // render's tree at this moment; concurrent requests on the same
-  // route get their own independent views and can't observe each
-  // other's in-flight writes. On commit (driven by the response
-  // stream's flush hook in entry.rsc.tsx), pendingWrites *replace*
-  // canonical[route] — ids that didn't re-register are dropped,
-  // which is what `clearRoute(route)` used to do in-band.
   if (!state.isPartialRefetch || registryMiss) {
     enterRequestRegistry(route, "streaming")
     const streamState: PartialRequestState = {
@@ -335,25 +770,6 @@ export async function PartialRoot({ children }: PartialRootProps) {
     return <PartialsClient mode="streaming">{children}</PartialsClient>
   }
 
-  // ── Cache mode (partial refetch) ──────────────────────────────────
-  //
-  // Render each explicitly-requested partial from its registry
-  // snapshot as a flat sibling. The `<Partial>` body re-runs (wrapping
-  // in Suspense + ErrorBoundary, re-registering) — but its ancestors
-  // do not. No server-side template: the client re-renders against
-  // the `_template` derived during the most recent streaming render.
-  //
-  // Why no refresh walk: snapshots store the JSX captured at the
-  // ancestor's most-recent execution. Request-varying state flows
-  // through tracked accessors (`getSearchParam`, `getCookie`,
-  // `getPathname`, frame URLs) read inside the Partial's content on
-  // re-render — the snapshot doesn't have to be re-baked to pick up
-  // new inputs because inputs don't live on the JSX at all. Closures
-  // that would have been stale (sku from a `.map()` iteration, etc.)
-  // stay stable-by-construction.
-  //
-  // Cache-mode commit overlays pendingWrites onto canonical[route]
-  // (no replace) — ids that didn't re-render keep their snapshots.
   enterRequestRegistry(route, "cache")
   enterPartialState(state)
 
@@ -366,25 +782,14 @@ export async function PartialRoot({ children }: PartialRootProps) {
     })
     .filter((x): x is NonNullable<typeof x> => x != null)
 
-  // Pass wrappedChildren as positional args via `createElement` rather
-  // than `{wrappedChildren}` in JSX. Passing an array as a child prop
-  // triggers React's "each child in a list needs a key" warning.
-  // Adding a `key` on each snapshot element is not an option: Flight
-  // composites an outer element's key with its rendered output's key
-  // into `"outerKey,innerKey"`. Since `<Partial>` renders `<Suspense
-  // key={id}>` internally, a `key={id}` on the outer Partial would
-  // emit `"id,id"` on the wire — which React reconciles as a
-  // different identity than the plain `"id"` emitted in streaming
-  // mode, forcing a remount that wipes client state inside the
-  // partial (e.g. the /cache-demo click counter). Positional children
-  // sidestep both: no warning, no composite.
   return React.createElement(PartialsClient, { mode: "cache" }, ...wrappedChildren)
 }
 
-// Re-export PartialBoundary + PartialErrorBoundary so existing
-// imports elsewhere (notably cache.tsx, which walks for PartialBoundary
-// as a type marker) keep working.
-export { PartialBoundary }
-// PartialErrorBoundary is client-only but some server-only code paths
-// reference its type; re-export for convenience.
-export type { PartialErrorBoundary }
+export function getSpecComponentById(id: string): FC<PartialComponentProps> | undefined {
+  return componentById.get(id)
+}
+
+export function lookupSpecComponentForCmsId(cmsId: string): FC<PartialComponentProps> | undefined {
+  const spec = getSpecByCmsId(cmsId)
+  return spec?.Component
+}

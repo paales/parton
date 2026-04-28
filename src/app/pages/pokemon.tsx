@@ -1,16 +1,23 @@
-import { Partial } from "../../lib/partial.tsx"
-import { ROOT, capturePartialContext } from "../../lib/partial-context.ts"
-import { WhenVisible } from "../components/when-visible.tsx"
-import { PartialControls } from "../components/partial-controls.tsx"
-import { SearchToggle, SearchInput, SearchDialog } from "../components/search.tsx"
-import { LoadMore, PageSentinel } from "../components/load-more.tsx"
+/**
+ * /pokemon/:id — and / (homepage Pokedex grid).
+ *
+ * Migrated to the define-step API: every section is a
+ * `ReactCms.partial(...)` spec at module scope. No tracked accessors;
+ * dependencies declared via `vary`.
+ */
+
+import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { getRequest } from "../../framework/context.ts"
 import { client } from "../data.ts"
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts"
-import { getPathname, getSearchParam } from "../../framework/context.ts"
 import { notFound } from "../../framework/errors.ts"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { LoadMore, PageSentinel } from "../components/load-more.tsx"
+import { WhenVisible } from "../components/when-visible.tsx"
+import { PartialControls } from "../components/partial-controls.tsx"
+import { SearchToggle, SearchInput, SearchDialog } from "../components/search.tsx"
 
 const PAGE_SIZE = 24
 
@@ -115,9 +122,7 @@ const PokemonSpeciesQuery = graphql(`
 
 type SpriteJson = {
   front_default?: string | null
-  other?: {
-    "official-artwork"?: { front_default?: string | null } | null
-  } | null
+  other?: { "official-artwork"?: { front_default?: string | null } | null } | null
 } | null
 
 function extractSprite(sprites: unknown): string | null {
@@ -125,11 +130,6 @@ function extractSprite(sprites: unknown): string | null {
   return s?.other?.["official-artwork"]?.front_default ?? s?.front_default ?? null
 }
 
-/**
- * Pokemon types → semantic tailwind background/text colors. Not a
- * shadcn Badge variant because the pool is open-ended — we use Badge's
- * base reset and layer a per-type className on top.
- */
 const TYPE_COLORS: Record<string, string> = {
   grass: "bg-emerald-900/60 text-emerald-200",
   fire: "bg-red-900/60 text-red-200",
@@ -155,173 +155,113 @@ function TypeBadge({ type, className }: { type: string; className?: string }) {
 
 const POKEMON_GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"
 
-export function PokemonPage() {
-  // Wrap in our own Partial so top-level tracked-accessor reads
-  // attribute to `#pokemon-page`'s manifestScope rather than
-  // drifting onto whichever sibling Partial last set the per-request
-  // manifest cell (typically a nav-link inside `<AppNav/>`). Page
-  // handlers wired through `pickRoute` aren't themselves `<Partial>`
-  // bodies, so without this wrap their reads land on a sibling's
-  // manifest and trip `HoistingViolationError` on the next nav.
+// ─── Header ─────────────────────────────────────────────────────────────
+
+export const HeaderPartial = ReactCms.partial(HeaderRender, {
+  selector: "#header",
+  vary: ({ request }) => {
+    const url = new URL(request.url)
+    // Header is Pokemon-app-specific — only render on the Pokemon
+    // homepage (`/`) and detail pages (`/pokemon/:id`). Other demo
+    // pages have their own chrome.
+    if (url.pathname !== "/" && !/^\/pokemon\/\d+$/.test(url.pathname)) return null
+    return {
+      urlSearchOpen: url.searchParams.get("search") != null,
+      showControls: /^\/pokemon\/(\d+)$/.test(url.pathname),
+    }
+  },
+})
+
+function HeaderRender({
+  urlSearchOpen,
+  showControls,
+}: {
+  urlSearchOpen: boolean
+  showControls: boolean
+} & RenderArgs) {
   return (
-    <Partial parent={ROOT} selector="#pokemon-page">
-      <PokemonPageBody />
-    </Partial>
+    <header className="mb-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
+        <SearchToggle urlOpen={urlSearchOpen} />
+      </div>
+      {showControls && <PartialControls />}
+    </header>
   )
 }
 
-function PokemonPageBody() {
-  // `/pokemon/:id` extracted via the framework's tracked accessor.
-  // Only consume the result if the id is numeric — the pattern matches
-  // any non-slash segment, so `/pokemon/nav` would otherwise leak
-  // through as a "non-numeric id".
-  const routeIdStr = getPathname("/pokemon/:id")?.id
-  const pokemonId = routeIdStr && /^\d+$/.test(routeIdStr) ? Number(routeIdStr) : undefined
-  const urlSearchOpen = getSearchParam("search") != null
-  const pages = Math.max(1, Number(getSearchParam("pages")) || 1)
+// ─── Search areas (page + frame scopes) ────────────────────────────────
 
-  return (
-    <>
-      <Partial parent={ROOT} selector="#header">
-        <header className="mb-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
-            {/* URL-mode open state comes from the page URL;
-                frame-mode open state is read client-side inside the
-                toggle via `useNavigation("search").currentUrl`. */}
-            <SearchToggle urlOpen={urlSearchOpen} />
-          </div>
-          {pokemonId != null && <PartialControls />}
-        </header>
-      </Partial>
+function makeSearchArea(scope: "page" | "frame") {
+  const Stage1 = ReactCms.partial(SearchStage1Render, {
+    selector: `#${scope}-stage-1`,
+    cache: {},
+    vary: ({ request }) => ({ query: new URL(request.url).searchParams.get("q") ?? "" }),
+  })
+  const Stage2 = ReactCms.partial(SearchStage2Render, {
+    selector: `#${scope}-stage-2`,
+    cache: {},
+    vary: ({ request }) => ({ query: new URL(request.url).searchParams.get("q") ?? "" }),
+    fallback: (
+      <div data-testid="stage-2-fallback" className="p-2 text-muted-foreground">
+        Loading stage 2...
+      </div>
+    ),
+  })
+  const Stage3 = ReactCms.partial(SearchStage3Render, {
+    selector: `#${scope}-stage-3`,
+    cache: {},
+    vary: ({ request }) => ({ query: new URL(request.url).searchParams.get("q") ?? "" }),
+    fallback: (
+      <div data-testid="stage-3-fallback" className="p-2 text-muted-foreground">
+        Loading stage 3...
+      </div>
+    ),
+  })
 
-      {/*
-        Two symmetric instances of the same component.
+  const Body = ReactCms.partial(SearchBodyRender, {
+    selector: scope === "page" ? "#search-page .search-results" : "#search .search-results",
+    frame: scope === "frame" ? "search" : undefined,
+    frameUrl: scope === "frame" ? "/" : undefined,
+    vary: ({ request }) => {
+      // Only render search on the Pokemon-app pages.
+      const pageUrl = new URL(getRequest().url)
+      if (pageUrl.pathname !== "/" && !/^\/pokemon\/\d+$/.test(pageUrl.pathname)) return null
+      const sp = new URL(request.url).searchParams
+      return {
+        isOpen: sp.get("search") != null,
+        q: sp.get("q") ?? "",
+      }
+    },
+  })
 
-        URL mode (page-scoped): reads `?search=` / `?q=` from the PAGE
-        URL. Its open/close is driven by `useNavigation().navigate(...)`.
-
-        Frame mode (frame-scoped): reads `?search=` / `?q=` from the
-        FRAME URL. Its open/close is driven by `useNavigation("search")
-        .navigate(...)`. The wrapping `<Partial frame="search">` swaps
-        the ambient request before descendants read accessors.
-
-        The inner `<SearchArea/>` is identical in both places — the
-        scope around it decides which URL it sees.
-      */}
-      <Partial parent={ROOT} selector="#search-page .search-results">
-        <SearchArea scope="page" />
-      </Partial>
-      <Partial parent={ROOT} selector="#search .search-results" frame="search" frameUrl="/">
-        <SearchArea scope="frame" />
-      </Partial>
-
-      {pokemonId != null ? (
-        <>
-          <Partial parent={ROOT} selector="#hero">
-            <HeroPartial pokemonId={pokemonId} />
-          </Partial>
-          <Partial parent={ROOT} selector="#stats">
-            <StatsPartial pokemonId={pokemonId} />
-          </Partial>
-          <Partial parent={ROOT} selector="#species">
-            <SpeciesPartial pokemonId={pokemonId} />
-          </Partial>
-          <div className="h-[80vh]" data-testid="lazy-spacer" />
-          <Partial
-            parent={ROOT}
-            selector="#trivia"
-            defer={<WhenVisible />}
-            fallback={
-              <Card data-testid="trivia-fallback" className="mb-4 p-5">
-                <CardContent className="px-0 italic text-muted-foreground">
-                  Loading trivia…
-                </CardContent>
-              </Card>
-            }
-          >
-            <TriviaPartial pokemonId={pokemonId} />
-          </Partial>
-        </>
-      ) : (
-        <>
-          {Array.from({ length: pages }, (_, i) => (
-            <Partial key={`page-${i + 1}`} parent={ROOT} selector={`#page-${i + 1}`}>
-              <PokemonListPage offset={i * PAGE_SIZE} isFirst={i === 0} />
-            </Partial>
-          ))}
-          <Partial parent={ROOT} selector="#load-more">
-            <LoadMore nextPage={pages + 1} />
-          </Partial>
-        </>
-      )}
-    </>
-  )
+  function SearchBodyRender({
+    isOpen,
+    q,
+    parent,
+  }: {
+    isOpen: boolean
+    q: string
+  } & RenderArgs) {
+    if (!isOpen) return null
+    return (
+      <SearchDialog open>
+        <SearchInput query={q} />
+        <Stage1 parent={parent} />
+        <Stage2 parent={parent} />
+        <Stage3 parent={parent} />
+      </SearchDialog>
+    )
+  }
+  return Body
 }
 
-/**
- * Scope-agnostic search UI. Reads `?search=` and `?q=` from the
- * AMBIENT request (page URL or frame URL depending on what wraps us).
- */
-function SearchArea({ scope }: { scope: "page" | "frame" }) {
-  const parent = capturePartialContext()
-  // Hoist BOTH tracked-accessor reads above any branching — same
-  // rule as React hooks. The dependency surface a Partial declares
-  // is the union of every accessor key its body could touch, not
-  // just the ones taken on this particular render. Conditionally
-  // calling `getSearchParam("q")` only when `isOpen` made the
-  // first-render-while-closed snapshot record only `url:search`,
-  // and the next render-while-open would trip the hoisting check
-  // by trying to add `url:q` mid-flight.
-  const isOpen = getSearchParam("search") != null
-  const q = getSearchParam("q") ?? ""
-  if (!isOpen) return null
-  return (
-    <SearchDialog open>
-      <SearchInput query={q} />
-      <Partial parent={parent} selector={`#${scope}-stage-1`} cache={{}}>
-        <SearchStage1 query={q} />
-      </Partial>
-      <Partial
-        parent={parent}
-        selector={`#${scope}-stage-2`}
-        cache={{}}
-        fallback={
-          <div data-testid="stage-2-fallback" className="p-2 text-muted-foreground">
-            Loading stage 2...
-          </div>
-        }
-      >
-        <SearchStage2 query={q} />
-      </Partial>
-      <Partial
-        parent={parent}
-        selector={`#${scope}-stage-3`}
-        cache={{}}
-        fallback={
-          <div data-testid="stage-3-fallback" className="p-2 text-muted-foreground">
-            Loading stage 3...
-          </div>
-        }
-      >
-        <SearchStage3 query={q} />
-      </Partial>
-    </SearchDialog>
-  )
-}
-
-/**
- * Three search stages that resolve with staggered delays (0ms, 1s, 2s).
- */
+export const SearchAreaPage = makeSearchArea("page")
+export const SearchAreaFrame = makeSearchArea("frame")
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-type SearchResult = {
-  id: number
-  name: string
-  spriteUrl: string | null
-  types: string[]
-}
+type SearchResult = { id: number; name: string; spriteUrl: string | null; types: string[] }
 
 async function fetchSearchResults(
   query: string,
@@ -333,7 +273,6 @@ async function fetchSearchResults(
     offset,
     limit,
   })
-
   return data.pokemon_v2_pokemon.map(toSearchResult)
 }
 
@@ -373,13 +312,10 @@ function SearchResultGrid({ results, testId }: { results: SearchResult[]; testId
   )
 }
 
-async function SearchStage1({ query }: { query: string }) {
-  if (!query) {
+async function SearchStage1Render({ query }: { query: string } & RenderArgs) {
+  if (!query)
     return <p className="mt-4 text-sm text-muted-foreground">Start typing to search...</p>
-  }
-
   const results = await fetchSearchResults(query, 0, 6)
-
   return (
     <>
       <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant</h3>
@@ -388,11 +324,10 @@ async function SearchStage1({ query }: { query: string }) {
   )
 }
 
-async function SearchStage2({ query }: { query: string }) {
+async function SearchStage2Render({ query }: { query: string } & RenderArgs) {
   if (!query) return null
   await delay(1000)
   const results = await fetchSearchResults(query, 6, 6)
-
   return (
     <div>
       <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay</h3>
@@ -401,11 +336,10 @@ async function SearchStage2({ query }: { query: string }) {
   )
 }
 
-async function SearchStage3({ query }: { query: string }) {
+async function SearchStage3Render({ query }: { query: string } & RenderArgs) {
   if (!query) return null
   await delay(2000)
   const results = await fetchSearchResults(query, 12, 8)
-
   return (
     <div>
       <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay</h3>
@@ -414,14 +348,216 @@ async function SearchStage3({ query }: { query: string }) {
   )
 }
 
-async function PokemonListPage({ offset, isFirst }: { offset: number; isFirst: boolean }) {
-  const page = offset / PAGE_SIZE + 1
+// ─── Pokemon detail (/pokemon/:id) ─────────────────────────────────────
 
-  const data = await client.request(PokemonListQuery, {
-    limit: PAGE_SIZE,
-    offset,
-  })
+export const HeroPartial = ReactCms.partial(HeroRender, {
+  match: "/pokemon/:id",
+  selector: "#hero",
+  vary: ({ params }) => {
+    const idStr = params.id
+    if (!idStr || !/^\d+$/.test(idStr)) return null
+    return { pokemonId: Number(idStr) }
+  },
+})
 
+async function HeroRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
+  const data = await client.request(PokemonHeroQuery, { id: pokemonId })
+  const pokemon = data.pokemon_v2_pokemon[0]
+  if (!pokemon) notFound()
+  const { id, name, height, weight } = pokemon
+  const types = pokemon.pokemon_v2_pokemontypes.map((t) => ({
+    slot: t.slot,
+    name: t.pokemon_v2_type?.name ?? "",
+  }))
+  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites)
+  return (
+    <Card className="mb-4 p-5">
+      <CardContent className="flex flex-wrap items-center gap-8 px-0">
+        {spriteUrl && <img src={spriteUrl} alt={name} loading="lazy" className="h-50 w-50" />}
+        <div>
+          <h1 className="text-3xl capitalize">
+            #{id} {name}
+          </h1>
+          <div className="mt-3 flex flex-wrap gap-1">
+            {types.map((t) => (
+              <TypeBadge key={t.slot} type={t.name || "default"} />
+            ))}
+          </div>
+          <div className="mt-4 text-sm text-muted-foreground">
+            Height: {(height ?? 0) / 10}m · Weight: {(weight ?? 0) / 10}kg
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+export const StatsPartial = ReactCms.partial(StatsRender, {
+  match: "/pokemon/:id",
+  selector: "#stats",
+  vary: ({ params }) => {
+    const idStr = params.id
+    if (!idStr || !/^\d+$/.test(idStr)) return null
+    return { pokemonId: Number(idStr) }
+  },
+})
+
+async function StatsRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
+  const data = await client.request(PokemonStatsQuery, { id: pokemonId })
+  const pokemon = data.pokemon_v2_pokemon[0]
+  if (!pokemon) return null
+  const stats = pokemon.pokemon_v2_pokemonstats.map((s) => ({
+    name: s.pokemon_v2_stat?.name ?? "",
+    value: s.base_stat,
+  }))
+  const maxStat = 255
+  return (
+    <Card className="mb-4 p-5">
+      <CardContent className="flex flex-col gap-2 px-0">
+        <h2 className="text-lg font-semibold">Base Stats</h2>
+        {stats.map((stat) => {
+          const color =
+            stat.value >= 100 ? "bg-emerald-500" : stat.value >= 60 ? "bg-amber-400" : "bg-red-500"
+          return (
+            <div key={stat.name} className="flex items-center gap-3">
+              <span className="w-32 text-sm capitalize text-muted-foreground">
+                {stat.name.replace("-", " ")}
+              </span>
+              <span className="w-8 text-right text-sm">{stat.value}</span>
+              <div className="h-2 flex-1 overflow-hidden rounded bg-muted">
+                <div
+                  className={cn("h-full rounded", color)}
+                  style={{ width: `${(stat.value / maxStat) * 100}%` }}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </CardContent>
+    </Card>
+  )
+}
+
+export const SpeciesPartial = ReactCms.partial(SpeciesRender, {
+  match: "/pokemon/:id",
+  selector: "#species",
+  vary: ({ params }) => {
+    const idStr = params.id
+    if (!idStr || !/^\d+$/.test(idStr)) return null
+    return { pokemonId: Number(idStr) }
+  },
+})
+
+async function SpeciesRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
+  const data = await client.request(PokemonSpeciesQuery, { id: pokemonId })
+  const species = data.pokemon_v2_pokemon[0]?.pokemon_v2_pokemonspecy
+  if (!species) return null
+  const englishEntry = species.pokemon_v2_pokemonspeciesflavortexts[0]
+  return (
+    <Card className="mb-4 p-5">
+      <CardContent className="px-0">
+        <h2 className="text-lg font-semibold capitalize">Species: {species.name}</h2>
+        {englishEntry && (
+          <p className="mt-3 leading-relaxed text-foreground/80">
+            {englishEntry.flavor_text.replace(/\f|\n/g, " ")}
+          </p>
+        )}
+        <div className="mt-4 text-sm text-muted-foreground">
+          Generation:{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {species.pokemon_v2_generation?.name}
+          </code>{" "}
+          · Base Happiness:{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {species.base_happiness}
+          </code>{" "}
+          · Capture Rate:{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {species.capture_rate}
+          </code>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+export const TriviaPartial = ReactCms.partial(TriviaRender, {
+  match: "/pokemon/:id",
+  selector: "#trivia",
+  vary: ({ params }) => {
+    const idStr = params.id
+    if (!idStr || !/^\d+$/.test(idStr)) return null
+    return { pokemonId: Number(idStr) }
+  },
+  defer: <WhenVisible />,
+  fallback: (
+    <Card data-testid="trivia-fallback" className="mb-4 p-5">
+      <CardContent className="px-0 italic text-muted-foreground">Loading trivia…</CardContent>
+    </Card>
+  ),
+})
+
+async function TriviaRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
+  await new Promise((r) => setTimeout(r, 500))
+  return (
+    <Card data-testid="trivia-content" className="mb-4 p-5">
+      <CardContent className="px-0">
+        <h2 className="text-lg font-semibold">Trivia</h2>
+        <div className="mt-2 text-sm text-muted-foreground">
+          Loaded on demand via{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            renderOn="visible"
+          </code>{" "}
+          — pokemon id{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            {pokemonId}
+          </code>
+          .
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Detail page lazy spacer (visible only on detail pages) ────────────
+
+export const LazySpacerPartial = ReactCms.partial(LazySpacerRender, {
+  match: "/pokemon/:id",
+  selector: "#lazy-spacer",
+  vary: ({ params }) =>
+    params.id && /^\d+$/.test(params.id) ? {} : null,
+})
+
+function LazySpacerRender({}: RenderArgs) {
+  return <div className="h-[80vh]" data-testid="lazy-spacer" />
+}
+
+// ─── Pokedex list pages (homepage / no :id) ─────────────────────────────
+
+function makeListPagePartial(page: number) {
+  return ReactCms.partial(
+    PokemonListPageRender,
+    {
+      selector: `#page-${page}` as const,
+      vary: ({ request }) => {
+        const url = new URL(request.url)
+        // Only render on the homepage. The Pokedex list owns `/`;
+        // detail pages live at `/pokemon/:id`.
+        if (url.pathname !== "/") return null
+        const pages = Math.max(1, Number(url.searchParams.get("pages")) || 1)
+        if (page > pages) return null
+        return { page, isFirst: page === 1 }
+      },
+    },
+  )
+}
+
+async function PokemonListPageRender({
+  page,
+  isFirst,
+}: { page: number; isFirst: boolean } & RenderArgs) {
+  const offset = (page - 1) * PAGE_SIZE
+  const data = await client.request(PokemonListQuery, { limit: PAGE_SIZE, offset })
   return (
     <div>
       <PageSentinel page={page} />
@@ -449,7 +585,6 @@ function PokemonCard({ raw }: { raw: FragmentOf<typeof PokemonListFields> }) {
   const { id, name } = pokemon
   const types = pokemon.pokemon_v2_pokemontypes.map((t) => t.pokemon_v2_type?.name ?? "")
   const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites)
-
   return (
     <a
       href={`/pokemon/${id}`}
@@ -468,135 +603,48 @@ function PokemonCard({ raw }: { raw: FragmentOf<typeof PokemonListFields> }) {
   )
 }
 
-async function HeroPartial({ pokemonId }: { pokemonId: number }) {
-  const data = await client.request(PokemonHeroQuery, { id: pokemonId })
+// Pre-create page partials up to a sensible cap; only those whose
+// `vary` returns non-null actually render. The cap matches the
+// LoadMore ceiling.
+const MAX_LIST_PAGES = 10
+export const ListPagePartials = Array.from({ length: MAX_LIST_PAGES }, (_, i) =>
+  makeListPagePartial(i + 1),
+)
 
-  const pokemon = data.pokemon_v2_pokemon[0]
-  // Async 404: the PokeAPI returns an empty array for ids outside its range.
-  if (!pokemon) notFound()
-  const { id, name, height, weight } = pokemon
-  const types = pokemon.pokemon_v2_pokemontypes.map((t) => ({
-    slot: t.slot,
-    name: t.pokemon_v2_type?.name ?? "",
-  }))
-  const spriteUrl = extractSprite(pokemon.pokemon_v2_pokemonsprites[0]?.sprites)
+// LoadMore — visible only on the homepage list (not detail pages).
+export const LoadMorePartial = ReactCms.partial(LoadMoreRender, {
+  selector: "#load-more",
+  vary: ({ request }) => {
+    const url = new URL(request.url)
+    if (url.pathname !== "/") return null
+    const pages = Math.max(1, Number(url.searchParams.get("pages")) || 1)
+    return { nextPage: pages + 1 }
+  },
+})
 
-  return (
-    <Card className="mb-4 p-5">
-      <CardContent className="flex flex-wrap items-center gap-8 px-0">
-        {spriteUrl && <img src={spriteUrl} alt={name} loading="lazy" className="h-50 w-50" />}
-        <div>
-          <h1 className="text-3xl capitalize">
-            #{id} {name}
-          </h1>
-          <div className="mt-3 flex flex-wrap gap-1">
-            {types.map((t) => (
-              <TypeBadge key={t.slot} type={t.name || "default"} />
-            ))}
-          </div>
-          <div className="mt-4 text-sm text-muted-foreground">
-            Height: {(height ?? 0) / 10}m · Weight: {(weight ?? 0) / 10}kg
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  )
+function LoadMoreRender({ nextPage }: { nextPage: number } & RenderArgs) {
+  return <LoadMore nextPage={nextPage} />
 }
 
-async function StatsPartial({ pokemonId }: { pokemonId: number }) {
-  const data = await client.request(PokemonStatsQuery, { id: pokemonId })
-
-  const pokemon = data.pokemon_v2_pokemon[0]
-  if (!pokemon) return null
-  const stats = pokemon.pokemon_v2_pokemonstats.map((s) => ({
-    name: s.pokemon_v2_stat?.name ?? "",
-    value: s.base_stat,
-  }))
-  const maxStat = 255
-
+// ─── Page composer — places every spec as a sibling ─────────────────────
+//
+// With pattern-as-router, only the matching specs render. The page is
+// just a list of placements at the top level of the body.
+export function PokemonPagePlacements({ parent }: { parent: PartialCtx }) {
   return (
-    <Card className="mb-4 p-5">
-      <CardContent className="flex flex-col gap-2 px-0">
-        <h2 className="text-lg font-semibold">Base Stats</h2>
-        {stats.map((stat) => {
-          const color =
-            stat.value >= 100 ? "bg-emerald-500" : stat.value >= 60 ? "bg-amber-400" : "bg-red-500"
-          return (
-            <div key={stat.name} className="flex items-center gap-3">
-              <span className="w-32 text-sm capitalize text-muted-foreground">
-                {stat.name.replace("-", " ")}
-              </span>
-              <span className="w-8 text-right text-sm">{stat.value}</span>
-              <div className="h-2 flex-1 overflow-hidden rounded bg-muted">
-                <div
-                  className={cn("h-full rounded", color)}
-                  style={{
-                    width: `${(stat.value / maxStat) * 100}%`,
-                  }}
-                />
-              </div>
-            </div>
-          )
-        })}
-      </CardContent>
-    </Card>
-  )
-}
-
-async function TriviaPartial({ pokemonId }: { pokemonId: number }) {
-  // Short delay to make streaming visible after the IntersectionObserver fires.
-  await new Promise((r) => setTimeout(r, 500))
-  return (
-    <Card data-testid="trivia-content" className="mb-4 p-5">
-      <CardContent className="px-0">
-        <h2 className="text-lg font-semibold">Trivia</h2>
-        <div className="mt-2 text-sm text-muted-foreground">
-          Loaded on demand via{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-            renderOn="visible"
-          </code>{" "}
-          — pokemon id{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-            {pokemonId}
-          </code>
-          .
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-async function SpeciesPartial({ pokemonId }: { pokemonId: number }) {
-  const data = await client.request(PokemonSpeciesQuery, { id: pokemonId })
-
-  const species = data.pokemon_v2_pokemon[0]?.pokemon_v2_pokemonspecy
-  if (!species) return null
-  const englishEntry = species.pokemon_v2_pokemonspeciesflavortexts[0]
-
-  return (
-    <Card className="mb-4 p-5">
-      <CardContent className="px-0">
-        <h2 className="text-lg font-semibold capitalize">Species: {species.name}</h2>
-        {englishEntry && (
-          <p className="mt-3 leading-relaxed text-foreground/80">
-            {englishEntry.flavor_text.replace(/\f|\n/g, " ")}
-          </p>
-        )}
-        <div className="mt-4 text-sm text-muted-foreground">
-          Generation:{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-            {species.pokemon_v2_generation?.name}
-          </code>{" "}
-          · Base Happiness:{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-            {species.base_happiness}
-          </code>{" "}
-          · Capture Rate:{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-            {species.capture_rate}
-          </code>
-        </div>
-      </CardContent>
-    </Card>
+    <>
+      <HeaderPartial parent={parent} />
+      <SearchAreaPage parent={parent} />
+      <SearchAreaFrame parent={parent} />
+      <HeroPartial parent={parent} />
+      <StatsPartial parent={parent} />
+      <SpeciesPartial parent={parent} />
+      <LazySpacerPartial parent={parent} />
+      <TriviaPartial parent={parent} />
+      {ListPagePartials.map((P, i) => (
+        <P key={`list-page-${i + 1}`} parent={parent} />
+      ))}
+      <LoadMorePartial parent={parent} />
+    </>
   )
 }

@@ -1,28 +1,19 @@
 /**
  * /cache-demo — server-side render-output caching spike.
  *
- * Two partials:
- *  - "Slow": simulates ~500ms server work. Uses `<Partial cache>`.
- *  - "Clock": renders the current time on every request. Not cached.
- *
- * Initial render populates both. Refetching the Slow partial on
- * subsequent requests should serve from the server-side cache
- * (render count stays at 1, response is fast). The Clock ticks every
- * request regardless.
+ * Each section is its own spec gating on `match: "/cache-demo"`.
+ * `CacheDemoSlowPartial` declares `cache={{maxAge: 60}}` and varies
+ * by `flavor`; the fast clock partial stays uncached.
  */
 
-import { Partial } from "../../lib/partial.tsx"
-import { ROOT } from "../../lib/partial-context.ts"
+import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
 import { _cacheStats } from "../../lib/cache.tsx"
 import { CacheControls } from "../components/cache-controls.tsx"
 import { ClickCounter } from "../components/click-counter.tsx"
-import { getScope, getSearchParam } from "../../framework/context.ts"
+import { getScope } from "../../framework/context.ts"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// Per-scope counter so parallel Playwright workers (each with its own
-// `x-test-scope` header) don't share the tally. Tests assert on
-// deltas within a single scope, which is what matters.
 const slowRenderCounts = new Map<string, number>()
 function bumpSlowRender(): number {
   const scope = getScope()
@@ -31,12 +22,52 @@ function bumpSlowRender(): number {
   return next
 }
 
-async function SlowContent() {
-  // Demonstrates auto-tracked cache keys: `getSearchParam` records
-  // `url:flavor` in the enclosing `<Partial cache>`'s access manifest,
-  // so cached bytes are automatically keyed per flavor without any
-  // `vary` declaration on the Partial.
-  const flavor = getSearchParam("flavor") ?? "vanilla"
+function Code({ children, ...rest }: React.ComponentProps<"code">) {
+  return (
+    <code {...rest} className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+      {children}
+    </code>
+  )
+}
+
+// ─── Intro ─────────────────────────────────────────────────────────────
+
+export const CacheDemoIntroPartial = ReactCms.partial(CacheDemoIntroRender, {
+  match: "/cache-demo",
+  selector: "#cache-demo-intro",
+  vary: ({ request }) => ({
+    flavor: new URL(request.url).searchParams.get("flavor") ?? "vanilla",
+  }),
+})
+
+async function CacheDemoIntroRender({ flavor }: { flavor: string } & RenderArgs) {
+  const stats = await _cacheStats()
+  return (
+    <>
+      <title>Cache Demo</title>
+      <h1 className="mb-4 text-2xl font-semibold">Server-side cache spike</h1>
+      <p className="mb-4 text-muted-foreground">
+        flavor=<Code>{flavor}</Code> · cache size:{" "}
+        <Code data-testid="cache-size">{stats.size}</Code>
+      </p>
+      <CacheControls />
+    </>
+  )
+}
+
+// ─── Slow content (cached) ─────────────────────────────────────────────
+
+export const CacheDemoSlowPartial = ReactCms.partial(CacheDemoSlowRender, {
+  match: "/cache-demo",
+  selector: "#slow",
+  cache: { maxAge: 60 },
+  vary: ({ request }) => ({
+    flavor: new URL(request.url).searchParams.get("flavor") ?? "vanilla",
+  }),
+  fallback: <div data-testid="slow-fallback">Loading slow…</div>,
+})
+
+async function CacheDemoSlowRender({ flavor }: { flavor: string } & RenderArgs) {
   const slowRenderCount = bumpSlowRender()
   await delay(500)
   return (
@@ -57,7 +88,15 @@ async function SlowContent() {
   )
 }
 
-function Clock() {
+// ─── Clock (uncached) ───────────────────────────────────────────────────
+
+export const CacheDemoClockPartial = ReactCms.partial(CacheDemoClockRender, {
+  match: "/cache-demo",
+  selector: "#clock",
+  fallback: <div>Loading clock…</div>,
+})
+
+function CacheDemoClockRender({}: RenderArgs) {
   return (
     <div data-testid="clock-content" className="mb-2 rounded-lg bg-muted p-4">
       <div className="font-semibold">Clock (always fresh)</div>
@@ -68,58 +107,32 @@ function Clock() {
   )
 }
 
-export function CacheDemoPage() {
-  // Wrap in own Partial — see `PokemonPage` for why page-level
-  // reads need a per-page manifestScope.
+// ─── Footer ────────────────────────────────────────────────────────────
+
+export const CacheDemoFooterPartial = ReactCms.partial(CacheDemoFooterRender, {
+  match: "/cache-demo",
+  selector: "#cache-demo-footer",
+  vary: () => ({ tick: Date.now() }),
+})
+
+function CacheDemoFooterRender({}: { tick: number } & RenderArgs) {
   return (
-    <Partial parent={ROOT} selector="#cache-demo-page">
-      <CacheDemoPageBody />
-    </Partial>
+    <div className="mt-8 text-xs text-muted-foreground">
+      Server <Code>slowRenderCount</Code>:{" "}
+      <span data-testid="server-render-count">{slowRenderCounts.get(getScope()) ?? 0}</span>
+      <br />
+      Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
+    </div>
   )
 }
 
-async function CacheDemoPageBody() {
-  const flavor = getSearchParam("flavor") ?? "vanilla"
-  const stats = await _cacheStats()
-
+export function CacheDemoPagePlacements({ parent }: { parent: PartialCtx }) {
   return (
     <>
-      <title>Cache Demo</title>
-      <h1 className="mb-4 text-2xl font-semibold">Server-side cache spike</h1>
-      <p className="mb-4 text-muted-foreground">
-        flavor=<Code>{flavor}</Code> · cache size:{" "}
-        <Code data-testid="cache-size">{stats.size}</Code>
-      </p>
-
-      <CacheControls />
-
-      <Partial
-        parent={ROOT}
-        selector="#slow"
-        cache={{ maxAge: 60 }}
-        fallback={<div data-testid="slow-fallback">Loading slow…</div>}
-      >
-        <SlowContent />
-      </Partial>
-
-      <Partial parent={ROOT} selector="#clock" fallback={<div>Loading clock…</div>}>
-        <Clock />
-      </Partial>
-
-      <div className="mt-8 text-xs text-muted-foreground">
-        Server <Code>slowRenderCount</Code>:{" "}
-        <span data-testid="server-render-count">{slowRenderCounts.get(getScope()) ?? 0}</span>
-        <br />
-        Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
-      </div>
+      <CacheDemoIntroPartial parent={parent} />
+      <CacheDemoSlowPartial parent={parent} />
+      <CacheDemoClockPartial parent={parent} />
+      <CacheDemoFooterPartial parent={parent} />
     </>
-  )
-}
-
-function Code({ children, ...rest }: React.ComponentProps<"code">) {
-  return (
-    <code {...rest} className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-      {children}
-    </code>
   )
 }
