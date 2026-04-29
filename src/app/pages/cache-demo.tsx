@@ -48,11 +48,11 @@ const Intro = ReactCms.partial(
   },
 )
 
-// Cached specs read their deps via `vary` rather than relying on the
-// parent-passed JSX prop. Cache-mode partial-refetch (`?partials=slow`)
-// bypasses the parent wrapper and replays this spec's snapshot props
-// from the prior render — for a cached spec, deriving flavor from
-// the URL directly keeps the cache key fresh on every refetch.
+// `flavor` flows from the wrapper's `vary` as a JSX call-site prop.
+// On a partial-refetch (`?partials=slow`) the wrapper is bypassed —
+// `<CacheControls>`'s Toggle button explicitly forwards the new
+// flavor via `nav.navigate(..., { props: { slow: { flavor } } })`,
+// which the server splices in on top of the snapshot-replayed props.
 const Slow = ReactCms.partial(
   async function CacheDemoSlowRender({ flavor }: { flavor: string } & RenderArgs) {
     const slowRenderCount = bumpSlowRender()
@@ -78,7 +78,6 @@ const Slow = ReactCms.partial(
     selector: "#slow",
     cache: { maxAge: 60 },
     fallback: <div data-testid="slow-fallback">Loading slow…</div>,
-    vary: ({ search: { flavor = "vanilla" } }) => ({ flavor }),
   },
 )
 
@@ -119,7 +118,7 @@ export const CacheDemoPage = ReactCms.partial(
     return (
       <>
         <Intro parent={parent} flavor={flavor} />
-        <Slow parent={parent} />
+        <Slow parent={parent} flavor={flavor} />
         <Clock parent={parent} />
         <Footer parent={parent} />
       </>

@@ -50,9 +50,15 @@ export function CacheControls() {
           const next = current === "vanilla" ? "chocolate" : "vanilla"
           url.searchParams.set("flavor", next)
           startTransition(() => {
+            // Targeted refetch of `#slow` with the new flavor sent
+            // alongside as a JSX-style prop. The wrapper isn't
+            // re-evaluated in cache mode, so partial-refetch needs
+            // the prop wired explicitly — same mechanism
+            // `<WhenStored>` uses.
             void nav.navigate(url.toString(), {
               history: "push",
               selector: "#slow",
+              props: { slow: { flavor: next } },
             })
           })
         }}

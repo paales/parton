@@ -1234,6 +1234,7 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
             uniqueTokens: parsed.uniqueTokens,
             sharedTokens: parsed.sharedTokens,
             disableTransition: options?.disableTransition ?? false,
+            props: options?.props,
           }),
       )
     }
@@ -1256,6 +1257,7 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
           uniqueTokens: parsed.uniqueTokens,
           sharedTokens: parsed.sharedTokens,
           disableTransition: options?.disableTransition ?? false,
+          props: options?.props,
         }),
       )
     }

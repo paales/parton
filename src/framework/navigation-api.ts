@@ -129,6 +129,21 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    * handles (frame navigation always refetches the frame).
    */
   silent?: boolean
+  /**
+   * Per-partial JSX-style props to send with the refetch. Keyed by
+   * partial id (selector token without the leading `#`). On the
+   * server, these override the snapshot-replayed props in
+   * `partialFromSnapshot` so a deep partial-refetch can carry fresh
+   * call-site values without re-running the parent wrapper.
+   *
+   *   nav.navigate(url, {
+   *     selector: "#slow",
+   *     props: { slow: { flavor: "chocolate" } },
+   *   })
+   *
+   * `<WhenStored>` uses the same wire format under the hood.
+   */
+  props?: Record<string, Record<string, unknown>>
 }
 
 /**
@@ -140,6 +155,8 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
 export interface FrameworkReloadOptions extends NavigationReloadOptions {
   selector?: string | string[]
   disableTransition?: boolean
+  /** See `FrameworkNavigateOptions.props`. */
+  props?: Record<string, Record<string, unknown>>
 }
 
 /**
