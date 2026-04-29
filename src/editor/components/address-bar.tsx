@@ -20,13 +20,11 @@ import { cn } from "@/lib/utils"
  * update the input via `useSyncExternalStore` (unless the user is
  * actively typing, in which case we don't clobber their draft).
  *
- * Selector-targeted nav: every address-bar nav explicitly includes
- * `#preview #cms-edit-fields #cms-edit-tree` in the selector. The
- * preview Partial covers all page content; fields and tree need to
- * re-render so the auto-picked config tab follows the new path.
- * Without this, the field panel's structural fp wouldn't see the
- * URL change (it doesn't read pathname-tracked accessors directly)
- * and fp-skip would serve the previous render's tab selection.
+ * Address-bar nav is a regular window navigation: the URL changes
+ * and the framework's page-level intercept fetches the full RSC
+ * payload, which re-runs Root → EditorShell → page placements so
+ * the previewed content + tree + field panels all update against
+ * the new path.
  *
  * A `×` button clears the editor cookie via `?editor=0`.
  */
@@ -98,17 +96,7 @@ export function CmsEditAddressBar({ initialUrl }: { initialUrl: string }) {
     e.preventDefault()
     const target = draft.trim()
     if (!target) return
-    void nav.navigate(withEditorState(target), {
-      history: "push",
-      // Force the editor's tree + field panels to refetch alongside
-      // the previewed page. Without this, the field panel's fp
-      // (which doesn't capture the previewed-page pathname) matches
-      // its prior render and the auto-picked config tab serves
-      // stale. `#preview` covers the page content; the framework
-      // recurses into its body so PokemonPage / CmsDemoPage / etc.
-      // re-render normally.
-      selector: "#preview #cms-edit-fields #cms-edit-tree",
-    })
+    void nav.navigate(withEditorState(target), { history: "push" })
     inputRef.current?.blur()
   }
 

@@ -1,21 +1,14 @@
 /**
  * Editor shell — three-pane layout (tree / preview / field form).
  *
- * Migrated to the define-step API: each pane is a
- * `ReactCms.partial(...)` spec at module scope. Tree and field
- * panels declare their dependencies via `vary` (reading `?select=`,
- * `?config=` from the request); preview wraps `children` in a
- * frame-scoped spec so the previewed page's accessors don't leak
- * editor params.
+ * Tree and field panels are `ReactCms.partial(...)` specs; the
+ * preview pane renders the previewed page inline (`{children}`). The
+ * field panel's `vary` folds the pathname so `pickBestConfigIndex`
+ * re-evaluates as the previewed URL changes.
  */
 
 import type { ReactNode } from "react"
-import {
-  ReactCms,
-  ROOT,
-  type PartialCtx,
-  type RenderArgs,
-} from "../lib"
+import { ReactCms, ROOT, type RenderArgs } from "../lib"
 import {
   listAllCmsNodes,
   lookupDraftNode,
@@ -95,18 +88,6 @@ function cmsEditHref(opts: { select: string; config?: number }): string {
   for (const p of FRAMEWORK_INTERNAL_PARAMS) url.searchParams.delete(p)
   return url.pathname + url.search
 }
-
-// ─── Preview frame spec ────────────────────────────────────────────────
-
-export const EditorPreviewFramePartial = ReactCms.partial(
-  function EditorPreviewFrameRender({ children }: RenderArgs) {
-    return <>{children}</>
-  },
-  {
-    selector: "#preview",
-    frame: "preview",
-  },
-)
 
 // ─── Tree pane ─────────────────────────────────────────────────────────
 
@@ -344,6 +325,7 @@ export const EditorFieldPanelPartial = ReactCms.partial(
     selected,
     configIndexRaw,
   }: {
+    pathname: string
     selected: string | null
     configIndexRaw: string | null
   } & RenderArgs) {
@@ -438,10 +420,15 @@ export const EditorFieldPanelPartial = ReactCms.partial(
   {
     selector: "#cms-edit-fields",
     vary: ({ request }) => {
-      const sp = new URL(request.url).searchParams
+      const url = new URL(request.url)
       return {
-        selected: sp.get("select"),
-        configIndexRaw: sp.get("config"),
+        // Pathname is folded into the fp so the auto-picked config tab
+        // follows preview navigation — pickBestConfigIndex reads the
+        // previewed-page pathname inside render, but the vary surface
+        // would otherwise miss path-only changes.
+        pathname: url.pathname,
+        selected: url.searchParams.get("select"),
+        configIndexRaw: url.searchParams.get("config"),
       }
     },
   },
@@ -696,9 +683,7 @@ export function EditorShell({ children }: { children: ReactNode }) {
         <EditorTreePartial parent={ROOT} />
       </aside>
       <main className="min-h-screen" data-testid="cms-edit-preview-pane">
-        <PreviewPanel previewUrl={previewUrl} parent={ROOT}>
-          {children}
-        </PreviewPanel>
+        <PreviewPanel previewUrl={previewUrl}>{children}</PreviewPanel>
       </main>
       <aside
         className="sticky top-0 h-screen overflow-y-auto border-l bg-muted/30 p-4"
@@ -712,11 +697,9 @@ export function EditorShell({ children }: { children: ReactNode }) {
 
 function PreviewPanel({
   previewUrl,
-  parent,
   children,
 }: {
   previewUrl: string
-  parent: PartialCtx
   children: ReactNode
 }) {
   return (
@@ -732,12 +715,7 @@ function PreviewPanel({
           </Button>
         </form>
       </div>
-      <div className="p-4">
-        {/* Frame-scoped preview wrapper — opens `frame="preview"` so
-            descendant specs' vary callbacks see the previewUrl, not
-            the full editor-state URL. */}
-        <EditorPreviewFramePartial parent={parent}>{children}</EditorPreviewFramePartial>
-      </div>
+      <div className="p-4">{children}</div>
     </>
   )
 }

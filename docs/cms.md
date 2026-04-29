@@ -170,7 +170,7 @@ loader runs in `Render`. Loaders are userspace (`src/app/loaders/`).
 
 | Signal | Where |
 |---|---|
-| `?cms-draft=1` | Editor preview-frame URL stamps it. |
+| `?cms-draft=1` | Editor stamps it on the preview URL. |
 | `Cookie: cms-draft=1` | Editor sets on first response. |
 | `?editor=1` / `Cookie: __editor=1` | Editor mode implies draft visibility. |
 
@@ -185,10 +185,15 @@ inside `<EditorShell>`. Three panes:
 
 - Tree (`#cms-edit-tree`) — list of CMS nodes for the previewed
   page. Click to select.
-- Preview (frame-scoped) — the page itself, reading frame-resolved
-  URLs so editor params don't leak into accessor reads.
+- Preview — the page itself, rendered inline inside the editor's
+  middle pane. Page placements receive `parent={ROOT}`; their `vary`
+  callbacks see the window URL with editor-internal params present
+  (`?select=…`, `?config=…`). Specs whose `vary` only reads the
+  pathname or page-relevant search params naturally ignore those.
 - Field form (`#cms-edit-fields`) — per-config tabs + form fields
-  derived from the catalog manifest.
+  derived from the catalog manifest. Folds `pathname` into its
+  `vary` so `pickBestConfigIndex` re-evaluates as the previewed
+  page changes.
 
 Server actions (`saveCmsFields`, `publishCmsDraft`,
 `addBlockToSlot`, `removeBlockFromSlot`, `moveBlockInSlot`,
