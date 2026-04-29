@@ -42,3 +42,11 @@ export function _childContext(
 export function _joinFrameChain(chain: readonly string[]): string {
   return chain.join(".")
 }
+
+/**
+ * Symbol attached to spec components produced by
+ * `ReactCms.partial(...)`. The `Match` walker uses it to identify
+ * spec invocations in a JSX tree without depending on referential
+ * equality through the registry.
+ */
+export const SPEC_COMPONENT_MARKER = Symbol.for("react-cms.spec-component")

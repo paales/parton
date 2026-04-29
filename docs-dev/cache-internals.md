@@ -31,9 +31,16 @@ Two side-tables back this:
 ## Cache key derivation
 
 ```ts
-key = baseKey + ":" + djb2(stableStringify([varyResult, options.vary]))
-baseKey = `${spec.id}:${structuralFp}:${djb2(innerPartialIds.sorted)}`
+key = baseKey + ":" + hash(stableStringify([varyResult, options.vary]))
+baseKey = `${spec.id}:${structuralFp}:${hash(innerPartialIds.sorted)}`
 ```
+
+`hash()` is SHA-256 truncated to 64 bits (`src/lib/hash.ts`).
+`stableStringify` (`src/lib/stable-stringify.ts`) canonicalizes the
+hash input — distinct sentinels for `undefined` / `NaN` / `±Infinity`
+/ `BigInt`, ms-encoded `Date`, sorted-content `Set` / `Map`, and
+`<circular>` for self-referential structures so a malformed
+`vary` result fails loudly instead of recursing forever.
 
 `innerPartialIds` lives in `baseKey` so adding/removing an inner
 partial inside the cached subtree invalidates the cache

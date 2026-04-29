@@ -274,3 +274,403 @@ With those in place, deleting `refreshRegistry` kept all unit tests and e2e test
 
 - **Unify the two PartialRoot branches** into one. With the walker gone, cache-mode exists only as an optimization (skip ancestor execution on a refetch by rendering directly from snapshots). An alternative: always stream, and have authors wrap expensive ancestors in `<Partial cache>`. The ergonomic trade-off is worth a design pass — the simplification would also let `PartialsClient` shed its `mode` prop.
 - **Dynamic-partial-inside-cached-ancestor on partial refetch.** If a refetch targets a dynamic partial whose ancestor is wrapped in `<Partial cache>`, cache-mode pulls the dynamic partial's snapshot directly (works today). Under a unified always-streaming model the ancestor's Partial body would need to NOT skip when it contains a requested descendant — but that requires knowing topology ahead of render, i.e., a static walker. Likely the reason to keep cache-mode as the optimization path, even after the refresh walker is gone.
+
+---
+
+## Transient client state — the un-URL-able middle (2026-04-29)
+
+The framework's load-bearing position is that **state lives in URLs**:
+page URL for shareable, frame URL for subtree-scoped. Combined with
+`vary` purity, this gives the strong promise that a Partial's render
+is reproducible from its URL alone. The cost: there is no first-class
+story for state that is **not yet authoritative** and **not appropriate
+for a URL**. Today this falls on the floor between client components
+(which can hold any state but can't influence a Partial's render) and
+server actions (which only commit authoritative state).
+
+The shape of the gap, with concrete failure cases:
+
+1. **Drag-to-reorder with debounced save.** User drags item 5 above
+   item 2 in a 50-item list; visual reorder must be instant, save
+   debounced. The new ordering doesn't belong in a URL (you're not
+   serializing a 50-item permutation in a query string), and `vary`
+   has no client-state input. Best you can do today is a client-only
+   visual layer that diverges from the server tree until the action
+   commits — the very split-state the "one primitive" thesis wants
+   to avoid.
+2. **Multi-step form draft restoration.** User starts filling a long
+   checkout / CMS authoring form, navigates away, comes back. Draft
+   lives in `localStorage` (or wants to). Today the Partial that
+   renders the form has no way to read that draft on the server; the
+   form re-renders blank from server state, and a client effect has
+   to repopulate. Hydration-time flip.
+3. **Optimistic UI on a server-rendered region.** User clicks
+   favorite; UI shows favorited instantly; server confirms. React's
+   `useOptimistic` works inside a client component, but the
+   surrounding Partial re-renders authoritatively from server state
+   only after the action commits. The optimistic value is invisible
+   to anything that renders through the Partial pipeline.
+4. **Cross-tab leak via session-scoped frame URL.** Two tabs viewing
+   the same app share the frame URL through the session cookie
+   (`docs/frames-navigation.md` §Sharp-edges). Tab A opens a drawer,
+   tab B's drawer also opens on next render. Already a known leak;
+   a per-tab-id channel would fix it but that channel doesn't exist.
+
+The deliberately-rejected design (`getLocalStorage()` /
+`getMousePosition()` server-side accessors, see "Borrowed-from-Inertia
+§Deliberately skipped", 2026-04-19) is still the right thing to reject:
+implicit subscription, hidden control flow, per-client cache keys,
+SSR fallback flips. Those critiques stand. The directions below try
+to address the gap **without** reinstating that DSL.
+
+### Direction A — Durable draft as a server entity (Partial reads it)
+
+The CMS layer already has the precedent: `content.json` (published) +
+`draft.json` (gitignored), with `lookupCmsNode(cmsId, request)`
+checking draft first when `cms-draft=1` is set. Generalize that shape
+to **app draft state**:
+
+```tsx
+const CheckoutForm = ReactCms.partial(CheckoutFormRender, {
+  match: "/checkout",
+  draft: { kind: "checkout", scope: "session" },   // new option
+  vary: ({ request, draft }) => ({
+    step: new URL(request.url).searchParams.get("step") ?? "shipping",
+    values: draft.fields(),                         // sync read like cms.*
+  }),
+})
+```
+
+`draft.fields()` reads from a per-session draft store keyed by
+`(sessionId, kind)`. A `useDraft()` hook in client code writes to the
+same store via a narrow server action. The store is the single
+authoritative place; the Partial reads it like it reads CMS fields;
+the cache key derives correctly because the read appears in `vary`.
+
+What this buys: zero new primitives, zero URL pollution, draft
+restoration across reloads, multi-tab consistency (it's server state),
+SSR works (no client state read at render time). The Partial re-renders
+on every draft mutation because the action invalidates by selector.
+
+What it costs: every keystroke in the form costs a server round-trip
+to write the draft. Acceptable for checkout / CMS authoring; too heavy
+for an autosave-on-every-keystroke text editor. For the heavy case,
+client-side debouncing inside the `useDraft` hook brings round-trips
+down to one-per-pause without changing the contract.
+
+Open question: scope key. `session` cookie works for anonymous flows;
+authenticated flows want the user id. Probably a `scope:
+(req) => string` callback.
+
+### Direction B — Optimistic overlay channel (one-shot, narrow)
+
+The "no client→server prop-override channel" rule was about preventing
+arbitrary client state from leaking into `vary`. A narrower channel —
+**optimistic overlays attached to a specific in-flight server action**
+— doesn't have the cache-key explosion problem because the overlay
+exists only for the duration of the action's lifetime.
+
+```tsx
+// Client component inside a Partial render:
+const [optimistic, addOptimistic] = useOptimistic(items)
+function onReorder(next) {
+  addOptimistic(next)
+  reorderItemsAction(next)              // server action
+}
+
+// Server action returns a directive the framework already understands:
+async function reorderItemsAction(next) {
+  await db.saveOrder(next)
+  return { invalidate: { selector: "#item-list" } }
+}
+```
+
+Today this works for the client component itself but the Partial body
+re-renders from authoritative state. Proposal: when an action is
+in-flight against a Partial, the framework holds the previous render's
+output and lets the Partial's *client* descendants read an optimistic
+overlay via `useOptimisticPartial(partialId)`. On commit, the new
+server render replaces both. No new server-side accessor; no `vary`
+input from client state; the channel is one-shot per action.
+
+This is roughly "Inertia visit progress events" + `useOptimistic`
+glued together at the Partial boundary. Aligns with the
+"Rich refetch event hooks" item earlier in this doc.
+
+### Direction C — Per-tab session axis
+
+The cross-tab leak (#4 above) and the "where does drag-reorder
+intermediate state live" question (#1) both want the same thing: a
+**per-tab** state cell the server can read sync. Today's session is
+cookie-backed and shared across tabs.
+
+A per-tab id stamped at first paint (e.g., a `sessionStorage`-backed
+nonce sent in a header on every request) gives a third URL-like axis:
+
+- Page URL — shareable, browser back/forward.
+- Frame URL — subtree-scoped, browser back/forward.
+- **Tab-scoped session** — per-tab transient state, no back/forward,
+  not shareable, not URL-visible.
+
+`vary` could read it: `vary: ({ tab }) => ({ draftOrder: tab.get("order") })`.
+Client writes via `useTabState("order", value)` which posts to a
+narrow framework action. This is closer to URL-discipline than
+Direction B (still server-authoritative, still appears in `vary`,
+still cache-keys correctly) but solves the multi-tab case Direction A
+doesn't.
+
+Risk: tab session becomes the dumping ground for "state I didn't
+want to think about." A sharp constraint — values must be
+JSON-serializable and under N bytes — keeps it honest.
+
+### Direction D — `<PartialForm>` with first-class draft
+
+Pull A + B together into a form-specific primitive:
+
+```tsx
+<PartialForm partial="#checkout" action={submitCheckout}
+             draft={{ kind: "checkout", debounce: 500 }}>
+  <Field name="email" />
+  <Field name="address" />
+</PartialForm>
+```
+
+Behaviour:
+- Field values write to the server-side draft store (Direction A) on
+  blur / debounce.
+- `submitCheckout` runs against the draft + final field values.
+- On in-flight submit, the optimistic-overlay channel (Direction B)
+  holds the form's "submitting" state visible to client descendants.
+- Cancel / abandon clears the draft.
+
+Most of the unhappy paths in the four failure cases above collapse
+into known-good behaviour: refresh restores the draft, multi-tab sees
+the same draft, optimistic state is scoped to the submission, and
+the partial's `vary` appears in cache keys.
+
+### What to NOT build
+
+- A server-side `getLocalStorage()` / `getClientState()` accessor.
+  The 2026-04-19 critique still applies: hidden control flow, every
+  read is a subscription, cache-key explosion, SSR fallback flips.
+- Implicit synchronization of arbitrary client state into `vary`.
+  The whole point of `vary` purity is that the cache key is
+  predictable; admitting any client value defeats it.
+- A "Partial-aware Redux." If the answer is a global store with
+  selectors, we're rebuilding what RSC was supposed to delete.
+
+### Decision the framework still owes
+
+Pick one of A / B / C / D as the *opinionated* path, document the
+others as escape hatches, and ship it before anyone tries to build a
+real form on this. Today the docs are silent on transient state;
+that silence will turn into a pile of bespoke client-side workarounds
+that are hard to reverse later. The CMS draft pattern (Direction A
+generalized) is the most architecturally consistent — it reuses the
+existing draft/published cascade and stays inside the
+"vary purity + URL-discipline" frame — and is probably the right
+default. B and C are additive on top.
+
+---
+
+## Critique inventory — open issues with priority (2026-04-29)
+
+Captured from a critical review session against Next.js / Remix.
+Items already conceded in conversation are folded in for completeness
+so future work has a single ranked list. Priority legend:
+
+- **P0** — silent correctness failure. Fix before any adoption.
+- **P1** — production blocker. Must address for non-research deployment.
+- **P2** — ergonomic / scaling pain. Will hurt as the project grows.
+- **P3** — future polish or out-of-scope today.
+
+### P0 — correctness
+
+- **djb2-32-bit hash for fingerprints + cache keys + variant keys.**
+  `src/lib/hash.ts`, used at `cache.tsx:464`, `partial.tsx:348`,
+  `partial-registry.ts:84`. Birthday-paradox collisions appear ~65k
+  distinct values. A *fingerprint* collision is a correctness bug:
+  client paints a stale `_cache` subtree as fresh because two
+  unrelated renders happen to share an fp. Variant-key collision in
+  the registry → cache-mode reconstructs the wrong snapshot →
+  wrong subtree rendered. Fix: xxhash64 / murmur3-128 over
+  `stable-stringify` output. Cheap; not yet wired.
+- **`stable-stringify.ts` correctness for hash inputs.** 17 lines,
+  ad-hoc. If it doesn't normalize Dates, Sets, Maps, `undefined`,
+  `+0`/`-0`, Symbol-keyed properties, NaN consistently, two equal
+  vary results may hash differently (spurious miss) or two different
+  vary results may hash equal (wrong cached output). Replace with
+  `safe-stable-stringify` or equivalent and add property-based
+  tests on the canonicalization.
+- **In-memory state breaks horizontal scale.** Sessions
+  (`session.ts:61`), render cache (`cache.tsx:55`), partial registry
+  (`partial-registry.ts:73`) are module-global Maps. Two server
+  instances → `__frame_sid` cookie points to memory that doesn't
+  exist on the other → frame URLs randomly disappear depending on
+  which instance routes the request. The "session is the source of
+  truth for what scene the user is looking at" claim collapses
+  under any HA deploy. Need a real `SessionStore` interface +
+  Redis/KV backend before claiming production-readiness.
+- **CMS cache invalidation across processes is unsound.**
+  `cms-storage.ts:113` uses `Date.now()` as the mtime tag in the
+  async path. Per-process parsed-store cache. Two writers → lost
+  writes; one writer + N readers → stale cache for arbitrary time
+  on the readers. The right answer is a real database, not "atomic
+  rename + per-process cache."
+
+### P1 — production blockers
+
+- **No auth / principal / CSRF model.** `entry.rsc.tsx:97` decodes and
+  executes server actions with zero identity check. CMS write
+  actions (`editor/actions.ts`) are unauthenticated by default.
+  Adopters must wire auth into every action by hand and there's no
+  CSRF protection on the RSC action endpoint. Need a documented
+  pattern + framework hook (e.g. `partial({ auth: requireRole(...) })`).
+- **Default CMS storage is a JSON file committed to git.** Fine for
+  the demo; unworkable for a real CMS (merge conflicts on every
+  edit, no row-level auth, no concurrent-author safety, deploy-on-
+  content-change). `setCmsStorage()` swap point exists but no real
+  backend ships. The repo is *named* "react-cms"; this is the
+  primary use case and it isn't covered.
+- **No metadata / SEO API.** `<title>`s rendered inline inside
+  spec render functions (`pokemon.tsx:567`). No Open Graph helpers,
+  no canonical URLs, no robots, no structured data. Conspicuous
+  absence for a CMS framework where content IS the SEO target.
+  Design space: a `head` option on `partial()` that contributes to
+  a per-request `<head>` collector, deduped by tag/key.
+- **No request-scoped data dedup.** Two specs that load the same
+  product fire two requests. Compare Next's `cache(fn)` and Remix's
+  loader composition. Workaround today: hand-roll a request-scoped
+  Map. Belongs in the framework.
+- **No observability hooks.** No per-spec timing, no slow-spec
+  warnings, no trace context propagation across Partial boundaries,
+  no cache hit/miss metrics. Production teams need this on day one
+  to find the spec adding 800ms per page. Pairs with the
+  per-Partial trace context idea in §Operational concerns.
+- **No deploy story.** `@vitejs/plugin-rsc` is experimental; no
+  edge runtime adapter, no ISR, no static export despite the
+  project name. The flight-runtime shim (`flight-runtime.ts`)
+  imports vendored React-Server-DOM bundles directly from
+  plugin-rsc's vendor path — if plugin-rsc moves the path, the
+  framework breaks. Need either an abstraction over the Flight
+  runtime or a commitment to a stable upstream.
+
+### P2 — ergonomic / scaling pain
+
+- **Selector tokens are a global flat namespace** (conceded
+  2026-04-29). `partial.tsx:367` throws on collision at render time;
+  fine for a demo, hostile for a multi-team codebase. Move to
+  module-scoped or path-scoped selector resolution. The
+  `makeSearchArea` factory at `pokemon.tsx:194` already has to
+  hand-disambiguate `#page-stage-1` vs `#frame-stage-1`; scoped
+  selectors would let the same internal name be reused across
+  factory invocations.
+- **Pattern-as-router doesn't compose hierarchically** (conceded
+  2026-04-29). Every spec on `/pokemon/:id` repeats the match and
+  re-validates `params.id` (`pokemon.tsx:357,398,444,488`). Fix:
+  ship `<PartialMatch>` (first-match-wins page-level container
+  with 404 fallback) so child specs inherit the matched scope
+  without re-declaring it. **— SHIPPED 2026-04-29** as
+  `src/lib/partial-match.tsx` exporting `<PartialMatch>` +
+  `<Match>`. First-match-wins routing, fallback on miss, ambient
+  match-params injected into descendant spec components via a
+  JSX-tree walk (cloneElement + `__ambientMatchParams` prop —
+  `react-server` doesn't export `createContext`, ALS scope exits
+  before render descends, so element-walk is the only option that
+  survives RSC's render boundary). Documented in `docs/partial.md`
+  §Page-level routing. Demo migration deferred — opt-in for new
+  pages, existing per-spec `match` keeps working unchanged. Walker
+  limitation: doesn't traverse user-defined function components,
+  so deeply-nested specs need explicit prop threading.
+- **Auto-derived selector + STRIP_SUFFIXES list is fragile.**
+  `partial.tsx:160` strips a hardcoded suffix list; renaming
+  `PokemonHeroRender` → `HeroRender` silently flips `#pokemon-hero`
+  to `#hero`. Production minification mangles `Render.name`
+  entirely. The escape hatch (`selector:` explicit) works but the
+  default path is a footgun. Fix: require explicit `selector` in
+  production builds, or freeze the auto-derive at module load
+  before minification (Babel/Vite plugin that stamps `displayName`).
+- **Pattern params are stringly-typed.** `params.id: string` has
+  no compile-time link to the `/pokemon/:id` pattern. Five copies
+  of `if (!idStr || !/^\d+$/.test(idStr)) return null` in
+  `pokemon.tsx`. Codegen typed-params from the pattern (Next-style)
+  or a runtime schema validator (`vary: ({ params: { id } }) =>
+  ({ pokemonId: int(id) })`).
+- **Module-graph eagerness on the server** (partially conceded
+  2026-04-29). `app/root.tsx` static-imports every page module;
+  RSC's native code-splitting is at `'use client'` boundaries, not
+  route boundaries. Fine for current scale; matters for serverless
+  cold-start at large catalogs. Pairs with the `<PartialMatch>`
+  hierarchy work — once routes have explicit hierarchy, lazy-import
+  page modules behind the match boundary.
+- **`partial-client.tsx` is 1752 lines in one file.** Cohesion is
+  real but the file accumulates lazy resolution, key-collision-in-
+  `.map()`, snapshot reinjection, fingerprint registration, frame-
+  name context, Suspense-wrapper detection. Will resist refactor
+  the longer it grows. Carve into: `merge.ts` (template + cache
+  diff), `nav.ts` (navigation API surface), `wrappers.ts`
+  (Suspense / boundary detection helpers).
+- **Constructor has two API faces with one signature.** Slot blocks
+  use `{tags, type}`; page specs use `{selector, match}`.
+  Constructor branches on `tags != null` (`partial.tsx:554`).
+  Either two named constructors (`ReactCms.partial(...)` /
+  `ReactCms.block(...)`) or a discriminated options type that
+  forces the choice up-front.
+- **HMR nukes every cache on every edit.** `cache.tsx:584` and
+  `entry.rsc.tsx:33`. Dev iteration gets slower the more partials
+  you have — the gradient is exactly backwards. Granular HMR-
+  invalidation by spec id (only specs whose source module changed
+  evict their cache entries) is the right shape.
+- **Children pass-through naming overlap.**
+  `PartialComponentProps.children` (JSX wrapper pattern) vs
+  `<Children name="body">` (CMS slot iteration). Same word, two
+  unrelated mechanisms. Rename the slot primitive (`<SlotChildren>`,
+  `<Slot>`) before the docs surface ossifies.
+
+### P3 — future polish
+
+- **Frame URL appears in every shareable page URL**
+  (`?__frame=...&__frameUrl=...`). Privacy mostly OK (closed
+  drawer), occasionally surprising (open-with-content state). At
+  minimum, doc a recommendation; ideally collapse the param to a
+  short opaque token resolved server-side.
+- **i18n as a first-class concern.** Already in
+  §Operational-concerns. Locale routing, locale as a vary axis,
+  translation function. Required for "CMS" framing.
+- **a11y of selector-targeted reload.** Already in
+  §Operational-concerns. Focus restoration policy, `aria-busy`
+  during pending, live-region announcements.
+- **ALS-spine fragility.** `runWithRequestAsync` is the request
+  context spine; userspace code that captures Promises into
+  module-level variables can resolve under the wrong request's
+  ALS context. Class-of-bugs that comes with the territory; doc
+  it loudly in `docs-dev/server-isolation.md`.
+- **Bundle eagerness for serverless cold-start.** See P2 module-
+  graph entry; same root cause, different symptom — a 200-page
+  app pays full module-init on every cold container boot.
+
+### Withdrawn / not-a-bug
+
+- **"Cache strip-and-reinject is expensive."** Withdrawn 2026-04-29;
+  local measurement is <5ms. Worth benchmarking under large
+  product-grid subtrees before re-raising.
+- **"The big incumbents are funded."** Withdrawn 2026-04-29;
+  stage-of-project, not value-prop.
+
+### Suggested sequencing
+
+1. **P0 sweep first** — they're all small, mostly mechanical, and
+   each one is a silent-failure mode. Ship before any external
+   adoption.
+2. **`<PartialMatch>` + scoped selectors** — unblocks the biggest
+   ergonomic complaints from the review (P2 conceded items) with
+   a single coherent design pass.
+3. **P1 auth + storage + metadata** — the three things every
+   real adopter would have to build themselves on day one.
+   Picking opinionated defaults (NextAuth-style adapter, Postgres
+   default backend, head-collector hook) lowers the integration
+   tax dramatically.
+4. **P1 observability** — one OpenTelemetry tracer hook around
+   each Partial render goes a long way; can land alongside the
+   debug overlay work.
+5. **Everything else** opportunistically.

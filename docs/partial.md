@@ -172,6 +172,69 @@ A spec doesn't render in three cases:
 Cases 1 and 2 emit nothing. Case 3 emits a placeholder so the client
 paints from `_cache`.
 
+## Page-level routing — `<PartialMatch>` / `<Match>`
+
+Per-spec `match` works for individual sections but doesn't compose
+hierarchically — every spec on `/pokemon/:id` repeats the pattern,
+and there's no single place to render a 404 when nothing matches.
+`PartialMatch` is the page-level router:
+
+```tsx
+import { PartialMatch, Match, ROOT } from "./lib"
+
+<PartialMatch fallback={<NotFoundPage />}>
+  <Match pattern="/pokemon/:id">
+    <DetailPlacements parent={ROOT} />
+  </Match>
+  <Match pattern="/cms-demo/:slug">
+    <CmsDemoPlacements parent={ROOT} />
+  </Match>
+  <Match pattern="/">
+    <HomePlacements parent={ROOT} />
+  </Match>
+</PartialMatch>
+```
+
+Behaviour:
+
+- **First match wins.** `PartialMatch` scans its top-level `Match`
+  children in order and renders the first whose `pattern` hits the
+  request pathname. Later `Match` siblings don't run.
+- **Fallback on miss.** Nothing matched → `fallback` renders. No
+  `fallback` → empty.
+- **Non-`Match` children are ignored.** Chrome (header, footer,
+  debug overlays) goes outside `PartialMatch`.
+- **Ambient match-params.** When a `Match` hits, its matched params
+  flow into descendant spec components via an injected
+  `__ambientMatchParams` prop. A spec with no `match` of its own
+  reads those params in its `vary` scope, so the per-spec
+  `match: "/pokemon/:id"` repetition can be removed:
+
+  ```tsx
+  // Before — every spec repeats the pattern.
+  const Hero = ReactCms.partial(HeroRender, { match: "/pokemon/:id", ... })
+  const Stats = ReactCms.partial(StatsRender, { match: "/pokemon/:id", ... })
+
+  // After — outer Match owns the URL, specs inherit params.
+  <Match pattern="/pokemon/:id">
+    <Hero parent={ROOT} />
+    <Stats parent={ROOT} />
+  </Match>
+  ```
+
+- **`Match` standalone.** `Match` works without a `PartialMatch`
+  wrapper. It self-gates on a miss (returns `null`) and provides
+  ambient params on a hit. Useful for local route gating.
+
+The injection walks the JSX tree under a `Match` and stops at:
+
+- spec components — injects ambient params and stops descending;
+- nested `<Match>` — its own injection wins, so the outer doesn't
+  recurse into it;
+- user-defined function components — opaque to the walker. A spec
+  nested inside `<Wrapper>{specs}</Wrapper>` will not receive
+  ambient params; thread them as explicit props in that case.
+
 ## Sharp edges
 
 - **Slot block specs need `tags`.** Specs without `tags` aren't
@@ -181,9 +244,8 @@ paints from `_cache`.
 - **`closest` / ancestor `provides`.** Punted out of this design
   pass. Specs that need ancestor data should accept it as a render
   prop (manual threading from a parent spec's `vary`).
-- **Pattern-as-router `*` fallback.** When zero specs on a page
-  match, the page renders empty. A future `<PartialMatch>` will
-  provide an explicit "render this when nothing matched" hook.
+- **`Match` ambient params don't traverse function components.** As
+  noted above. The escape hatch is explicit prop threading.
 
 ## Migration notes (2026-04-28)
 

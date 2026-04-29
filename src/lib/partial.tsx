@@ -27,7 +27,12 @@ import React, {
 } from "react"
 import { djb2 } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
-import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
+import {
+  _childContext,
+  ROOT,
+  SPEC_COMPONENT_MARKER,
+  type PartialCtx,
+} from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 import { FrameNameProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
@@ -116,6 +121,11 @@ export interface PartialComponentProps {
    *  its props bag. Lets specs act as JSX wrappers (e.g. opening a
    *  frame around author content). */
   children?: ReactNode
+  /** Match-params injected by an enclosing `<Match>` /
+   *  `<PartialMatch>` wrapper. Consumed by the spec component when
+   *  the spec has no `match` of its own — the spec's `vary` then
+   *  sees these params. Internal: authors don't pass it directly. */
+  __ambientMatchParams?: Record<string, string>
 }
 
 // ─── Selector parsing & id derivation ─────────────────────────────────
@@ -284,6 +294,7 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
     parent,
     cmsId: cmsIdOverride,
     children: outerChildren,
+    __ambientMatchParams,
   }) => {
     const opts = spec.options
     const effectiveCmsId = cmsIdOverride ?? spec.cmsId
@@ -303,6 +314,12 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
       const matched = matchRoutePattern(pageUrl.pathname, opts.match)
       if (matched === null) return null
       params = matched
+    } else if (__ambientMatchParams) {
+      // No spec-level match: inherit match-params injected by the
+      // enclosing `<Match>` wrapper (see partial-match.tsx). The
+      // wrapper walked the JSX tree and stamped this prop onto every
+      // spec invocation it found in its descendants.
+      params = __ambientMatchParams
     }
 
     // ── Frame phase ──
@@ -538,6 +555,7 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
     )
   }
   Component.displayName = `Partial(${spec.id})`
+  ;(Component as unknown as { [key: symbol]: unknown })[SPEC_COMPONENT_MARKER] = true
   return Component
 }
 

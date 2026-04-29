@@ -25,6 +25,8 @@ export {
   type ChildProps,
 } from "./slot.tsx"
 
+export { Match, PartialMatch, getActiveMatchParams } from "./partial-match.tsx"
+
 export {
   PartialsClient,
   getCachedPartialIds,

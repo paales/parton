@@ -34,7 +34,7 @@ Two layers:
 
 ```ts
 function variantKeyOf(snap: PartialSnapshot): string {
-  return djb2(stableStringify([
+  return hash(stableStringify([
     snap.parentPath,
     snap.parentFrameChain,
     snap.frameUrl ?? null,
@@ -42,6 +42,13 @@ function variantKeyOf(snap: PartialSnapshot): string {
   ]))
 }
 ```
+
+`hash()` is SHA-256 truncated to 64 bits (16 hex chars; see
+`src/lib/hash.ts`). The `djb2` export name still exists as a
+deprecated alias during the upgrade — it's the same function now.
+Variant-key collision would cause cache-mode to reconstruct the
+wrong snapshot for a given `(route, id)` lookup, so the upgrade
+from 32-bit djb2 was a correctness fix, not a perf change.
 
 The variant key captures the **structural placement axes** that
 distinguish two registrations of the same id:
