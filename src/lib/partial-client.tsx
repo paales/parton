@@ -658,6 +658,11 @@ interface RefetchBatchEntry {
   /** `.`-token names (sans `.`) — become `?tags=…` on the wire. */
   sharedTokens: string[]
   disableTransition: boolean
+  /** Per-id props map merged into the wire as `?partialProps=<JSON>`.
+   *  Server reads it in `PartialRoot` and forwards to the spec via
+   *  `partialFromSnapshot` so `<WhenStored>` and similar activators
+   *  can pass values without writing them into the URL. */
+  props?: Record<string, Record<string, unknown>>
 }
 
 let _batchRef: RefetchBatchEntry[] = []
@@ -673,17 +678,26 @@ async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
 
   const uniques = new Set<string>()
   const shareds = new Set<string>()
+  const mergedProps: Record<string, Record<string, unknown>> = {}
   let disableTransition = false
   for (const entry of batch) {
     for (const u of entry.uniqueTokens) uniques.add(u)
     for (const s of entry.sharedTokens) shareds.add(s)
     if (entry.disableTransition) disableTransition = true
+    if (entry.props) {
+      for (const [id, p] of Object.entries(entry.props)) {
+        mergedProps[id] = { ...(mergedProps[id] ?? {}), ...p }
+      }
+    }
   }
 
   const url = new URL(window.location.href)
   if (uniques.size > 0) url.searchParams.set("partials", [...uniques].join(","))
   if (shareds.size > 0) url.searchParams.set("tags", [...shareds].join(","))
   if (disableTransition) url.searchParams.set("disableTransition", "1")
+  if (Object.keys(mergedProps).length > 0) {
+    url.searchParams.set("partialProps", JSON.stringify(mergedProps))
+  }
 
   // Send cached fingerprints for the non-target set so the server can
   // skip the unchanged ones via fingerprint-match placeholders. We
@@ -1605,9 +1619,15 @@ export function useNavigation(name?: string): FrameworkNavigation {
  * or a frame URL via `useNavigation("name").navigate`) so the server reads
  * it via tracked accessors on re-render.
  */
+/** Fire signature: optionally pass a `props` payload that the server
+ *  forwards to the activated spec as JSX-like props (the `<WhenStored>`
+ *  and similar activators use this so values flow without writing
+ *  to the URL). */
+export type ActivatorFire = (payload?: { props?: Record<string, unknown> }) => void
+
 export function useActivate(
   partialId: string,
-  subscribe: (fire: () => void) => (() => void) | void,
+  subscribe: (fire: ActivatorFire) => (() => void) | void,
   opts?: { once?: boolean },
 ): void {
   const once = opts?.once ?? true
@@ -1616,13 +1636,14 @@ export function useActivate(
   subscribeRef.current = subscribe
 
   useEffect(() => {
-    const cleanup = subscribeRef.current(() => {
+    const cleanup = subscribeRef.current((payload) => {
       if (once && firedRef.current) return
       firedRef.current = true
       void enqueueRefetch({
         uniqueTokens: [partialId],
         sharedTokens: [],
         disableTransition: false,
+        props: payload?.props ? { [partialId]: payload.props } : undefined,
       })
     })
     return () => {

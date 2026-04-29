@@ -57,7 +57,14 @@ async function handler(request: Request): Promise<Response> {
         clearRegistry(scope)
         _clearAllSessions(scope)
       }
-      await _clearCmsDraft()
+      // CMS draft is process-global file-system state shared across
+      // every test scope. Only wipe it when explicitly requested via
+      // `?cms=1` (or the wholesale `?all=1`) — clearing on every
+      // `beforeEach` raced with cms-edit tests that depend on the
+      // draft state surviving across their own assertions.
+      if (all || url.searchParams.get("cms") === "1") {
+        await _clearCmsDraft()
+      }
       return new Response("ok", { status: 200 })
     }
   }

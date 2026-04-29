@@ -1,6 +1,6 @@
 "use client"
 
-import { useActivate, useNavigation } from "../../lib/partial-client.tsx"
+import { useActivate } from "../../lib/partial-client.tsx"
 import type { ActivatorProps } from "../../lib"
 
 export interface WhenStoredProps extends ActivatorProps {
@@ -9,9 +9,10 @@ export interface WhenStoredProps extends ActivatorProps {
   /** Which store to read from. Default `"local"`. */
   store?: "local" | "session"
   /**
-   * Name of the URL search param to write the stored value into
-   * before activating. The server reads it via `getSearchParam(as)`
-   * on re-render. Default `"value"`.
+   * Prop name to send the stored value as. Default `"stored"`. The
+   * activator fires a partial-refetch with `{ [as]: <storedValue> }`
+   * as the prop payload, which the server forwards to the spec's
+   * Render function as a JSX-style call-site prop.
    */
   as?: string
 }
@@ -19,27 +20,24 @@ export interface WhenStoredProps extends ActivatorProps {
 /**
  * Activator: fires the enclosing Partial's refetch when a key is
  * present (or appears) in `localStorage` / `sessionStorage`. The
- * stored value is written to the page URL as `?<as>=<value>` so the
- * server can read it via `getSearchParam(as)` on re-render.
+ * stored value is sent as a prop named by `as` (defaults to
+ * `"stored"`). The server reads `?partialProps={"<id>":{<as>:<v>}}`
+ * and re-renders the spec with the value as a JSX call-site prop —
+ * no URL writes, no `getSearchParam` reads.
  *
- *   <Partial
- *     id="draft"
- *     fallback={<NewDraft/>}
- *     defer={<WhenStored storageKey="draft-id" as="draftId"/>}
- *   >
- *     <Editor/>      // reads `getSearchParam("draftId")` server-side
- *   </Partial>
+ *   const Draft = ReactCms.partial(
+ *     function DraftRender({ draftId }: { draftId: string } & RenderArgs) { ... },
+ *     {
+ *       defer: <WhenStored storageKey="draft-id" as="draftId" />,
+ *       fallback: <NewDraft />,
+ *     },
+ *   )
  *
  * Behavior:
- *  - On mount: reads the key. If present, writes to the URL and
- *    activates immediately.
- *  - Otherwise: subscribes to the `storage` event and activates when
- *    the key transitions to non-null.
- *
- * The URL write uses `nav.navigate(url, { history: "replace", silent })`
- * — stamped with a framework silent-info marker, so the page-level
- * navigate interceptor declines to refetch. Only the activator's own
- * targeted reload (via `useActivate`) hits the server.
+ *  - On mount: reads the key. If present, fires immediately with the
+ *    value as a prop.
+ *  - Otherwise: subscribes to the `storage` event and fires when the
+ *    key transitions to non-null.
  *
  * Storage events only fire on OTHER tabs — a same-tab write won't
  * notify. If the author expects same-tab activation, they should set
@@ -50,7 +48,7 @@ export function WhenStored({ partialId, children, storageKey, store, as }: WhenS
   if (!partialId) {
     throw new Error("<WhenStored> requires `partialId`. Use it as the `defer` prop of a <Partial>.")
   }
-  const nav = useNavigation()
+  const propName = as ?? "stored"
 
   // `useActivate` captures `subscribe` via a ref, so returning a new
   // closure each render is fine — the ref holds the latest and the
@@ -60,17 +58,7 @@ export function WhenStored({ partialId, children, storageKey, store, as }: WhenS
     const tryActivate = () => {
       const v = storage.getItem(storageKey)
       if (v == null) return
-      if ("location" in globalThis) {
-        const url = new URL(window.location.href)
-        if (url.searchParams.get(as ?? "value") !== v) {
-          url.searchParams.set(as ?? "value", v)
-          void nav.navigate(url.toString(), {
-            history: "replace",
-            silent: true,
-          })
-        }
-      }
-      fire()
+      fire({ props: { [propName]: v } })
     }
     tryActivate()
     const onStorage = (e: StorageEvent) => {

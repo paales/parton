@@ -18,6 +18,16 @@ test.describe("notFound + redirect", () => {
     await expect(page.locator('[data-testid="not-found"]')).toBeVisible()
   })
 
+  test("URL with no registered spec match: NotFoundFallback fires 404", async ({ page }) => {
+    // /this/path/does/not/exist isn't covered by any spec's `match`.
+    // The framework's NotFoundFallback iterates the registered match
+    // set, finds nothing, and calls notFound() from its render —
+    // surfacing as HTTP 404 with the default NotFoundPage body.
+    const response = await page.goto("/this/path/does/not/exist")
+    expect(response?.status()).toBe(404)
+    await expect(page.locator('[data-testid="not-found"]')).toBeVisible()
+  })
+
   test("notFound() from deep async server component: HTML still returns 404", async ({ page }) => {
     // /pokemon/9999999 — PokeAPI returns no pokemon for that id;
     // HeroPartial awaits the query, sees an empty result, and calls

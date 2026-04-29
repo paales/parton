@@ -7,9 +7,9 @@
  * re-evaluates as the previewed URL changes.
  */
 
-import type { ReactNode } from "react"
-import { ReactCms, ROOT, type RenderArgs } from "../lib"
+import { ReactCms, type RenderArgs } from "../lib"
 import {
+  EDITOR_COOKIE,
   listAllCmsNodes,
   lookupDraftNode,
   parseSlotEntryId,
@@ -21,7 +21,7 @@ import {
 } from "../framework/cms-runtime.ts"
 import { getCatalogManifest, type BlockManifest } from "../framework/cms-prerender.ts"
 import { setSessionFrameUrl } from "../framework/session.ts"
-import { getRequest } from "../framework/context.ts"
+import { getRequest, setCookie } from "../framework/context.ts"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -187,11 +187,9 @@ export const EditorTreePartial = ReactCms.partial(
             const isSelected = entry.id === selected
             const label = entry.displayName ?? `#${entry.id}`
             const slotKey =
-              entry.parentId && entry.slotName
-                ? `${entry.parentId}:${entry.slotName}`
-                : null
-            const idx = slotKey != null ? rowIndex.get(entry.id) ?? 0 : 0
-            const total = slotKey != null ? slotCounts.get(slotKey) ?? 1 : 1
+              entry.parentId && entry.slotName ? `${entry.parentId}:${entry.slotName}` : null
+            const idx = slotKey != null ? (rowIndex.get(entry.id) ?? 0) : 0
+            const total = slotKey != null ? (slotCounts.get(slotKey) ?? 1) : 1
             const inSlot = entry.parentId && entry.slotName
             return (
               <li
@@ -282,12 +280,7 @@ export const EditorTreePartial = ReactCms.partial(
                     </form>
                     <form
                       action={asFormAction(
-                        removeBlockFromSlot.bind(
-                          null,
-                          entry.parentId!,
-                          entry.slotName!,
-                          entry.id,
-                        ),
+                        removeBlockFromSlot.bind(null, entry.parentId!, entry.slotName!, entry.id),
                       )}
                       className="contents"
                     >
@@ -312,9 +305,7 @@ export const EditorTreePartial = ReactCms.partial(
   },
   {
     selector: "#cms-edit-tree",
-    vary: ({ request }) => ({
-      selected: new URL(request.url).searchParams.get("select"),
-    }),
+    vary: ({ search: { select: selected = null } }) => ({ selected }),
   },
 )
 
@@ -365,12 +356,7 @@ export const EditorFieldPanelPartial = ReactCms.partial(
 
         {hasDraft && (
           <form action={asFormAction(resetCmsDraft.bind(null, selected))}>
-            <Button
-              type="submit"
-              size="sm"
-              variant="outline"
-              data-testid="cms-edit-reset-draft"
-            >
+            <Button type="submit" size="sm" variant="outline" data-testid="cms-edit-reset-draft">
               Reset draft → published
             </Button>
           </form>
@@ -419,27 +405,21 @@ export const EditorFieldPanelPartial = ReactCms.partial(
   },
   {
     selector: "#cms-edit-fields",
-    vary: ({ request }) => {
-      const url = new URL(request.url)
-      return {
-        // Pathname is folded into the fp so the auto-picked config tab
-        // follows preview navigation — pickBestConfigIndex reads the
-        // previewed-page pathname inside render, but the vary surface
-        // would otherwise miss path-only changes.
-        pathname: url.pathname,
-        selected: url.searchParams.get("select"),
-        configIndexRaw: url.searchParams.get("config"),
-      }
-    },
+    vary: ({ pathname, search: { select: selected = null, config: configIndexRaw = null } }) => ({
+      // Pathname is folded into the fp so the auto-picked config tab
+      // follows preview navigation — pickBestConfigIndex reads the
+      // previewed-page pathname inside render, but the vary surface
+      // would otherwise miss path-only changes.
+      pathname,
+      selected,
+      configIndexRaw,
+    }),
   },
 )
 
 // ─── Helpers (config tabs, field map, format helpers) ──────────────────
 
-function pickEffectiveConfig(
-  configs: readonly CmsConfig[],
-  requested: number | null,
-): number {
+function pickEffectiveConfig(configs: readonly CmsConfig[], requested: number | null): number {
   if (configs.length === 0) return -1
   if (requested != null && requested >= 0 && requested < configs.length) return requested
   const best = pickBestConfigIndex(configs, previewRequest())
@@ -663,59 +643,85 @@ function BooleanSidecar({ fields }: { fields: string[] }) {
   return <input type="hidden" name="__boolean-fields" value={fields.join(",")} />
 }
 
-// ─── Shell ─────────────────────────────────────────────────────────────
+// ─── Editor shell ──────────────────────────────────────────────────────
+//
+// `EditorShell` is itself a partial. Its vary reads both the
+// `?editor=1`/`?editor=0` URL toggle (immediate effect this request)
+// and the editor cookie (sticky across requests). The render persists
+// the URL toggle to the cookie so the next request reads it back from
+// the cookie alone. When the resolved mode is off, the spec just
+// passes its children through (no UI); when on, it wraps them in the
+// three-pane layout.
 
-export function EditorShell({ children }: { children: ReactNode }) {
-  const previewUrl = derivePreviewUrl()
-  const incomingUrl = new URL(getRequest().url)
-  const isPreviewFrameRefetch = incomingUrl.searchParams.getAll("__frame").includes("preview")
-  if (!isPreviewFrameRefetch) setSessionFrameUrl(["preview"], previewUrl)
+export const EditorShell = ReactCms.partial(
+  function EditorShellRender({
+    editor,
+    sync,
+    parent,
+    children,
+  }: { editor: boolean; sync: string | null } & RenderArgs) {
+    // Persist the URL toggle as a cookie so subsequent requests stick
+    // without `?editor=` in the URL.
+    if (sync === "1") setCookie(EDITOR_COOKIE, "1")
+    else if (sync === "0") setCookie(EDITOR_COOKIE, "", 0)
 
-  return (
-    <div
-      className="grid gap-0 min-h-screen items-start"
-      style={{ gridTemplateColumns: "320px minmax(0, 1fr) 360px" }}
-    >
-      <aside
-        className="sticky top-0 h-screen overflow-y-auto border-r bg-muted/30 p-4"
-        data-testid="cms-edit-tree-pane"
-      >
-        <EditorTreePartial parent={ROOT} />
-      </aside>
-      <main className="min-h-screen" data-testid="cms-edit-preview-pane">
-        <PreviewPanel previewUrl={previewUrl}>{children}</PreviewPanel>
-      </main>
-      <aside
-        className="sticky top-0 h-screen overflow-y-auto border-l bg-muted/30 p-4"
-        data-testid="cms-edit-field-pane"
-      >
-        <EditorFieldPanelPartial parent={ROOT} />
-      </aside>
-    </div>
-  )
-}
-
-function PreviewPanel({
-  previewUrl,
-  children,
-}: {
-  previewUrl: string
-  children: ReactNode
-}) {
-  return (
-    <>
+    if (!editor) {
+      return (
+        <div className="mx-auto min-h-screen max-w-225 p-8" data-testid="page-shell">
+          {children}
+        </div>
+      )
+    }
+    const previewUrl = derivePreviewUrl()
+    const incomingUrl = new URL(getRequest().url)
+    const isPreviewFrameRefetch = incomingUrl.searchParams.getAll("__frame").includes("preview")
+    if (!isPreviewFrameRefetch) setSessionFrameUrl(["preview"], previewUrl)
+    return (
       <div
-        className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/95 px-4 py-3 backdrop-blur"
-        data-testid="cms-edit-preview-chrome"
+        className="grid gap-0 min-h-screen items-start"
+        style={{ gridTemplateColumns: "320px minmax(0, 1fr) 360px" }}
       >
-        <CmsEditAddressBar initialUrl={previewUrl} />
-        <form action={asFormAction(publishCmsDraft)}>
-          <Button type="submit" size="sm" variant="outline">
-            Publish
-          </Button>
-        </form>
+        <aside
+          className="sticky top-0 h-screen overflow-y-auto border-r bg-muted/30 p-4"
+          data-testid="cms-edit-tree-pane"
+        >
+          <EditorTreePartial parent={parent} />
+        </aside>
+        <main className="min-h-screen" data-testid="cms-edit-preview-pane">
+          <div
+            className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/95 px-4 py-3 backdrop-blur"
+            data-testid="cms-edit-preview-chrome"
+          >
+            <CmsEditAddressBar initialUrl={previewUrl} />
+            <form action={asFormAction(publishCmsDraft)}>
+              <Button type="submit" size="sm" variant="outline">
+                Publish
+              </Button>
+            </form>
+          </div>
+          <div className="p-4">{children}</div>
+        </main>
+        <aside
+          className="sticky top-0 h-screen overflow-y-auto border-l bg-muted/30 p-4"
+          data-testid="cms-edit-field-pane"
+        >
+          <EditorFieldPanelPartial parent={parent} />
+        </aside>
       </div>
-      <div className="p-4">{children}</div>
-    </>
-  )
-}
+    )
+  },
+  {
+    vary: ({
+      search: { editor: editorParam = null },
+      cookies: { [EDITOR_COOKIE]: cookieFlag },
+    }) => {
+      // URL toggle wins for the current request so the editor pops
+      // open immediately; the render also sets the cookie so the
+      // mode persists. The framework folds the page URL into every
+      // spec's fingerprint, so descendant page wrappers re-evaluate
+      // on URL changes without needing to opt in here.
+      const editor = editorParam === "1" ? true : editorParam === "0" ? false : cookieFlag === "1"
+      return { editor, sync: editorParam }
+    },
+  },
+)

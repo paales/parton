@@ -57,6 +57,23 @@ export interface PartialSnapshot {
   frameUrl?: string
   parentPath: readonly string[]
   cmsId?: string
+  /** Call-site JSX props captured during the streaming render. Cache-
+   *  mode partial-refetch reads them back so a child spec rendered
+   *  via a parent wrapper still receives `flavor={...}` etc. when
+   *  the framework re-invokes it without going through the wrapper.
+   *
+   *  Per-scope (per-user-session) state: concurrent requests from the
+   *  same scope with different prop values for the same partial id
+   *  could race. For typical single-tab users this is fine; the
+   *  proper fix is wiring props through the client so refetches
+   *  carry the props they were originally rendered with. */
+  props?: Record<string, unknown>
+  /** Hash of the spec's varyResult on its most-recent render —
+   *  feeds the descendant-fp fold so an ancestor's fingerprint
+   *  reflects every descendant's deps. Without it, a wrapper whose
+   *  own JSX is unchanged would fp-skip and starve its descendants
+   *  of a re-evaluation, even when their URL/CMS deps just changed. */
+  varyKey?: string
 }
 
 const HINT_LRU_MAX = 10_000
@@ -329,6 +346,13 @@ export function _registryStats(): {
 }
 
 if (import.meta.hot) {
-  import.meta.hot.on("vite:beforeUpdate", () => clearRegistry())
+  // ONLY clear on a true full reload — `vite:beforeUpdate` fires for
+  // every incremental HMR (any imported module changing, including
+  // unrelated stylesheets and other test-worker activity), and
+  // wiping every scope's registry on each one creates cross-test
+  // pollution under parallel `yarn test:e2e`. Stale snapshots after
+  // an HMR self-heal on the next render — their effective ids and
+  // fingerprints are recomputed, and the variant store overwrites
+  // idempotently.
   import.meta.hot.on("vite:beforeFullReload", () => clearRegistry())
 }

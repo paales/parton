@@ -65,11 +65,11 @@ const MessagePartials = AVAILABLE_FILES.map((fileId) =>
     },
     {
       selector: `#chat-msg-${fileId}`,
-      vary: ({ request }) => {
-        const sp = new URL(request.url).searchParams
-        const msgs = parseMsgs(sp.get("msgs"))
+      vary: ({ search }) => {
+        const { msgs: msgsRaw = null } = search
+        const msgs = parseMsgs(msgsRaw)
         if (!msgs.includes(fileId)) return null
-        const cursor = Math.max(0, Number(sp.get(`cursor-${fileId}`)) || 0)
+        const cursor = Math.max(0, Number(search[`cursor-${fileId}`]) || 0)
         return { cursor }
       },
     },
@@ -97,10 +97,7 @@ export const ChatListPartial = ReactCms.partial(
   },
   {
     selector: "#chat-list",
-    vary: ({ request }) => {
-      const msgIds = parseMsgs(new URL(request.url).searchParams.get("msgs"))
-      return { msgIds }
-    },
+    vary: ({ search: { msgs = null } }) => ({ msgIds: parseMsgs(msgs) }),
   },
 )
 
@@ -139,12 +136,9 @@ export const ChatOverlayPartial = ReactCms.partial(
   {
     selector: "#chat-overlay",
     frame: "chat-overlay",
-    vary: ({ request }) => {
-      const sp = new URL(request.url).searchParams
-      const open = sp.get("chat") === "open"
-      const msgIds = parseMsgs(sp.get("msgs"))
-      const nextHref = computeNextHref(msgIds)
-      return { open, msgIds, nextHref }
+    vary: ({ search: { chat, msgs = null } }) => {
+      const msgIds = parseMsgs(msgs)
+      return { open: chat === "open", msgIds, nextHref: computeNextHref(msgIds) }
     },
   },
 )

@@ -3,10 +3,10 @@
  * The actual streaming UI lives in `chat-overlay.tsx`.
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { ReactCms } from "../../lib"
 
-export const ChatNotesPagePartial = ReactCms.partial(
-  function ChatNotesPageRender({}: RenderArgs) {
+export const ChatNotesPage = ReactCms.partial(
+  function ChatNotesRender() {
     return (
       <main className="pb-[60vh]">
         <title>Chat Notes — streaming demo</title>
@@ -18,9 +18,5 @@ export const ChatNotesPagePartial = ReactCms.partial(
       </main>
     )
   },
-  { match: "/chat-notes", selector: "#chat-notes-page" },
+  { match: "/chat-notes" },
 )
-
-export function ChatNotesPagePlacements({ parent }: { parent: PartialCtx }) {
-  return <ChatNotesPagePartial parent={parent} />
-}

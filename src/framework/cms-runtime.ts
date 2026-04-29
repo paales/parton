@@ -606,10 +606,19 @@ export interface SpecCatalogEntry {
   isSlotBlock: boolean
   /** Used by the editor's catalog prerender to discover content fields. */
   vary?: (scope: {
-    request: Request
+    url: URL
+    pathname: string
+    search: Partial<Record<string, string>>
+    cookies: Partial<Record<string, string>>
+    headers: Partial<Record<string, string>>
     params: Record<string, string>
     cms: CmsReadSurface
   }) => unknown
+  /** Compiled URLPattern for the spec's `match` option, if any. The
+   *  framework's descendant-fp fold needs to evaluate descendants'
+   *  matches against the current request URL when computing
+   *  ancestors' fingerprints. */
+  matchPattern?: URLPattern
   /** Optional render fn name for selector auto-derivation. */
   displayName: string
 }

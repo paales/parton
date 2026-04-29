@@ -1,13 +1,13 @@
 /**
  * /sentinels-demo + /not-found-demo + /redirect-demo.
  *
- * Three specs:
- *  - `SentinelsDemoChromePartial` — UI on /sentinels-demo
- *  - `NotFoundDemoTriggerPartial` — calls `notFound()` on /not-found-demo
- *  - `RedirectDemoTriggerPartial` — calls `redirect()` on /redirect-demo
+ * Three independent page specs, each gating its own URL:
+ *  - `SentinelsDemoPage` — UI on /sentinels-demo
+ *  - `NotFoundDemoPage` — calls `notFound()` on /not-found-demo
+ *  - `RedirectDemoPage` — calls `redirect()` on /redirect-demo
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "../../lib"
 import { notFound } from "../../framework/errors.ts"
 import { setFrameworkControl } from "../../framework/context.ts"
 import { Redirect } from "../../framework/redirect-client.tsx"
@@ -28,15 +28,15 @@ function StatusBadge({ status }: { status: 404 | 302 | 200 }) {
   )
 }
 
-export const NotFoundDemoTriggerPartial = ReactCms.partial(
-  function NotFoundDemoTriggerRender({}: RenderArgs) {
+export const NotFoundDemoPage = ReactCms.partial(
+  function NotFoundDemoTriggerRender() {
     notFound()
   },
-  { match: "/not-found-demo", selector: "#not-found-demo-trigger" },
+  { match: "/not-found-demo" },
 )
 
-export const RedirectDemoTriggerPartial = ReactCms.partial(
-  function RedirectDemoTriggerRender({}: RenderArgs) {
+export const RedirectDemoPage = ReactCms.partial(
+  function RedirectDemoTriggerRender() {
     // Set framework control so the HTML path emits a 302; render
     // <Redirect> so the RSC path commits with a client-side
     // navigate. No throwing — the tree-level control channel is
@@ -44,11 +44,11 @@ export const RedirectDemoTriggerPartial = ReactCms.partial(
     setFrameworkControl({ redirect: { url: "/cache-demo", status: 302 } })
     return <Redirect url="/cache-demo" />
   },
-  { match: "/redirect-demo", selector: "#redirect-demo-trigger" },
+  { match: "/redirect-demo" },
 )
 
-export const SentinelsDemoChromePartial = ReactCms.partial(
-  function SentinelsDemoChromeRender({}: RenderArgs) {
+export const SentinelsDemoPage = ReactCms.partial(
+  function SentinelsDemoRender({}: RenderArgs) {
     return (
       <main className="py-4">
         <title>Sentinels Demo</title>
@@ -110,15 +110,5 @@ export const SentinelsDemoChromePartial = ReactCms.partial(
       </main>
     )
   },
-  { match: "/sentinels-demo", selector: "#sentinels-demo-chrome" },
+  { match: "/sentinels-demo" },
 )
-
-export function SentinelsDemoPagePlacements({ parent }: { parent: PartialCtx }) {
-  return (
-    <>
-      <SentinelsDemoChromePartial parent={parent} />
-      <NotFoundDemoTriggerPartial parent={parent} />
-      <RedirectDemoTriggerPartial parent={parent} />
-    </>
-  )
-}

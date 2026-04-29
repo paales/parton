@@ -24,7 +24,7 @@ export interface BlockManifest {
   readonly childSlots: Record<string, SlotSpec>
 }
 
-const PRERENDER_REQUEST = new Request("http://localhost/__prerender/")
+const PRERENDER_URL = new URL("http://localhost/__prerender/")
 
 function trackingCms(): {
   surface: CmsReadSurface
@@ -73,7 +73,11 @@ export async function prerenderBlock(type: string): Promise<BlockManifest | null
   if (spec.vary) {
     try {
       spec.vary({
-        request: PRERENDER_REQUEST,
+        url: PRERENDER_URL,
+        pathname: PRERENDER_URL.pathname,
+        search: {},
+        cookies: {},
+        headers: {},
         params: {},
         cms: tracker.surface,
       })
@@ -112,9 +116,7 @@ export function _invalidateCatalogManifest(): void {
 }
 
 if (import.meta.hot) {
-  import.meta.hot.on("vite:beforeUpdate", () => {
-    cached = null
-  })
+  // See partial-registry.ts — only clear on a true full reload.
   import.meta.hot.on("vite:beforeFullReload", () => {
     cached = null
   })

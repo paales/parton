@@ -3,12 +3,11 @@
  * batched-activation, streaming/defer race, and concurrent-refetch
  * scenarios.
  *
- * One container spec renders the static chrome + lays out the
- * sub-specs. Each sub-spec gates on `match: "/defer-demo"` so it only
- * appears on this route.
+ * Outer wrapper gates the route once; sub-specs render unconditionally
+ * inside it.
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "../../lib"
 import { WhenVisible } from "../components/when-visible.tsx"
 import { WhenStored } from "../components/when-stored.tsx"
 import { WhenMounted } from "../components/when-mounted.tsx"
@@ -46,7 +45,6 @@ export const ManualPartial = ReactCms.partial(
     )
   },
   {
-    match: "/defer-demo",
     selector: "#manual",
     defer: true,
     fallback: (
@@ -58,7 +56,7 @@ export const ManualPartial = ReactCms.partial(
 )
 
 export const StoredPartial = ReactCms.partial(
-  function StoredRender({ stored }: { stored: string | null } & RenderArgs) {
+  function StoredRender({ stored }: { stored?: string } & RenderArgs) {
     return (
       <div data-testid="stored-content">
         <Timestamp prefix="activated at" /> — value:{" "}
@@ -69,25 +67,20 @@ export const StoredPartial = ReactCms.partial(
     )
   },
   {
-    match: "/defer-demo",
     selector: "#stored",
-    defer: <WhenStored storageKey="demo-stored" as="stored" />,
+    defer: <WhenStored storageKey="demo-stored" />,
     fallback: (
       <DormantFallback testId="stored-fallback">
         dormant — set localStorage["demo-stored"] to activate
       </DormantFallback>
     ),
-    vary: ({ request }) => ({
-      stored: new URL(request.url).searchParams.get("stored"),
-    }),
   },
 )
 
 function makeBatch(label: string) {
   const key = `${label}-key`
-  const param = label
   return ReactCms.partial(
-    async function BatchRender({ stored }: { stored: string | null } & RenderArgs) {
+    async function BatchRender({ stored }: { stored?: string } & RenderArgs) {
       return (
         <div data-testid={`${label}-content`}>
           <Timestamp prefix="activated at" /> — value:{" "}
@@ -98,17 +91,13 @@ function makeBatch(label: string) {
       )
     },
     {
-      match: "/defer-demo",
       selector: `#${label}`,
-      defer: <WhenStored storageKey={key} as={param} />,
+      defer: <WhenStored storageKey={key} />,
       fallback: (
         <DormantFallback testId={`${label}-fallback`}>
           dormant — set localStorage["{key}"] before loading to activate
         </DormantFallback>
       ),
-      vary: ({ request }) => ({
-        stored: new URL(request.url).searchParams.get(param),
-      }),
     },
   )
 }
@@ -126,7 +115,6 @@ export const SlowStreamPartial = ReactCms.partial(
     )
   },
   {
-    match: "/defer-demo",
     selector: "#slow-stream",
     fallback: (
       <DormantFallback testId="slow-fallback">slow content streaming… (1.5s)</DormantFallback>
@@ -143,7 +131,6 @@ export const RaceDeferPartial = ReactCms.partial(
     )
   },
   {
-    match: "/defer-demo",
     selector: "#race-defer",
     defer: <WhenMounted />,
     fallback: (
@@ -165,7 +152,6 @@ function makeConcurrent(label: string, delayMs: number) {
       )
     },
     {
-      match: "/defer-demo",
       selector: `#concurrent-${label} .concurrent`,
       fallback: (
         <div data-testid={`concurrent-${label}-fallback`} className="text-muted-foreground">
@@ -189,7 +175,6 @@ export const VisibilityDeferPartial = ReactCms.partial(
     )
   },
   {
-    match: "/defer-demo",
     selector: "#any",
     defer: <WhenVisible />,
     fallback: (
@@ -202,8 +187,8 @@ export const VisibilityDeferPartial = ReactCms.partial(
 
 // ─── Static chrome ──────────────────────────────────────────────────────
 
-export const DeferDemoChromePartial = ReactCms.partial(
-  function DeferDemoChromeRender({ parent }: RenderArgs) {
+export const DeferDemoPage = ReactCms.partial(
+  function DeferDemoRender({ parent }: RenderArgs) {
     return (
       <main className="py-4">
         <title>Defer Demo</title>
@@ -307,9 +292,5 @@ export const DeferDemoChromePartial = ReactCms.partial(
       </main>
     )
   },
-  { match: "/defer-demo", selector: "#defer-demo-chrome" },
+  { match: "/defer-demo" },
 )
-
-export function DeferDemoPagePlacements({ parent }: { parent: PartialCtx }) {
-  return <DeferDemoChromePartial parent={parent} />
-}

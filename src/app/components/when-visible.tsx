@@ -1,7 +1,7 @@
 "use client"
 
-import { Fragment, useCallback, useRef, type FragmentInstance, type ReactNode } from "react"
-import { useActivate } from "../../lib/partial-client.tsx"
+import { Fragment, useCallback, useRef, type FragmentInstance } from "react"
+import { useActivate, type ActivatorFire } from "../../lib/partial-client.tsx"
 import type { ActivatorProps } from "../../lib"
 
 export interface WhenVisibleProps extends ActivatorProps {
@@ -42,7 +42,7 @@ export function WhenVisible({
   }
   const ref = useRef<FragmentInstance | null>(null)
   const subscribe = useCallback(
-    (fire: () => void) => {
+    (fire: ActivatorFire) => {
       const instance = ref.current
       if (!instance) return
       const observer = new IntersectionObserver(

@@ -68,14 +68,16 @@ describe("<WhenStored>", () => {
     expect(() => WhenStored({ storageKey: "greeting" } as never)).toThrowError(/partialId/)
   })
 
-  it("fires immediately when the key is already present on mount and writes the value to the URL", async () => {
+  it("fires immediately when the key is already present on mount and sends the value as a prop", async () => {
     localStorage.setItem("greeting", "hi")
     history.replaceState(null, "", "/defer-demo")
 
     await render({ partialId: "t", storageKey: "greeting" })
 
-    expect(new URL(window.location.href).searchParams.get("value")).toBe("hi")
     expect(refetchSpy).toHaveBeenCalled()
+    const refetchUrl = new URL(refetchSpy.mock.calls[0]?.[0] as string)
+    const partialProps = JSON.parse(refetchUrl.searchParams.get("partialProps") ?? "{}")
+    expect(partialProps).toEqual({ t: { stored: "hi" } })
   })
 
   it("does not fire when the key is absent on mount", async () => {
@@ -83,7 +85,7 @@ describe("<WhenStored>", () => {
     expect(refetchSpy).not.toHaveBeenCalled()
   })
 
-  it("fires when a matching storage event arrives and writes the value to the URL", async () => {
+  it("fires when a matching storage event arrives and sends the value as a prop", async () => {
     history.replaceState(null, "", "/defer-demo")
     await render({ partialId: "t", storageKey: "greeting" })
     expect(refetchSpy).not.toHaveBeenCalled()
@@ -100,8 +102,10 @@ describe("<WhenStored>", () => {
     })
     await Promise.resolve()
 
-    expect(new URL(window.location.href).searchParams.get("value")).toBe("hello")
     expect(refetchSpy).toHaveBeenCalled()
+    const refetchUrl = new URL(refetchSpy.mock.calls[0]?.[0] as string)
+    const partialProps = JSON.parse(refetchUrl.searchParams.get("partialProps") ?? "{}")
+    expect(partialProps).toEqual({ t: { stored: "hello" } })
   })
 
   it("ignores storage events for other keys", async () => {
@@ -140,14 +144,16 @@ describe("<WhenStored>", () => {
     expect(refetchSpy).not.toHaveBeenCalled()
   })
 
-  it("uses the `as` prop as the URL param name", async () => {
+  it("uses the `as` prop as the prop key name", async () => {
     localStorage.setItem("greeting", "hi")
     history.replaceState(null, "", "/defer-demo")
 
     await render({ partialId: "t", storageKey: "greeting", as: "draftId" })
 
-    expect(new URL(window.location.href).searchParams.get("draftId")).toBe("hi")
     expect(refetchSpy).toHaveBeenCalled()
+    const refetchUrl = new URL(refetchSpy.mock.calls[0]?.[0] as string)
+    const partialProps = JSON.parse(refetchUrl.searchParams.get("partialProps") ?? "{}")
+    expect(partialProps).toEqual({ t: { draftId: "hi" } })
   })
 
   it("reads sessionStorage when store='session'", async () => {
@@ -156,8 +162,10 @@ describe("<WhenStored>", () => {
 
     await render({ partialId: "t", storageKey: "greeting", store: "session" })
 
-    expect(new URL(window.location.href).searchParams.get("value")).toBe("hi")
     expect(refetchSpy).toHaveBeenCalled()
+    const refetchUrl = new URL(refetchSpy.mock.calls[0]?.[0] as string)
+    const partialProps = JSON.parse(refetchUrl.searchParams.get("partialProps") ?? "{}")
+    expect(partialProps).toEqual({ t: { stored: "hi" } })
   })
 
   it("cleanup removes the storage listener", async () => {

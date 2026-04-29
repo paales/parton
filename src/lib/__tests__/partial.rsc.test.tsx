@@ -13,11 +13,14 @@ async function flightAt(url: string, node: React.ReactNode): Promise<string> {
 
 describe("ReactCms.partial — match + skip", () => {
   it("renders pattern-matched specs with extracted params", async () => {
+    // No vary — match params auto-flow into Render. `InferV<{match:
+    // "/pokemon/:id"}>` resolves to `{id: string}`, so the call site
+    // doesn't need to supply id.
     const Page = ReactCms.partial(
       function ParamPageRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="param-out">id={id}</span>
       },
-      "/pokemon/:id",
+      { match: "/pokemon/:id", selector: "#param-page" },
     )
     const out = await flightAt("http://t/pokemon/42", <Page parent={ROOT} />)
     // Flight serializes JSX children as an array `["id=", "42"]`.
@@ -44,8 +47,7 @@ describe("ReactCms.partial — match + skip", () => {
       {
         match: "/x",
         selector: "#vary-null-spec",
-        vary: ({ request }) =>
-          new URL(request.url).searchParams.get("on") === "1" ? {} : null,
+        vary: ({ search: { on } }) => (on === "1" ? {} : null),
       },
     )
     const off = await flightAt("http://t/x", <Page parent={ROOT} />)
@@ -64,9 +66,7 @@ describe("ReactCms.partial — vary + render", () => {
       {
         match: "/flavors",
         selector: "#flavor-spec",
-        vary: ({ request }) => ({
-          flavor: new URL(request.url).searchParams.get("flavor") ?? "vanilla",
-        }),
+        vary: ({ search: { flavor = "vanilla" } }) => ({ flavor }),
       },
     )
     const v = await flightAt("http://t/flavors?flavor=chocolate", <Page parent={ROOT} />)
@@ -75,7 +75,7 @@ describe("ReactCms.partial — vary + render", () => {
     expect(dflt).toContain("vanilla")
   })
 
-  it("provides match params to render when no vary set", async () => {
+  it("auto-flows match params to Render with no vary", async () => {
     const Page = ReactCms.partial(
       function MatchParamRender({ slug }: { slug: string } & RenderArgs) {
         return <span data-testid="slug-out">{slug}</span>
@@ -104,9 +104,9 @@ describe("ReactCms.partial — vary + render", () => {
       {
         match: "/p/:slug",
         selector: "#merged-spec",
-        vary: ({ params, request }) => ({
+        vary: ({ params, search: { page = "1" } }) => ({
           slug: params.slug,
-          page: Number(new URL(request.url).searchParams.get("page") ?? 1),
+          page: Number(page),
         }),
       },
     )
@@ -165,6 +165,71 @@ describe("ReactCms.partial — children passthrough", () => {
   })
 })
 
+describe("ReactCms.partial — call-site prop pass-through", () => {
+  it("forwards JSX call-site props to Render alongside vary", async () => {
+    const Inner = ReactCms.partial(
+      function PassthroughInnerRender({
+        pokemonId,
+        flavor,
+      }: {
+        pokemonId: number
+        flavor: string
+      } & RenderArgs) {
+        return (
+          <span data-testid="passthrough-out">
+            {pokemonId}/{flavor}
+          </span>
+        )
+      },
+      {
+        selector: "#passthrough-inner",
+        vary: ({ search: { flavor = "vanilla" } }) => ({ flavor }),
+      },
+    )
+    // Outer wrapper: parses :id from URL, passes pokemonId as a JSX
+    // prop to Inner. Inner gets `flavor` from its own vary and
+    // `pokemonId` from the call-site prop.
+    const Outer = ReactCms.partial(
+      function PassthroughOuterRender({ pokemonId, parent }: { pokemonId: number } & RenderArgs) {
+        return <Inner parent={parent} pokemonId={pokemonId} />
+      },
+      {
+        match: "/p/:id",
+        selector: "#passthrough-outer",
+        vary: ({ params }) => ({ pokemonId: Number(params.id) }),
+      },
+    )
+    const out = await flightAt("http://t/p/9?flavor=mint", <Outer parent={ROOT} />)
+    expect(out).toContain("passthrough-out")
+    // Flight serializes children as `[9, "/", "mint"]`.
+    expect(out).toContain('9,"/","mint"')
+  })
+
+  it("inner spec without vary receives props directly from the call site", async () => {
+    // The whole point: zero `vary` ceremony. Outer parses the URL,
+    // Inner just takes pokemonId as a prop.
+    const Inner = ReactCms.partial(
+      function NoVaryInnerRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
+        return <span data-testid="no-vary-inner">id-{pokemonId}</span>
+      },
+      { selector: "#no-vary-inner" },
+    )
+    const Outer = ReactCms.partial(
+      function NoVaryOuterRender({ pokemonId, parent }: { pokemonId: number } & RenderArgs) {
+        return <Inner parent={parent} pokemonId={pokemonId} />
+      },
+      {
+        match: "/no-vary/:id",
+        selector: "#no-vary-outer",
+        vary: ({ params }) => ({ pokemonId: Number(params.id) }),
+      },
+    )
+    const out = await flightAt("http://t/no-vary/77", <Outer parent={ROOT} />)
+    expect(out).toContain("no-vary-inner")
+    expect(out).toContain('"id-",77')
+  })
+})
+
 describe("ReactCms.partial — frame scope", () => {
   it("vary receives frame-resolved request when spec opens a frame", async () => {
     // Without a session entry, the frame falls back to the spec's
@@ -183,9 +248,7 @@ describe("ReactCms.partial — frame scope", () => {
         selector: "#framed-spec",
         frame: "drawer",
         frameUrl: "/drawer/initial",
-        vary: ({ request }) => ({
-          framePath: new URL(request.url).pathname,
-        }),
+        vary: ({ pathname }) => ({ framePath: pathname }),
       },
     )
     const out = await flightAt("http://t/frame-host", <Page parent={ROOT} />)

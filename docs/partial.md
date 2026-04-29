@@ -112,17 +112,86 @@ content invalidation is the loader's concern.
 
 ## `Render` props
 
-`Render` receives the vary result spread, plus framework-injected
-keys:
+`Render` receives, in order: any extra props passed at the JSX call
+site, the `vary` result spread, the framework-injected
+`parent`/`cmsId`/`children`. Vary keys win on collision.
 
 | Key | Source |
 |---|---|
+| `<JSX call-site props>` | parent spec, e.g. `<Hero parent={p} pokemonId={id} />` |
 | `<every key from vary's return>` | author |
 | `parent` | framework — fresh `PartialCtx` for descendants |
 | `cmsId` | framework — effective cmsId (override-aware) |
+| `children` | framework — passes outer JSX children through |
 
 `parent` is what nested specs and slot hosts use; `cmsId` is what
 slot primitives pass as `hostCmsId`.
+
+### Call-site prop pass-through
+
+`ReactCms.partial(Render, …)` feels like `React.memo(Render)`: the
+returned component's prop signature is Render's prop signature minus
+the keys `vary` already provides minus the framework-injected keys.
+TypeScript subtracts both, so the call site is exactly the props the
+parent has to supply.
+
+```tsx
+// vary fills `pokemonId` → call site only takes `parent`
+const Hero = ReactCms.partial(HeroRender, {
+  match: "/pokemon/:id",
+  vary: ({ params }) => ({ pokemonId: Number(params.id) }),
+})
+function HeroRender({ pokemonId }: { pokemonId: number } & RenderArgs) { … }
+<Hero parent={ROOT} />
+```
+
+```tsx
+// no vary → `pokemonId` is required at the call site
+const Hero = ReactCms.partial(function HeroRender({
+  pokemonId,
+}: { pokemonId: number } & RenderArgs) { … })
+<Hero parent={parent} pokemonId={9} />
+```
+
+This is what makes nested wrappers work: an outer wrapper parses the
+URL once via `vary`, then threads typed props down to its children
+without forcing each child to re-parse the URL.
+
+```tsx
+const PokemonDetailPage = ReactCms.partial(
+  function PokemonDetailRender({ id, parent }: { id: string } & RenderArgs) {
+    return (
+      <>
+        <Hero parent={parent} id={id} />
+        <Stats parent={parent} id={id} />
+        <Species parent={parent} id={id} />
+      </>
+    )
+  },
+  { match: "/pokemon/:id", vary: ({ params }) => ({ id: params.id ?? "" }) },
+)
+
+// Inner specs have no `match`, no `vary` — the wrapper gates the
+// route once and passes `id` as a prop.
+const Hero = ReactCms.partial(async function HeroRender({
+  id,
+}: { id: string } & RenderArgs) {
+  const data = await client.request(PokemonHeroQuery, { id: Number(id) })
+  …
+})
+```
+
+Call-site props are part of the cache fingerprint automatically —
+two parents passing different `id` values produce different cache
+entries.
+
+The framework captures the call-site props in the spec's snapshot
+so a partial-refetch (cache-mode `?partials=…`) can re-invoke the
+child without going through its parent and still receive the same
+props. This is per-user-session state — concurrent requests from
+the same scope passing different prop values for the same partial
+id could race; the proper fix is wiring props through the client
+so refetches carry the props they were originally rendered with.
 
 ## Slots
 
@@ -172,68 +241,71 @@ A spec doesn't render in three cases:
 Cases 1 and 2 emit nothing. Case 3 emits a placeholder so the client
 paints from `_cache`.
 
-## Page-level routing — `<PartialMatch>` / `<Match>`
+## Page-level routing — wrapper specs
 
-Per-spec `match` works for individual sections but doesn't compose
-hierarchically — every spec on `/pokemon/:id` repeats the pattern,
-and there's no single place to render a 404 when nothing matches.
-`PartialMatch` is the page-level router:
+Page routing is just specs with `match`. There's no separate router
+primitive — an outer wrapper spec gates the URL once, its children
+are nested specs that take their data via JSX props or `vary`.
 
 ```tsx
-import { PartialMatch, Match, ROOT } from "./lib"
+const PokemonDetailPage = ReactCms.partial(
+  function PokemonDetailRender({ id, parent }: { id: string } & RenderArgs) {
+    return (
+      <>
+        <Hero parent={parent} id={id} />
+        <Stats parent={parent} id={id} />
+        <Species parent={parent} id={id} />
+      </>
+    )
+  },
+  { match: "/pokemon/:id", vary: ({ params }) => ({ id: params.id ?? "" }) },
+)
 
-<PartialMatch fallback={<NotFoundPage />}>
-  <Match pattern="/pokemon/:id">
-    <DetailPlacements parent={ROOT} />
-  </Match>
-  <Match pattern="/cms-demo/:slug">
-    <CmsDemoPlacements parent={ROOT} />
-  </Match>
-  <Match pattern="/">
-    <HomePlacements parent={ROOT} />
-  </Match>
-</PartialMatch>
+// Place every page wrapper as a sibling at the root; only the
+// matching one renders.
+<PokemonOverviewPage parent={ROOT} />
+<PokemonDetailPage parent={ROOT} />
+<CmsDemoPage parent={ROOT} />
+…
 ```
 
-Behaviour:
+Each wrapper self-gates: on a `match` miss it emits nothing. Inner
+specs don't need their own `match` — the wrapper already filtered.
 
-- **First match wins.** `PartialMatch` scans its top-level `Match`
-  children in order and renders the first whose `pattern` hits the
-  request pathname. Later `Match` siblings don't run.
-- **Fallback on miss.** Nothing matched → `fallback` renders. No
-  `fallback` → empty.
-- **Non-`Match` children are ignored.** Chrome (header, footer,
-  debug overlays) goes outside `PartialMatch`.
-- **Ambient match-params.** When a `Match` hits, its matched params
-  flow into descendant spec components via an injected
-  `__ambientMatchParams` prop. A spec with no `match` of its own
-  reads those params in its `vary` scope, so the per-spec
-  `match: "/pokemon/:id"` repetition can be removed:
+### 404 fallback
 
-  ```tsx
-  // Before — every spec repeats the pattern.
-  const Hero = ReactCms.partial(HeroRender, { match: "/pokemon/:id", ... })
-  const Stats = ReactCms.partial(StatsRender, { match: "/pokemon/:id", ... })
+`getRegisteredMatchPatterns()` returns every `match` pattern any
+spec was constructed with. A `NotFoundFallback` spec checks the URL
+against that set; if no pattern matches, it calls `notFound()`,
+which `Root` catches and turns into HTTP 404 + `<NotFoundPage>`.
 
-  // After — outer Match owns the URL, specs inherit params.
-  <Match pattern="/pokemon/:id">
-    <Hero parent={ROOT} />
-    <Stats parent={ROOT} />
-  </Match>
-  ```
+```tsx
+import { ReactCms, getRegisteredMatchPatterns } from "./lib"
+import { matchRoutePattern } from "./framework/context"
+import { notFound } from "./framework/errors"
 
-- **`Match` standalone.** `Match` works without a `PartialMatch`
-  wrapper. It self-gates on a miss (returns `null`) and provides
-  ambient params on a hit. Useful for local route gating.
+export const NotFoundFallback = ReactCms.partial(
+  function NotFoundFallbackRender() {
+    notFound()
+    return null
+  },
+  {
+    vary: ({ request }) => {
+      const p = new URL(request.url).pathname
+      for (const pattern of getRegisteredMatchPatterns()) {
+        if (matchRoutePattern(p, pattern) !== null) return null
+      }
+      return {}
+    },
+  },
+)
 
-The injection walks the JSX tree under a `Match` and stops at:
+// Place once alongside the other page wrappers.
+<NotFoundFallback parent={ROOT} />
+```
 
-- spec components — injects ambient params and stops descending;
-- nested `<Match>` — its own injection wins, so the outer doesn't
-  recurse into it;
-- user-defined function components — opaque to the walker. A spec
-  nested inside `<Wrapper>{specs}</Wrapper>` will not receive
-  ambient params; thread them as explicit props in that case.
+The set is populated as a side-effect of every `ReactCms.partial(…,
+{ match: … })` call; no explicit registration needed.
 
 ## Sharp edges
 
@@ -244,8 +316,10 @@ The injection walks the JSX tree under a `Match` and stops at:
 - **`closest` / ancestor `provides`.** Punted out of this design
   pass. Specs that need ancestor data should accept it as a render
   prop (manual threading from a parent spec's `vary`).
-- **`Match` ambient params don't traverse function components.** As
-  noted above. The escape hatch is explicit prop threading.
+- **Spec metadata doesn't cross the RSC boundary.** Spec components
+  are server-only — don't import a spec into a client component to
+  reach for its `id`. Reload calls stay stringly-typed
+  (`reload({ selector: "#hero" })`).
 
 ## Migration notes (2026-04-28)
 

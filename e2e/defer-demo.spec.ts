@@ -55,17 +55,17 @@ test.describe("Partial defer demo", () => {
     expect(hits.length, "expected exactly one RSC refetch for `manual`").toBeGreaterThanOrEqual(1)
   })
 
-  test("<WhenStored>: setting the key activates and value passes via ?stored= URL param", async ({
+  test("<WhenStored>: setting the key activates and value passes via partialProps", async ({
     page,
   }) => {
-    const rscCalls: Array<{ partials: string | null; stored: string | null }> = []
+    const rscCalls: Array<{ partials: string | null; partialProps: string | null }> = []
     page.on("request", (req) => {
       const url = req.url()
       if (url.includes("_.rsc")) {
         const u = new URL(url)
         rscCalls.push({
           partials: u.searchParams.get("partials"),
-          stored: u.searchParams.get("stored"),
+          partialProps: u.searchParams.get("partialProps"),
         })
       }
     })
@@ -102,7 +102,10 @@ test.describe("Partial defer demo", () => {
 
     const hit = rscCalls.find((c) => c.partials != null && c.partials.split(",").includes("stored"))
     expect(hit, "expected an RSC refetch for `stored`").toBeDefined()
-    expect(hit!.stored, "expected ?stored= URL param with the stored value").toBe("hello-world")
+    const parsed = JSON.parse(hit!.partialProps ?? "{}")
+    expect(parsed, "expected partialProps to carry the stored value").toEqual({
+      stored: { stored: "hello-world" },
+    })
   })
 
   test("<WhenVisible>: scroll-into-view activates the Partial", async ({ page }) => {

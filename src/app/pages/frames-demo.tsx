@@ -4,7 +4,7 @@
  * a nested frame (`cart.tab`, `menu.tab`).
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "../../lib"
 import { FrameNavigateButton, UpdateEntryStateButton } from "../components/frames-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -49,11 +49,8 @@ export const FramesMainListPartial = ReactCms.partial(
     )
   },
   {
-    match: "/frames-demo",
     selector: "#frames-main-list",
-    vary: ({ request }) => ({
-      sku: new URL(request.url).searchParams.get("product"),
-    }),
+    vary: ({ search: { product: sku = null } }) => ({ sku }),
   },
 )
 
@@ -94,7 +91,7 @@ export const CartTabPartial = ReactCms.partial(
     selector: "#cart-tab",
     frame: "tab",
     frameUrl: "/items",
-    vary: ({ request }) => ({ pathname: new URL(request.url).pathname }),
+    vary: ({ pathname }) => ({ pathname }),
   },
 )
 
@@ -174,12 +171,10 @@ export const CartFramePartial = ReactCms.partial(
     }
   },
   {
-    match: "/frames-demo",
     selector: "#cart",
     frame: "cart",
     frameUrl: "/cart/closed",
-    vary: ({ request }) => {
-      const pn = new URL(request.url).pathname
+    vary: ({ pathname: pn }) => {
       const state: "closed" | "open" | "checkout" | "unknown" =
         pn === "/cart/closed"
           ? "closed"
@@ -224,7 +219,7 @@ export const MenuTabPartial = ReactCms.partial(
     selector: "#menu-tab",
     frame: "tab",
     frameUrl: "/general",
-    vary: ({ request }) => ({ pathname: new URL(request.url).pathname }),
+    vary: ({ pathname }) => ({ pathname }),
   },
 )
 
@@ -313,12 +308,10 @@ export const MenuFramePartial = ReactCms.partial(
     }
   },
   {
-    match: "/frames-demo",
     selector: "#menu",
     frame: "menu",
     frameUrl: "/menu/closed",
-    vary: ({ request }) => {
-      const pn = new URL(request.url).pathname
+    vary: ({ pathname: pn }) => {
       const state: "closed" | "about" | "settings" | "slow" | "unknown" =
         pn === "/menu/closed"
           ? "closed"
@@ -336,8 +329,8 @@ export const MenuFramePartial = ReactCms.partial(
 
 // ─── Chrome ─────────────────────────────────────────────────────────────
 
-export const FramesDemoChromePartial = ReactCms.partial(
-  function FramesDemoChromeRender({ parent }: RenderArgs) {
+export const FramesDemoPage = ReactCms.partial(
+  function FramesDemoRender({ parent }: RenderArgs) {
     return (
       <main className="py-4">
         <title>Frames Demo</title>
@@ -369,9 +362,5 @@ export const FramesDemoChromePartial = ReactCms.partial(
       </main>
     )
   },
-  { match: "/frames-demo", selector: "#frames-demo-chrome" },
+  { match: "/frames-demo" },
 )
-
-export function FramesDemoPagePlacements({ parent }: { parent: PartialCtx }) {
-  return <FramesDemoChromePartial parent={parent} />
-}

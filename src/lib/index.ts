@@ -8,6 +8,8 @@ export {
   type PartialCtx,
   type PartialOptions,
   type PartialComponentProps,
+  type SpecComponent,
+  type SpecExtraProps,
   type SelectorToken,
   type SelectorTokens,
   type VaryScope,
@@ -16,6 +18,7 @@ export {
   type DeferSpec,
   getSpecComponentById,
   lookupSpecComponentForCmsId,
+  getRegisteredMatchPatterns,
 } from "./partial.tsx"
 
 export {
@@ -25,13 +28,13 @@ export {
   type ChildProps,
 } from "./slot.tsx"
 
-export { Match, PartialMatch, getActiveMatchParams } from "./partial-match.tsx"
 
 export {
   PartialsClient,
   getCachedPartialIds,
   useActivate,
   useNavigation,
+  type ActivatorFire,
 } from "./partial-client.tsx"
 
 export type {

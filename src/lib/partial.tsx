@@ -27,12 +27,7 @@ import React, {
 } from "react"
 import { djb2 } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
-import {
-  _childContext,
-  ROOT,
-  SPEC_COMPONENT_MARKER,
-  type PartialCtx,
-} from "./partial-context.ts"
+import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 import { FrameNameProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
@@ -53,7 +48,7 @@ import {
   registerSpec,
   type CmsReadSurface,
 } from "../framework/cms-runtime.ts"
-import { getRequest, matchRoutePattern } from "../framework/context.ts"
+import { getRequest, parseCookies } from "../framework/context.ts"
 import { getSessionFrameUrl, setSessionFrameUrl } from "../framework/session.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
@@ -71,9 +66,45 @@ export interface ActivatorProps {
 export type DeferSpec = true | ReactElement<ActivatorProps>
 
 export interface VaryScope {
-  request: Request
+  /** The (frame-resolved) request URL, already parsed. Reach for
+   *  this when you need fields outside the destructurable shortcuts
+   *  (port, protocol, hash). */
+  url: URL
+  /** Shortcut for `url.pathname`. */
+  pathname: string
+  /** Search params as a destructurable record. Missing keys are
+   *  `undefined` (the type reflects this — destructure with
+   *  defaults: `{ flavor = "vanilla" }`). Multi-valued keys (rare)
+   *  carry only their first value; for `getAll`, reach into
+   *  `url.searchParams`. */
+  search: Partial<Record<string, string>>
+  /** Cookies parsed from the request's `Cookie` header, as a
+   *  destructurable record. Missing keys are `undefined`. */
+  cookies: Partial<Record<string, string>>
+  /** Request headers as a destructurable record. Keys are
+   *  lowercased per HTTP spec — destructure with quoted keys for
+   *  hyphenated names (`{ "accept-language": al }`). Missing keys
+   *  are `undefined`. */
+  headers: Partial<Record<string, string>>
+  /** Match params populated by `match` (URLPattern groups for the
+   *  pathname). */
   params: Record<string, string>
+  /** CMS read surface bound to the spec's effective cmsId. */
   cms: CmsReadSurface
+}
+
+/** Build a plain `{key: value}` object from a URLSearchParams. */
+function searchParamsToRecord(sp: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of sp) out[k] = v
+  return out
+}
+
+/** Lowercase + flatten a `Headers` instance into a plain record. */
+function headersToRecord(h: Headers): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of h) out[k.toLowerCase()] = v
+  return out
 }
 
 export interface RenderArgs {
@@ -89,8 +120,19 @@ export interface RenderArgs {
   children?: ReactNode
 }
 
+/**
+ * Pattern accepted by `match`. Either a pathname-only string
+ * shorthand, or a full URLPattern init dict for declarative
+ * matching across pathname / search / hostname / etc.
+ *
+ *   match: "/pokemon/:id"
+ *   match: { pathname: "/p/:slug", search: "?variant=*" }
+ *   match: { pathname: "/api/:v(v[0-9]+)/:resource" }
+ */
+export type MatchPattern = string | URLPatternInit
+
 export interface PartialOptions<V> {
-  match?: string
+  match?: MatchPattern
   vary?: (scope: VaryScope) => V | null
   /** Class-only selector tokens (e.g. `[".hero"]`). When set, the spec
    *  is usable as a slot block — slot entries form effective selectors
@@ -113,6 +155,12 @@ export interface PartialOptions<V> {
   errorWith?: ReactNode
 }
 
+/**
+ * Framework-managed props every spec component understands. Plain
+ * pass-through props (e.g. `id` from a parent wrapper) live in the
+ * `Extra` parameter of `SpecComponent<Extra>` — they flow into Render
+ * alongside `vary`'s output and contribute to the cache fingerprint.
+ */
 export interface PartialComponentProps {
   parent: PartialCtx
   /** Per-instance cmsId override (used by slots). */
@@ -121,12 +169,67 @@ export interface PartialComponentProps {
    *  its props bag. Lets specs act as JSX wrappers (e.g. opening a
    *  frame around author content). */
   children?: ReactNode
-  /** Match-params injected by an enclosing `<Match>` /
-   *  `<PartialMatch>` wrapper. Consumed by the spec component when
-   *  the spec has no `match` of its own — the spec's `vary` then
-   *  sees these params. Internal: authors don't pass it directly. */
-  __ambientMatchParams?: Record<string, string>
 }
+
+/**
+ * The Render function's props get split by the framework into three:
+ *   - framework-managed (`parent`, `cmsId`, `children`) — `RenderArgs`,
+ *     always supplied by the framework.
+ *   - vary-derived (`V`) — produced by `vary`, also framework-supplied.
+ *   - everything else — must be passed as a JSX prop at the call site.
+ *
+ * `SpecExtraProps<R, V>` is the call-site prop surface: `R` minus the
+ * framework keys minus the vary keys. When `vary` returns the entire
+ * prop surface, `SpecExtraProps` collapses to `{}` and the call site
+ * is just `<Spec parent={...} />`.
+ */
+export type SpecExtraProps<R, V> = Omit<R, keyof RenderArgs | keyof V>
+
+/**
+ * Parse a route pattern at the type level into a `{param: string}`
+ * shape. `/pokemon/:id` → `{ id: string }`,
+ * `/p/:slug/reviews/:page` → `{ slug: string; page: string }`.
+ * Patterns with no `:param` segments resolve to `object` (empty
+ * surface). Wildcards (`/*`) don't contribute typed params.
+ */
+export type ParseRoute<T extends string> =
+  T extends `${string}:${infer Param}/${infer Rest}`
+    ? { [K in Param]: string } & ParseRoute<`/${Rest}`>
+    : T extends `${string}:${infer Param}`
+      ? { [K in Param]: string }
+      : object
+
+/**
+ * Infer the framework-supplied prop surface (`V`) from the options
+ * object. Resolution order:
+ *   1. string shorthand (`partial(Render, "/x/:id")`) → match-only,
+ *      params auto-flow as `ParseRoute<pattern>`.
+ *   2. options with `vary` → V is the vary callback's return type
+ *      (null is excluded — null means "don't render").
+ *   3. options with `match` but no `vary` → params auto-flow as
+ *      `ParseRoute<pattern>`.
+ *   4. anything else → empty: every Render prop must come from the
+ *      JSX call site.
+ *
+ * This is what makes `{ match: "/pokemon/:id" }` enough to wire
+ * `params.id` into a Render that takes `{ id: string }` — no
+ * `vary: ({ params }) => ({ id: params.id })` boilerplate.
+ */
+export type InferV<Opts> = Opts extends string
+  ? ParseRoute<Opts>
+  : Opts extends { vary: (scope: VaryScope) => infer R }
+    ? Exclude<R, null>
+    : Opts extends { match: infer M }
+      ? M extends string
+        ? ParseRoute<M>
+        : M extends { pathname: infer P extends string }
+          ? ParseRoute<P>
+          : object
+      : object
+
+/** Spec component type. The JSX call-site sees framework props
+ *  AND any Render prop the `vary` return doesn't already provide. */
+export type SpecComponent<Extra = unknown> = FC<PartialComponentProps & Extra>
 
 // ─── Selector parsing & id derivation ─────────────────────────────────
 
@@ -200,6 +303,7 @@ function resolveFrameRequest(
   return new Request(resolved, { headers: pageRequest.headers, method: "GET" })
 }
 
+
 // ─── PartialBoundary — registers + passes children through ────────────
 
 interface PartialBoundaryProps {
@@ -215,6 +319,13 @@ interface PartialBoundaryProps {
   cache?: CacheOptions
   fallback: ReactNode
   errorWith: ReactNode | undefined
+  /** Call-site JSX props (e.g. `id` from a parent wrapper). Stored
+   *  in the snapshot so partial-refetch in cache mode can replay
+   *  them when re-rendering the spec without its parent. */
+  props?: Record<string, unknown>
+  /** Hash of the spec's varyResult — feeds the descendant fold so
+   *  ancestors' fps reflect descendants' deps. */
+  varyKey?: string
   children: ReactNode
 }
 
@@ -231,6 +342,8 @@ export function PartialBoundary({
   cache,
   fallback,
   errorWith,
+  props,
+  varyKey,
   children,
 }: PartialBoundaryProps): ReactNode {
   registerPartial(id, {
@@ -245,13 +358,147 @@ export function PartialBoundary({
     parentPath,
     cmsId,
     cache,
+    props,
+    varyKey,
   })
   return children
 }
 
 // ─── Registry of spec components, keyed by effective id ────────────────
 
-const componentById = new Map<string, FC<PartialComponentProps>>()
+const componentById = new Map<string, SpecComponent<Record<string, unknown>>>()
+
+/**
+ * Compute the descendant-fp fold for a spec.
+ *
+ * Walks the previous-render snapshots for descendants of `ancestorId`
+ * (snapshots whose `parentPath` includes the ancestor) and resolves
+ * each descendant's vary against the CURRENT request — without
+ * actually re-rendering the descendant. This makes the ancestor's
+ * fingerprint move whenever any descendant's deps would have moved,
+ * so fp-skipping the ancestor never serves a stale subtree.
+ *
+ * Mirrors the OLD `<Partial>` `computeDescendantManifestKey` exactly:
+ * a stored manifest schema (here, the snapshot+spec catalog pair)
+ * resolved at the parent's render time, not via lagged stored
+ * values. Returns a string suffix to fold into the parent's hash —
+ * empty string when there are no descendants.
+ */
+function computeDescendantFold(ancestorId: string): string {
+  const snapshots = getRouteSnapshots()
+  if (!snapshots) return ""
+
+  const parts: string[] = []
+  for (const [descId, snap] of snapshots) {
+    if (descId === ancestorId) continue
+    if (!snap.parentPath.includes(ancestorId)) continue
+    parts.push(descendantContribution(descId, snap))
+  }
+  if (parts.length === 0) return ""
+  // Order shouldn't matter for fingerprint stability, but sorting
+  // keeps it deterministic across registry iteration order changes.
+  parts.sort()
+  return `|desc=${djb2(parts.join(","))}`
+}
+
+/**
+ * Compute one descendant's contribution to its ancestor's fp.
+ * Re-evaluates the descendant's match + vary against the current
+ * request so URL/cookie/header/CMS changes flow through to the
+ * ancestor's fp without lag. Falls back to the snapshot's stored
+ * `varyKey` when the catalog entry isn't available (e.g. the spec
+ * module hasn't loaded yet on the current process).
+ */
+function descendantContribution(descId: string, snap: PartialSnapshot): string {
+  const spec = snap.cmsId ? getSpecByCmsId(snap.cmsId) : undefined
+  // No live spec → fall back to last-known varyKey. Prevents the
+  // fold from becoming all-stable when the registry is warm but the
+  // catalog is still hydrating; lag of one render in this corner.
+  if (!spec) return `${descId}:${snap.varyKey ?? ""}`
+
+  // Honor the descendant's match: a wrapper navigating to a URL
+  // that no longer matches a child's pattern means the child won't
+  // render, so its fp contribution should be a stable "no-render"
+  // marker rather than the resolved vary value.
+  const request = getRequest()
+  let params: Record<string, string> = {}
+  if (spec.matchPattern) {
+    const result = spec.matchPattern.exec(request.url)
+    if (result === null) return `${descId}:nomatch`
+    const groups = { ...result.pathname.groups, ...result.search.groups }
+    params = Object.fromEntries(
+      Object.entries(groups).filter(([_k, v]) => typeof v === "string"),
+    ) as Record<string, string>
+  }
+
+  if (!spec.vary) {
+    // No vary → only match params + props contribute. The propsKey
+    // from the snapshot still distinguishes per-instance call sites.
+    return `${descId}:${stableStringify(params)}|${stableStringify(snap.props ?? null)}`
+  }
+
+  // Build a vary scope from the current request and resolve.
+  const url = new URL(request.url)
+  let result: unknown
+  try {
+    result = spec.vary({
+      url,
+      pathname: url.pathname,
+      search: searchParamsToRecord(url.searchParams),
+      cookies: parseCookies(request),
+      headers: headersToRecord(request.headers),
+      params,
+      cms: createCmsReadSurface(snap.cmsId ?? "", request),
+    })
+  } catch {
+    // A vary that throws on the synthetic scope (e.g. relies on a
+    // tracked accessor outside its expected request) just falls
+    // back to the stored varyKey — same lag as missing-catalog.
+    return `${descId}:${snap.varyKey ?? ""}`
+  }
+  if (result === null) return `${descId}:varynull`
+  const cmsKey = snap.cmsId ? cmsFingerprintContribution(snap.cmsId, request) : ""
+  const propsKey = stableStringify(snap.props ?? null)
+  return `${descId}:${stableStringify(result)}|${propsKey}|${cmsKey}`
+}
+
+/**
+ * Every URLPattern any spec was constructed with. Populated as a
+ * side effect of `ReactCms.partial(..., { match: ... })`. Consumed
+ * by `getRegisteredMatchPatterns()` so authors can wire a 404
+ * fallback that fires only when no registered pattern matches the
+ * request URL.
+ */
+const registeredMatchPatterns: URLPattern[] = []
+
+/**
+ * Normalize a `MatchPattern` (string shorthand or URLPatternInit
+ * dict) into a URLPattern. The string form is interpreted as a
+ * pathname pattern, with one ergonomic concession: a trailing `/*`
+ * is treated as optional so `"/cms-demo/*"` matches both
+ * `/cms-demo` and `/cms-demo/anything`. Authors who want strict
+ * URLPattern semantics use the URLPatternInit form.
+ */
+function normalizePathnamePattern(pattern: string): string {
+  // `/x/*` → `/x{/*}?` — wraps the trailing wildcard in an optional
+  // group so the slash is also optional.
+  return pattern.replace(/\/\*$/, "{/*}?")
+}
+
+function compileMatchPattern(pattern: MatchPattern): URLPattern {
+  if (typeof pattern === "string") {
+    return new URLPattern({ pathname: normalizePathnamePattern(pattern) })
+  }
+  if (typeof pattern.pathname === "string") {
+    return new URLPattern({ ...pattern, pathname: normalizePathnamePattern(pattern.pathname) })
+  }
+  return new URLPattern(pattern)
+}
+
+/** Snapshot of every URLPattern currently registered. */
+export function getRegisteredMatchPatterns(): readonly URLPattern[] {
+  return [...registeredMatchPatterns]
+}
 
 // ─── The constructor ──────────────────────────────────────────────────
 
@@ -264,6 +511,10 @@ interface InternalSpec<V> {
   type: string
   parsed: ParsedSelector
   options: PartialOptions<V>
+  /** Compiled URLPattern for `options.match`, or `undefined` when
+   *  the spec has no match. Compiled once at constructor time so
+   *  every render-phase `exec` is cheap. */
+  matchPattern?: URLPattern
   Render: (props: V & RenderArgs) => ReactNode
   /** True iff `options.tags` was set — spec is usable as slot block. */
   isSlotBlock: boolean
@@ -289,13 +540,16 @@ function effectiveIdForInstance(spec: InternalSpec<unknown>, cmsIdOverride: stri
   }
 }
 
-function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps> {
-  const Component: FC<PartialComponentProps> = ({
-    parent,
-    cmsId: cmsIdOverride,
-    children: outerChildren,
-    __ambientMatchParams,
-  }) => {
+function createSpecComponent<V>(
+  spec: InternalSpec<V>,
+): SpecComponent<Record<string, unknown>> {
+  const Component: SpecComponent<Record<string, unknown>> = (props) => {
+    const {
+      parent,
+      cmsId: cmsIdOverride,
+      children: outerChildren,
+      ...extraProps
+    } = props as PartialComponentProps & Record<string, unknown>
     const opts = spec.options
     const effectiveCmsId = cmsIdOverride ?? spec.cmsId
     const { id, parsed } = effectiveIdForInstance(
@@ -309,17 +563,13 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
     // the frame-resolved URL when the spec is framed; `match` does
     // not.
     let params: Record<string, string> = {}
-    if (opts.match) {
-      const pageUrl = new URL(getRequest().url)
-      const matched = matchRoutePattern(pageUrl.pathname, opts.match)
-      if (matched === null) return null
-      params = matched
-    } else if (__ambientMatchParams) {
-      // No spec-level match: inherit match-params injected by the
-      // enclosing `<Match>` wrapper (see partial-match.tsx). The
-      // wrapper walked the JSX tree and stamped this prop onto every
-      // spec invocation it found in its descendants.
-      params = __ambientMatchParams
+    if (spec.matchPattern) {
+      const result = spec.matchPattern.exec(getRequest().url)
+      if (result === null) return null
+      const groups = { ...result.pathname.groups, ...result.search.groups }
+      params = Object.fromEntries(
+        Object.entries(groups).filter(([_k, v]) => typeof v === "string"),
+      ) as Record<string, string>
     }
 
     // ── Frame phase ──
@@ -337,23 +587,42 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
     const cms = createCmsReadSurface(effectiveCmsId, ourRequest)
     let varyResult: unknown
     if (opts.vary) {
-      const v = opts.vary({ request: ourRequest, params, cms })
+      const ourUrl = new URL(ourRequest.url)
+      const v = opts.vary({
+        url: ourUrl,
+        pathname: ourUrl.pathname,
+        search: searchParamsToRecord(ourUrl.searchParams),
+        cookies: parseCookies(ourRequest),
+        headers: headersToRecord(ourRequest.headers),
+        params,
+        cms,
+      })
       if (v === null) return null
       varyResult = v
+    } else if (Object.keys(extraProps).length > 0) {
+      // No `vary` declared, but the call site supplied JSX props.
+      // The spec is a nested child whose identity is its props +
+      // match params; URL reactivity flows through the props.
+      varyResult = { ...params }
     } else {
-      // No `vary` declared. Default: fold match params + the full
-      // request URL search string into the dependency surface. This
-      // keeps "wrapper" specs (chrome with no own state) reactive to
-      // URL changes their descendants might depend on. If a spec
-      // wants to fp-skip across URL changes, it must declare a vary
-      // that returns a stable shape.
-      varyResult = {
-        ...params,
-        __search: new URL(ourRequest.url).search,
-      }
+      // No `vary`, no call-site props — fold match params alone.
+      // The page-URL fingerprint contribution is added below so
+      // every spec re-renders on URL changes by default.
+      varyResult = { ...params }
     }
 
     // ── Fingerprint ──
+    // The spec's "own" fp captures only what THIS spec declared:
+    // vary result, call-site props, frame URL, CMS contribution.
+    // The full fp folds in transitive descendant deps so an
+    // ancestor's fp moves whenever a descendant's would, keeping
+    // fp-skip conservative — fp-skipping a wrapper while a
+    // descendant's URL/CMS deps changed would otherwise serve a
+    // stale subtree. The fold reads each descendant's `varyKey`
+    // from the previous-render snapshot AND re-evaluates its vary
+    // against the CURRENT request so URL changes are reflected at
+    // ancestor fp time without lag (mirrors the OLD `<Partial>`
+    // `computeDescendantManifestKey` mechanism).
     const cmsKey = effectiveCmsId
       ? cmsFingerprintContribution(effectiveCmsId, ourRequest)
       : ""
@@ -362,20 +631,40 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
       opts.frame == null && ourFrameChain.length > 0
         ? `|inFrame=${ourFrameChain.join(".")}:${ourRequest.url}`
         : ""
-    const structuralFp = djb2(
-      `${id}|vary=${stableStringify(varyResult)}${cmsKey}${ownFrameKey}`,
+    const propsKey =
+      Object.keys(extraProps).length > 0 ? `|props=${stableStringify(extraProps)}` : ""
+    const varyKey = stableStringify(varyResult)
+    const ownStructuralFp = djb2(
+      `${id}|vary=${varyKey}${propsKey}${cmsKey}${ownFrameKey}`,
     )
+    const descendantFold = computeDescendantFold(id)
+    const structuralFp = djb2(`${ownStructuralFp}${descendantFold}`)
     const fp = djb2(
-      `${id}|vary=${stableStringify(varyResult)}${cmsKey}${ownFrameKey}${ambientFrameKey}`,
+      `${ownStructuralFp}${ambientFrameKey}${descendantFold}`,
     )
 
     // ── Skip decisions ──
+    // When the client has the spec's rendered output cached and its
+    // current fingerprint matches, the server returns a placeholder
+    // and the client paints from cache. Two things gate fp-skip:
+    //
+    // 1. Wrappers (`outerChildren` non-empty) never fp-skip. Their
+    //    "output" IS their children, which are rendered separately
+    //    by their JSX parent — fp-skipping the wrapper would block
+    //    those children from re-evaluating on this request even
+    //    when their deps have changed. Wrapper render is cheap (it
+    //    just returns its JSX shell + children), so always running
+    //    it costs nothing and preserves correctness.
+    // 2. The spec's fp folds in transitive descendant fps so any
+    //    descendant-dep change moves the ancestor's fp too.
     const state = getPartialState() ?? null
 
     const isExplicit = state?.explicitIds.has(id) ?? false
     const cachedFp = state?.cachedFingerprints.get(id)
     const fingerprintMatches = cachedFp != null && cachedFp === fp
-    const shouldSkip = state ? !isExplicit && fingerprintMatches : false
+    const hasOuterChildren = outerChildren != null && outerChildren !== false
+    const shouldSkip =
+      state != null && !isExplicit && fingerprintMatches && !hasOuterChildren
 
     if (state) {
       for (const tok of parsed.uniqueTokens) {
@@ -393,7 +682,11 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
     }
 
     const childCtx = _childContext(parent, id, opts.frame)
+    // Render receives: extra JSX-prop pass-through, vary result,
+    // framework-managed (parent / cmsId / children). vary wins on
+    // key collision — vary's return is the canonical surface.
     const renderProps = {
+      ...extraProps,
       ...(varyResult as object),
       parent: childCtx,
       cmsId: effectiveCmsId,
@@ -416,6 +709,8 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
           cache={opts.cache}
           fallback={fallback}
           errorWith={opts.errorWith}
+          props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
+          varyKey={varyKey}
         >
           {placeholderFor(id)}
         </PartialBoundary>
@@ -448,6 +743,8 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
           cache={opts.cache}
           fallback={fallback}
           errorWith={opts.errorWith}
+          props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
+          varyKey={varyKey}
         >
           <PartialErrorBoundary
             key={id}
@@ -549,25 +846,52 @@ function createSpecComponent<V>(spec: InternalSpec<V>): FC<PartialComponentProps
         cache={opts.cache}
         fallback={fallback}
         errorWith={opts.errorWith}
+        props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
       >
         {body}
       </PartialBoundary>
     )
   }
   Component.displayName = `Partial(${spec.id})`
-  ;(Component as unknown as { [key: symbol]: unknown })[SPEC_COMPONENT_MARKER] = true
   return Component
 }
 
 // ─── Public constructor ───────────────────────────────────────────────
 
 export const ReactCms = {
-  partial<V extends object>(
-    Render: (props: V & RenderArgs) => ReactNode,
-    matchOrOpts: string | PartialOptions<V> = {},
-  ): FC<PartialComponentProps> {
+  /**
+   * Construct a placeable spec component from a Render function plus
+   * an options object (or a `match` shorthand).
+   *
+   * Type inference splits the Render function's props into three:
+   *   1. framework-managed (`parent`, `cmsId`, `children`) — always
+   *      injected by the framework.
+   *   2. vary-derived (`V`) — auto-inferred via `InferV<Opts>`. With
+   *      `match` set, V defaults to the URL params (`Record<string,
+   *      string>`); with `vary` declared, V is its return type.
+   *   3. call-site pass-through (`Extra`) — anything left over.
+   *      Inferred from `Render`'s prop type minus the previous two.
+   *
+   * `Extra` is what the JSX call site has to supply (e.g.
+   * `<HeroSpec parent={...} id={pokemonId} />`). When `vary` (or the
+   * URL pattern) already covers the entire surface, `Extra` is empty
+   * and the call site is just `<HeroSpec parent={...} />`.
+   */
+  partial<
+    const Opts extends string | PartialOptions<object> = PartialOptions<object>,
+    V extends object = InferV<Opts>,
+    R extends V & RenderArgs = V & RenderArgs,
+  >(
+    Render: (props: R) => ReactNode,
+    matchOrOpts?: Opts,
+  ): SpecComponent<SpecExtraProps<R, V>> {
     const options: PartialOptions<V> =
-      typeof matchOrOpts === "string" ? { match: matchOrOpts } : matchOrOpts
+      typeof matchOrOpts === "string"
+        ? { match: matchOrOpts }
+        : ((matchOrOpts ?? {}) as PartialOptions<V>)
+
+    const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
+    if (matchPattern) registeredMatchPatterns.push(matchPattern)
 
     const isSlotBlock = options.tags != null && options.tags.length > 0
 
@@ -597,21 +921,32 @@ export const ReactCms = {
       type,
       parsed,
       options,
-      Render,
+      matchPattern,
+      // The internal renderer is invoked with the merged
+      // (extraProps + varyResult + framework) prop bag — the type
+      // narrows down to `R` at the public signature, but inside
+      // `createSpecComponent` we only know the V-shape side.
+      Render: Render as unknown as (props: V & RenderArgs) => ReactNode,
       isSlotBlock,
     }
 
-    const Component = createSpecComponent(spec)
-    componentById.set(id, Component)
+    const Component = createSpecComponent(spec) as SpecComponent<SpecExtraProps<R, V>>
+    componentById.set(id, Component as SpecComponent<Record<string, unknown>>)
 
     registerSpec({
       id,
       cmsId,
       type,
       selectorTokens: parsed,
-      Component,
+      // Slot lookup invokes the component with only framework props
+      // (`parent`, optional `cmsId`/`children`); call sites that pass
+      // extra `Extra` props go through the typed `SpecComponent<Extra>`
+      // surface returned to the spec author. The catalog signature is
+      // narrower than `SpecComponent<Extra>`, so we cast at the boundary.
+      Component: Component as FC<PartialComponentProps>,
       isSlotBlock,
       vary: options.vary as ((scope: VaryScope) => unknown) | undefined,
+      matchPattern,
       displayName:
         (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
     })
@@ -685,7 +1020,11 @@ function resolveSelectorToIds(
   return ids.size > 0 ? ids : null
 }
 
-function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
+function partialFromSnapshot(
+  id: string,
+  snap: PartialSnapshot,
+  overrideProps: Record<string, unknown> | undefined,
+): ReactNode {
   // Try direct id lookup (page specs).
   let Component = componentById.get(id)
   let cmsIdOverride: string | undefined
@@ -702,7 +1041,14 @@ function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
     path: snap.parentPath,
     frameChain: snap.parentFrameChain,
   }
-  return <Component parent={parent} cmsId={cmsIdOverride} />
+  // Replay any call-site props captured during the streaming render
+  // (e.g. `<Slow flavor={…}>`). On top of those, overlay per-request
+  // props the client sent via `?partialProps=` — that's how the
+  // `<WhenStored>` activator delivers a stored value as a prop
+  // without writing it into the URL.
+  const replayProps = (snap.props ?? {}) as Record<string, unknown>
+  const props = overrideProps ? { ...replayProps, ...overrideProps } : replayProps
+  return <Component parent={parent} cmsId={cmsIdOverride} {...props} />
 }
 
 export async function PartialRoot({ children }: PartialRootProps): Promise<ReactNode> {
@@ -711,6 +1057,19 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
   const tagsParam = requestUrl.searchParams.get("tags")
   const cachedParam = requestUrl.searchParams.get("cached")
   const populateCache = requestUrl.searchParams.has("__populateCache")
+  const partialPropsParam = requestUrl.searchParams.get("partialProps")
+  const partialProps: Record<string, Record<string, unknown>> = (() => {
+    if (!partialPropsParam) return {}
+    try {
+      const parsed = JSON.parse(partialPropsParam) as unknown
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, Record<string, unknown>>
+      }
+    } catch {
+      // Malformed JSON — ignore. Fall through with empty props.
+    }
+    return {}
+  })()
 
   const frameNames = requestUrl.searchParams.getAll("__frame")
   const frameUrls = requestUrl.searchParams.getAll("__frameUrl")
@@ -781,18 +1140,22 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     .map((id) => {
       const snap = lookupPartial(id)
       if (!snap) return null
-      return partialFromSnapshot(id, snap)
+      return partialFromSnapshot(id, snap, partialProps[id])
     })
     .filter((x): x is NonNullable<typeof x> => x != null)
 
   return React.createElement(PartialsClient, { mode: "cache" }, ...wrappedChildren)
 }
 
-export function getSpecComponentById(id: string): FC<PartialComponentProps> | undefined {
+export function getSpecComponentById(
+  id: string,
+): SpecComponent<Record<string, unknown>> | undefined {
   return componentById.get(id)
 }
 
-export function lookupSpecComponentForCmsId(cmsId: string): FC<PartialComponentProps> | undefined {
+export function lookupSpecComponentForCmsId(
+  cmsId: string,
+): SpecComponent<Record<string, unknown>> | undefined {
   const spec = getSpecByCmsId(cmsId)
-  return spec?.Component
+  return spec?.Component as SpecComponent<Record<string, unknown>> | undefined
 }

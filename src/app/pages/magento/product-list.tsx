@@ -13,10 +13,9 @@ import { client } from "../../magento-data.ts"
 import { graphql, type ResultOf } from "../../magento-graphql.ts"
 import { AddToCartButton } from "./add-to-cart-button.tsx"
 import { CartBadge } from "./cart-badge.tsx"
-import { LivePrice, LivePriceFallback } from "./live-price.tsx"
+import { LivePricePartial, LivePriceFallback } from "./live-price.tsx"
 import { RefreshAllPricesButton } from "./refresh-all-prices-button.tsx"
 import { Card, CardContent } from "@/components/ui/card"
-import { readCookie } from "../../../framework/context.ts"
 
 const CartQuery = graphql(`
   query Cart($cartId: String!) {
@@ -54,7 +53,7 @@ type ProductItem = NonNullable<
   NonNullable<NonNullable<ResultOf<typeof ProductsQuery>["products"]>["items"]>[number]
 >
 
-export const MagentoCartBadgePartial = ReactCms.partial(
+const MagentoCartBadge = ReactCms.partial(
   async function MagentoCartBadgeRender({ cartId }: { cartId: string | undefined } & RenderArgs) {
     await new Promise((r) => setTimeout(r, 100))
     if (!cartId) return <CartBadge quantity={0} />
@@ -62,33 +61,29 @@ export const MagentoCartBadgePartial = ReactCms.partial(
     return <CartBadge quantity={data.cart?.total_quantity ?? 0} />
   },
   {
-    match: "/magento/*",
     selector: "#cart-badge .cart .header",
     fallback: <CartBadge quantity={"?"} />,
-    vary: () => ({ cartId: readCookie("cart_id") }),
+    vary: ({ cookies: { cart_id: cartId } }) => ({ cartId }),
   },
 )
 
-export const MagentoHeaderPartial = ReactCms.partial(
-  function MagentoHeaderRender({ parent }: RenderArgs) {
-    return (
-      <header className="mb-4 flex items-center justify-between gap-4">
-        <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
-        <MagentoCartBadgePartial parent={parent} />
-      </header>
-    )
-  },
-  { match: "/magento/*", selector: "#magento-header" },
-)
+const MagentoHeader = ReactCms.partial(function MagentoHeaderRender({ parent }: RenderArgs) {
+  return (
+    <header className="mb-4 flex items-center justify-between gap-4">
+      <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
+      <MagentoCartBadge parent={parent} />
+    </header>
+  )
+})
 
-export const MagentoProductsPartial = ReactCms.partial(
-  async function MagentoProductsRender({ search }: { search: string } & RenderArgs) {
+const MagentoProducts = ReactCms.partial(
+  async function MagentoProductsRender({ q, parent }: { q: string } & RenderArgs) {
     const data = await client.request(ProductsQuery, { pageSize: 12 })
     const items = (data.products?.items ?? []).filter((item): item is ProductItem => item != null)
     return (
       <div>
         <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Magento Store {search ? `— "${search}"` : ""}</h1>
+          <h1 className="text-2xl font-semibold">Magento Store {q ? `— "${q}"` : ""}</h1>
         </div>
         <p className="mb-6 text-muted-foreground">
           Products loaded from GraphCommerce Magento 2 API.
@@ -99,23 +94,20 @@ export const MagentoProductsPartial = ReactCms.partial(
           className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"
         >
           {items.map((product) => (
-            <ProductCard key={product.sku ?? product.id} product={product} />
+            <ProductCard key={product.sku ?? product.id} product={product} parent={parent} />
           ))}
         </div>
       </div>
     )
   },
   {
-    match: "/magento/*",
     selector: "#products",
     cache: { maxAge: 12 },
-    vary: ({ request }) => ({
-      search: new URL(request.url).searchParams.get("q") ?? "",
-    }),
+    vary: ({ search: { q = "" } }) => ({ q }),
   },
 )
 
-function ProductCard({ product }: { product: ProductItem }) {
+function ProductCard({ product, parent }: { product: ProductItem; parent: PartialCtx }) {
   const { name, sku, id } = product
   const imageUrl = product.small_image?.url
   const imageLabel = product.small_image?.label
@@ -142,7 +134,13 @@ function ProductCard({ product }: { product: ProductItem }) {
         </div>
         {sku && (
           <Suspense fallback={<LivePriceFallback sku={sku} basePrice={price} currency={currency} />}>
-            <LivePrice sku={sku} basePrice={price} currency={currency} />
+            <LivePricePartial
+              parent={parent}
+              cmsId={`price-${sku}`}
+              sku={sku}
+              basePrice={price}
+              currency={currency}
+            />
           </Suspense>
         )}
         <div className="mt-2">{sku && <AddToCartButton sku={sku} />}</div>
@@ -151,11 +149,14 @@ function ProductCard({ product }: { product: ProductItem }) {
   )
 }
 
-export function MagentoPagePlacements({ parent }: { parent: PartialCtx }) {
-  return (
-    <>
-      <MagentoHeaderPartial parent={parent} />
-      <MagentoProductsPartial parent={parent} />
-    </>
-  )
-}
+export const MagentoPage = ReactCms.partial(
+  function MagentoRender({ parent }: RenderArgs) {
+    return (
+      <>
+        <MagentoHeader parent={parent} />
+        <MagentoProducts parent={parent} />
+      </>
+    )
+  },
+  { match: "/magento/*" },
+)

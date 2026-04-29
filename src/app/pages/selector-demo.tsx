@@ -3,7 +3,7 @@
  * `.`-shared tokens.
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "../../lib"
 import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
@@ -23,32 +23,32 @@ export const ProductAnonymousPartial = ReactCms.partial(
   function ProductAnonymousRender({}: RenderArgs) {
     return <ServerTime label="product" />
   },
-  { match: "/selector-demo", selector: ".product" },
+  { selector: ".product" },
 )
 
 export const PriceAPartial = ReactCms.partial(
   function PriceARender({}: RenderArgs) {
     return <ServerTime label="price-a" />
   },
-  { match: "/selector-demo", selector: "#price-a .price" },
+  { selector: "#price-a .price" },
 )
 
 export const PriceBPartial = ReactCms.partial(
   function PriceBRender({}: RenderArgs) {
     return <ServerTime label="price-b" />
   },
-  { match: "/selector-demo", selector: "#price-b .price .featured" },
+  { selector: "#price-b .price .featured" },
 )
 
 export const PriceCPartial = ReactCms.partial(
   function PriceCRender({}: RenderArgs) {
     return <ServerTime label="price-c" />
   },
-  { match: "/selector-demo", selector: "#price-c .price .featured" },
+  { selector: "#price-c .price .featured" },
 )
 
-export const SelectorDemoChromePartial = ReactCms.partial(
-  function SelectorDemoChromeRender({ parent }: RenderArgs) {
+export const SelectorDemoPage = ReactCms.partial(
+  function SelectorDemoRender({ parent }: RenderArgs) {
     return (
       <main className="py-4">
         <title>Selector Demo</title>
@@ -112,9 +112,5 @@ export const SelectorDemoChromePartial = ReactCms.partial(
       </main>
     )
   },
-  { match: "/selector-demo", selector: "#selector-demo-chrome" },
+  { match: "/selector-demo" },
 )
-
-export function SelectorDemoPagePlacements({ parent }: { parent: PartialCtx }) {
-  return <SelectorDemoChromePartial parent={parent} />
-}

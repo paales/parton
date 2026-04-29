@@ -4,7 +4,7 @@
  * the current `?end=` value, so only the active range renders.
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "../../lib"
 import { NextObserver } from "../components/next-observer.tsx"
 import { ScrollRestore } from "../components/scroll-restore.tsx"
 
@@ -13,7 +13,7 @@ const MAX_PAGES = 50
 
 function makeBarePage(page: number) {
   return ReactCms.partial(
-    function BarePageRender({}: RenderArgs) {
+    function BarePageRender() {
       const offset = (page - 1) * ITEMS_PER_PAGE
       return (
         <section data-testid={`page-${page}`} data-page={page} className="mb-4">
@@ -34,12 +34,11 @@ function makeBarePage(page: number) {
       )
     },
     {
-      match: "/bare",
       // Selector namespaced so the bare page-N specs don't collide
       // with the Pokemon homepage's `#page-N` list-page specs.
       selector: `#bare-page-${page}`,
-      vary: ({ request }) => {
-        const end = Math.max(1, Number(new URL(request.url).searchParams.get("end")) || 1)
+      vary: ({ search: { end: endRaw } }) => {
+        const end = Math.max(1, Number(endRaw) || 1)
         if (page > end) return null
         return { page }
       },
@@ -47,24 +46,22 @@ function makeBarePage(page: number) {
   )
 }
 
-export const BarePagePartials = Array.from({ length: MAX_PAGES }, (_, i) => makeBarePage(i + 1))
+const BarePagePartials = Array.from({ length: MAX_PAGES }, (_, i) => makeBarePage(i + 1))
 
-export const BareNextPartial = ReactCms.partial(
+const BareNext = ReactCms.partial(
   function BareNextRender({ end }: { end: number } & RenderArgs) {
     return <NextObserver currentEnd={end} />
   },
   {
-    match: "/bare",
     selector: "#bare-next",
-    vary: ({ request }) => {
-      const end = Math.max(1, Number(new URL(request.url).searchParams.get("end")) || 1)
-      return { end }
-    },
+    vary: ({ search: { end } }) => ({
+      end: Math.max(1, Number(end) || 1),
+    }),
   },
 )
 
-export const BareChromePartial = ReactCms.partial(
-  function BareChromeRender({ end }: { end: number } & RenderArgs) {
+export const BarePage = ReactCms.partial(
+  function BareRender({ end, parent }: { end: number } & RenderArgs) {
     return (
       <>
         <title>Infinite Scroll Test</title>
@@ -77,27 +74,17 @@ export const BareChromePartial = ReactCms.partial(
           {" · "}
           <span data-testid="end-readout">end={end}</span>
         </p>
+        {BarePagePartials.map((P, i) => (
+          <P key={`bare-page-${i + 1}`} parent={parent} />
+        ))}
+        <BareNext parent={parent} />
       </>
     )
   },
   {
     match: "/bare",
-    selector: "#bare-chrome",
-    vary: ({ request }) => {
-      const end = Math.max(1, Number(new URL(request.url).searchParams.get("end")) || 1)
-      return { end }
-    },
+    vary: ({ search: { end } }) => ({
+      end: Math.max(1, Number(end) || 1),
+    }),
   },
 )
-
-export function BarePagePlacements({ parent }: { parent: PartialCtx }) {
-  return (
-    <>
-      <BareChromePartial parent={parent} />
-      {BarePagePartials.map((P, i) => (
-        <P key={`bare-page-${i + 1}`} parent={parent} />
-      ))}
-      <BareNextPartial parent={parent} />
-    </>
-  )
-}

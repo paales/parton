@@ -1,45 +1,53 @@
 /**
- * 64-bit hash for cache keys, fingerprints, and registry variant keys.
+ * 64-bit pure-JS hash for cache keys, fingerprints, and registry
+ * variant keys.
  *
- * Implementation: SHA-256 truncated to the first 16 hex chars (64 bits).
+ * Implementation: two independent 32-bit mixers (djb2 + FNV-1a),
+ * concatenated into 16 hex chars. Pure JS so the module graph is
+ * portable across every runtime React Server Components might land
+ * on (Node, Bun, browsers, edge workers) — an earlier `node:crypto`
+ * SHA-256 implementation tripped Vite's browser-externalization
+ * warning whenever the hash module reached the client bundle, even
+ * indirectly.
  *
- * The upgrade from djb2 (32-bit) was driven by a fingerprint-collision
- * concern: a hash collision in `cache.tsx` (cache key) is a spurious
- * miss; a collision in `partial.tsx` fingerprint or
- * `partial-registry.ts` variant key is a SILENT correctness bug
- * (client paints stale subtree as fresh / wrong snapshot reconstructed).
- * 64 bits gives ~50% collision probability at 2^32 distinct values —
- * comfortable for the cache + registry size we expect.
- *
- * Why SHA-256 truncated rather than xxhash3 / murmur3:
- *  - Available everywhere `node:crypto` runs. No vendored code, no
- *    native bindings, no build configuration.
- *  - Sync API — compatible with `vary`'s sync contract.
- *  - Output distribution matches a uniform random 64-bit function
- *    (truncating a cryptographic hash preserves distribution).
- *
- * Cost: SHA-256 is slower than xxhash3 in absolute terms, but the
- * inputs we hash are small (canonicalized vary results, partial id
- * lists) and the call rate is bounded (one per partial render). Not
- * a hot-path concern.
- *
- * Portability: this uses `node:crypto`, which is available in Node
- * and Bun but NOT in Cloudflare Workers / Vercel Edge runtimes. The
- * framework is currently Node-only via `@vitejs/plugin-rsc`. If an
- * edge target lands, swap to a pure-JS implementation behind the
- * same signature.
+ * Collision space: ~50% probability at 2^32 distinct values, which
+ * is comfortable for the cache + registry sizes we expect (hundreds
+ * to low thousands of entries). If a stronger hash is needed later,
+ * swap to a pure-JS SHA-256 behind the same signature.
  */
 
-import { createHash } from "node:crypto"
+const FNV_OFFSET_BASIS_32 = 0x811c9dc5
+const FNV_PRIME_32 = 0x01000193
 
 export function hash(input: string): string {
-  return createHash("sha256").update(input).digest("hex").slice(0, 16)
+  // Mixer 1: djb2 with xor.
+  let h1 = 5381 >>> 0
+  // Mixer 2: FNV-1a 32-bit.
+  let h2 = FNV_OFFSET_BASIS_32 >>> 0
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i)
+    h1 = ((h1 << 5) + h1) >>> 0
+    h1 = (h1 ^ c) >>> 0
+    h2 = (h2 ^ c) >>> 0
+    h2 = Math.imul(h2, FNV_PRIME_32) >>> 0
+  }
+  // MurmurHash3 fmix32 finalizer on each lane — spreads
+  // single-character changes across all 64 output bits so
+  // `hash("…:a")` and `hash("…:b")` differ by ~half their bits.
+  return fmix32(h1).toString(16).padStart(8, "0") + fmix32(h2).toString(16).padStart(8, "0")
+}
+
+function fmix32(h: number): number {
+  h = (h ^ (h >>> 16)) >>> 0
+  h = Math.imul(h, 0x85ebca6b) >>> 0
+  h = (h ^ (h >>> 13)) >>> 0
+  h = Math.imul(h, 0xc2b2ae35) >>> 0
+  h = (h ^ (h >>> 16)) >>> 0
+  return h
 }
 
 /**
- * @deprecated Use `hash` instead. Kept as an alias during the
- * djb2 → SHA-256 upgrade so existing imports keep working. The
- * underlying algorithm is no longer djb2 — call sites that rely on
- * the algorithm name should switch to `hash`.
+ * @deprecated Use `hash` instead. Kept as an alias so call sites that
+ * imported the old name keep working.
  */
 export const djb2 = hash

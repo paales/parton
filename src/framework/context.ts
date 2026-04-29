@@ -152,6 +152,12 @@ export function getFrameworkControl(): FrameworkControl | undefined {
 /**
  * Read a cookie from the current request, considering any Set-Cookies
  * added during this request's ALS scope.
+ *
+ * @internal Avoid in spec render / vary callbacks — vary receives a
+ * pre-parsed `cookies` map in its scope, which is the supported
+ * surface. This function stays available for server actions and
+ * framework internals (session lookup, CMS runtime) that legitimately
+ * read cookies outside the vary scope.
  */
 export function readCookie(name: string): string | undefined {
   const store = getStore()
@@ -166,6 +172,26 @@ export function readCookie(name: string): string | undefined {
 
 /** @internal alias kept for session.ts back-compat. */
 export const _readCookieUntracked = readCookie
+
+/**
+ * Parse the entire `Cookie` header from a request into a record.
+ * Vary scope uses this to expose cookies declaratively.
+ */
+export function parseCookies(request: Request): Record<string, string> {
+  const header = request.headers.get("cookie") ?? ""
+  const out: Record<string, string> = {}
+  if (!header) return out
+  for (const pair of header.split(";")) {
+    const trimmed = pair.trim()
+    if (!trimmed) continue
+    const eq = trimmed.indexOf("=")
+    if (eq <= 0) continue
+    const name = trimmed.slice(0, eq).trim()
+    const value = trimmed.slice(eq + 1).trim()
+    out[name] = value
+  }
+  return out
+}
 
 export function setCookie(name: string, value: string, maxAge = 60 * 60 * 24 * 30): void {
   const store = getStore()

@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo } from "react"
-import { useActivate } from "../../lib/partial-client.tsx"
+import { useActivate, type ActivatorFire } from "../../lib/partial-client.tsx"
 import type { ActivatorProps } from "../../lib"
 
 /**
@@ -27,7 +27,7 @@ export function WhenMounted({ partialId, children }: ActivatorProps) {
     )
   }
   const subscribe = useMemo(
-    () => (fire: (inputs?: Record<string, unknown>) => void) => {
+    () => (fire: ActivatorFire) => {
       fire()
     },
     [],

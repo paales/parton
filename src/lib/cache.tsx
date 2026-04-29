@@ -582,9 +582,10 @@ export async function _clearCache(scope?: string | "all"): Promise<void> {
 }
 
 if (import.meta.hot) {
-  import.meta.hot.on("vite:beforeUpdate", () => {
-    void _clearCache()
-  })
+  // See partial-registry.ts — only clear on a true full reload.
+  // `vite:beforeUpdate` fires for every incremental HMR update and
+  // would wipe every scope's cache on each one, polluting parallel
+  // tests.
   import.meta.hot.on("vite:beforeFullReload", () => {
     void _clearCache()
   })

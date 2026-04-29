@@ -566,22 +566,33 @@ so future work has a single ranked list. Priority legend:
   selectors would let the same internal name be reused across
   factory invocations.
 - **Pattern-as-router doesn't compose hierarchically** (conceded
-  2026-04-29). Every spec on `/pokemon/:id` repeats the match and
-  re-validates `params.id` (`pokemon.tsx:357,398,444,488`). Fix:
-  ship `<PartialMatch>` (first-match-wins page-level container
-  with 404 fallback) so child specs inherit the matched scope
-  without re-declaring it. **— SHIPPED 2026-04-29** as
-  `src/lib/partial-match.tsx` exporting `<PartialMatch>` +
-  `<Match>`. First-match-wins routing, fallback on miss, ambient
-  match-params injected into descendant spec components via a
-  JSX-tree walk (cloneElement + `__ambientMatchParams` prop —
-  `react-server` doesn't export `createContext`, ALS scope exits
-  before render descends, so element-walk is the only option that
-  survives RSC's render boundary). Documented in `docs/partial.md`
-  §Page-level routing. Demo migration deferred — opt-in for new
-  pages, existing per-spec `match` keeps working unchanged. Walker
-  limitation: doesn't traverse user-defined function components,
-  so deeply-nested specs need explicit prop threading.
+  2026-04-29). Every spec on `/pokemon/:id` used to repeat the match
+  and re-validate `params.id` across five sibling specs.
+  **— RESOLVED 2026-04-29** by two orthogonal changes:
+  1. **Typed call-site prop pass-through.** `ReactCms.partial`
+     feels like `React.memo` — JSX call-site props flow into
+     `Render` alongside `vary`'s output and contribute to the cache
+     fingerprint. Subtraction is type-level: keys `vary` provides
+     disappear from the call-site prop type. An outer wrapper spec
+     parses the URL once via `vary` and threads `id` (or whatever)
+     down to its children as ordinary JSX props.
+  2. **Wrapper-spec routing.** A page-level wrapper with `match:
+     "/pokemon/:id"` gates the route; inner specs (`Hero`, `Stats`,
+     `Species`, …) drop their own `match` and `vary`, accept `id`
+     as a JSX prop, and cast to a number themselves. Demoed in
+     `src/app/pages/pokemon-detail.tsx`.
+  3. **404 fallback.** `getRegisteredMatchPatterns()` exposes the
+     set of every `match` pattern any spec was constructed with;
+     a `NotFoundFallback` spec checks the URL against that set and
+     calls `notFound()` on miss. One declarative line in
+     `src/app/pages/not-found-fallback.tsx`; documented in
+     `docs/partial.md` §Page-level routing.
+
+  Earlier attempt (`<PartialMatch>` / `<Match>` JSX walker with
+  `__ambientMatchParams`) was rolled back — it was a parallel
+  mechanism that didn't compose with `vary`/cache, didn't cross
+  user function components, and felt off the grain of the rest of
+  the framework.
 - **Auto-derived selector + STRIP_SUFFIXES list is fragile.**
   `partial.tsx:160` strips a hardcoded suffix list; renaming
   `PokemonHeroRender` → `HeroRender` silently flips `#pokemon-hero`
@@ -591,18 +602,18 @@ so future work has a single ranked list. Priority legend:
   production builds, or freeze the auto-derive at module load
   before minification (Babel/Vite plugin that stamps `displayName`).
 - **Pattern params are stringly-typed.** `params.id: string` has
-  no compile-time link to the `/pokemon/:id` pattern. Five copies
-  of `if (!idStr || !/^\d+$/.test(idStr)) return null` in
-  `pokemon.tsx`. Codegen typed-params from the pattern (Next-style)
-  or a runtime schema validator (`vary: ({ params: { id } }) =>
-  ({ pokemonId: int(id) })`).
+  no compile-time link to the `/pokemon/:id` pattern. Wrapper-spec
+  pattern collapsed five copies of the validation into one (the
+  outer wrapper's `vary`), but the type of `params.id` is still
+  `string | undefined`. Codegen typed-params from the pattern
+  (Next-style) or a runtime schema validator (`vary: ({ params: {
+  id } }) => ({ pokemonId: int(id) })`).
 - **Module-graph eagerness on the server** (partially conceded
   2026-04-29). `app/root.tsx` static-imports every page module;
   RSC's native code-splitting is at `'use client'` boundaries, not
   route boundaries. Fine for current scale; matters for serverless
-  cold-start at large catalogs. Pairs with the `<PartialMatch>`
-  hierarchy work — once routes have explicit hierarchy, lazy-import
-  page modules behind the match boundary.
+  cold-start at large catalogs. Once page wrappers are the routing
+  boundary, lazy-import page modules behind their `match` patterns.
 - **`partial-client.tsx` is 1752 lines in one file.** Cohesion is
   real but the file accumulates lazy resolution, key-collision-in-
   `.map()`, snapshot reinjection, fingerprint registration, frame-
@@ -648,6 +659,38 @@ so future work has a single ranked list. Priority legend:
 - **Bundle eagerness for serverless cold-start.** See P2 module-
   graph entry; same root cause, different symptom — a 200-page
   app pays full module-init on every cold container boot.
+
+### Open — fp-skip cascade on transparent wrappers
+
+**fp-skip cascades when a wrapper spec wraps descendant specs**
+(observed 2026-04-29 during the EditorShell refactor). When a
+parent spec's fingerprint matches the client's `?cached=` list, the
+server returns a placeholder *instead* of running its render — so
+descendant specs never get a chance to evaluate their own vary. If
+the wrapper's deps don't include everything its descendants
+depend on (typically the URL), navigations within the same wrapper
+boundary serve stale subtrees.
+
+The OLD `<Partial varyOn>` system propagated descendants' deps
+into ancestors' fingerprints transitively (commit `d72a9a7`,
+"Update 2026-04-26a") so an ancestor fp-skip was always
+conservative. The new define-step API dropped this. Authors now
+have to fold the union of descendants' URL deps into the wrapper's
+own vary explicitly (e.g. `__href: url.href` on `EditorShell`) —
+ergonomic but easy to forget.
+
+Proper fix paths:
+1. **Restore transitive propagation**: at PartialBoundary
+   commit-time, fold each spec's fp into all its `parentPath`
+   ancestors' fp. Two-pass: render once to discover the tree, then
+   compute final fps. The OLD system did this for cached partials
+   via the manifest mechanism.
+2. **Render-through-on-skip**: when fp-skip triggers, run the spec's
+   render anyway so descendants evaluate; emit a placeholder around
+   the rendered body. Wire-size loss for the spec itself but
+   preserves descendant freshness.
+3. **Opt-out flag**: add `{ passthrough: true }` to disable fp-skip
+   per spec. Wrappers declare it; framework doesn't try to detect.
 
 ### Withdrawn / not-a-bug
 
