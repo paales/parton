@@ -42,14 +42,21 @@ const workspaceAliases = [
  *              suite (hook tests, client-only units).
  *   - rsc:     Node + `react-server` condition + plugin-rsc
  *              active — tests that render server trees to
- *              Flight in-process. See `vitest.rsc.config.ts`.
+ *              Flight in-process. See `framework/vitest.rsc.config.ts`.
  *   - browser: real Chromium via Playwright provider — tests
  *              that need real DOM primitives jsdom can't fake
  *              (focus, Navigation API, measurement). See
- *              `vitest.browser.config.ts`.
- * `yarn test` runs the fast tiers (node + rsc); browser tier
- * is opt-in via `yarn test:browser` to avoid paying the
- * browser-boot cost on every save. CI runs all three.
+ *              `framework/vitest.browser.config.ts`.
+ *
+ * `yarn test` runs the fast tiers (node + rsc); browser tier is
+ * opt-in via `yarn test:browser` to avoid paying the browser-boot
+ * cost on every save. CI runs all three.
+ *
+ * The rsc and browser project configs live in framework/ — that's
+ * where the rsc-tier and browser-tier tests live (lib/__tests__/,
+ * test/). The node-project setup file (vitest.setup.ts) is also
+ * under framework/ since the navigation-API jsdom shim it installs
+ * is framework-scoped.
  */
 export default defineConfig({
   plugins: [react()],
@@ -62,7 +69,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: "node",
-          setupFiles: ["./vitest.setup.ts"],
+          setupFiles: ["./framework/vitest.setup.ts"],
           include: [
             "{framework,cms,copies,e2e-testing,e2e-magento}/**/*.{test,spec}.?(c|m)[jt]s?(x)",
           ],
@@ -77,8 +84,8 @@ export default defineConfig({
           environment: "jsdom",
         },
       },
-      "./vitest.rsc.config.ts",
-      "./vitest.browser.config.ts",
+      "./framework/vitest.rsc.config.ts",
+      "./framework/vitest.browser.config.ts",
     ],
   },
 })

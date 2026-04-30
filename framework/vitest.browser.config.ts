@@ -10,46 +10,53 @@ import { defineProject } from "vitest/config"
  * cross-frame event ordering.
  *
  * Lives alongside:
- *   - `node` (jsdom, fast, default — see vite.config.ts)
- *   - `rsc`  (Node + react-server condition, see vitest.rsc.config.ts)
+ *   - `node` (jsdom, fast, default — see the root vitest.config.ts)
+ *   - `rsc`  (Node + react-server condition, see ./vitest.rsc.config.ts)
  *
  * Only files matching `*.browser.test.{ts,tsx}` run here; separate
  * glob keeps accidental jsdom tests from paying the browser boot
  * cost.
+ *
+ * Lives in framework/ because the only browser test today
+ * (click-counter.browser.test.tsx) is part of the framework's test
+ * harness suite.
  */
+const REPO_ROOT = path.resolve(import.meta.dirname, "..")
+
 export default defineProject({
   plugins: [react()],
   resolve: {
     alias: [
       {
         find: /^@react-cms\/framework\/(.*)/,
-        replacement: path.resolve(import.meta.dirname, "framework/src/$1"),
+        replacement: path.resolve(REPO_ROOT, "framework/src/$1"),
       },
       {
         find: /^@react-cms\/framework$/,
-        replacement: path.resolve(import.meta.dirname, "framework/index.ts"),
+        replacement: path.resolve(REPO_ROOT, "framework/index.ts"),
       },
       {
         find: /^@react-cms\/cms\/(.*)/,
-        replacement: path.resolve(import.meta.dirname, "cms/src/$1"),
+        replacement: path.resolve(REPO_ROOT, "cms/src/$1"),
       },
       {
         find: /^@react-cms\/cms$/,
-        replacement: path.resolve(import.meta.dirname, "cms/index.ts"),
+        replacement: path.resolve(REPO_ROOT, "cms/index.ts"),
       },
       {
         find: /^@react-cms\/copies\/(.*)/,
-        replacement: path.resolve(import.meta.dirname, "copies/src/$1"),
+        replacement: path.resolve(REPO_ROOT, "copies/src/$1"),
       },
       {
         find: /^@react-cms\/copies$/,
-        replacement: path.resolve(import.meta.dirname, "copies/index.ts"),
+        replacement: path.resolve(REPO_ROOT, "copies/index.ts"),
       },
-      { find: "@", replacement: path.resolve(import.meta.dirname, "e2e-testing/src") },
+      { find: "@", replacement: path.resolve(REPO_ROOT, "e2e-testing/src") },
     ],
   },
   test: {
     name: "browser",
+    dir: REPO_ROOT,
     include: [
       "{framework,cms,copies,e2e-testing,e2e-magento}/**/*.browser.test.?(c|m)[jt]s?(x)",
     ],
