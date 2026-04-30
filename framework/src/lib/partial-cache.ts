@@ -21,7 +21,7 @@
  * buckets so their entries don't cross-contaminate.
  */
 
-import { getScope } from "../framework/context.ts"
+import { getScope } from "../runtime/context.ts"
 import { djb2 as hashQuery } from "./hash.ts"
 
 interface CacheEntry {

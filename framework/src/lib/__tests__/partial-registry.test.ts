@@ -17,7 +17,7 @@ import {
   registerPartial,
   type PartialSnapshot,
 } from "../partial-registry.ts"
-import { runWithRequestAsync } from "../../framework/context.ts"
+import { runWithRequestAsync } from "../../runtime/context.ts"
 
 function snap(parentPath: readonly string[], extra: Partial<PartialSnapshot> = {}): PartialSnapshot {
   return {

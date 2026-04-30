@@ -32,7 +32,7 @@ import { createFromReadableStream, renderToReadableStream } from "./flight-runti
 import { djb2 } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { PartialBoundary, getSpecComponentById } from "./partial.tsx"
-import { getScope } from "../framework/context.ts"
+import { getScope } from "../runtime/context.ts"
 import { lookupPartial, registerPartial, type PartialSnapshot } from "./partial-registry.ts"
 import type { CacheOptions } from "./cache-options.ts"
 

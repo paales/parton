@@ -8,9 +8,9 @@
  */
 
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { notFound } from "@react-cms/framework/framework/errors.ts"
-import { setFrameworkControl } from "@react-cms/framework/framework/context.ts"
-import { Redirect } from "@react-cms/framework/framework/redirect-client.tsx"
+import { notFound } from "@react-cms/framework/runtime/errors.ts"
+import { setFrameworkControl } from "@react-cms/framework/runtime/context.ts"
+import { Redirect } from "@react-cms/framework/runtime/redirect-client.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 import { Badge } from "@react-cms/copies/components/ui/badge"
 import { buttonVariants } from "@react-cms/copies/components/ui/button"

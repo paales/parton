@@ -18,7 +18,7 @@
  */
 
 import type { ReactNode } from "react"
-import { runWithRequestAsync } from "../framework/context.ts"
+import { runWithRequestAsync } from "../runtime/context.ts"
 // Import the vendored Flight server/client directly. Going through
 // `@vitejs/plugin-rsc/react/rsc` or `/rsc` pulls in plugin runtime
 // code that expects Vite's transform pipeline (`import.meta.env.DEV`,

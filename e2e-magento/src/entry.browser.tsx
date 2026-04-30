@@ -9,8 +9,8 @@ import React from "react"
 import { createRoot, hydrateRoot } from "react-dom/client"
 import { rscStream } from "rsc-html-stream/client"
 import type { RscPayload } from "./entry.rsc"
-import { GlobalErrorBoundary } from "@react-cms/framework/framework/error-boundary.tsx"
-import { createRscRenderRequest } from "@react-cms/framework/framework/request.tsx"
+import { GlobalErrorBoundary } from "@react-cms/framework/runtime/error-boundary.tsx"
+import { createRscRenderRequest } from "@react-cms/framework/runtime/request.tsx"
 import {
   _collectFramePaths,
   _dispatchFrameRefetch,
@@ -18,7 +18,7 @@ import {
   getCachedPartialIds,
   isFrameworkSilentInfo,
 } from "@react-cms/framework/lib/partial-client.tsx"
-import { getNavigation } from "@react-cms/framework/framework/navigation-api.ts"
+import { getNavigation } from "@react-cms/framework/runtime/navigation-api.ts"
 
 async function main() {
   let setPayload: (v: RscPayload) => void

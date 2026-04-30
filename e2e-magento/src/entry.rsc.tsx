@@ -9,14 +9,14 @@ import {
 import type { ReactFormState } from "react-dom/client"
 import { Root } from "./app/root.tsx"
 import { NotFoundPage } from "./app/pages/not-found.tsx"
-import { parseRenderRequest } from "@react-cms/framework/framework/request.tsx"
+import { parseRenderRequest } from "@react-cms/framework/runtime/request.tsx"
 import {
   _captureCommitHandle,
   getFrameworkControl,
   runWithRequestAsync,
   setRequest,
-} from "@react-cms/framework/framework/context.ts"
-import { warmCmsCache } from "@react-cms/framework/framework/cms-runtime.ts"
+} from "@react-cms/framework/runtime/context.ts"
+import { warmCmsCache } from "@react-cms/framework/runtime/cms-runtime.ts"
 import { deferRequestRegistryCommit } from "@react-cms/framework/lib/partial-registry.ts"
 
 export type RscPayload = {
@@ -41,8 +41,8 @@ async function handler(request: Request): Promise<Response> {
         import("@react-cms/framework/lib/cache.tsx"),
         import("@react-cms/framework/lib/partial-cache.ts"),
         import("@react-cms/framework/lib/partial-registry.ts"),
-        import("@react-cms/framework/framework/session.ts"),
-        import("@react-cms/framework/framework/cms-runtime.ts"),
+        import("@react-cms/framework/runtime/session.ts"),
+        import("@react-cms/framework/runtime/cms-runtime.ts"),
       ])
       const all = url.searchParams.get("all") === "1"
       if (all) {

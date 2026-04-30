@@ -47,9 +47,9 @@ import {
   getSpecByType,
   registerSpec,
   type CmsReadSurface,
-} from "../framework/cms-runtime.ts"
-import { getRequest, parseCookies } from "../framework/context.ts"
-import { getSessionFrameUrl, setSessionFrameUrl } from "../framework/session.ts"
+} from "../runtime/cms-runtime.ts"
+import { getRequest, parseCookies } from "../runtime/context.ts"
+import { getSessionFrameUrl, setSessionFrameUrl } from "../runtime/session.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 

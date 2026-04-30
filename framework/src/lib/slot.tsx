@@ -14,8 +14,8 @@
 
 import React, { type ReactNode } from "react"
 import type { PartialCtx } from "./partial-context.ts"
-import { lookupCmsNode, getSpecByType, type CmsNode } from "../framework/cms-runtime.ts"
-import { getRequest } from "../framework/context.ts"
+import { lookupCmsNode, getSpecByType, type CmsNode } from "../runtime/cms-runtime.ts"
+import { getRequest } from "../runtime/context.ts"
 
 export interface ChildrenProps {
   /** Slot key — matches `node.slots[name]` in the store. */

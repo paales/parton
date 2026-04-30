@@ -9,7 +9,7 @@ import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { _cacheStats } from "@react-cms/framework/lib/cache.tsx"
 import { CacheControls } from "../components/cache-controls.tsx"
 import { ClickCounter } from "../components/click-counter.tsx"
-import { getScope } from "@react-cms/framework/framework/context.ts"
+import { getScope } from "@react-cms/framework/runtime/context.ts"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

@@ -47,7 +47,7 @@ import {
   type FrameworkNavigationResult,
   type FrameworkReloadOptions,
   type NavigateTarget,
-} from "../framework/navigation-api.ts"
+} from "../runtime/navigation-api.ts"
 
 /**
  * Return true if the node looks like the outermost wrapper a

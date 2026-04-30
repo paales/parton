@@ -31,7 +31,7 @@ import {
   _setRegistryCommit,
   getRequest,
   getScope,
-} from "../framework/context.ts"
+} from "../runtime/context.ts"
 import type { CacheOptions } from "./cache-options.ts"
 import { djb2 } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"

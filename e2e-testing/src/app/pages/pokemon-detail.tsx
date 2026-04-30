@@ -10,7 +10,7 @@
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { client } from "../data.ts"
 import { graphql } from "../pokeapi-graphql.ts"
-import { notFound } from "@react-cms/framework/framework/errors.ts"
+import { notFound } from "@react-cms/framework/runtime/errors.ts"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 import { Badge } from "@react-cms/copies/components/ui/badge"
 import { cn } from "@react-cms/copies/lib/utils"

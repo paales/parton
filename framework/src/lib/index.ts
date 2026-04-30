@@ -43,7 +43,7 @@ export type {
   FrameworkReloadOptions,
   FrameworkNavigationResult,
   NavigateTarget,
-} from "../framework/navigation-api.ts"
+} from "../runtime/navigation-api.ts"
 
 export { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 export { invalidateByTags, clearCache, getCacheStats } from "./partial-cache.ts"

@@ -18,10 +18,10 @@ import {
   type CmsConfig,
   type ContentFieldKind,
   type MatchClause,
-} from "@react-cms/framework/framework/cms-runtime.ts"
-import { getCatalogManifest, type BlockManifest } from "@react-cms/framework/framework/cms-prerender.ts"
-import { setSessionFrameUrl } from "@react-cms/framework/framework/session.ts"
-import { getRequest, setCookie } from "@react-cms/framework/framework/context.ts"
+} from "@react-cms/framework/runtime/cms-runtime.ts"
+import { getCatalogManifest, type BlockManifest } from "@react-cms/framework/runtime/cms-prerender.ts"
+import { setSessionFrameUrl } from "@react-cms/framework/runtime/session.ts"
+import { getRequest, setCookie } from "@react-cms/framework/runtime/context.ts"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 import { Button, buttonVariants } from "@react-cms/copies/components/ui/button"
 import { Badge } from "@react-cms/copies/components/ui/badge"
