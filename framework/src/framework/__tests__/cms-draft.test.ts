@@ -18,7 +18,7 @@ import {
 // Mirrors `defaultCmsDataDir()` in cms-storage.ts — both resolve from
 // process.cwd(). When the test runs from the repo root, this points at
 // the same draft.json the storage layer writes.
-const DRAFT_PATH = join(process.cwd(), "src", "cms", "draft.json")
+const DRAFT_PATH = join(process.cwd(), "cms", "data", "draft.json")
 
 function clearDraftFile(): void {
   if (existsSync(DRAFT_PATH)) unlinkSync(DRAFT_PATH)
@@ -40,7 +40,7 @@ afterEach(() => clearDraftFile())
 
 describe("lookupCmsNode — draft / published fork", () => {
   it("reads the published store when no cookie is set", () => {
-    // `cms-demo-hero` lives in the committed src/cms/content.json.
+    // `cms-demo-hero` lives in the committed cms/data/content.json.
     const node = lookupCmsNode("cms-demo-hero")
     expect(node).not.toBeNull()
     expect(node?.configs[0].fields.headline).toBe("Welcome to the CMS demo")
@@ -151,7 +151,7 @@ describe("lookupCmsNode — top-level draft wins over slot-nested copy", () => {
 
 describe("publishDraft", () => {
   // Storage isolation: inject a fresh JsonFileStorage pointing at a
-  // tmp directory so the test doesn't pollute src/cms/content.json
+  // tmp directory so the test doesn't pollute cms/data/content.json
   // (the previous implementation tried to write+restore the shared
   // file, which caused two issues: a mid-restore failure left the
   // committed JSON dirty, and the post-page-as-slot refactor changed

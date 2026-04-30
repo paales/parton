@@ -1,2 +1,13 @@
-// Stub barrel — populated in Phase 5 when editor files move in.
-export {}
+// Public API surface for @react-cms/cms.
+//
+// The package contains the CMS editor UI (a three-pane shell built on top
+// of @react-cms/framework's Partial constructor) and the committed content
+// store at cms/data/. The framework's cms-runtime/cms-storage handle the
+// data layer; this package owns the editing experience.
+
+export {
+  EditorShell,
+  EditorTreePartial,
+  EditorFieldPanelPartial,
+  formatMatchLabel,
+} from "./src/editor/shell.tsx"

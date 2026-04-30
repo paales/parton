@@ -191,7 +191,7 @@ describe("resolveCmsNode — match & cascade", () => {
 })
 
 describe("lookupCmsNode — file-backed store", () => {
-  it("resolves the demo nodes committed to src/cms/content.json", () => {
+  it("resolves the demo nodes committed to cms/data/content.json", () => {
     // The demo fixture is the source of truth here; we read it
     // through the real loader to cover the full disk → JSON.parse →
     // lookup path.

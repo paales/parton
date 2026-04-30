@@ -9,7 +9,7 @@ import { PartialsDebug } from "@react-cms/framework/lib/partial-debug.tsx"
 import { AppNav } from "./components/app-nav.tsx"
 import { ChatOverlay } from "./chat/chat-overlay.tsx"
 import { NotFoundPage } from "./pages/not-found.tsx"
-import { EditorShell } from "../editor/shell.tsx"
+import { EditorShell } from "@react-cms/cms"
 
 import { PokemonOverviewPage } from "./pages/pokemon.tsx"
 import { PokemonDetailPage } from "./pages/pokemon-detail.tsx"

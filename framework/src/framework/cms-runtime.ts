@@ -1,7 +1,7 @@
 /**
  * CMS runtime — content store + sync read surface.
  *
- * The source of truth for CMS content is `src/cms/content.json` — a
+ * The source of truth for CMS content is `cms/data/content.json` — a
  * forest of `CmsNode`s keyed by `cmsId`. Each node holds one or more
  * `configs` (match clause → fields). The resolver picks every config
  * whose match is satisfied by the current request, scores by

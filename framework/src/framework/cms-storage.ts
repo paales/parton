@@ -20,7 +20,7 @@
  *     before any runtime code reads.
  *
  * Path resolution: `JsonFileStorage`'s default path is
- * `process.env.CMS_DATA_DIR` (resolved against cwd) or `src/cms/`
+ * `process.env.CMS_DATA_DIR` (resolved against cwd) or `cms/data/`
  * relative to cwd. `yarn dev` and `yarn preview` both run from the
  * project root so the default works for both. Real deployments set
  * `CMS_DATA_DIR=/var/lib/cms` (or wherever the JSON files live).
@@ -144,17 +144,17 @@ export class JsonFileStorage implements CmsStorage {
  * Resolve the default CMS data directory.
  *
  *   1. `process.env.CMS_DATA_DIR` if set — absolute or cwd-relative.
- *   2. `src/cms` relative to cwd — works for `yarn dev` and
- *      `yarn preview` because both run from the project root.
+ *   2. `cms/data` relative to cwd — the workspace package that owns
+ *      the committed content + draft files.
  *
- * Production deployments either set `CMS_DATA_DIR` explicitly or
- * keep `src/cms/content.json` next to the runtime cwd. Static-import
- * bundling is no longer necessary; the JSON is read at runtime.
+ * Production deployments set `CMS_DATA_DIR` explicitly or keep
+ * `cms/data/content.json` next to the runtime cwd. JSON is read at
+ * runtime; no static-import bundling.
  */
 export function defaultCmsDataDir(): string {
   const env = process.env.CMS_DATA_DIR
   if (env) return resolve(env)
-  return resolve(process.cwd(), "src/cms")
+  return resolve(process.cwd(), "cms/data")
 }
 
 let _instance: CmsStorage | null = null
