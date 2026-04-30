@@ -20,18 +20,21 @@ workflow. For framework architecture and APIs, read the docs.
 
 ## Project structure
 
+The repo is a yarn workspace monorepo. Each top-level folder is a
+package; cross-package imports go through workspace package names
+(`@react-cms/<pkg>`), not relative paths.
+
 | Path | Role |
 |---|---|
-| `src/lib/` | Partials library — `partial.tsx` (constructor + PartialRoot + render runtime), `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `flight-runtime.ts` (env-aware Flight encode/decode shim), `slot.tsx`, `hash.ts`, `multipart.ts`. Public surface in `index.ts`. |
-| `src/framework/` | RSC plumbing — `entry.{rsc,browser,ssr}.tsx`, `context.ts` (request ALS + cookies + matchRoutePattern), `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`. |
-| `src/editor/` | CMS editor UI — three-pane shell. `shell.tsx`, `actions.ts`, `components/{address-bar,tree-link,add-block}.tsx`. Top-level package boundary in prep for a monorepo split. |
-| `src/app/` | Example application — pages, blocks, components, GraphQL clients (PokeAPI + Magento). |
-| `src/cms/` | CMS content store — `content.json` (committed) + `draft.json` (gitignored). |
-| `src/test/` | In-process RSC test harness — `rsc-server.ts`, fixtures. |
-| `e2e/` | Playwright specs and fixtures. |
+| `framework/` (`@react-cms/framework`) | The framework runtime. `framework/index.ts` is the public barrel; internals live under `framework/src/{lib,framework,test}/`. `lib/` holds partials primitives (`partial.tsx`, `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `flight-runtime.ts`, `slot.tsx`, `hash.ts`, `multipart.ts`). `framework/` holds RSC plumbing (`context.ts` request ALS, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`). `test/` is the in-process Flight test harness (`rsc-server.ts`, fixtures). |
+| `cms/` (`@react-cms/cms`) | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/{address-bar,tree-link,add-block}.tsx`). The committed content store + per-author drafts live alongside as data: `cms/data/content.json` (committed) + `cms/data/draft.json` (gitignored). Public barrel `cms/index.ts` exports `EditorShell`. |
+| `copies/` (`@react-cms/copies`) | Local copies of shadcn UI primitives (`src/components/ui/`), the AI-elements library (`src/components/ai-elements/`), shared hooks (`src/hooks/`), and the `cn` helper (`src/lib/utils.ts`). `components.json` (shadcn config) lives here too — that's where new components are added. |
+| `e2e-testing/` (`@react-cms/e2e-testing`) | Example testing app (PokeAPI + GraphCommerce Magento backends) and Playwright specs. `src/entry.{rsc,ssr,browser}.tsx` are the framework entries (they import the local `Root`). `vite.config.ts` owns dev/build for this app. `e2e/` contains the Playwright specs + fixtures. |
+| `e2e-magento/` (`@react-cms/e2e-magento`) | Empty showcase scaffold for a future Magento integration. Stub `Root`, mirrored vite config (port 5181). |
+| `docs/` | All documentation (`reference/`, `internals/`, `archive/`, `notes/`). Not buildable code. |
 
-The load-bearing code is in `src/test/`, `src/lib/`, `src/framework/`,
-`src/editor/`, and `src/app/` — treat the rest as ignorable.
+The load-bearing code is in `framework/src/`, `cms/src/`, `copies/src/`,
+and `e2e-testing/src/` — treat the rest as ignorable.
 
 ## Data layer
 
@@ -42,7 +45,7 @@ generics to `client.request` — the typed document provides result
 + variable types.
 
 ```ts
-// src/app/magento-graphql.ts
+// e2e-testing/src/app/magento-graphql.ts
 import { initGraphQLTada } from "gql.tada";
 import type { introspection } from "./magento-env.d.ts";
 export const graphql = initGraphQLTada<{ introspection: introspection; scalars: { ... } }>();
@@ -85,22 +88,31 @@ succeeds where find-refs fails, returns the full edit plan.
 ## Development
 
 ```bash
-yarn dev                # Vite 8 + RSC dev server
-yarn test               # Vitest — node + rsc projects (fast)
+yarn dev                # Vite 8 + RSC dev server (e2e-testing app)
+yarn dev:magento        # Same, but against the empty e2e-magento showcase (port 5181)
+yarn build              # Production build for e2e-testing
+yarn build:magento      # Production build for e2e-magento
+yarn test               # Vitest — node + rsc projects (fast), all workspaces
 yarn test:node          # node project only (jsdom)
 yarn test:rsc           # rsc project only (in-process Flight)
 yarn test:browser       # Real Chromium via Vitest browser mode
 yarn test:all           # All three Vitest projects
 yarn test:watch         # Watch mode — node project
 yarn test:watch:rsc     # Watch mode — rsc project
-yarn test:e2e           # Playwright — full-stack specs in e2e/
+yarn test:e2e           # Playwright — full-stack specs in e2e-testing/e2e/
 ```
+
+The root `yarn dev` / `yarn build` scripts delegate via
+`yarn workspace @react-cms/<pkg> <cmd>`. Each app's vite config sets
+`CMS_DATA_DIR` to the repo-level `cms/data/` so the framework's storage
+points at the shared content store regardless of which workspace the
+dev server runs from.
 
 `yarn test` and `yarn test:e2e` cover disjoint suites — both must
 pass before a change is done. Tier picking and harness mechanics
 are in [`docs/internals/testing.md`](./docs/internals/testing.md).
 
-`yarn test:e2e` auto-starts `yarn dev` if nothing's on port 5173.
+`yarn test:e2e` auto-starts a dev server if nothing's on port 5179.
 HMR dispose hooks clear cache + registry on edits, so server
 restart is rarely needed during dev.
 

@@ -52,11 +52,11 @@ placements.
 
 | Folder | Role |
 |---|---|
-| `src/lib/` | Framework primitives — `partial.tsx` (constructor + PartialRoot), `cache.tsx`, `partial-registry.ts`, `slot.tsx`. |
-| `src/framework/` | RSC plumbing — `entry.{rsc,browser,ssr}.tsx`, `context.ts` (request ALS only), `cms-runtime.ts`, `navigation-api.ts`, `session.ts`. |
-| `src/editor/` | CMS editor UI — three-pane shell. |
-| `src/app/` | Example application — pages and blocks. |
-| `src/cms/` | CMS content store — `content.json` (committed), `draft.json` (gitignored). |
+| `framework/src/lib/` | Framework primitives — `partial.tsx` (constructor + PartialRoot), `cache.tsx`, `partial-registry.ts`, `slot.tsx`. |
+| `framework/src/framework/` | RSC plumbing — `entry.{rsc,browser,ssr}.tsx`, `context.ts` (request ALS only), `cms-runtime.ts`, `navigation-api.ts`, `session.ts`. |
+| `cms/src/editor/` | CMS editor UI — three-pane shell. |
+| `e2e-testing/src/app/` | Example application — pages and blocks. |
+| `cms/data/` | CMS content store — `content.json` (committed), `draft.json` (gitignored). |
 
 ## Reading order
 

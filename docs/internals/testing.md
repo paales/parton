@@ -4,9 +4,9 @@ Three Vitest projects:
 
 | Project | Where | Runs |
 |---|---|---|
-| `node` | `src/lib/__tests__/*.test.ts(x)` (jsdom-safe), `src/editor/__tests__/*` | Plain TS / DOM-safe units. |
-| `rsc` | `src/lib/__tests__/*.rsc.test.tsx`, `src/framework/__tests__/*` | In-process Flight render via `src/test/rsc-server.ts`. |
-| `browser` | `src/lib/__tests__/*.browser.test.ts(x)` | Real Chromium via Vitest browser mode. |
+| `node` | `framework/src/lib/__tests__/*.test.ts(x)` (jsdom-safe), `cms/src/editor/__tests__/*` | Plain TS / DOM-safe units. |
+| `rsc` | `framework/src/lib/__tests__/*.rsc.test.tsx`, `framework/src/framework/__tests__/*` | In-process Flight render via `framework/src/test/rsc-server.ts`. |
+| `browser` | `framework/src/lib/__tests__/*.browser.test.ts(x)` | Real Chromium via Vitest browser mode. |
 
 Plus Playwright:
 
@@ -16,7 +16,7 @@ Plus Playwright:
 
 ## RSC harness
 
-`src/test/rsc-server.ts` wraps the same Flight encode → decode
+`framework/src/test/rsc-server.ts` wraps the same Flight encode → decode
 round-trip the production renderer uses, but inside a single Node
 process. Use it to assert against the exact tree the client would
 render:

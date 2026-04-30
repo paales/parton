@@ -1,7 +1,7 @@
 /**
  * Unit tests for the CMS resolver — `resolveCmsNode` cascade + match
  * evaluation, independent of the file-backed store. Exercises the
- * types in `src/framework/cms-runtime.ts` directly against fabricated
+ * types in `../cms-runtime.ts` directly against fabricated
  * nodes so we can cover specificity, `{in: [...]}` clauses, pathname
  * param matching, and cascade inheritance without committing fixture
  * JSON per case.

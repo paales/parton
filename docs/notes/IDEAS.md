@@ -52,7 +52,7 @@ session URL, breaking back-nav.
 
 ### Refetch-trigger pattern — SHIPPED as `useActivate`
 
-`<WhenVisible>` is one reference activator built on the `useActivate(partialId, subscribe)` hook. Adding a new trigger type (idle, event, mediaQuery) is ~30 lines against that contract. Reference activators (`<WhenVisible>`, `<WhenStored>`) live in userspace (`src/app/components/`) — the framework only ships `defer` + `useActivate`. The `<AnyOf>` wrapper and a subsequent array/fragment `DeferSpec` experiment were both removed on 2026-04-19: `defer` takes one element; composition is written as a bespoke activator when needed.
+`<WhenVisible>` is one reference activator built on the `useActivate(partialId, subscribe)` hook. Adding a new trigger type (idle, event, mediaQuery) is ~30 lines against that contract. Reference activators (`<WhenVisible>`, `<WhenStored>`) live in userspace (`e2e-testing/src/app/components/`) — the framework only ships `defer` + `useActivate`. The `<AnyOf>` wrapper and a subsequent array/fragment `DeferSpec` experiment were both removed on 2026-04-19: `defer` takes one element; composition is written as a bespoke activator when needed.
 
 ### Prefetch links
 
@@ -487,7 +487,7 @@ so future work has a single ranked list. Priority legend:
 ### P0 — correctness
 
 - **djb2-32-bit hash for fingerprints + cache keys + variant keys —
-  RESOLVED 2026-04-30.** `src/lib/hash.ts` is now a 64-bit composite:
+  RESOLVED 2026-04-30.** `framework/src/lib/hash.ts` is now a 64-bit composite:
   two independent 32-bit mixers (djb2-with-xor + FNV-1a) each finalised
   through MurmurHash3's `fmix32` and concatenated to 16 hex chars. A
   single-character change in the input avalanches across all 64 output
@@ -505,7 +505,7 @@ so future work has a single ranked list. Priority legend:
   object keys at every level. Sentinel tokens use `<…>` brackets that
   `JSON.stringify` never emits, keeping the output unambiguous.
   Property-style tests covering each axis live in
-  `src/lib/__tests__/stable-stringify.test.ts`.
+  `framework/src/lib/__tests__/stable-stringify.test.ts`.
 - **In-memory state breaks horizontal scale.** Sessions
   (`session.ts:61`), render cache (`cache.tsx:55`), partial registry
   (`partial-registry.ts:73`) are module-global Maps. Two server
@@ -584,12 +584,12 @@ so future work has a single ranked list. Priority legend:
      "/pokemon/:id"` gates the route; inner specs (`Hero`, `Stats`,
      `Species`, …) drop their own `match` and `vary`, accept `id`
      as a JSX prop, and cast to a number themselves. Demoed in
-     `src/app/pages/pokemon-detail.tsx`.
+     `e2e-testing/src/app/pages/pokemon-detail.tsx`.
   3. **404 fallback.** `getRegisteredMatchPatterns()` exposes the
      set of every `match` pattern any spec was constructed with;
      a `NotFoundFallback` spec checks the URL against that set and
      calls `notFound()` on miss. One declarative line in
-     `src/app/pages/not-found-fallback.tsx`; documented in
+     `e2e-testing/src/app/pages/not-found-fallback.tsx`; documented in
      `docs/partial.md` §Page-level routing.
 
   Earlier attempt (`<PartialMatch>` / `<Match>` JSX walker with

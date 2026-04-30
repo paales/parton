@@ -4,7 +4,7 @@
  * Minimal ALS surface — just the incoming Request and the outgoing
  * Set-Cookie accumulator. No tracked accessors; no per-Partial
  * manifest, frame-scope, or CMS-scope cells. Specs declare their
- * dependencies via `vary` (see `src/lib/partial.tsx`); the request is
+ * dependencies via `vary` (see `../lib/partial.tsx`); the request is
  * passed to vary explicitly, so no async-context propagation is needed
  * for dependency tracking.
  */

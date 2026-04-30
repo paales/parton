@@ -244,9 +244,9 @@ Zero backwards compat. The whole repo flips at once:
    `partial-registry.ts`, adjust `cache.tsx`.
 2. CMS runtime: sync `CmsReadSurface`, prerender by spec walk,
    delete `registerBlock`.
-3. `src/app/` rewritten end-to-end. No incremental migration; the
+3. `e2e-testing/src/app/` rewritten end-to-end. No incremental migration; the
    demo app is small enough to flip wholesale.
-4. `src/editor/` adapted: tree + field form read from spec catalog
+4. `cms/src/editor/` adapted: tree + field form read from spec catalog
    directly, no ALS reads.
 5. Tests + docs in the same pass.
 

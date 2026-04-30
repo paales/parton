@@ -52,7 +52,7 @@ A separate lineage: render the shell once, hole-punch the dynamic
 parts at the edge, fill them in independently.
 
 **Varnish + ESI.** The `<Cache>` strip-on-store + reinject-on-return
-pattern in `src/lib/cache.tsx` is ESI hole-punching done in-process
+pattern in `framework/src/lib/cache.tsx` is ESI hole-punching done in-process
 instead of at the edge. The bytes are stored with placeholders;
 live partials reinject on the way out.
 
@@ -148,7 +148,7 @@ softer one (you write `await`, you own the latency).
 **Shopify theme editor.** Three-pane layout (sections panel /
 preview / fields), drag-drop inside named sections, configuration
 schema per section type, draft / published split. The editor in
-`src/editor/` borrows the layout and the draft semantics. It
+`cms/src/editor/` borrows the layout and the draft semantics. It
 doesn't borrow:
 
 - Schema files. Accessor reads ARE the schema; the catalog

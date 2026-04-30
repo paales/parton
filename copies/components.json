@@ -4,7 +4,7 @@
   "tsx": true,
   "tailwind": {
     "config": "",
-    "css": "src/app/styles.css",
+    "css": "../e2e-testing/src/app/styles.css",
     "baseColor": "mist",
     "cssVariables": true,
     "prefix": ""

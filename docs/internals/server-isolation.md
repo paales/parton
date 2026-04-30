@@ -5,11 +5,11 @@ parallel test workers don't contend on the same state:
 
 | State | Module |
 |---|---|
-| `<Cache>` render-output store | `src/lib/cache.tsx` |
-| Partial registry (variant store + per-route hint LRU) | `src/lib/partial-registry.ts` |
-| GraphQL response cache | `src/lib/partial-cache.ts` |
-| Session store (frame URLs) | `src/framework/session.ts` |
-| Chat log producer | `src/app/chat/log.ts` |
+| `<Cache>` render-output store | `framework/src/lib/cache.tsx` |
+| Partial registry (variant store + per-route hint LRU) | `framework/src/lib/partial-registry.ts` |
+| GraphQL response cache | `framework/src/lib/partial-cache.ts` |
+| Session store (frame URLs) | `framework/src/framework/session.ts` |
+| Chat log producer | `e2e-testing/src/app/chat/log.ts` |
 
 Each one keys its top-level map by `getScope()`:
 
@@ -25,7 +25,7 @@ function bucket(scope: string = getScope()): ScopeState {
 
 ## Scope derivation
 
-`src/framework/context.ts::deriveScope`:
+`framework/src/framework/context.ts::deriveScope`:
 
 - Production: every request → `"default"`.
 - Dev with `x-test-scope: <value>` header → `<value>`.
@@ -36,7 +36,7 @@ state can't cross-contaminate.
 
 ## CMS draft store
 
-`src/cms/draft.json` is on-disk and shared across processes.
+`cms/data/draft.json` is on-disk and shared across processes.
 `/__test/clear-caches` always deletes it (regardless of `?all=1`)
 because per-process scoping doesn't extend to the file system.
 Tests that write to draft must run serially within one worker, or

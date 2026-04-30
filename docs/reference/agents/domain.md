@@ -2,7 +2,7 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-This repo is **single-context**: one `CONTEXT.md` + `docs/adr/` at the repo root. A monorepo split is planned later (see CLAUDE.md "Project structure" — `src/editor/` is already shaped as a future package boundary). When that happens, switch to the multi-context layout shown below.
+This repo is **single-context**: one `CONTEXT.md` + `docs/adr/` at the repo root. The codebase is split across yarn workspaces (framework, cms, copies, e2e-testing, e2e-magento) but they share one mental model and one set of decisions. If that ever changes — separate teams, conflicting domain language between workspaces — switch to the multi-context layout shown below.
 
 ## Before exploring, read these
 

@@ -42,7 +42,7 @@ only** — async loaders run inside `Render`, not `vary`.
 
 ## Content store schema
 
-`src/cms/content.json` (committed) + `src/cms/draft.json` (gitignored).
+`cms/data/content.json` (committed) + `cms/data/draft.json` (gitignored).
 Both share one shape:
 
 ```jsonc
@@ -92,7 +92,7 @@ break by config-array order (earlier wins).
 ## Authoring a block
 
 ```tsx
-// src/app/blocks/promo.tsx
+// e2e-testing/src/app/blocks/promo.tsx
 import { ReactCms, type RenderArgs } from "../../lib"
 
 export const PromoBlock = ReactCms.partial(
@@ -113,7 +113,7 @@ export const PromoBlock = ReactCms.partial(
 
 That's it — no `registerBlock` call. The constructor self-registers
 under `type` (or auto-derived id). Import the file once for its side
-effect (`src/app/blocks/catalog.ts` does this for the demo app).
+effect (`e2e-testing/src/app/blocks/catalog.ts` does this for the demo app).
 
 ## Slots
 
@@ -164,7 +164,7 @@ const ProductHero = ReactCms.partial(
 ```
 
 The id contributes to the cache key via the vary result; the async
-loader runs in `Render`. Loaders are userspace (`src/app/loaders/`).
+loader runs in `Render`. Loaders are userspace (`e2e-testing/src/app/loaders/`).
 
 ## Draft + published
 
@@ -197,7 +197,7 @@ inside `<EditorShell>`. Three panes:
 
 Server actions (`saveCmsFields`, `publishCmsDraft`,
 `addBlockToSlot`, `removeBlockFromSlot`, `moveBlockInSlot`,
-`resetCmsDraft`) live in `src/editor/actions.ts`.
+`resetCmsDraft`) live in `cms/src/editor/actions.ts`.
 
 ## Catalog prerender
 

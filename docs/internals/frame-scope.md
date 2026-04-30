@@ -7,7 +7,7 @@ its `vary` callback receives the frame-resolved `Request` as an
 argument.
 
 ```ts
-// inside createSpecComponent (src/lib/partial.tsx):
+// inside createSpecComponent (framework/src/lib/partial.tsx):
 const ourFrameChain = opts.frame
   ? [...parent.frameChain, opts.frame]
   : parent.frameChain
@@ -45,13 +45,13 @@ Frame navigation drops `?__frame=<dotted-path>&__frameUrl=<url>` on
 the URL. `PartialRoot` reads them on every request and writes the
 URL into the session before any spec runs. The session is
 cookie-backed (`__frame_sid`); state lives in
-`src/framework/session.ts`.
+`framework/src/framework/session.ts`.
 
 ## Client-side handle
 
 `useNavigation(name?)` returns the navigation handle for the named
 frame, or for the closest ambient frame in the React context (set
-by `FrameNameProvider` from `src/lib/partial-client.tsx`). Buttons
+by `FrameNameProvider` from `framework/src/lib/partial-client.tsx`). Buttons
 inside a framed spec naturally drive that frame.
 
 ## Sharp edges

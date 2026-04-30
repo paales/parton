@@ -37,8 +37,8 @@ baseKey = `${spec.id}:${structuralFp}:${hash(innerPartialIds.sorted)}`
 
 `hash()` is a 64-bit composite — two independent 32-bit mixers
 (djb2-with-xor + FNV-1a) each run through MurmurHash3's `fmix32` and
-concatenated to 16 hex chars (`src/lib/hash.ts`).
-`stableStringify` (`src/lib/stable-stringify.ts`) canonicalizes the
+concatenated to 16 hex chars (`framework/src/lib/hash.ts`).
+`stableStringify` (`framework/src/lib/stable-stringify.ts`) canonicalizes the
 hash input — distinct sentinels for `undefined` / `NaN` / `±Infinity`
 / `BigInt`, ms-encoded `Date`, sorted-content `Set` / `Map`, and
 `<circular>` for self-referential structures so a malformed

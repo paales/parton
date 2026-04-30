@@ -43,7 +43,7 @@ function variantKeyOf(snap: PartialSnapshot): string {
 }
 ```
 
-`hash()` is a 64-bit composite (16 hex chars; see `src/lib/hash.ts`):
+`hash()` is a 64-bit composite (16 hex chars; see `framework/src/lib/hash.ts`):
 two independent 32-bit mixers (djb2-with-xor + FNV-1a) each finalised
 through MurmurHash3's `fmix32` and concatenated. Pure JS so the module
 graph stays portable across every runtime RSC might land on (an
