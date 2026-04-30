@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "moduleResolution": "Bundler",
+    "module": "ESNext",
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    "types": [
+      "vite/client",
+      "@vitejs/plugin-rsc/types",
+      "node",
+      "react/canary"
+    ],
+    "jsx": "react-jsx",
+    "strict": true,
+    "paths": {
+      "@react-cms/framework": ["./framework/index.ts"],
+      "@react-cms/framework/*": ["./framework/src/*"],
+      "@react-cms/cms": ["./cms/index.ts"],
+      "@react-cms/cms/*": ["./cms/src/*"],
+      "@react-cms/copies": ["./copies/index.ts"],
+      "@react-cms/copies/*": ["./copies/src/*"]
+    }
+  }
+}

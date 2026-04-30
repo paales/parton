@@ -2044,6 +2044,42 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@react-cms/cms@workspace:cms":
+  version: 0.0.0-use.local
+  resolution: "@react-cms/cms@workspace:cms"
+  languageName: unknown
+  linkType: soft
+
+"@react-cms/copies@workspace:copies":
+  version: 0.0.0-use.local
+  resolution: "@react-cms/copies@workspace:copies"
+  languageName: unknown
+  linkType: soft
+
+"@react-cms/docs@workspace:docs":
+  version: 0.0.0-use.local
+  resolution: "@react-cms/docs@workspace:docs"
+  languageName: unknown
+  linkType: soft
+
+"@react-cms/e2e-magento@workspace:e2e-magento":
+  version: 0.0.0-use.local
+  resolution: "@react-cms/e2e-magento@workspace:e2e-magento"
+  languageName: unknown
+  linkType: soft
+
+"@react-cms/e2e-testing@workspace:e2e-testing":
+  version: 0.0.0-use.local
+  resolution: "@react-cms/e2e-testing@workspace:e2e-testing"
+  languageName: unknown
+  linkType: soft
+
+"@react-cms/framework@workspace:framework":
+  version: 0.0.0-use.local
+  resolution: "@react-cms/framework@workspace:framework"
+  languageName: unknown
+  linkType: soft
+
 "@reduxjs/toolkit@npm:^1.9.0 || 2.x.x":
   version: 2.11.2
   resolution: "@reduxjs/toolkit@npm:2.11.2"

@@ -486,22 +486,26 @@ so future work has a single ranked list. Priority legend:
 
 ### P0 — correctness
 
-- **djb2-32-bit hash for fingerprints + cache keys + variant keys.**
-  `src/lib/hash.ts`, used at `cache.tsx:464`, `partial.tsx:348`,
-  `partial-registry.ts:84`. Birthday-paradox collisions appear ~65k
-  distinct values. A *fingerprint* collision is a correctness bug:
-  client paints a stale `_cache` subtree as fresh because two
-  unrelated renders happen to share an fp. Variant-key collision in
-  the registry → cache-mode reconstructs the wrong snapshot →
-  wrong subtree rendered. Fix: xxhash64 / murmur3-128 over
-  `stable-stringify` output. Cheap; not yet wired.
-- **`stable-stringify.ts` correctness for hash inputs.** 17 lines,
-  ad-hoc. If it doesn't normalize Dates, Sets, Maps, `undefined`,
-  `+0`/`-0`, Symbol-keyed properties, NaN consistently, two equal
-  vary results may hash differently (spurious miss) or two different
-  vary results may hash equal (wrong cached output). Replace with
-  `safe-stable-stringify` or equivalent and add property-based
-  tests on the canonicalization.
+- **djb2-32-bit hash for fingerprints + cache keys + variant keys —
+  RESOLVED 2026-04-30.** `src/lib/hash.ts` is now a 64-bit composite:
+  two independent 32-bit mixers (djb2-with-xor + FNV-1a) each finalised
+  through MurmurHash3's `fmix32` and concatenated to 16 hex chars. A
+  single-character change in the input avalanches across all 64 output
+  bits. Pure JS so it stays portable across every runtime RSC might
+  land on (an earlier `node:crypto` SHA-256 tripped Vite's browser-
+  externalisation warning whenever the module reached the client
+  bundle). Birthday-paradox now ~50% at 2³² distinct values, comfortable
+  for the cache + registry sizes we expect. Swap to a pure-JS SHA-256
+  behind the same signature if a stronger hash is ever needed.
+- **`stable-stringify.ts` correctness for hash inputs — RESOLVED
+  2026-04-29.** Replaced with a hand-written canonicaliser that
+  distinguishes `undefined` / `null` / missing, `NaN` / ±Infinity,
+  `+0` / `-0`, BigInt, Date (by ms), Set (sorted entries), Map
+  (sorted-by-serialized-key entries), and circular references. Sorts
+  object keys at every level. Sentinel tokens use `<…>` brackets that
+  `JSON.stringify` never emits, keeping the output unambiguous.
+  Property-style tests covering each axis live in
+  `src/lib/__tests__/stable-stringify.test.ts`.
 - **In-memory state breaks horizontal scale.** Sessions
   (`session.ts:61`), render cache (`cache.tsx:55`), partial registry
   (`partial-registry.ts:73`) are module-global Maps. Two server
@@ -601,13 +605,18 @@ so future work has a single ranked list. Priority legend:
   default path is a footgun. Fix: require explicit `selector` in
   production builds, or freeze the auto-derive at module load
   before minification (Babel/Vite plugin that stamps `displayName`).
-- **Pattern params are stringly-typed.** `params.id: string` has
-  no compile-time link to the `/pokemon/:id` pattern. Wrapper-spec
-  pattern collapsed five copies of the validation into one (the
-  outer wrapper's `vary`), but the type of `params.id` is still
-  `string | undefined`. Codegen typed-params from the pattern
-  (Next-style) or a runtime schema validator (`vary: ({ params: {
-  id } }) => ({ pokemonId: int(id) })`).
+- **Pattern params are stringly-typed — PARTIALLY RESOLVED
+  2026-04-30.** `ParseRoute<P>` now extracts `:param` names from the
+  pattern at the type level and auto-flows them into `V` when no
+  `vary` is declared (or when `vary`'s return is `null`). So
+  `partial(Render, "/pokemon/:id")` typechecks a `Render` that takes
+  `{ id: string }` with no vary boilerplate. What's still
+  unresolved: when `vary` IS declared, `params` inside the scope is
+  `Record<string, string>` (not `ParseRoute<P>`), so `params.id ??
+  ""` boilerplate persists for any spec that needs to derive other
+  V values from the same params. And there's no runtime schema
+  validator yet (`vary: ({ params: { id } }) => ({ pokemonId: int(id)
+  })`) — string-to-int / regex / enum coercions stay manual.
 - **Module-graph eagerness on the server** (partially conceded
   2026-04-29). `app/root.tsx` static-imports every page module;
   RSC's native code-splitting is at `'use client'` boundaries, not
@@ -660,37 +669,18 @@ so future work has a single ranked list. Priority legend:
   graph entry; same root cause, different symptom — a 200-page
   app pays full module-init on every cold container boot.
 
-### Open — fp-skip cascade on transparent wrappers
+### fp-skip cascade on transparent wrappers — RESOLVED 2026-04-30
 
-**fp-skip cascades when a wrapper spec wraps descendant specs**
-(observed 2026-04-29 during the EditorShell refactor). When a
-parent spec's fingerprint matches the client's `?cached=` list, the
-server returns a placeholder *instead* of running its render — so
-descendant specs never get a chance to evaluate their own vary. If
-the wrapper's deps don't include everything its descendants
-depend on (typically the URL), navigations within the same wrapper
-boundary serve stale subtrees.
-
-The OLD `<Partial varyOn>` system propagated descendants' deps
-into ancestors' fingerprints transitively (commit `d72a9a7`,
-"Update 2026-04-26a") so an ancestor fp-skip was always
-conservative. The new define-step API dropped this. Authors now
-have to fold the union of descendants' URL deps into the wrapper's
-own vary explicitly (e.g. `__href: url.href` on `EditorShell`) —
-ergonomic but easy to forget.
-
-Proper fix paths:
-1. **Restore transitive propagation**: at PartialBoundary
-   commit-time, fold each spec's fp into all its `parentPath`
-   ancestors' fp. Two-pass: render once to discover the tree, then
-   compute final fps. The OLD system did this for cached partials
-   via the manifest mechanism.
-2. **Render-through-on-skip**: when fp-skip triggers, run the spec's
-   render anyway so descendants evaluate; emit a placeholder around
-   the rendered body. Wire-size loss for the spec itself but
-   preserves descendant freshness.
-3. **Opt-out flag**: add `{ passthrough: true }` to disable fp-skip
-   per spec. Wrappers declare it; framework doesn't try to detect.
+Restored transitive descendant fp propagation (commit `49de264`).
+At fingerprint time a spec folds every previously-registered
+descendant's contribution, resolved against the *current* request via
+the spec catalog's `match` pattern + `vary` callback. Mirrors the OLD
+`<Partial varyOn>` mechanism (commit `d72a9a7`, "Update 2026-04-26a")
+so an ancestor fp-skip can no longer serve a stale subtree. Wrappers
+called with `outerChildren` skip fp-skip entirely — their output IS
+their children, which are rendered by the JSX parent. Authors no
+longer need to hand-fold `__href: url.href` into wrapper vary just to
+keep descendants fresh.
 
 ### Withdrawn / not-a-bug
 
@@ -702,18 +692,27 @@ Proper fix paths:
 
 ### Suggested sequencing
 
-1. **P0 sweep first** — they're all small, mostly mechanical, and
-   each one is a silent-failure mode. Ship before any external
-   adoption.
-2. **`<PartialMatch>` + scoped selectors** — unblocks the biggest
-   ergonomic complaints from the review (P2 conceded items) with
-   a single coherent design pass.
+1. **Remaining P0 items** — in-memory session/cache/registry and the
+   `Date.now()`-tagged CMS storage cache. These are no longer
+   "small / mechanical" (the hash + stable-stringify items that fit
+   that bill landed 2026-04-29/30); they require a `SessionStore`
+   interface + real backend and a real CMS database. Both block any
+   HA deploy, so they gate external adoption.
+2. **Scoped selectors** — unblocks the biggest ergonomic complaint
+   from the review (P2 selector-token global namespace) with a
+   single coherent design pass. Wrapper-spec routing already shipped
+   (commit `49de264`), so the routing half of this batch is done.
 3. **P1 auth + storage + metadata** — the three things every
    real adopter would have to build themselves on day one.
    Picking opinionated defaults (NextAuth-style adapter, Postgres
    default backend, head-collector hook) lowers the integration
    tax dramatically.
-4. **P1 observability** — one OpenTelemetry tracer hook around
+4. **P1 request-scoped data dedup** — small framework primitive
+   (`useLoader(key, fn)` over the existing request ALS) that
+   eliminates duplicate fetches across sibling specs and unlocks
+   composable per-row dynamic Partials. Cheap relative to its
+   payoff.
+5. **P1 observability** — one OpenTelemetry tracer hook around
    each Partial render goes a long way; can land alongside the
    debug overlay work.
-5. **Everything else** opportunistically.
+6. **Everything else** opportunistically.

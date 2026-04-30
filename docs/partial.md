@@ -153,9 +153,9 @@ const Hero = ReactCms.partial(function HeroRender({
 <Hero parent={parent} pokemonId={9} />
 ```
 
-This is what makes nested wrappers work: an outer wrapper parses the
-URL once via `vary`, then threads typed props down to its children
-without forcing each child to re-parse the URL.
+This is what makes nested wrappers work: an outer wrapper matches
+the URL once, then threads typed props down to its children without
+forcing each child to re-parse the URL.
 
 ```tsx
 const PokemonDetailPage = ReactCms.partial(
@@ -168,7 +168,7 @@ const PokemonDetailPage = ReactCms.partial(
       </>
     )
   },
-  { match: "/pokemon/:id", vary: ({ params }) => ({ id: params.id ?? "" }) },
+  { match: "/pokemon/:id" },
 )
 
 // Inner specs have no `match`, no `vary` — the wrapper gates the
@@ -181,9 +181,12 @@ const Hero = ReactCms.partial(async function HeroRender({
 })
 ```
 
-Call-site props are part of the cache fingerprint automatically —
-two parents passing different `id` values produce different cache
-entries.
+`{ match: "/pokemon/:id" }` alone is enough — `ParseRoute<P>` extracts
+`:id` from the pattern at the type level and auto-flows it as a typed
+`{ id: string }` into Render. Add a `vary` only when you need to
+reshape the params (coercion, defaults, derived values). Call-site
+props are part of the cache fingerprint automatically — two parents
+passing different `id` values produce different cache entries.
 
 The framework captures the call-site props in the spec's snapshot
 so a partial-refetch (cache-mode `?partials=…`) can re-invoke the
@@ -241,6 +244,21 @@ A spec doesn't render in three cases:
 Cases 1 and 2 emit nothing. Case 3 emits a placeholder so the client
 paints from `_cache`.
 
+### Transitive fingerprint propagation
+
+A spec's fingerprint folds every previously-registered descendant
+spec's contribution, resolved against the *current* request via the
+spec catalog's `match` + `vary`. A wrapper that doesn't itself
+declare a URL dependency still produces a different fingerprint when
+any of its descendants would render differently. So an ancestor
+fp-skip can never serve a stale subtree, and authors don't need to
+hand-fold descendant deps (`__href: url.href`) into a wrapper's
+vary just to keep the children fresh.
+
+Wrappers called with `outerChildren` (transparent passthrough)
+skip fp-skip entirely — their output IS their children, which the
+JSX parent renders directly.
+
 ## Page-level routing — wrapper specs
 
 Page routing is just specs with `match`. There's no separate router
@@ -258,7 +276,7 @@ const PokemonDetailPage = ReactCms.partial(
       </>
     )
   },
-  { match: "/pokemon/:id", vary: ({ params }) => ({ id: params.id ?? "" }) },
+  { match: "/pokemon/:id" },
 )
 
 // Place every page wrapper as a sibling at the root; only the

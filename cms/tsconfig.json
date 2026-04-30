@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      "@react-cms/framework": ["../framework/index.ts"],
+      "@react-cms/framework/*": ["../framework/src/*"],
+      "@react-cms/cms": ["./index.ts"],
+      "@react-cms/cms/*": ["./src/*"],
+      "@react-cms/copies": ["../copies/index.ts"],
+      "@react-cms/copies/*": ["../copies/src/*"]
+    }
+  },
+  "include": ["src", "index.ts"]
+}

@@ -54,16 +54,33 @@ interface PartialSnapshot {
   frameUrl?: string
   parentPath: readonly string[]
   cmsId?: string
+  props?: Record<string, unknown>       // captured call-site JSX props
+  varyKey?: string                      // hash of last varyResult, for descendant-fp fold
 }
 ```
 
-Snapshots store no JSX, and they don't capture the spec's
-`varyResult` either — `vary` is recomputed on the current request
-inside the spec component, and no consumer of the snapshot reads
-the previous render's `varyResult`. Cache-mode reconstruction
+Snapshots store no JSX. They DO capture two derived bits:
+
+- `props` — the call-site JSX props the spec was last rendered with.
+  Cache-mode replays them so a child rendered via a parent wrapper
+  still receives `id={...}` / `flavor={...}` etc. when the framework
+  re-invokes it without going through the wrapper. A client-supplied
+  `partialProps` overlay (see `?partialProps=` below) wins over the
+  snapshot replay so deep refetches can change the prop. Per-scope
+  state — concurrent requests from the same scope with different
+  prop values for the same id could race.
+- `varyKey` — hash of the spec's `varyResult` on its most-recent
+  render. Feeds the descendant-fp fold so an ancestor's fingerprint
+  reflects every descendant's deps. Without it, a wrapper whose own
+  JSX is unchanged would fp-skip and starve its descendants of a
+  re-evaluation even when their URL / CMS deps just changed.
+
+The `varyResult` itself is NOT stored — `vary` is recomputed on the
+current request inside the spec component. Cache-mode reconstruction
 looks up the spec component by id (or by `type` for slot blocks)
 and renders it with `{parent: {path: snap.parentPath, frameChain:
-snap.parentFrameChain}}`.
+snap.parentFrameChain}}`, plus the snapshot props (overlaid by any
+client-sent `partialProps` overlay).
 
 For storage details — variant deduplication, hint table, LRU
 bounds — see [`registry-internals.md`](./registry-internals.md).
@@ -77,6 +94,7 @@ Wire params:
 | `partials` | `#`-token names (without `#`) |
 | `tags` | `.`-token names (without `.`) |
 | `cached` | `id:fp,id:fp,...` — fingerprints the client has |
+| `partialProps` | JSON `{"<id>":{<propName>:<value>}}` — call-site prop overlay; overrides snapshot-replayed `props` |
 | `__populateCache` | flag to re-render fresh after a server-action invalidate, repopulating the client cache |
 | `__frame=...&__frameUrl=...` | session-write a frame URL before render |
 
@@ -97,5 +115,14 @@ The fp folds in:
 
 - spec id
 - vary result (stable-stringified)
+- call-site JSX props (`extraProps`)
 - frame URL (own and ambient)
 - CMS resolved fields contribution (when `cmsId` is set)
+- every previously-registered descendant spec's `varyKey` snapshot,
+  resolved against the *current* request via the spec catalog's
+  `match` + `vary` (transitive descendant fp propagation — an
+  ancestor fp-skip can never serve a stale subtree)
+
+Wrappers called with `outerChildren` (transparent passthrough) skip
+fp-skip entirely — their output IS the children, which the JSX
+parent renders directly, so there's nothing for fp-skip to gate.

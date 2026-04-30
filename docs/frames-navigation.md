@@ -73,6 +73,42 @@ wrapper) and falls back to the window. Buttons inside a framed
 spec naturally navigate that frame; buttons outside drive the
 window.
 
+### Targeted refetch with explicit props
+
+Both `navigate` and `reload` accept an optional `props` bag that
+threads JSX-style call-site props into the targeted refetch:
+
+```tsx
+nav.navigate(url, {
+  selector: "#slow",
+  props: { slow: { flavor: "chocolate" } },
+})
+```
+
+Keys are partial ids (the selector token without the leading `#`).
+On the server, these props override the snapshot-replayed call-site
+props in `partialFromSnapshot`, so a deep partial-refetch can carry
+fresh values without re-running the parent wrapper. The values land
+in `Render`'s prop bag alongside any vary-derived keys (vary still
+wins on collision). Cached specs that should react to a prop change
+need to read the same value from the URL in their own `vary` — a
+cache-mode refetch derives its key from `vary`'s output, not from
+the threaded prop.
+
+The wire format is `?partialProps={"<id>":{<propName>:<value>}}`.
+`<WhenStored>` and the other activators all funnel through this
+same surface — `useActivate(...).fire({ props })` calls
+`nav.reload({ selector, props })` internally, so there's exactly
+one public refetch path.
+
+### Other commit knobs
+
+| Option | Effect |
+|---|---|
+| `disableTransition: true` | Commit without `startTransition`, so Suspense fallbacks paint and Flight chunks reveal per-row. Default is transition-wrapped (atomic swap, no fallback flash). |
+| `silent: true` | Update the URL without firing any refetch. Wins over `selector` if both are set. Ignored on frame handles. |
+| `props` | See above. |
+
 ## Frame URL on the wire
 
 ```

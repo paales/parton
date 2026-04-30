@@ -172,16 +172,19 @@ Not novel; the combination is uncommon.
 
 2. **Runtime discovery, not static analysis.** No build-time
    manifest of available blocks; no schema files; no codegen.
-   `registerBlock` populates the catalog at module-init; the
-   prerender introspects components by calling them. Adding a new
-   block type is one component file + one `registerBlock` line —
-   the editor's palette picks it up on the next HMR.
+   `ReactCms.partial(...)` self-registers in the catalog at
+   module-init when it declares `tags: [".x"]`; the prerender
+   introspects each spec by invoking its `vary` once with a stub
+   request. Adding a new block type is one component file + one
+   `ReactCms.partial(...)` call — the editor's palette picks it up
+   on the next HMR.
 
-3. **The cache key is what you read.** Manifest accessors record
-   `(kind, name)` into a per-Partial set; the cache key derives
-   automatically. Drupal had this conceptually (cache contexts);
-   this framework makes the read pattern the literal source of the
-   key, with a hard hoisting rule to keep it stable.
+3. **The cache key is what `vary` returns.** Every per-spec
+   dependency on the request, route, or CMS lives in a single sync
+   `vary` callback whose return value IS the cache-key surface.
+   Drupal had this conceptually (cache contexts); this framework
+   makes the read pattern the literal source of the key, evaluated
+   at the spec's body, no manifest cell or hoisting rule needed.
 
 4. **One client navigation surface.** `useNavigation()` is a typed
    superset of `window.navigation`. Page nav, frame nav, and

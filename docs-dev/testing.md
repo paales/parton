@@ -32,15 +32,9 @@ Every RSC + Vitest test gets a per-test scope token via
 `x-test-scope`. Parallel tests don't contend on the per-scope
 state buckets (`<Cache>` store, registry, sessions, GraphQL cache).
 
-## After the constructor migration
+## Spec test shape
 
-The 2026-04-28 rewrite replaced `<Partial>` + tracked accessors
-with `ReactCms.partial(...)` specs. Most existing tests reference
-removed APIs (`getCookie`, `getSearchParam`, `runWithCacheManifest`,
-`HoistingViolationError`, `partial-component.tsx`) and don't run
-yet — they need rewriting against the new surface.
-
-The migration target shape for a test:
+The basic shape of a partial-system test:
 
 ```ts
 import { ReactCms, ROOT } from "../../lib"
@@ -53,3 +47,9 @@ const TestPartial = ReactCms.partial(
 const { rendered } = await renderRsc(<TestPartial parent={ROOT} />, { url: "/?v=hello" })
 expect(rendered).toContain("hello")
 ```
+
+The `<Partial>` JSX wrapper, tracked accessors (`getCookie`,
+`getSearchParam`, …), `runWithCacheManifest`, and
+`HoistingViolationError` are all gone — see `archive/` for the
+historical surface and `notes/partial-define-step-api.md` for the
+design rationale behind the constructor.
