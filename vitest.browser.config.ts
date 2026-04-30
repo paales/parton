@@ -50,7 +50,10 @@ export default defineProject({
   },
   test: {
     name: "browser",
-    include: ["src/**/*.browser.test.?(c|m)[jt]s?(x)"],
+    include: [
+      "src/**/*.browser.test.?(c|m)[jt]s?(x)",
+      "{framework,cms,copies,e2e-testing,e2e-magento}/**/*.browser.test.?(c|m)[jt]s?(x)",
+    ],
     setupFiles: ["./vitest.browser.setup.ts"],
     browser: {
       enabled: true,

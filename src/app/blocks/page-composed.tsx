@@ -2,7 +2,7 @@
  * Composed container — has its own `body` slot of demo blocks.
  */
 
-import { Children, ReactCms, type RenderArgs } from "../../lib"
+import { Children, ReactCms, type RenderArgs } from "@react-cms/framework"
 
 export const PageComposedBlock = ReactCms.partial(
   function PageComposedRender({ parent, cmsId }: RenderArgs) {

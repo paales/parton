@@ -7,7 +7,7 @@
  * inside it.
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { WhenVisible } from "../components/when-visible.tsx"
 import { WhenStored } from "../components/when-stored.tsx"
 import { WhenMounted } from "../components/when-mounted.tsx"

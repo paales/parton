@@ -19,7 +19,7 @@ import {
   writeDraftNode,
   type CmsConfig,
   type CmsNode,
-} from "../framework/cms-runtime.ts"
+} from "@react-cms/framework/framework/cms-runtime.ts"
 
 function invalidateEditorAround(cmsId: string): { invalidate: { selector: string } } {
   return {

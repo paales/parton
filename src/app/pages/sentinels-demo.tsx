@@ -7,10 +7,10 @@
  *  - `RedirectDemoPage` — calls `redirect()` on /redirect-demo
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
-import { notFound } from "../../framework/errors.ts"
-import { setFrameworkControl } from "../../framework/context.ts"
-import { Redirect } from "../../framework/redirect-client.tsx"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { notFound } from "@react-cms/framework/framework/errors.ts"
+import { setFrameworkControl } from "@react-cms/framework/framework/context.ts"
+import { Redirect } from "@react-cms/framework/framework/redirect-client.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 import { Badge } from "@react-cms/copies/components/ui/badge"
 import { buttonVariants } from "@react-cms/copies/components/ui/button"

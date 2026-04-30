@@ -9,15 +9,15 @@ import {
 import type { ReactFormState } from "react-dom/client"
 import { Root } from "../app/root.tsx"
 import { NotFoundPage } from "../app/pages/not-found.tsx"
-import { parseRenderRequest } from "./request.tsx"
+import { parseRenderRequest } from "@react-cms/framework/framework/request.tsx"
 import {
   _captureCommitHandle,
   getFrameworkControl,
   runWithRequestAsync,
   setRequest,
-} from "./context.ts"
-import { warmCmsCache } from "./cms-runtime.ts"
-import { deferRequestRegistryCommit } from "../lib/partial-registry.ts"
+} from "@react-cms/framework/framework/context.ts"
+import { warmCmsCache } from "@react-cms/framework/framework/cms-runtime.ts"
+import { deferRequestRegistryCommit } from "@react-cms/framework/lib/partial-registry.ts"
 
 export type RscPayload = {
   root: React.ReactNode
@@ -38,11 +38,11 @@ async function handler(request: Request): Promise<Response> {
         { _clearAllSessions },
         { _clearCmsDraft },
       ] = await Promise.all([
-        import("../lib/cache.tsx"),
-        import("../lib/partial-cache.ts"),
-        import("../lib/partial-registry.ts"),
-        import("./session.ts"),
-        import("./cms-runtime.ts"),
+        import("@react-cms/framework/lib/cache.tsx"),
+        import("@react-cms/framework/lib/partial-cache.ts"),
+        import("@react-cms/framework/lib/partial-registry.ts"),
+        import("@react-cms/framework/framework/session.ts"),
+        import("@react-cms/framework/framework/cms-runtime.ts"),
       ])
       const all = url.searchParams.get("all") === "1"
       if (all) {
@@ -158,7 +158,7 @@ async function handleRequest(
         needsUpdate = true
       }
       if (sharedNames.length > 0) {
-        const { invalidateByTags } = await import("../lib/partial-cache.ts")
+        const { invalidateByTags } = await import("@react-cms/framework/lib/partial-cache.ts")
         invalidateByTags(sharedNames)
         const existing = renderRequest.url.searchParams.get("tags")
         const merged = existing ? `${existing},${sharedNames.join(",")}` : sharedNames.join(",")

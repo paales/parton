@@ -7,7 +7,7 @@
  * blocks in the catalog) compose the page.
  */
 
-import { Children, ReactCms } from "../../lib"
+import { Children, ReactCms } from "@react-cms/framework"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 
 export const CmsDemoRootPartial = ReactCms.partial(

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { useNavigation } from "../../lib/partial-client.tsx"
+import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
 
 /**
  * Sentinel rendered at the bottom of a bounded `<Piece>` chain once it hits

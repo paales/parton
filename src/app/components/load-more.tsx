@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { useNavigation } from "../../lib/partial-client.tsx"
+import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
 
 /**
  * Tracks which page partials are currently visible.

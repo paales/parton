@@ -7,7 +7,7 @@
  * once per id.
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../lib"
+import { ReactCms, type PartialCtx, type RenderArgs } from "@react-cms/framework"
 import { ChatMessage } from "./piece.tsx"
 import {
   AutoScrollToBottom,

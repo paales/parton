@@ -1,7 +1,7 @@
 "use client"
 
-import { useActivate } from "../../lib/partial-client.tsx"
-import type { ActivatorProps } from "../../lib"
+import { useActivate } from "@react-cms/framework/lib/partial-client.tsx"
+import type { ActivatorProps } from "@react-cms/framework"
 
 export interface WhenStoredProps extends ActivatorProps {
   /** The storage key to watch. */

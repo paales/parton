@@ -4,7 +4,7 @@
  * the current `?end=` value, so only the active range renders.
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { NextObserver } from "../components/next-observer.tsx"
 import { ScrollRestore } from "../components/scroll-restore.tsx"
 

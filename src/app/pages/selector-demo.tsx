@@ -3,7 +3,7 @@
  * `.`-shared tokens.
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 

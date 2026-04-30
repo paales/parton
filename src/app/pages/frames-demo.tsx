@@ -4,7 +4,7 @@
  * a nested frame (`cart.tab`, `menu.tab`).
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { FrameNavigateButton, UpdateEntryStateButton } from "../components/frames-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 

@@ -1,4 +1,4 @@
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 
 export const RichTextBlock = ReactCms.partial(
   function RichTextRender({ body }: { body: string } & RenderArgs) {

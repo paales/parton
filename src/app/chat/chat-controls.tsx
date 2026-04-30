@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, type MouseEvent } from "react"
-import { useNavigation } from "../../lib/partial-client.tsx"
+import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
 import { Button, buttonVariants } from "@react-cms/copies/components/ui/button"
 import { cn } from "@react-cms/copies/lib/utils"
 

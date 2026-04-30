@@ -13,8 +13,8 @@
  * other page wrappers; the gating is automatic.
  */
 
-import { ReactCms, getRegisteredMatchPatterns } from "../../lib"
-import { notFound } from "../../framework/errors.ts"
+import { ReactCms, getRegisteredMatchPatterns } from "@react-cms/framework"
+import { notFound } from "@react-cms/framework/framework/errors.ts"
 
 export const NotFoundFallback = ReactCms.partial(
   function NotFoundFallbackRender() {

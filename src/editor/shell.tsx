@@ -7,7 +7,7 @@
  * re-evaluates as the previewed URL changes.
  */
 
-import { ReactCms, type RenderArgs } from "../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import {
   EDITOR_COOKIE,
   listAllCmsNodes,
@@ -18,10 +18,10 @@ import {
   type CmsConfig,
   type ContentFieldKind,
   type MatchClause,
-} from "../framework/cms-runtime.ts"
-import { getCatalogManifest, type BlockManifest } from "../framework/cms-prerender.ts"
-import { setSessionFrameUrl } from "../framework/session.ts"
-import { getRequest, setCookie } from "../framework/context.ts"
+} from "@react-cms/framework/framework/cms-runtime.ts"
+import { getCatalogManifest, type BlockManifest } from "@react-cms/framework/framework/cms-prerender.ts"
+import { setSessionFrameUrl } from "@react-cms/framework/framework/session.ts"
+import { getRequest, setCookie } from "@react-cms/framework/framework/context.ts"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 import { Button, buttonVariants } from "@react-cms/copies/components/ui/button"
 import { Badge } from "@react-cms/copies/components/ui/badge"

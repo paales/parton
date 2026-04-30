@@ -1,4 +1,4 @@
-import { ReactCms, type RenderArgs } from "../../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { RefreshPriceButton } from "./refresh-price-button.tsx"
 
 export function LivePriceFallback({

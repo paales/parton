@@ -3,7 +3,7 @@
  * `.nav-item` blocks.
  */
 
-import { Children, ReactCms, type RenderArgs } from "../../lib"
+import { Children, ReactCms, type RenderArgs } from "@react-cms/framework"
 
 export const NavRootBlock = ReactCms.partial(
   function NavRootRender({ parent, cmsId }: RenderArgs) {

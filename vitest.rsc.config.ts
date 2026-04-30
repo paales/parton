@@ -63,7 +63,10 @@ export default defineProject({
   },
   test: {
     name: "rsc",
-    include: ["src/**/*.rsc.test.?(c|m)[jt]s?(x)"],
+    include: [
+      "src/**/*.rsc.test.?(c|m)[jt]s?(x)",
+      "{framework,cms,copies,e2e-testing,e2e-magento}/**/*.rsc.test.?(c|m)[jt]s?(x)",
+    ],
     environment: "node",
     // Force-inline React + the vendored Flight runtime so Vite's
     // resolver (with our `react-server` condition) handles them.

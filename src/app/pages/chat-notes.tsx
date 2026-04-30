@@ -3,7 +3,7 @@
  * The actual streaming UI lives in `chat-overlay.tsx`.
  */
 
-import { ReactCms } from "../../lib"
+import { ReactCms } from "@react-cms/framework"
 
 export const ChatNotesPage = ReactCms.partial(
   function ChatNotesRender() {

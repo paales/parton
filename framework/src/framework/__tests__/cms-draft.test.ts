@@ -4,8 +4,7 @@
  * file that a previous test left behind, so failures don't leak.
  */
 import { existsSync, unlinkSync } from "node:fs"
-import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   _invalidateCmsStoreCache,
@@ -16,7 +15,10 @@ import {
   type CmsNode,
 } from "../cms-runtime.ts"
 
-const DRAFT_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "cms", "draft.json")
+// Mirrors `defaultCmsDataDir()` in cms-storage.ts — both resolve from
+// process.cwd(). When the test runs from the repo root, this points at
+// the same draft.json the storage layer writes.
+const DRAFT_PATH = join(process.cwd(), "src", "cms", "draft.json")
 
 function clearDraftFile(): void {
   if (existsSync(DRAFT_PATH)) unlinkSync(DRAFT_PATH)
@@ -155,13 +157,7 @@ describe("publishDraft", () => {
   // committed JSON dirty, and the post-page-as-slot refactor changed
   // content.json's top-level shape so the "restore" wrote a
   // different shape than the file actually had).
-  const tmpDir = join(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "..",
-    `tmp-publish-test-${process.pid}`,
-  )
+  const tmpDir = join(process.cwd(), `tmp-publish-test-${process.pid}`)
   const tmpPublished = join(tmpDir, "content.json")
   const tmpDraft = join(tmpDir, "draft.json")
 

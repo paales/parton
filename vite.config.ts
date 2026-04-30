@@ -61,12 +61,16 @@ export default defineConfig(({ mode }) => ({
         test: {
           name: "node",
           setupFiles: ["./vitest.setup.ts"],
-          include: ["src/**/*.{test,spec}.?(c|m)[jt]s?(x)"],
+          // Workspace-aware glob: matches tests in any package.
+          include: [
+            "src/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+            "{framework,cms,copies,e2e-testing,e2e-magento}/**/*.{test,spec}.?(c|m)[jt]s?(x)",
+          ],
           // Other tiers own their own globs.
           exclude: [
             "**/node_modules/**",
-            "src/**/*.rsc.test.?(c|m)[jt]s?(x)",
-            "src/**/*.browser.test.?(c|m)[jt]s?(x)",
+            "**/*.rsc.test.?(c|m)[jt]s?(x)",
+            "**/*.browser.test.?(c|m)[jt]s?(x)",
           ],
           environment: "jsdom",
         },

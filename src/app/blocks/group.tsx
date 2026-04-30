@@ -3,7 +3,7 @@
  * padding/wrap. Children plug in via the `items` slot (any block).
  */
 
-import { Children, ReactCms, type RenderArgs } from "../../lib"
+import { Children, ReactCms, type RenderArgs } from "@react-cms/framework"
 import { cn } from "@react-cms/copies/lib/utils"
 
 const DIRECTIONS = ["column", "row"] as const

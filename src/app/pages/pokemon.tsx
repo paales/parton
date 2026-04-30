@@ -9,7 +9,7 @@
  * pieces it shares (header, search areas, sprite helper).
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { client } from "../data.ts"
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts"
 import { Badge } from "@react-cms/copies/components/ui/badge"

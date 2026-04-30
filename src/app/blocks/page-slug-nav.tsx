@@ -3,7 +3,7 @@
  * registered as a block so the page can compose it via Children.
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { buttonVariants } from "@react-cms/copies/components/ui/button"
 
 const SLUG_LINKS: ReadonlyArray<[href: string, label: string]> = [

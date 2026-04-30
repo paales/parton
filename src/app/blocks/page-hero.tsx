@@ -1,4 +1,4 @@
-import { ReactCms, type RenderArgs } from "../../lib"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 import { cn } from "@react-cms/copies/lib/utils"
 

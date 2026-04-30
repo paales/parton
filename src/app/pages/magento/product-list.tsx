@@ -8,7 +8,7 @@
  */
 
 import { Suspense } from "react"
-import { ReactCms, type PartialCtx, type RenderArgs } from "../../../lib"
+import { ReactCms, type PartialCtx, type RenderArgs } from "@react-cms/framework"
 import { client } from "../../magento-data.ts"
 import { graphql, type ResultOf } from "../../magento-graphql.ts"
 import { AddToCartButton } from "./add-to-cart-button.tsx"

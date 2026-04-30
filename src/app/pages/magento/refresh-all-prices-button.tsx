@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { useNavigation } from "../../../lib/partial-client.tsx"
+import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
 import { Button } from "@react-cms/copies/components/ui/button"
 
 export function RefreshAllPricesButton() {

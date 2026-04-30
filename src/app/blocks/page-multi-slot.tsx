@@ -2,7 +2,7 @@
  * Multi-slot container — `body` + `sidebar`.
  */
 
-import { Children, ReactCms, type RenderArgs } from "../../lib"
+import { Children, ReactCms, type RenderArgs } from "@react-cms/framework"
 
 export const PageMultiSlotBlock = ReactCms.partial(
   function PageMultiSlotRender({ parent, cmsId }: RenderArgs) {

@@ -5,11 +5,11 @@
  * {maxAge: 60}`) and varies by `flavor`; `Clock` stays uncached.
  */
 
-import { ReactCms, type RenderArgs } from "../../lib"
-import { _cacheStats } from "../../lib/cache.tsx"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { _cacheStats } from "@react-cms/framework/lib/cache.tsx"
 import { CacheControls } from "../components/cache-controls.tsx"
 import { ClickCounter } from "../components/click-counter.tsx"
-import { getScope } from "../../framework/context.ts"
+import { getScope } from "@react-cms/framework/framework/context.ts"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

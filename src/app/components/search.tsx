@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react"
-import { useNavigation } from "../../lib/partial-client.tsx"
+import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
 import { Button } from "@react-cms/copies/components/ui/button"
 import { Input } from "@react-cms/copies/components/ui/input"
 
