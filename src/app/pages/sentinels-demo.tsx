@@ -11,9 +11,9 @@ import { ReactCms, type RenderArgs } from "../../lib"
 import { notFound } from "../../framework/errors.ts"
 import { setFrameworkControl } from "../../framework/context.ts"
 import { Redirect } from "../../framework/redirect-client.tsx"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { buttonVariants } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
+import { Badge } from "@react-cms/copies/components/ui/badge"
+import { buttonVariants } from "@react-cms/copies/components/ui/button"
 
 function InlineCode({ children }: { children: React.ReactNode }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">{children}</code>

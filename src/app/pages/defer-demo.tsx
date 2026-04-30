@@ -12,7 +12,7 @@ import { WhenVisible } from "../components/when-visible.tsx"
 import { WhenStored } from "../components/when-stored.tsx"
 import { WhenMounted } from "../components/when-mounted.tsx"
 import { ActivateButton, StorageKeyEditor } from "../components/defer-demo-controls.tsx"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 
 function InlineCode({ children }: { children: React.ReactNode }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">{children}</code>

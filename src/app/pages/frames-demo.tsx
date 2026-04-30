@@ -6,7 +6,7 @@
 
 import { ReactCms, type RenderArgs } from "../../lib"
 import { FrameNavigateButton, UpdateEntryStateButton } from "../components/frames-demo-controls.tsx"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 
 // ─── Main listing (page-scoped) ─────────────────────────────────────────
 

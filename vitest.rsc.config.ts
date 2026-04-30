@@ -25,9 +25,33 @@ export default defineProject({
   ],
   resolve: {
     conditions: ["react-server"],
-    alias: {
-      "@": path.resolve(import.meta.dirname, "src"),
-    },
+    alias: [
+      {
+        find: /^@react-cms\/framework\/(.*)/,
+        replacement: path.resolve(import.meta.dirname, "framework/src/$1"),
+      },
+      {
+        find: /^@react-cms\/framework$/,
+        replacement: path.resolve(import.meta.dirname, "framework/index.ts"),
+      },
+      {
+        find: /^@react-cms\/cms\/(.*)/,
+        replacement: path.resolve(import.meta.dirname, "cms/src/$1"),
+      },
+      {
+        find: /^@react-cms\/cms$/,
+        replacement: path.resolve(import.meta.dirname, "cms/index.ts"),
+      },
+      {
+        find: /^@react-cms\/copies\/(.*)/,
+        replacement: path.resolve(import.meta.dirname, "copies/src/$1"),
+      },
+      {
+        find: /^@react-cms\/copies$/,
+        replacement: path.resolve(import.meta.dirname, "copies/index.ts"),
+      },
+      { find: "@", replacement: path.resolve(import.meta.dirname, "src") },
+    ],
   },
   // SSR config mirrors `resolve` — Vitest runs tests through Vite's
   // SSR transform, which reads conditions from here, not the outer

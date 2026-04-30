@@ -3,8 +3,8 @@
  */
 
 import { ReactCms, type RenderArgs } from "../../lib"
-import { Card, CardContent } from "@/components/ui/card"
-import { cn } from "@/lib/utils"
+import { Card, CardContent } from "@react-cms/copies/components/ui/card"
+import { cn } from "@react-cms/copies/lib/utils"
 
 export const HeroBlock = ReactCms.partial(
   function HeroRender({

@@ -5,7 +5,7 @@
 
 import { ReactCms, type RenderArgs } from "../../lib"
 import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 
 function ServerTime({ label }: { label: string }) {
   return (

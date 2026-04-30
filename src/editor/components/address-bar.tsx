@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react"
 import { useNavigation } from "../../lib/partial-client.tsx"
-import { cn } from "@/lib/utils"
+import { cn } from "@react-cms/copies/lib/utils"
 
 /**
  * Address bar for the editor's preview pane.

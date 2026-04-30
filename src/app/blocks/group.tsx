@@ -4,7 +4,7 @@
  */
 
 import { Children, ReactCms, type RenderArgs } from "../../lib"
-import { cn } from "@/lib/utils"
+import { cn } from "@react-cms/copies/lib/utils"
 
 const DIRECTIONS = ["column", "row"] as const
 const ALIGN_VALUES = ["start", "center", "end", "stretch"] as const

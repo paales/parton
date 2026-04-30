@@ -15,7 +15,7 @@ import { AddToCartButton } from "./add-to-cart-button.tsx"
 import { CartBadge } from "./cart-badge.tsx"
 import { LivePricePartial, LivePriceFallback } from "./live-price.tsx"
 import { RefreshAllPricesButton } from "./refresh-all-prices-button.tsx"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 
 const CartQuery = graphql(`
   query Cart($cartId: String!) {

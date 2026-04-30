@@ -2,8 +2,8 @@
 
 import { useState, useTransition } from "react"
 import { addToCart } from "./cart-actions.ts"
-import { Button } from "@/components/ui/button"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@react-cms/copies/components/ui/button"
+import { Alert, AlertDescription } from "@react-cms/copies/components/ui/alert"
 
 export function AddToCartButton({ sku }: { sku: string }) {
   const [isPending, startTransition] = useTransition()

@@ -8,7 +8,7 @@
  */
 
 import { Children, ReactCms } from "../../lib"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 
 export const CmsDemoRootPartial = ReactCms.partial(
   function CmsDemoRootRender({ cmsId, parent }) {

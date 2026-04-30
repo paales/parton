@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { useNavigation } from "../../lib/partial-client.tsx"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Button } from "@react-cms/copies/components/ui/button"
+import { Input } from "@react-cms/copies/components/ui/input"
 
 /**
  * Manual activator: a plain button that calls

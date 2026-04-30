@@ -77,8 +77,33 @@ export default defineConfig(({ mode }) => ({
   },
   resolve: {
     dedupe: ["react", "react-dom"],
-    alias: {
-      "@": path.resolve(import.meta.dirname, "src"),
-    },
+    alias: [
+      // Order matters: longer prefixes first.
+      {
+        find: /^@react-cms\/framework\/(.*)/,
+        replacement: path.resolve(import.meta.dirname, "framework/src/$1"),
+      },
+      {
+        find: /^@react-cms\/framework$/,
+        replacement: path.resolve(import.meta.dirname, "framework/index.ts"),
+      },
+      {
+        find: /^@react-cms\/cms\/(.*)/,
+        replacement: path.resolve(import.meta.dirname, "cms/src/$1"),
+      },
+      {
+        find: /^@react-cms\/cms$/,
+        replacement: path.resolve(import.meta.dirname, "cms/index.ts"),
+      },
+      {
+        find: /^@react-cms\/copies\/(.*)/,
+        replacement: path.resolve(import.meta.dirname, "copies/src/$1"),
+      },
+      {
+        find: /^@react-cms\/copies$/,
+        replacement: path.resolve(import.meta.dirname, "copies/index.ts"),
+      },
+      { find: "@", replacement: path.resolve(import.meta.dirname, "src") },
+    ],
   },
 }))

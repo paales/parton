@@ -4,7 +4,7 @@
  */
 
 import { ReactCms, type RenderArgs } from "../../lib"
-import { buttonVariants } from "@/components/ui/button"
+import { buttonVariants } from "@react-cms/copies/components/ui/button"
 
 const SLUG_LINKS: ReadonlyArray<[href: string, label: string]> = [
   ["/cms-demo", "Default (no slug)"],

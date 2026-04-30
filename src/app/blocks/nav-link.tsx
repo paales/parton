@@ -3,7 +3,7 @@
  */
 
 import { ReactCms, type RenderArgs } from "../../lib"
-import { buttonVariants } from "@/components/ui/button"
+import { buttonVariants } from "@react-cms/copies/components/ui/button"
 
 export const NavLinkBlock = ReactCms.partial(
   function NavLinkRender({ href, label }: { href: string; label: string } & RenderArgs) {

@@ -1,7 +1,7 @@
 import { ReactCms, type RenderArgs } from "../../lib"
-import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
+import { Card, CardContent } from "@react-cms/copies/components/ui/card"
+import { Badge } from "@react-cms/copies/components/ui/badge"
+import { cn } from "@react-cms/copies/lib/utils"
 
 export const PageGreetingBlock = ReactCms.partial(
   function PageGreetingRender({
