@@ -4,7 +4,7 @@ A research project: a React CMS data layer for pages composed of
 independently re-renderable, addressable, cacheable subtrees built
 on RSC. The primitive is `ReactCms.partial(Render, options)` — a
 define-step constructor that returns a placeable React component;
-the contract and full surface live in [`docs/`](./docs/).
+the contract and full surface live in [`docs/reference/`](./docs/reference/).
 
 This file is for working in this repo — structure, tooling,
 workflow. For framework architecture and APIs, read the docs.
@@ -13,10 +13,10 @@ workflow. For framework architecture and APIs, read the docs.
 
 | Folder | For |
 |---|---|
-| [`docs/`](./docs/) | Framework reference. `intro` · `partial` · `frames-navigation` · `cache` · `cms` · `prior-art`. Read these to use the framework. |
-| [`docs-dev/`](./docs-dev/) | Framework internals. `testing` · `render-pipeline` · `cache-internals` · `registry-internals` · `frame-scope` · `manifest-internals` · `server-isolation` · `flight-gotchas`. Read these to modify the framework. |
-| [`notes/`](./notes/) | Active research. Forward-looking backlog (`IDEAS.md`); chat overlay's demo content. |
-| [`archive/`](./archive/) | Superseded designs and debugging logs. Reference only. |
+| [`docs/reference/`](./docs/reference/) | Framework reference. `intro` · `partial` · `frames-navigation` · `cache` · `cms` · `prior-art`. Read these to use the framework. |
+| [`docs/internals/`](./docs/internals/) | Framework internals. `testing` · `render-pipeline` · `cache-internals` · `registry-internals` · `frame-scope` · `manifest-internals` · `server-isolation` · `flight-gotchas`. Read these to modify the framework. |
+| [`docs/notes/`](./docs/notes/) | Active research. Forward-looking backlog (`IDEAS.md`); chat overlay's demo content. |
+| [`docs/archive/`](./docs/archive/) | Superseded designs and debugging logs. Reference only. |
 
 ## Project structure
 
@@ -98,7 +98,7 @@ yarn test:e2e           # Playwright — full-stack specs in e2e/
 
 `yarn test` and `yarn test:e2e` cover disjoint suites — both must
 pass before a change is done. Tier picking and harness mechanics
-are in [`docs-dev/testing.md`](./docs-dev/testing.md).
+are in [`docs/internals/testing.md`](./docs/internals/testing.md).
 
 `yarn test:e2e` auto-starts `yarn dev` if nothing's on port 5173.
 HMR dispose hooks clear cache + registry on edits, so server
@@ -133,18 +133,19 @@ When a non-trivial task reaches a clean end state (feature landed,
 bug fixed, refactor finished) AND `yarn test` + `yarn test:e2e` are
 both green:
 
-1. **Update the docs.** Find every `docs/` or `docs-dev/` file that
-   touches the changed area and amend it to match the new reality.
-   No history banners ("we used to do X"), no progression — the
-   docs always describe latest state. Design rationale that future
-   readers might need stays in `notes/` (active) or `archive/`
-   (superseded).
+1. **Update the docs.** Find every `docs/reference/` or
+   `docs/internals/` file that touches the changed area and amend
+   it to match the new reality. No history banners ("we used to do
+   X"), no progression — the docs always describe latest state.
+   Design rationale that future readers might need stays in
+   `docs/notes/` (active) or `docs/archive/` (superseded).
 
-2. **Move stale notes to `archive/`.** A note earns archival when
-   its design is no longer wired in OR has been fully superseded
-   by a docs/ entry. Add a `Superseded YYYY-MM-DD by docs/X.md`
-   banner at the top of the note before moving. Update
-   `archive/README.md` with the index entry.
+2. **Move stale notes to `docs/archive/`.** A note earns archival
+   when its design is no longer wired in OR has been fully
+   superseded by a `docs/reference/` entry. Add a
+   `Superseded YYYY-MM-DD by docs/reference/X.md` banner at the top
+   of the note before moving. Update `docs/archive/README.md` with
+   the index entry.
 
 3. **Confirm the test suites are green.** `yarn test` and
    `yarn test:e2e` from a clean working tree. Don't commit red.
@@ -162,12 +163,12 @@ without the corresponding doc/test update is incomplete work.
 
 ### Issue tracker
 
-Issues live in GitHub Issues at `paales/react-cms` (the `gh` CLI). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues at `paales/react-cms` (the `gh` CLI). See `docs/reference/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/reference/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. Neither exists yet — skills create them lazily. See `docs/agents/domain.md`.
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. Neither exists yet — skills create them lazily. See `docs/reference/agents/domain.md`.

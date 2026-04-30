@@ -6,10 +6,10 @@ sets, `HoistingViolationError`, descendant manifest folding,
 rewrite to the `ReactCms.partial(...)` constructor.
 
 The cache-key surface is now whatever `vary` returns — see
-[`docs/cache.md`](../docs/cache.md) for the new shape, and
-[`notes/partial-define-step-api.md`](../notes/partial-define-step-api.md)
+[`../reference/cache.md`](../reference/cache.md) for the new shape, and
+[`../notes/partial-define-step-api.md`](../notes/partial-define-step-api.md)
 for the design rationale.
 
 The historical manifest docs are preserved in
-[`archive/`](../archive/) under `AUTO_TRACKED_CACHE_KEYS.md` and
+[`../archive/`](../archive/) under `AUTO_TRACKED_CACHE_KEYS.md` and
 `AUTO_TRACKED_VARY.md`.

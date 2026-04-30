@@ -60,10 +60,10 @@ placements.
 
 ## Reading order
 
-1. [`docs/partial.md`](./partial.md) — the constructor surface.
-2. [`docs/cache.md`](./cache.md) — server-side render-output cache.
-3. [`docs/cms.md`](./cms.md) — CMS layer + editor.
-4. [`docs/frames-navigation.md`](./frames-navigation.md) — frames
+1. [`partial.md`](./partial.md) — the constructor surface.
+2. [`cache.md`](./cache.md) — server-side render-output cache.
+3. [`cms.md`](./cms.md) — CMS layer + editor.
+4. [`frames-navigation.md`](./frames-navigation.md) — frames
    and the `useNavigation` API.
 
 ## What changed (2026-04-28)

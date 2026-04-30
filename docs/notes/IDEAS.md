@@ -6,7 +6,7 @@ The new primitive is `ReactCms.partial(Render, options)` — a
 module-scope constructor that returns a placeable React component.
 Every dependency a spec has on the request, route, or CMS lives in
 a single sync `vary` callback whose result is also the cache-key
-surface. See [`docs/partial.md`](../docs/partial.md) and the
+surface. See [`reference/partial.md`](../reference/partial.md) and the
 design rationale in [`partial-define-step-api.md`](./partial-define-step-api.md).
 
 What landed:
@@ -664,7 +664,7 @@ so future work has a single ranked list. Priority legend:
   context spine; userspace code that captures Promises into
   module-level variables can resolve under the wrong request's
   ALS context. Class-of-bugs that comes with the territory; doc
-  it loudly in `docs-dev/server-isolation.md`.
+  it loudly in `docs/internals/server-isolation.md`.
 - **Bundle eagerness for serverless cold-start.** See P2 module-
   graph entry; same root cause, different symptom — a 200-page
   app pays full module-init on every cold container boot.

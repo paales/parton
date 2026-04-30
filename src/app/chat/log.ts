@@ -44,10 +44,10 @@ const STREAM_BUDGET_MS_TEST = 3_000
 // active research, archived design proposals — without the chat
 // overlay having to hardcode where each file lives.
 const SEARCH_DIRS = [
-  resolve(process.cwd(), "notes"),
-  resolve(process.cwd(), "docs"),
-  resolve(process.cwd(), "docs-dev"),
-  resolve(process.cwd(), "archive"),
+  resolve(process.cwd(), "docs/notes"),
+  resolve(process.cwd(), "docs/reference"),
+  resolve(process.cwd(), "docs/internals"),
+  resolve(process.cwd(), "docs/archive"),
 ]
 
 async function readMarkdown(fileId: string): Promise<string> {

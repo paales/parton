@@ -31,7 +31,7 @@ interface CacheEntry {
   expiresAt: number
 }
 
-// CATEGORY C (docs-dev/server-isolation.md) — shared GraphQL response cache.
+// CATEGORY C (docs/internals/server-isolation.md) — shared GraphQL response cache.
 // Entries keyed by query hash + variables within a scope; safe to share
 // across users for anonymous queries, and authenticated queries should
 // not end up here.
