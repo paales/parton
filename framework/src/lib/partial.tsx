@@ -442,7 +442,20 @@ function computeDescendantFold(ancestorId: string): string {
  * module hasn't loaded yet on the current process).
  */
 function descendantContribution(descId: string, snap: PartialSnapshot): string {
-  const spec = snap.cmsId ? getSpecByCmsId(snap.cmsId) : undefined
+  // Slot-block instances register their snapshot with a per-instance
+  // `cmsId` override (the entry id, e.g. `composed-hero-2`), but the
+  // spec catalog has them under their `type` (e.g. `hero`). Try cmsId
+  // first for ordinary specs, fall through to type for slot blocks.
+  // Without this, slot-block-instance descendants always hit the
+  // `snap.varyKey ?? ""` fallback below — frozen at the value
+  // captured on the descendant's last render — so the ancestor's fp
+  // never moves when only a slot block's CMS-resolved content
+  // changes. That's the cms-demo-slots regression: navigating
+  // `/cms-demo/alpha` → `/cms-demo/beta` swaps `composed-hero-2`'s
+  // resolved fields, but the wrapper fp-skips and serves alpha's
+  // cached content.
+  let spec = snap.cmsId ? getSpecByCmsId(snap.cmsId) : undefined
+  if (!spec && snap.type) spec = getSpecByType(snap.type)
   // No live spec → fall back to last-known varyKey. Prevents the
   // fold from becoming all-stable when the registry is warm but the
   // catalog is still hydrating; lag of one render in this corner.
