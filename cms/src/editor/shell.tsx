@@ -1,10 +1,19 @@
 /**
- * Editor shell — three-pane layout (tree / preview / field form).
+ * Editor shell — floating-panel layout from the V6 design.
  *
- * Tree and field panels are `ReactCms.partial(...)` specs; the
- * preview pane renders the previewed page inline (`{children}`). The
- * field panel's `vary` folds the pathname so `pickBestConfigIndex`
- * re-evaluates as the previewed URL changes.
+ *   ┌──────────────── top toolbar (pill) ────────────────┐
+ *   │  ⠿ ⤴ 🏠 Home page ⌄  ▭ ▯ ▮  ↶↷  ⛶ ☾ </> ● Draft ⌄ │
+ *   └─────────────────────────────────────────────────────┘
+ *   ┌── left panel ──┐   ┌────── preview ──────┐   ┌── right ──┐
+ *   │ Layers ╲ Setts │   │  page renders here  │   │ <Element> │
+ *   │   tree …       │   │  ╳selection chrome  │   │ Properties│
+ *   └────────────────┘   └─────────────────────┘   └───────────┘
+ *
+ * Tweaks (palette / surface / attachment / device) live in URL
+ * params and a sticky cookie. Tree and field panels are still
+ * partials with the `#cms-edit-tree` and `#cms-edit-fields`
+ * selectors — selector-targeted refetch on a tree click only re-runs
+ * those two, never the preview.
  */
 
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
@@ -18,18 +27,19 @@ import {
   type CmsConfig,
   type ContentFieldKind,
   type MatchClause,
+  type CmsNode,
 } from "@react-cms/framework/runtime/cms-runtime.ts"
 import { getCatalogManifest, type BlockManifest } from "@react-cms/framework/runtime/cms-prerender.ts"
 import { getRouteSnapshots } from "@react-cms/framework/lib/partial-registry.ts"
 import { setSessionFrameUrl } from "@react-cms/framework/runtime/session.ts"
 import { getRequest, setCookie } from "@react-cms/framework/runtime/context.ts"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
-import { Button, buttonVariants } from "@react-cms/copies/components/ui/button"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { cn } from "@react-cms/copies/lib/utils"
 import { CmsEditTreeLink } from "./components/tree-link.tsx"
 import { CmsEditAddBlock } from "./components/add-block.tsx"
-import { CmsEditAddressBar } from "./components/address-bar.tsx"
+import { Icon, SixDot } from "./components/icon.tsx"
+import { PanelTabBar, type PanelTab } from "./components/panel-tab-bar.tsx"
+import { PageNavigator } from "./components/page-navigator.tsx"
+import { StatusPill } from "./components/status-pill.tsx"
+import { EditorChromeStyles } from "./editor-styles.tsx"
 import {
   addBlockToSlot as _addBlockToSlot,
   moveBlockInSlot as _moveBlockInSlot,
@@ -39,8 +49,6 @@ import {
   saveCmsFields as _saveCmsFields,
 } from "./actions.ts"
 
-// Server actions return `{invalidate: {selector}}` directives; React's
-// form-action prop expects `void | Promise<void>`. Cast at the boundary.
 type FormAction = string | ((formData: FormData) => void | Promise<void>) | undefined
 const asFormAction = (fn: unknown): FormAction => fn as FormAction
 const addBlockToSlot = _addBlockToSlot
@@ -50,7 +58,18 @@ const removeBlockFromSlot = _removeBlockFromSlot
 const resetCmsDraft = _resetCmsDraft
 const saveCmsFields = _saveCmsFields
 
-const EDITOR_RESERVED_PARAMS = ["editor", "select", "config"] as const
+const EDITOR_RESERVED_PARAMS = [
+  "editor",
+  "select",
+  "config",
+  "tab",
+  "tree",
+  "tabs",
+  "palette",
+  "surface",
+  "attachment",
+  "device",
+] as const
 const FRAMEWORK_INTERNAL_PARAMS = [
   "partials",
   "cached",
@@ -58,6 +77,11 @@ const FRAMEWORK_INTERNAL_PARAMS = [
   "__frameUrl",
   "disableTransition",
 ] as const
+
+type Palette = "light" | "dark"
+type Surface = "light" | "translucent" | "solid"
+type Attachment = "floating" | "docked"
+type Device = "desktop" | "tablet" | "mobile"
 
 function stripEditorAndInternalParams(url: URL): void {
   for (const p of EDITOR_RESERVED_PARAMS) url.searchParams.delete(p)
@@ -70,21 +94,6 @@ function derivePreviewUrl(): string {
   return url.pathname + url.search
 }
 
-/**
- * CmsIds that rendered for the previewed page, taken from the
- * route-scoped partial registry. Each `ReactCms.partial(...)` call
- * site self-registers its `cmsId` at render time, so "what cmsIds
- * belong on this page" is a runtime fact the framework already
- * tracks. The editor tree reads it and walks each as a tree root —
- * `buildCmsTreeEntries` filters slot-children-of-other-roots out
- * automatically, so passing the full set (roots + descendants) is
- * idempotent.
- *
- * Cold-start: an empty registry produces an empty tree. The next
- * full render of this route warms the canonical store and the tree
- * fills in. Inside cache-mode refetches the canonical store carries
- * the previous full render, so the tree stays populated.
- */
 function renderedCmsIdsForPreviewedPage(): string[] {
   const ids = new Set<string>()
   const snapshots = getRouteSnapshots()
@@ -103,17 +112,82 @@ function previewRequest(): Request {
   return new Request(url, { headers: page.headers, method: "GET" })
 }
 
-function cmsEditHref(opts: { select: string; config?: number }): string {
+interface HrefOpts {
+  select?: string | null
+  config?: number | null
+  tab?: "layers" | "settings"
+  tree?: "jsx" | "plain"
+  tabs?: string | null
+  palette?: Palette
+  surface?: Surface
+  attachment?: Attachment
+  device?: Device
+  clearSelect?: boolean
+}
+
+function cmsEditHref(opts: HrefOpts): string {
   const url = new URL(getRequest().url)
-  url.searchParams.set("select", opts.select)
+  if (opts.clearSelect) url.searchParams.delete("select")
+  else if (opts.select != null) url.searchParams.set("select", opts.select)
+
   if (opts.config != null && opts.config >= 0) {
     url.searchParams.set("config", String(opts.config))
-  } else {
+  } else if (opts.config != null) {
     url.searchParams.delete("config")
   }
+  if (opts.tab) url.searchParams.set("tab", opts.tab)
+  if (opts.tree) url.searchParams.set("tree", opts.tree)
+  if (opts.tabs != null) {
+    if (opts.tabs === "") url.searchParams.delete("tabs")
+    else url.searchParams.set("tabs", opts.tabs)
+  }
+  if (opts.palette) url.searchParams.set("palette", opts.palette)
+  if (opts.surface) url.searchParams.set("surface", opts.surface)
+  if (opts.attachment) url.searchParams.set("attachment", opts.attachment)
+  if (opts.device) url.searchParams.set("device", opts.device)
+
   url.searchParams.delete("editor")
   for (const p of FRAMEWORK_INTERNAL_PARAMS) url.searchParams.delete(p)
   return url.pathname + url.search
+}
+
+function camelToSpace(s: string): string {
+  if (!s) return s
+  return s
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase())
+}
+
+function blockTypeToPascal(type: string): string {
+  return type
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((p) => p[0].toUpperCase() + p.slice(1))
+    .join("")
+}
+
+function iconForType(type: string | undefined): string {
+  if (!type) return "block"
+  if (/hero|banner|page-hero/.test(type)) return "star"
+  if (/nav-?(root|link)|menu/.test(type)) return "nav"
+  if (/rich-?text|^text$/.test(type)) return "text"
+  if (/heading|title/.test(type)) return "heading"
+  if (/image|media/.test(type)) return "image"
+  if (/button|cta/.test(type)) return "button"
+  if (/grid|cols|column/.test(type)) return "cols"
+  if (/page-(root|composed|multi|greeting|slug|hero)/.test(type)) return "page"
+  if (/cart|product/.test(type)) return "cart"
+  if (/group|section/.test(type)) return "section"
+  return "block"
+}
+
+function readMultiTabs(): string[] {
+  const url = new URL(getRequest().url)
+  const raw = url.searchParams.get("tabs") ?? ""
+  return raw.split(",").map((s) => s.trim()).filter(Boolean)
 }
 
 // ─── Tree pane ─────────────────────────────────────────────────────────
@@ -121,15 +195,12 @@ function cmsEditHref(opts: { select: string; config?: number }): string {
 export const EditorTreePartial = ReactCms.partial(
   async function EditorTreeRender({
     selected,
+    treeStyle,
   }: {
     selected: string | null
     previewPath: string
+    treeStyle: "jsx" | "plain"
   } & RenderArgs) {
-    // Tree shows what `<Spec cmsId>` rendered for the previewed page —
-    // the registry maps "this page's tree" without a hardcoded route
-    // table. The `await` below also yields long enough for sibling
-    // partials (page roots + their slot children) to synchronously
-    // register before we read the registry.
     const catalog = await getCatalogManifest()
     const rootIds = renderedCmsIdsForPreviewedPage()
     const entries = listAllCmsNodes(rootIds)
@@ -142,11 +213,13 @@ export const EditorTreePartial = ReactCms.partial(
 
     if (entries.length === 0) {
       return (
-        <p className="text-sm text-muted-foreground" data-testid="cms-edit-tree-empty">
-          {rootIds.length === 0
-            ? "No CMS-aware partials rendered on this page yet. Navigate to a page that mounts a CMS root, or refresh once to warm the registry."
-            : "The CMS store is empty for this page's roots."}
-        </p>
+        <div style={{ padding: 14 }}>
+          <p style={{ fontSize: 12, color: "var(--cms-ink-3)" }} data-testid="cms-edit-tree-empty">
+            {rootIds.length === 0
+              ? "No CMS-aware partials rendered on this page yet. Navigate to a page that mounts a CMS root, or refresh once to warm the registry."
+              : "The CMS store is empty for this page's roots."}
+          </p>
+        </div>
       )
     }
 
@@ -162,111 +235,143 @@ export const EditorTreePartial = ReactCms.partial(
     }
 
     return (
-      <div>
-        <p className="mb-3 text-xs uppercase tracking-wide text-muted-foreground">Content tree</p>
-        <ul className="space-y-1">
-          {entries.map((entry) => {
-            if (entry.kind === "slot") {
-              return (
-                <li
-                  key={entry.id}
-                  style={{ paddingLeft: `${entry.depth * 12}px` }}
-                  className="flex items-center gap-1"
-                  data-testid={`cms-edit-tree-entry-${entry.id}`}
-                >
-                  <span
-                    className="flex flex-1 items-center gap-2 rounded-md px-2 py-1 text-xs italic text-muted-foreground min-w-0"
-                    data-testid={`cms-edit-tree-slot-label-${entry.parentId}-${entry.slotName}`}
-                  >
-                    <span aria-hidden className="text-muted-foreground/70">
-                      ▸
-                    </span>
-                    <span className="flex-1 truncate">{entry.slotName}</span>
-                  </span>
-                </li>
-              )
-            }
-            if (entry.kind === "slot-add") {
-              const parentType = parentTypeById.get(entry.parentId!)
-              const parentManifest = parentType ? catalog[parentType] : undefined
-              const allow = parentManifest?.childSlots[entry.slotName!]?.allow ?? null
-              const filteredTypes =
-                allow == null || isWildcardAllow(allow)
-                  ? blockTypes
-                  : blockTypes.filter((type) => {
-                      const m = catalog[type]
-                      if (!m) return false
-                      return blockTagsSatisfyAllow(m.tags, allow)
-                    })
-              const options = filteredTypes.map((type) => ({
-                type,
-                action: addBlockToSlot.bind(null, entry.parentId!, entry.slotName!, type),
-              }))
-              return (
-                <li
-                  key={entry.id}
-                  style={{ paddingLeft: `${entry.depth * 12}px` }}
-                  className="flex items-center gap-1"
-                  data-testid={`cms-edit-tree-entry-${entry.id}`}
-                >
-                  <CmsEditAddBlock
-                    parentCmsId={entry.parentId!}
-                    slotName={entry.slotName!}
-                    options={options}
-                  />
-                </li>
-              )
-            }
-            const isSelected = entry.id === selected
-            const label = entry.displayName ?? `#${entry.id}`
-            const slotKey =
-              entry.parentId && entry.slotName ? `${entry.parentId}:${entry.slotName}` : null
-            const idx = slotKey != null ? (rowIndex.get(entry.id) ?? 0) : 0
-            const total = slotKey != null ? (slotCounts.get(slotKey) ?? 1) : 1
-            const inSlot = entry.parentId && entry.slotName
+      <div className="cms-panel-body cms-panel-body--tree">
+        {entries.map((entry) => {
+          const indent = 6 + entry.depth * 16
+          if (entry.kind === "slot") {
             return (
-              <li
+              <div
                 key={entry.id}
-                style={{ paddingLeft: `${entry.depth * 12}px` }}
-                className="flex items-center gap-1"
+                style={{ paddingLeft: indent }}
+                data-testid={`cms-edit-tree-entry-${entry.id}`}
               >
-                <CmsEditTreeLink
-                  href={cmsEditHref({ select: entry.id })}
-                  className={cn(
-                    "flex flex-1 items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors min-w-0",
-                    isSelected ? "bg-primary/10 text-primary" : "hover:bg-muted",
-                  )}
-                  testId={`cms-edit-tree-entry-${entry.id}`}
-                  selected={isSelected}
+                <div
+                  className="cms-tree-slot-label"
+                  data-testid={`cms-edit-tree-slot-label-${entry.parentId}-${entry.slotName}`}
                 >
-                  <span className="flex-1 truncate" title={label}>
-                    {label}
+                  <span aria-hidden style={{ color: "var(--cms-ink-3)" }}>
+                    ▸
                   </span>
-                  {entry.type && (
-                    <Badge variant="secondary" className="px-1.5 py-0 text-[0.7rem]">
-                      {entry.type}
-                    </Badge>
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {entry.slotName}
+                  </span>
+                </div>
+              </div>
+            )
+          }
+          if (entry.kind === "slot-add") {
+            const parentType = parentTypeById.get(entry.parentId!)
+            const parentManifest = parentType ? catalog[parentType] : undefined
+            const allow = parentManifest?.childSlots[entry.slotName!]?.allow ?? null
+            const filteredTypes =
+              allow == null || isWildcardAllow(allow)
+                ? blockTypes
+                : blockTypes.filter((type) => {
+                    const m = catalog[type]
+                    if (!m) return false
+                    return blockTagsSatisfyAllow(m.tags, allow)
+                  })
+            const options = filteredTypes.map((type) => ({
+              type,
+              displayName: camelToSpace(type),
+              tags: catalog[type]?.tags ?? [],
+              action: addBlockToSlot.bind(null, entry.parentId!, entry.slotName!, type),
+            }))
+            return (
+              <div
+                key={entry.id}
+                style={{ paddingLeft: indent, display: "flex", alignItems: "center" }}
+                data-testid={`cms-edit-tree-entry-${entry.id}`}
+              >
+                <CmsEditAddBlock
+                  parentCmsId={entry.parentId!}
+                  slotName={entry.slotName!}
+                  options={options}
+                />
+              </div>
+            )
+          }
+          const isSelected = entry.id === selected
+          const label = entry.displayName ?? `#${entry.id}`
+          const slotKey =
+            entry.parentId && entry.slotName ? `${entry.parentId}:${entry.slotName}` : null
+          const idx = slotKey != null ? (rowIndex.get(entry.id) ?? 0) : 0
+          const total = slotKey != null ? (slotCounts.get(slotKey) ?? 1) : 1
+          const inSlot = entry.parentId && entry.slotName
+          const tagName = entry.type ? blockTypeToPascal(entry.type) : label
+          const showJsx = treeStyle === "jsx"
+          const hasChildren = entry.depth === 0 // page-level rows usually expand
+          return (
+            <div
+              key={entry.id}
+              className="cms-tree-row-wrapper"
+              style={{ paddingLeft: indent }}
+            >
+              <CmsEditTreeLink
+                href={cmsEditHref({ select: entry.id })}
+                className="cms-tree-row"
+                testId={`cms-edit-tree-entry-${entry.id}`}
+                selected={isSelected}
+              >
+                <span className="cms-tree-leading">
+                  <span className="chev">
+                    {hasChildren ? (
+                      <Icon name="chevDown" size={11} />
+                    ) : (
+                      <span style={{ width: 11, height: 11 }} />
+                    )}
+                  </span>
+                  <span className="grip" aria-hidden>
+                    <SixDot />
+                  </span>
+                </span>
+                <span className="cms-tree-row-icon">
+                  <Icon name={iconForType(entry.type)} size={14} />
+                </span>
+                <span className="cms-tree-row-name">
+                  {showJsx ? (
+                    <span className="tag" title={label}>
+                      &lt;{tagName}&gt;
+                    </span>
+                  ) : (
+                    <span className="label" title={label}>
+                      {camelToSpace(label)}
+                    </span>
                   )}
-                  {entry.draftOnly ? (
-                    <Badge
-                      variant="outline"
-                      className="border-amber-400/60 px-1.5 py-0 text-[0.65rem]"
-                      data-testid={`cms-edit-tree-entry-${entry.id}-draft-badge`}
-                    >
-                      draft
-                    </Badge>
-                  ) : entry.hasDraft ? (
-                    <Badge
-                      variant="outline"
-                      className="border-blue-400/60 px-1.5 py-0 text-[0.65rem]"
-                      data-testid={`cms-edit-tree-entry-${entry.id}-modified-badge`}
-                    >
-                      modified
-                    </Badge>
-                  ) : null}
-                </CmsEditTreeLink>
+                </span>
+                {entry.draftOnly ? (
+                  <span
+                    data-testid={`cms-edit-tree-entry-${entry.id}-draft-badge`}
+                    style={{
+                      fontSize: 10,
+                      padding: "1px 5px",
+                      border: "1px solid rgba(224,169,27,0.6)",
+                      borderRadius: 3,
+                      color: "#a37212",
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    draft
+                  </span>
+                ) : entry.hasDraft ? (
+                  <span
+                    data-testid={`cms-edit-tree-entry-${entry.id}-modified-badge`}
+                    style={{
+                      fontSize: 10,
+                      padding: "1px 5px",
+                      border: "1px solid rgba(44,127,214,0.5)",
+                      borderRadius: 3,
+                      color: "var(--cms-accent)",
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    modified
+                  </span>
+                ) : null}
+              </CmsEditTreeLink>
+              <div className="cms-tree-tools">
                 {inSlot && (
-                  <span className="flex shrink-0 items-center">
+                  <>
                     <form
                       action={asFormAction(
                         moveBlockInSlot.bind(
@@ -277,11 +382,10 @@ export const EditorTreePartial = ReactCms.partial(
                           "up",
                         ),
                       )}
-                      className="contents"
+                      style={{ display: "contents" }}
                     >
                       <button
                         type="submit"
-                        className="rounded px-1 text-muted-foreground hover:bg-muted disabled:opacity-30"
                         disabled={idx === 0}
                         title="Move up"
                         aria-label={`Move ${entry.id} up`}
@@ -299,11 +403,10 @@ export const EditorTreePartial = ReactCms.partial(
                           "down",
                         ),
                       )}
-                      className="contents"
+                      style={{ display: "contents" }}
                     >
                       <button
                         type="submit"
-                        className="rounded px-1 text-muted-foreground hover:bg-muted disabled:opacity-30"
                         disabled={idx >= total - 1}
                         title="Move down"
                         aria-label={`Move ${entry.id} down`}
@@ -313,40 +416,89 @@ export const EditorTreePartial = ReactCms.partial(
                     </form>
                     <form
                       action={asFormAction(
-                        removeBlockFromSlot.bind(null, entry.parentId!, entry.slotName!, entry.id),
+                        removeBlockFromSlot.bind(
+                          null,
+                          entry.parentId!,
+                          entry.slotName!,
+                          entry.id,
+                        ),
                       )}
-                      className="contents"
+                      style={{ display: "contents" }}
                     >
                       <button
                         type="submit"
-                        className="rounded px-1 text-red-600/80 hover:bg-red-50"
                         title="Remove"
                         aria-label={`Remove ${entry.id}`}
                         data-testid={`cms-edit-slot-remove-${entry.id}`}
                       >
-                        ×
+                        <Icon name="trash" size={13} />
                       </button>
                     </form>
-                  </span>
+                  </>
                 )}
-              </li>
-            )
-          })}
-        </ul>
+                {/* Visibility toggle (visual placeholder — there's no
+                    `hidden` field on CmsNode in this codebase yet). */}
+                <button type="button" title="Hide" aria-label={`Toggle visibility ${entry.id}`}>
+                  <Icon name="eye" size={13} />
+                </button>
+              </div>
+            </div>
+          )
+        })}
       </div>
     )
   },
   {
     selector: "#cms-edit-tree",
-    // Fold the previewed pathname into the fp so cross-page
-    // navigation invalidates the tree even though `?select=` is
-    // unchanged. The previewed pathname == the request pathname
-    // (editor toggle / select live in `?search`, never the path),
-    // so reading `pathname` directly is correct.
-    vary: ({ search: { select: selected = null }, pathname }) => ({
+    vary: ({
+      search: { select: selected = null, tree: treeStyleParam = null },
+      pathname,
+    }) => ({
       selected,
       previewPath: pathname,
+      treeStyle: treeStyleParam === "jsx" ? "jsx" : "plain",
     }),
+  },
+)
+
+// ─── Settings pane (left panel — Settings tab) ─────────────────────────
+
+export const EditorSettingsPartial = ReactCms.partial(
+  function EditorSettingsRender({ pathname }: { pathname: string } & RenderArgs) {
+    return (
+      <div className="cms-panel-body">
+        <div className="cms-section-head" style={{ marginTop: 6 }}>Page</div>
+        <div className="cms-row">
+          <span className="cms-row-label">Title</span>
+          <span className="cms-wf-field">Home page</span>
+        </div>
+        <div className="cms-row">
+          <span className="cms-row-label">Handle</span>
+          <span className="cms-wf-field" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+            {pathname}
+          </span>
+        </div>
+        <div className="cms-row">
+          <span className="cms-row-label">Visible</span>
+          <span className="cms-wf-toggle" data-on />
+        </div>
+        <div className="cms-section-head">SEO</div>
+        <div className="cms-row">
+          <span className="cms-row-label">Meta</span>
+          <span className="cms-wf-field" style={{ color: "var(--cms-ink-3)" }}>
+            (not configured)
+          </span>
+        </div>
+        <div className="cms-row">
+          <span className="cms-row-label">Indexable</span>
+          <span className="cms-wf-toggle" data-on />
+        </div>
+      </div>
+    )
+  },
+  {
+    selector: "#cms-edit-settings",
+    vary: ({ pathname }) => ({ pathname }),
   },
 )
 
@@ -363,15 +515,19 @@ export const EditorFieldPanelPartial = ReactCms.partial(
   } & RenderArgs) {
     if (!selected) {
       return (
-        <div className="text-sm text-muted-foreground">
-          Select a Partial from the tree to edit its fields.
+        <div className="cms-panel-body">
+          <div style={{ fontSize: 12, color: "var(--cms-ink-3)" }}>
+            Select a Partial from the tree to edit its fields.
+          </div>
         </div>
       )
     }
     if (parseSlotEntryId(selected)) {
       return (
-        <div className="text-sm text-muted-foreground">
-          Slots aren't selectable. Click a block to edit its fields.
+        <div className="cms-panel-body">
+          <div style={{ fontSize: 12, color: "var(--cms-ink-3)" }}>
+            Slots aren't selectable. Click a block to edit its fields.
+          </div>
         </div>
       )
     }
@@ -386,40 +542,64 @@ export const EditorFieldPanelPartial = ReactCms.partial(
     const fieldMap = buildFieldMap(currentConfig, manifest)
 
     return (
-      <div className="space-y-4">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Selected</p>
-          <p className="text-sm font-medium" data-testid="cms-edit-selected-id">
-            {node?.displayName ?? `#${selected}`}
-          </p>
-          <p className="text-xs text-muted-foreground">id: {selected}</p>
+      <div className="cms-panel-body">
+        <div className="cms-selected-head">
+          <Icon name={iconForType(node?.type)} size={14} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{ fontSize: 13, fontWeight: 500 }}
+              data-testid="cms-edit-selected-id"
+            >
+              {node?.displayName ?? `#${selected}`}
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--cms-ink-3)",
+                fontFamily: "ui-monospace, Menlo, monospace",
+              }}
+            >
+              {selected}
+            </div>
+          </div>
+          {hasDraft && (
+            <form action={asFormAction(resetCmsDraft.bind(null, selected))}>
+              <button
+                type="submit"
+                className="cms-btn cms-btn--ghost"
+                data-testid="cms-edit-reset-draft"
+                style={{ height: 24, padding: "0 8px", fontSize: 12 }}
+              >
+                Reset draft → published
+              </button>
+            </form>
+          )}
         </div>
-
-        {hasDraft && (
-          <form action={asFormAction(resetCmsDraft.bind(null, selected))}>
-            <Button type="submit" size="sm" variant="outline" data-testid="cms-edit-reset-draft">
-              Reset draft → published
-            </Button>
-          </form>
-        )}
 
         {configs.length > 0 && (
           <ConfigTabs selected={selected} configs={configs} activeIndex={effectiveIndex} />
         )}
 
         {Object.keys(fieldMap).length === 0 ? (
-          <Card className="p-4">
-            <CardContent className="px-0 text-sm text-muted-foreground">
-              No fields on this configuration yet.
-            </CardContent>
-          </Card>
+          <div
+            style={{
+              padding: 12,
+              fontSize: 12,
+              color: "var(--cms-ink-3)",
+              border: "1px solid var(--cms-line)",
+              borderRadius: 8,
+              background: "rgba(0,0,0,0.02)",
+            }}
+          >
+            No fields on this configuration yet.
+          </div>
         ) : (
           <form
             key={`${selected}:${effectiveIndex}`}
             action={asFormAction(saveCmsFields.bind(null, selected, effectiveIndex))}
-            className="space-y-3"
             data-testid="cms-edit-field-form"
           >
+            <div className="cms-section-head">Fields</div>
             {Object.entries(fieldMap).map(([name, spec]) => (
               <FieldInput key={name} name={name} kind={spec.kind} value={spec.value} />
             ))}
@@ -428,29 +608,27 @@ export const EditorFieldPanelPartial = ReactCms.partial(
                 .filter(([, s]) => s.kind === "boolean")
                 .map(([n]) => n)}
             />
-            <div className="flex gap-2">
-              <Button type="submit" size="sm">
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button type="submit" className="cms-btn">
                 Save to draft
-              </Button>
+              </button>
               <a
                 href={cmsEditHref({ select: selected, config: effectiveIndex })}
-                className={buttonVariants({ size: "sm", variant: "ghost" })}
+                className="cms-btn cms-btn--ghost"
               >
                 Discard changes
               </a>
             </div>
           </form>
         )}
+
+        <SpacingVisualizer />
       </div>
     )
   },
   {
     selector: "#cms-edit-fields",
     vary: ({ pathname, search: { select: selected = null, config: configIndexRaw = null } }) => ({
-      // Pathname is folded into the fp so the auto-picked config tab
-      // follows preview navigation — pickBestConfigIndex reads the
-      // previewed-page pathname inside render, but the vary surface
-      // would otherwise miss path-only changes.
       pathname,
       selected,
       configIndexRaw,
@@ -458,7 +636,7 @@ export const EditorFieldPanelPartial = ReactCms.partial(
   },
 )
 
-// ─── Helpers (config tabs, field map, format helpers) ──────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────
 
 function pickEffectiveConfig(configs: readonly CmsConfig[], requested: number | null): number {
   if (configs.length === 0) return -1
@@ -479,27 +657,45 @@ function ConfigTabs({
   activeIndex: number
 }) {
   return (
-    <div data-testid="cms-edit-config-tabs">
-      <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Configuration</p>
-      <div className="flex flex-wrap gap-1">
+    <div data-testid="cms-edit-config-tabs" style={{ marginBottom: 6 }}>
+      <div className="cms-section-head" style={{ marginTop: 0 }}>
+        Configuration
+      </div>
+      <div className="cms-wf-segment" style={{ flexWrap: "wrap", height: "auto", padding: 2 }}>
         {configs.map((cfg, idx) => {
           const isActive = idx === activeIndex
           const label = formatMatchLabel(cfg.match)
           return (
-            <a
+            <CmsEditTreeLink
               key={idx}
               href={cmsEditHref({ select: selected, config: idx })}
-              className={cn(
-                "rounded-md border px-2 py-1 text-xs font-medium transition-colors",
-                isActive
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-transparent hover:bg-muted",
-              )}
-              data-testid={`cms-edit-config-tab-${idx}`}
-              data-active={isActive}
+              testId={`cms-edit-config-tab-${idx}`}
+              selected={isActive}
             >
-              {label}
-            </a>
+              <span
+                data-active={isActive ? "true" : undefined}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "2px 8px",
+                  fontFamily: "ui-monospace, Menlo, monospace",
+                  fontSize: 11,
+                  whiteSpace: "nowrap",
+                  borderRadius: 4,
+                  color: "var(--cms-ink-2)",
+                  ...(isActive
+                    ? {
+                        background: "var(--cms-input-bg)",
+                        color: "var(--cms-ink)",
+                        boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
+                      }
+                    : {}),
+                }}
+              >
+                {label}
+              </span>
+            </CmsEditTreeLink>
           )
         })}
       </div>
@@ -602,80 +798,120 @@ function FieldInput({
   value: unknown
 }) {
   const label = (
-    <label
-      htmlFor={`cms-edit-field-${name}`}
-      className="mb-1 block text-xs font-medium text-muted-foreground"
-    >
+    <label htmlFor={`cms-edit-field-${name}`} className="cms-row-label">
       {name}
-      <span className="ml-2 text-[0.65rem] uppercase opacity-60">{kind}</span>
     </label>
   )
-  const commonClass =
-    "w-full rounded-md border border-input bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2"
-
   switch (kind) {
-    case "number":
+    case "number": {
+      const num = Number(value ?? 0) || 0
+      // Heuristic for slider visualization: assume 0–100 normalized for display
+      const pct = Math.max(0, Math.min(100, num))
       return (
-        <div>
+        <div className="cms-row">
           {label}
-          <input
-            id={`cms-edit-field-${name}`}
-            type="number"
-            name={name}
-            defaultValue={String(value ?? 0)}
-            className={commonClass}
-            data-testid={`cms-edit-field-input-${name}`}
-          />
-          <input type="hidden" name={`__kind:${name}`} value="number" />
+          <span className="cms-wf-slider-row">
+            <span className="cms-wf-slider">
+              <span className="cms-wf-slider-fill" style={{ width: `${pct}%` }} />
+              <span className="cms-wf-slider-thumb" style={{ left: `${pct}%` }} />
+            </span>
+            <span className="cms-wf-slider-num">
+              <input
+                id={`cms-edit-field-${name}`}
+                type="number"
+                name={name}
+                defaultValue={String(num)}
+                data-testid={`cms-edit-field-input-${name}`}
+              />
+            </span>
+            <input type="hidden" name={`__kind:${name}`} value="number" />
+          </span>
         </div>
       )
+    }
     case "boolean":
       return (
-        <div className="flex items-center gap-2">
-          <input
-            id={`cms-edit-field-${name}`}
-            type="checkbox"
-            name={name}
-            defaultChecked={Boolean(value)}
-            data-testid={`cms-edit-field-input-${name}`}
-          />
-          <label
-            htmlFor={`cms-edit-field-${name}`}
-            className="text-xs font-medium text-muted-foreground"
-          >
-            {name}
-          </label>
-          <input type="hidden" name={`__kind:${name}`} value="boolean" />
+        <div className="cms-row">
+          {label}
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input
+              id={`cms-edit-field-${name}`}
+              type="checkbox"
+              name={name}
+              defaultChecked={Boolean(value)}
+              data-testid={`cms-edit-field-input-${name}`}
+            />
+            <input type="hidden" name={`__kind:${name}`} value="boolean" />
+          </span>
         </div>
       )
     case "richText":
       return (
-        <div>
+        <div className="cms-row" style={{ alignItems: "flex-start" }}>
           {label}
-          <textarea
-            id={`cms-edit-field-${name}`}
-            name={name}
-            defaultValue={String(value ?? "")}
-            rows={4}
-            className={cn(commonClass, "font-mono text-xs")}
-            data-testid={`cms-edit-field-input-${name}`}
-          />
+          <span>
+            <textarea
+              id={`cms-edit-field-${name}`}
+              name={name}
+              defaultValue={String(value ?? "")}
+              rows={4}
+              className="cms-wf-field cms-wf-textarea"
+              data-testid={`cms-edit-field-input-${name}`}
+            />
+          </span>
         </div>
       )
-    default:
+    default: {
+      const str = String(value ?? "")
+      // If the value looks like it references a binding (e.g. `{{x}}`),
+      // render a "dynamic source" decoration with a database icon —
+      // matches the V6 design's `Source` row.
+      const dyn = /\{\{[^}]+\}\}/.exec(str)
+      if (dyn) {
+        const before = str.slice(0, dyn.index)
+        const ref = dyn[0]
+        const after = str.slice(dyn.index + dyn[0].length)
+        return (
+          <div className="cms-row">
+            {label}
+            <span className="cms-wf-field cms-source-field">
+              <input
+                id={`cms-edit-field-${name}`}
+                type="text"
+                name={name}
+                defaultValue={str}
+                data-testid={`cms-edit-field-input-${name}`}
+                style={{
+                  flex: 1,
+                  border: 0,
+                  outline: 0,
+                  background: "transparent",
+                  fontSize: 13,
+                  padding: 0,
+                  color: "var(--cms-ink)",
+                }}
+              />
+              <span className="db" title="Dynamic source">
+                <Icon name="database" size={13} />
+              </span>
+            </span>
+          </div>
+        )
+      }
       return (
-        <div>
+        <div className="cms-row">
           {label}
           <input
             id={`cms-edit-field-${name}`}
             type="text"
             name={name}
-            defaultValue={String(value ?? "")}
-            className={commonClass}
+            defaultValue={str}
+            className="cms-wf-field"
             data-testid={`cms-edit-field-input-${name}`}
           />
         </div>
       )
+    }
   }
 }
 
@@ -684,85 +920,427 @@ function BooleanSidecar({ fields }: { fields: string[] }) {
   return <input type="hidden" name="__boolean-fields" value={fields.join(",")} />
 }
 
+function SpacingVisualizer() {
+  return (
+    <>
+      <div className="cms-section-head">Spacing</div>
+      <div className="cms-spacing">
+        <div className="cms-spacing-margin cms-stripes-margin" />
+        <div className="cms-spacing-padding cms-stripes-padding" />
+        <div className="cms-spacing-content" />
+        <span className="cms-spacing-num" style={{ left: "50%", top: 2, transform: "translateX(-50%)" }}>80</span>
+        <span className="cms-spacing-num" style={{ left: "50%", bottom: 2, transform: "translateX(-50%)" }}>80</span>
+        <span className="cms-spacing-num" style={{ left: 2, top: "50%", transform: "translateY(-50%)" }}>24</span>
+        <span className="cms-spacing-num" style={{ right: 2, top: "50%", transform: "translateY(-50%)" }}>24</span>
+      </div>
+    </>
+  )
+}
+
+// ─── Top toolbar ───────────────────────────────────────────────────────
+
+function EditorToolbar({
+  treeStyle,
+  selected,
+  palette,
+  surface,
+  attachment,
+  device,
+  previewUrl,
+  homeLabel,
+}: {
+  treeStyle: "jsx" | "plain"
+  selected: string | null
+  palette: Palette
+  surface: Surface
+  attachment: Attachment
+  device: Device
+  previewUrl: string
+  homeLabel: string
+}) {
+  const toggleTreeStyle = cmsEditHref({
+    tree: treeStyle === "jsx" ? "plain" : "jsx",
+    select: selected ?? undefined,
+  })
+  const toggleAttachment = cmsEditHref({
+    attachment: attachment === "docked" ? "floating" : "docked",
+  })
+  const togglePalette = cmsEditHref({
+    palette: palette === "dark" ? "light" : "dark",
+    surface: "translucent",
+  })
+
+  return (
+    <div className="cms-toolbar" data-topbar>
+      {attachment !== "docked" && (
+        <span
+          className="cms-toolbar-icon"
+          title="Drag toolbar"
+          style={{ cursor: "grab", opacity: 0.6 }}
+          aria-hidden
+        >
+          <SixDot />
+        </span>
+      )}
+      <a
+        href="?editor=0"
+        className="cms-toolbar-icon"
+        title="Exit design mode"
+        aria-label="Close editor"
+        data-testid="cms-edit-close"
+      >
+        <Icon name="exit" size={16} />
+      </a>
+      <Sep />
+      <PageNavigator currentPath={previewUrl.split("?")[0]} homeLabel={homeLabel} />
+      <Sep />
+      <div style={{ display: "flex", gap: 2 }}>
+        {(["desktop", "tablet", "mobile"] as const).map((d) => (
+          <a
+            key={d}
+            href={cmsEditHref({ device: d })}
+            className="cms-toolbar-icon"
+            data-active={device === d || undefined}
+            title={d.charAt(0).toUpperCase() + d.slice(1)}
+          >
+            <Icon name={d} size={16} />
+          </a>
+        ))}
+      </div>
+      <Sep />
+      <span className="cms-toolbar-icon" title="Undo" data-disabled>
+        <Icon name="undo" size={16} />
+      </span>
+      <span className="cms-toolbar-icon" title="Redo" data-disabled>
+        <Icon name="redo" size={16} />
+      </span>
+      <Sep />
+      <a
+        href={toggleAttachment}
+        className="cms-toolbar-icon"
+        data-active={attachment === "docked" || undefined}
+        title={attachment === "docked" ? "Floating panels" : "Dock panels"}
+      >
+        <Icon
+          name={attachment === "docked" ? "floatPanels" : "dockPanels"}
+          size={16}
+        />
+      </a>
+      <a
+        href={togglePalette}
+        className="cms-toolbar-icon"
+        title={palette === "dark" ? "Switch to light" : "Switch to dark"}
+      >
+        <Icon name={palette === "dark" ? "sun" : "moon"} size={14} />
+      </a>
+      <Sep />
+      {/* Plain <a> (full page nav) so EditorShell re-evaluates and the
+          toolbar's treeStyle prop reflects the new state — selector-
+          targeted refetch would only re-run #cms-edit-tree, leaving the
+          toolbar's toggle href stale. */}
+      <a
+        href={toggleTreeStyle}
+        className="cms-toolbar-icon"
+        data-testid="cms-edit-tree-style-toggle"
+        data-active={treeStyle === "jsx" ? "true" : undefined}
+        title={treeStyle === "jsx" ? "Switch to plain names" : "Switch to JSX tags"}
+      >
+        <span
+          style={{
+            fontFamily: "ui-monospace, Menlo, monospace",
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          &lt;/&gt;
+        </span>
+      </a>
+      <Sep />
+      <StatusPill />
+      <Sep />
+      <form action={asFormAction(publishCmsDraft)} style={{ display: "contents" }}>
+        <button type="submit" className="cms-toolbar-save" title="Publish draft">
+          Save
+        </button>
+      </form>
+    </div>
+  )
+}
+
+function Sep() {
+  return <span className="cms-toolbar-sep" aria-hidden />
+}
+
+// ─── Canvas chrome (selection rect + insertion line) ───────────────────
+
+function CanvasChrome({
+  selectedLabel,
+  selectedType,
+}: {
+  selectedLabel: string | null
+  selectedType: string | undefined
+}) {
+  if (!selectedLabel) return null
+  // The DOM-rect overlay flagged in IDEAS.md as future work — without
+  // a way to map cmsId → DOM rect of the rendered partial, the canvas
+  // chrome anchors generically to the preview pane. The visual is a
+  // 1380×200 block centered horizontally, painted as the V6 design
+  // shows it: blue-purple dashed selection, corner markers, bottom-
+  // left attached element-name tag, pink margin bands above/below,
+  // and the +-circle insertion line above.
+  const tagName = selectedType ? blockTypeToPascal(selectedType) : selectedLabel
+  return (
+    <div className="cms-canvas-overlay">
+      <div
+        className="cms-selection-rect"
+        style={{
+          left: "5%",
+          right: "5%",
+          top: "55%",
+          height: 200,
+        }}
+      >
+        <div className="cms-canvas-margin-band cms-canvas-margin-band--top cms-stripes-margin" />
+        <div className="cms-canvas-margin-band cms-canvas-margin-band--bottom cms-stripes-margin" />
+        <span className="cms-selection-corner" style={{ left: -4, top: -4 }} />
+        <span className="cms-selection-corner" style={{ right: -4, top: -4 }} />
+        <span className="cms-selection-corner" style={{ left: -4, bottom: -4 }} />
+        <span className="cms-selection-corner" style={{ right: -4, bottom: -4 }} />
+        <span
+          className="cms-selection-tag"
+          style={{ left: -1, top: "100%", marginTop: 22 }}
+        >
+          <span className="tag">{tagName}</span>
+          <span className="dim">selected</span>
+        </span>
+      </div>
+      <div
+        className="cms-insertion-line"
+        style={{ left: "5%", right: "5%", top: "calc(55% - 22px)" }}
+      >
+        <span className="plus">
+          <Icon name="plus" size={12} strokeWidth={2.4} />
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ─── Editor shell ──────────────────────────────────────────────────────
-//
-// `EditorShell` is itself a partial. Its vary reads both the
-// `?editor=1`/`?editor=0` URL toggle (immediate effect this request)
-// and the editor cookie (sticky across requests). The render persists
-// the URL toggle to the cookie so the next request reads it back from
-// the cookie alone. When the resolved mode is off, the spec just
-// passes its children through (no UI); when on, it wraps them in the
-// three-pane layout.
 
 export const EditorShell = ReactCms.partial(
   function EditorShellRender({
     editor,
     sync,
     parent,
-    children,
-  }: { editor: boolean; sync: string | null } & RenderArgs) {
-    // Persist the URL toggle as a cookie so subsequent requests stick
-    // without `?editor=` in the URL.
+    leftTab,
+    treeStyle,
+    selected,
+    palette,
+    surface,
+    attachment,
+    device,
+  }: {
+    editor: boolean
+    sync: string | null
+    leftTab: "layers" | "settings"
+    treeStyle: "jsx" | "plain"
+    selected: string | null
+    palette: Palette
+    surface: Surface
+    attachment: Attachment
+    device: Device
+  } & RenderArgs) {
     if (sync === "1") setCookie(EDITOR_COOKIE, "1")
     else if (sync === "0") setCookie(EDITOR_COOKIE, "", 0)
 
-    if (!editor) {
-      return (
-        <div className="mx-auto min-h-screen max-w-225 p-8" data-testid="page-shell">
-          {children}
-        </div>
-      )
-    }
+    // Editor off — the partial emits nothing. The page renders on its
+    // own; this partial is a sibling overlay placed at body level.
+    if (!editor) return null
+
     const previewUrl = derivePreviewUrl()
     const incomingUrl = new URL(getRequest().url)
     const isPreviewFrameRefetch = incomingUrl.searchParams.getAll("__frame").includes("preview")
     if (!isPreviewFrameRefetch) setSessionFrameUrl(["preview"], previewUrl)
+
+    const layersHref = cmsEditHref({ tab: "layers" })
+    const settingsHref = cmsEditHref({ tab: "settings", clearSelect: true })
+
+    const selectedNode: CmsNode | null = selected ? lookupDraftNode(selected) : null
+    const selectedLabel = selectedNode?.displayName ?? (selected ? `#${selected}` : null)
+
+    // Multi-element tabs in the right panel — `?tabs=id1,id2,…` is a
+    // co-pending list of recently inspected blocks (newest first). The
+    // active tab is whichever entry matches `?select=`. Closing a tab
+    // removes it from the list; if the active tab is closed, fall back
+    // to the next one.
+    const openTabIds = new Set<string>(readMultiTabs())
+    if (selected) openTabIds.add(selected)
+    const tabs: Array<{ id: string; label: string; type: string | undefined }> = [...openTabIds]
+      .map((id) => {
+        const n = lookupDraftNode(id)
+        return { id, label: n?.displayName ?? `#${id}`, type: n?.type }
+      })
+    function closeHrefFor(id: string): string {
+      const next = [...openTabIds].filter((x) => x !== id).join(",")
+      const newSelect = id === selected ? null : selected
+      return cmsEditHref({
+        tabs: next || "",
+        select: newSelect ?? undefined,
+        clearSelect: newSelect == null,
+      })
+    }
+
+    // Editor on — emit only chrome. The page is a sibling, rendered
+    // by its own placement in root, untouched by the editor. The
+    // chrome lives inside a `.cms-editor` wrapper with
+    // `display: contents` so it doesn't reserve layout space, and
+    // the panels are `position: fixed`. Editor CSS variables +
+    // data-* attrs still cascade because the chrome elements remain
+    // DOM descendants of `.cms-editor`.
     return (
-      <div
-        className="grid gap-0 min-h-screen items-start"
-        style={{ gridTemplateColumns: "320px minmax(0, 1fr) 360px" }}
-      >
-        <aside
-          className="sticky top-0 h-screen overflow-y-auto border-r bg-muted/30 p-4"
-          data-testid="cms-edit-tree-pane"
+      <>
+        <EditorChromeStyles />
+        <div
+          className="cms-editor"
+          data-attachment={attachment}
+          data-surface={surface}
+          data-dark={palette === "dark" ? "" : undefined}
+          data-device={device}
+          style={{ display: "contents" }}
         >
-          <EditorTreePartial parent={parent} />
-        </aside>
-        <main className="min-h-screen" data-testid="cms-edit-preview-pane">
-          <div
-            className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/95 px-4 py-3 backdrop-blur"
-            data-testid="cms-edit-preview-chrome"
-          >
-            <CmsEditAddressBar initialUrl={previewUrl} />
-            <form action={asFormAction(publishCmsDraft)}>
-              <Button type="submit" size="sm" variant="outline">
-                Publish
-              </Button>
-            </form>
-          </div>
-          <div className="p-4">{children}</div>
-        </main>
-        <aside
-          className="sticky top-0 h-screen overflow-y-auto border-l bg-muted/30 p-4"
-          data-testid="cms-edit-field-pane"
-        >
-          <EditorFieldPanelPartial parent={parent} />
-        </aside>
-      </div>
+          <EditorToolbar
+            treeStyle={treeStyle}
+            selected={selected}
+            palette={palette}
+            surface={surface}
+            attachment={attachment}
+            device={device}
+            previewUrl={previewUrl}
+            homeLabel="Home page"
+          />
+
+          {/* Left panel — Layers / Settings */}
+          <aside className="cms-panel cms-panel--left" data-testid="cms-edit-tree-pane">
+            <PanelTabBar
+              surface={surface}
+              attachment={attachment}
+              tabs={[
+                {
+                  id: "layers",
+                  label: "Layers",
+                  icon: <Icon name="layers" size={14} />,
+                  active: leftTab === "layers",
+                  href: layersHref,
+                },
+                {
+                  id: "settings",
+                  label: "Settings",
+                  icon: <Icon name="settings" size={14} />,
+                  active: leftTab === "settings",
+                  href: settingsHref,
+                },
+              ]}
+            />
+            <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+              {leftTab === "layers" ? (
+                <EditorTreePartial parent={parent} />
+              ) : (
+                <EditorSettingsPartial parent={parent} />
+              )}
+            </div>
+            <ResizeGrip />
+          </aside>
+
+          {/* Right panel — element tabs + properties */}
+          <aside className="cms-panel cms-panel--right" data-testid="cms-edit-field-pane">
+            <PanelTabBar
+              surface={surface}
+              attachment={attachment}
+              align="right"
+              tabs={
+                tabs.length === 0
+                  ? [{ id: "properties", label: "Properties", active: true }]
+                  : tabs.map<PanelTab>((t) => ({
+                      id: t.id,
+                      label: t.label,
+                      icon: <Icon name={iconForType(t.type)} size={14} />,
+                      active: t.id === selected,
+                      href: cmsEditHref({ select: t.id }),
+                      closeHref: closeHrefFor(t.id),
+                    }))
+              }
+            />
+            <EditorFieldPanelPartial parent={parent} />
+            <ResizeGrip />
+          </aside>
+
+          {/* Canvas selection chrome (disabled for now — wired below
+              `false &&` so the code path stays in tree). When DOM-
+              coordinate tracking lands, this can paint over a
+              specific rect inside the page. */}
+          {false && selected && (
+            <CanvasChrome selectedLabel={selectedLabel} selectedType={selectedNode?.type} />
+          )}
+        </div>
+      </>
     )
   },
   {
     vary: ({
-      search: { editor: editorParam = null },
+      search: {
+        editor: editorParam = null,
+        tab: tabParam = null,
+        tree: treeParam = null,
+        select: selectedParam = null,
+        palette: paletteParam = null,
+        surface: surfaceParam = null,
+        attachment: attachmentParam = null,
+        device: deviceParam = null,
+      },
       cookies: { [EDITOR_COOKIE]: cookieFlag },
     }) => {
-      // URL toggle wins for the current request so the editor pops
-      // open immediately; the render also sets the cookie so the
-      // mode persists. The framework folds the page URL into every
-      // spec's fingerprint, so descendant page wrappers re-evaluate
-      // on URL changes without needing to opt in here.
       const editor = editorParam === "1" ? true : editorParam === "0" ? false : cookieFlag === "1"
-      return { editor, sync: editorParam }
+      const leftTab: "layers" | "settings" = tabParam === "settings" ? "settings" : "layers"
+      const treeStyle: "jsx" | "plain" = treeParam === "jsx" ? "jsx" : "plain"
+      const palette: Palette = paletteParam === "dark" ? "dark" : "light"
+      // Translucent ("blur") is the canonical surface — light + solid
+      // remain in the type system but no toolbar control selects them.
+      const surface: Surface =
+        surfaceParam === "light"
+          ? "light"
+          : surfaceParam === "solid"
+            ? "solid"
+            : "translucent"
+      const attachment: Attachment = attachmentParam === "floating" ? "floating" : "docked"
+      const device: Device =
+        deviceParam === "tablet" ? "tablet" : deviceParam === "mobile" ? "mobile" : "desktop"
+      return {
+        editor,
+        sync: editorParam,
+        leftTab,
+        treeStyle,
+        selected: selectedParam,
+        palette,
+        surface,
+        attachment,
+        device,
+      }
     },
   },
 )
+
+function ResizeGrip() {
+  return (
+    <svg
+      className="cms-panel-resize"
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      aria-hidden
+    >
+      <line x1="11" y1="5" x2="5" y2="11" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+      <line x1="11" y1="9" x2="9" y2="11" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+    </svg>
+  )
+}

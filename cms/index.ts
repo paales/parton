@@ -8,6 +8,7 @@
 export {
   EditorShell,
   EditorTreePartial,
+  EditorSettingsPartial,
   EditorFieldPanelPartial,
   formatMatchLabel,
 } from "./src/editor/shell.tsx"

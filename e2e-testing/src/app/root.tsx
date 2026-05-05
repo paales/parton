@@ -23,11 +23,7 @@ import { BarePage } from "./pages/bare-stream.tsx"
 import { ChatNotesPage } from "./pages/chat-notes.tsx"
 import { MagentoPage } from "./pages/magento/product-list.tsx"
 import { NotFoundFallback } from "./pages/not-found-fallback.tsx"
-import {
-  InspectBasePage,
-  InspectDrawer1,
-  InspectDrawer2,
-} from "./pages/inspect-stack.tsx"
+import { InspectBasePage, InspectDrawer1, InspectDrawer2 } from "./pages/inspect-stack.tsx"
 
 export function Root() {
   try {
@@ -40,7 +36,8 @@ export function Root() {
             <title>React Partials</title>
           </head>
           <body className="min-h-screen bg-background text-foreground antialiased">
-            <EditorShell parent={ROOT}>
+            {/* Site content lives in a centered, max-width column. */}
+            <div className="mx-auto min-h-screen max-w-225 p-8" data-testid="page-shell">
               <AppNav />
               <PokemonOverviewPage parent={ROOT} />
               <PokemonDetailPage parent={ROOT} />
@@ -58,8 +55,9 @@ export function Root() {
               <InspectBasePage parent={ROOT} />
               <InspectDrawer1 parent={ROOT} />
               <InspectDrawer2 parent={ROOT} />
-              <NotFoundFallback parent={ROOT} />{" "}
-            </EditorShell>
+              <NotFoundFallback parent={ROOT} />
+            </div>
+            <EditorShell parent={ROOT} />
             <ChatOverlay parent={ROOT} />
             {import.meta.env.DEV && <PartialsDebug />}
           </body>

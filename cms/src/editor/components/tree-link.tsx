@@ -25,12 +25,14 @@ export function CmsEditTreeLink({
   children,
   testId,
   selected,
+  style,
 }: {
   href: string
   className?: string
   children: ReactNode
   testId?: string
   selected: boolean
+  style?: React.CSSProperties
 }) {
   const nav = useNavigation()
   function onClick(e: React.MouseEvent<HTMLAnchorElement>) {
@@ -52,6 +54,8 @@ export function CmsEditTreeLink({
       className={className}
       data-testid={testId}
       data-selected={selected}
+      data-active={selected ? "true" : undefined}
+      style={style}
     >
       {children}
     </a>
