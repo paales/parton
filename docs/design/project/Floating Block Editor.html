@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Floating Block Editor — Wireframe Explorations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1a1f;
+    --ink-2: #4a4a52;
+    --ink-3: #8b8b92;
+    --paper: #f4f1ea;
+    --paper-2: #e9e4d8;
+    --line: #2a2a30;
+    --line-soft: rgba(40,40,48,0.35);
+
+    /* Chrome inspector palette */
+    --insp-blue: #6cb1f0;
+    --insp-blue-fill: rgba(108,177,240,0.28);
+    --insp-blue-strong: #2c7fd6;
+    --insp-padding: #b6d99a;
+    --insp-padding-fill: rgba(182,217,154,0.45);
+    --insp-margin: #f5b9b9;
+    --insp-margin-fill: rgba(245,185,185,0.55);
+    --insp-content: rgba(120,170,230,0.18);
+
+    --hand: 'Caveat', cursive;
+    --mono: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    --ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  /* Dark palette: re-map the ink/paper tokens so all the inner panel content
+     (tree rows, page navigator, block picker, JSX attribute text, badges, etc.)
+     stays legible on the dark surface without rewriting every consumer. */
+  [data-dark] {
+    --ink: #f1f1f4;
+    --ink-2: rgba(241,241,244,0.78);
+    --ink-3: rgba(241,241,244,0.50);
+    --paper: #1c1c20;
+    --paper-2: #26262c;
+    --line: rgba(255,255,255,0.10);
+    --line-soft: rgba(255,255,255,0.06);
+  }
+  /* Dark-mode flips for inline form chrome (fields, segmented controls, sliders, toggles).
+     Inputs invert: gray fill instead of white, lighter borders, white knobs read as bright. */
+  [data-dark] .wf-field {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--ink);
+  }
+  [data-dark] .wf-segment {
+    background: rgba(255,255,255,0.06);
+  }
+  [data-dark] .wf-segment > div.on {
+    background: rgba(255,255,255,0.18);
+    color: var(--ink);
+    box-shadow: none;
+  }
+  [data-dark] .wf-slider {
+    background: rgba(255,255,255,0.08);
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.30);
+  }
+  [data-dark] .wf-slider::before {
+    background: rgba(255,255,255,0.85);
+  }
+  [data-dark] .wf-slider::after {
+    background: #f1f1f4;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.40),
+      0 1px 2px rgba(0,0,0,0.50);
+  }
+
+  html, body { background: var(--paper); }
+
+  /* ───── Diagonal stripe utility classes — darker, dashed, 45° (perpendicular to before) ───── */
+  .stripes-margin {
+    background-color: rgba(245,185,185,0.22);
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 7px,
+      rgba(180,60,60,0.55) 7px 8px
+    );
+    border: 1px solid rgba(180,60,60,0.5);
+  }
+  .stripes-padding {
+    background-color: rgba(182,217,154,0.25);
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 7px,
+      rgba(60,120,40,0.55) 7px 8px
+    );
+    border: 1px solid rgba(60,120,40,0.45);
+  }
+  .stripes-content {
+    background-color: rgba(108,177,240,0.16);
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 7px,
+      rgba(40,90,180,0.5) 7px 8px
+    );
+  }
+  .stripes-gray {
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent 0 7px,
+      rgba(0,0,0,0.35) 7px 8px
+    );
+  }
+
+  /* ───── Sketchy borders ───── */
+  .sketch-border {
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.08);
+  }
+  .sketch-dashed {
+    border: 1.5px dashed var(--line-soft);
+    border-radius: 8px;
+  }
+  .sketch-blue {
+    outline: 1.5px dashed var(--insp-blue-strong);
+    outline-offset: -1px;
+  }
+  .sketch-blue-solid {
+    outline: 1.5px solid var(--insp-blue-strong);
+    outline-offset: -1px;
+  }
+
+  /* ───── Inspector tag (the floating "div.foo 1153×2378" label) ───── */
+  .insp-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 3px 7px;
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    box-shadow: 1px 1px 0 rgba(0,0,0,0.12);
+    white-space: nowrap;
+  }
+  .insp-tag .t-tag { color: #b347a3; }
+  .insp-tag .t-class { color: #2c7fd6; }
+  .insp-tag .t-dim { color: var(--ink-3); }
+
+  /* sketchy headings */
+  .h-hand { font-family: var(--hand); font-weight: 700; letter-spacing: 0.3px; }
+  .ui { font-family: var(--ui); }
+  .mono { font-family: var(--mono); }
+
+  /* shake-free input "fields" for wireframes */
+  .wf-field {
+    background: #fff;
+    border: 1px solid rgba(0,0,0,0.15);
+    border-radius: 6px;
+    height: 28px;
+    display: flex; align-items: center;
+    padding: 0 10px;
+    font-family: var(--ui);
+    font-size: 13px;
+    color: var(--ink);
+    font-weight: 400;
+  }
+  .wf-segment {
+    display: flex;
+    background: rgba(0,0,0,0.04);
+    border-radius: 6px;
+    padding: 2px;
+    height: 26px;
+    font-family: var(--ui);
+    font-size: 13px;
+    gap: 2px;
+  }
+  .wf-segment > div {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 0 8px; border-radius: 4px;
+    color: var(--ink-2); cursor: pointer; font-weight: 400;
+  }
+  .wf-segment > div.on {
+    background: #fff; color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  /* Slider track + thumb — refined: 6px track, soft inner shadow on the rail,
+     filled portion uses ink with a subtle 1px highlight, thumb is a clean white
+     puck with a soft drop shadow + 1px ring (no hard 1.5px stroke). */
+  .wf-slider {
+    height: 6px; background: rgba(0,0,0,0.06);
+    border-radius: 999px;
+    position: relative;
+    box-shadow: inset 0 1px 1px rgba(0,0,0,0.04);
+    --pct: 35%;
+  }
+  .wf-slider::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: var(--pct); background: var(--ink); border-radius: 999px;
+  }
+  .wf-slider::after {
+    content: '';
+    position: absolute; left: var(--pct);
+    top: 50%; transform: translate(-50%,-50%);
+    width: 16px; height: 16px;
+    background: #fff; border-radius: 50%;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.18),
+      0 1px 2px rgba(0,0,0,0.18),
+      0 2px 4px rgba(0,0,0,0.06);
+  }
+  .wf-toggle {
+    width: 28px; height: 16px;
+    border-radius: 999px;
+    background: var(--ink);
+    position: relative;
+  }
+  .wf-toggle::after {
+    content: ''; position: absolute;
+    right: 2px; top: 2px;
+    width: 12px; height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  .wf-toggle.off { background: rgba(0,0,0,0.15); }
+  .wf-toggle.off::after { left: 2px; right: auto; }
+
+  /* corner resize handles for selection state */
+  .corner {
+    position: absolute;
+    width: 7px; height: 7px;
+    background: var(--paper);
+    border: 1.5px solid var(--insp-blue-strong);
+    border-radius: 1px;
+  }
+
+  /* Scrollbar hide on inner cards */
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { scrollbar-width: none; }
+
+  /* "Website behind glass" backdrop — same in every variation so they read as alternative UIs */
+  .site-bg {
+    background: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+  .site-bg::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, #faf7f0 0%, #faf7f0 80px, #fff 80px),
+      repeating-linear-gradient(0deg, rgba(0,0,0,0.04) 0 1px, transparent 1px 80px);
+    pointer-events: none;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     TWEAKS — repaint V6 layout. Only the V6 artboard carries data-attachment.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /* ── ATTACHMENT: Docked — panels snap to viewport edges, full-height, no shadow.
+        Topbar slides to top-right and shrinks (right panel sits below it). ── */
+  [data-attachment="docked"] [data-panel="left"],
+  [data-attachment="docked"] [data-panel="right"] {
+    top: 0 !important;
+    bottom: 0 !important;
+    height: auto !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    border-top: 0 !important;
+    border-bottom: 0 !important;
+  }
+  [data-attachment="docked"] [data-panel="left"]  {
+    left: 0 !important; border-left: 0 !important;
+  }
+  [data-attachment="docked"] [data-panel="right"] {
+    right: 0 !important;
+    border-right: 0 !important;
+  }
+  /* Translucent surface paints panels with a near-white border; in docked mode
+     that bleeds onto the canvas-facing edges. Override just the inner edges to
+     the same hairline the toolbar uses so the chrome reads as one piece. */
+  [data-attachment="docked"][data-surface="translucent"] [data-panel="left"]  { border-right: 1px solid rgba(0,0,0,0.08) !important; }
+  [data-attachment="docked"][data-surface="translucent"] [data-panel="right"] { border-left:  1px solid rgba(0,0,0,0.08) !important; }
+  /* Dark + translucent: the inner-edge hairline must be a light divider over dark glass,
+     not the dark one used on light surfaces. */
+  [data-attachment="docked"][data-surface="translucent"][data-dark] [data-panel="left"]  { border-right: 1px solid rgba(255,255,255,0.10) !important; }
+  [data-attachment="docked"][data-surface="translucent"][data-dark] [data-panel="right"] { border-left:  1px solid rgba(255,255,255,0.10) !important; }
+  /* Translucent + docked: a 135° gradient on three separate elements (toolbar
+     in the middle, panels on the sides) reads as different shades because each
+     element samples a different slice of the gradient. Force a single flat
+     translucent fill across all three so the chrome row looks continuous. */
+  [data-attachment="docked"][data-surface="translucent"] [data-topbar],
+  [data-attachment="docked"][data-surface="translucent"] [data-panel="left"],
+  [data-attachment="docked"][data-surface="translucent"] [data-panel="right"] {
+    background: rgba(252, 250, 245, 0.72) !important;
+  }
+  [data-attachment="docked"][data-surface="translucent"][data-dark] [data-topbar],
+  [data-attachment="docked"][data-surface="translucent"][data-dark] [data-panel="left"],
+  [data-attachment="docked"][data-surface="translucent"][data-dark] [data-panel="right"] {
+    background: rgba(28, 28, 32, 0.72) !important;
+  }
+  /* Topbar: stretches horizontally between the two docked panels (left:320, right:320),
+     pinned to the top, flush to both panels' inner edges, square. */
+  [data-attachment="docked"] [data-topbar] {
+    left: 320px !important;
+    right: 320px !important;
+    top: 0 !important;
+    transform: none !important;
+    width: auto !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    border-top: 0 !important;
+    border-left: 0 !important;
+    border-right: 0 !important;
+    /* Match the panel tab-bar's hairline so the chrome row reads as one piece.
+       Without this, the translucent-surface white border bleeds through and clashes
+       with the dark hairline used by ChromeTabBar/RightChromeTabBar. */
+    border-bottom: 1px solid rgba(0,0,0,0.08) !important;
+    height: 48px !important;
+  }
+  /* Dark + translucent + docked: topbar bottom hairline becomes a light divider. */
+  [data-attachment="docked"][data-surface="translucent"][data-dark] [data-topbar] {
+    border-bottom: 1px solid rgba(255,255,255,0.10) !important;
+  }
+</style>
+</head>
+<body style="margin:0; font-family: var(--ui); font-weight: 400;">
+
+<!-- Splash thumbnail required by bundler -->
+<template id="__bundler_thumbnail">
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <rect width="200" height="200" fill="#f4f1ea"/>
+  <rect x="60" y="60" width="80" height="80" fill="none" stroke="#2c7fd6" stroke-width="3" stroke-dasharray="6 4"/>
+  <pattern id="d" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="rotate(45)">
+    <line x1="0" y1="0" x2="0" y2="8" stroke="#f5b9b9" stroke-width="3"/>
+  </pattern>
+  <rect x="60" y="60" width="80" height="80" fill="url(#d)" opacity="0.6"/>
+</svg>
+</template>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<div id="root"></div>
+
+<script>
+  // Tweak defaults — controls that reshape the editor's feel.
+  // palette: highlight color system (Light / Dark)
+  // treeStyle: how layers render (jsx tags / plain names / flat path)
+  // surface: panel materiality (light / translucent blur / solid)
+  // toolbar: top bar mode (floating pill / inline ribbon / hidden)
+  // attachment: panels float vs dock flush to edges.
+  window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "palette": "inspector",
+    "treeStyle": "plain",
+    "surface": "translucent",
+    "toolbar": "floating",
+    "attachment": "docked"
+  }/*EDITMODE-END*/;
+</script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="parts/site-mock.jsx"></script>
+<script type="text/babel" src="parts/inspector-bits.jsx"></script>
+<script type="text/babel" src="parts/v1-floating-island.jsx"></script>
+<script type="text/babel" src="parts/v2-edge-rails.jsx"></script>
+<script type="text/babel" src="parts/v3-radial.jsx"></script>
+<script type="text/babel" src="parts/v4-command-bar.jsx"></script>
+<script type="text/babel" src="parts/v5-overlay-canvas.jsx"></script>
+<script type="text/babel" src="parts/v6-consolidated.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+
+</body>
+</html>
