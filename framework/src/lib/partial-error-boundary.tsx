@@ -40,7 +40,7 @@ interface State {
  *
  * Also doubles as the registration vehicle for the partial's
  * fingerprint on the client: during render we push
- * `(partialId, partialFingerprint)` into `_fingerprints` so the next
+ * `(partialId, partialFingerprint)` into `_currentPageFingerprints` so the next
  * `getCachedPartialIds()` call picks it up.
  */
 export class PartialErrorBoundary extends React.Component<Props, State> {

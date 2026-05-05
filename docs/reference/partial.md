@@ -242,7 +242,7 @@ A spec doesn't render in three cases:
    (the `?cached=` skip handshake).
 
 Cases 1 and 2 emit nothing. Case 3 emits a placeholder so the client
-paints from `_cache`.
+paints from `_currentPagePartials`.
 
 ### Transitive fingerprint propagation
 

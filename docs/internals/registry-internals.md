@@ -11,8 +11,8 @@ lives in `<Cache>` (see [`cache-internals.md`](./cache-internals.md)).
 interface ScopeStore {
   // Deduplicated snapshot store: id → variantKey → snapshot.
   partials: Map<string, Map<string, PartialSnapshot>>
-  // Per-route hint: which variant did the most-recent render for
-  // this route bind to each id. LRU on the outer Map.
+  // Hint table: which variant did the most-recent render for this
+  // routeKey bind to each id. LRU on the outer Map.
   hints: Map<string, Map<string, string>>
 }
 ```
@@ -25,10 +25,21 @@ Two layers:
    onto a single variant entry, regardless of which route or
    request triggered the registration.
 
-2. **`hints`** — a per-route index. Each entry maps `(route, id) →
-   variantKey` so cache-mode lookup can resolve "which variant of
-   `cart` does the request for `/checkout` want" without scanning
-   the variant store. Bounded LRU (default 10 000 routes).
+2. **`hints`** — a per-routeKey index. Each entry maps `(routeKey,
+   id) → variantKey` so cache-mode lookup can resolve "which
+   variant of `cart` does this request want" without scanning the
+   variant store. Bounded LRU (default 10 000 routeKeys).
+
+   The routeKey is NOT the URL pathname — it's a hash of which
+   registered URLPatterns match the current URL (see
+   `computeRouteKey` in `partial.tsx`). 50k product URLs that all
+   match `/p/:slug` collapse to one routeKey, so they share a hint
+   slot instead of evicting each other from the LRU. Spam to junk
+   URLs that hit the same pattern can't displace real hot entries
+   for the same reason. URLs that match no pattern share a single
+   `__no-pattern` sentinel routeKey — those requests never commit
+   anyway (`notFound()` throws past the commit), so the sentinel
+   is a read-side fallback.
 
 ## Variant key
 
@@ -120,10 +131,13 @@ placement of this partial."
 The variant store is bounded by **spec topology** — finitely many
 placement combinations exist for any given id. No LRU needed.
 
-The hint table is bounded by **distinct routes seen** — uncapped
-in principle, so it's LRU'd at `HINT_LRU_MAX = 10_000` routes per
-scope. Eviction drops a route's hint entirely; the next refetch
-on that route falls through to streaming-mode (registry miss),
+The hint table is bounded by **distinct routeKeys seen** — i.e. by
+URLPattern combinations, not by URL cardinality. For a typical app
+the working set is small (the number of pattern-set equivalence
+classes is roughly the number of distinct page shapes), so the
+`HINT_LRU_MAX = 10_000` cap is rarely approached. Eviction drops
+a routeKey's hint entirely; the next refetch on a URL that hashes
+to that routeKey falls through to streaming-mode (registry miss),
 which re-registers and rebuilds the hint.
 
 ## What snapshots intentionally do not capture

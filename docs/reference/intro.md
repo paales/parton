@@ -30,7 +30,7 @@ A spec is:
   client sends the fingerprints it has on every refetch; the server
   emits a 3-byte placeholder for any spec whose fingerprint is
   unchanged, and the client paints the cached subtree from its
-  module-level `_cache`.
+  module-level `_currentPagePartials`.
 - **Pattern-as-router** — when `match: "/pokemon/:id"` is set, the
   spec emits nothing on a pattern miss. A page is a list of pattern-
   gated specs; only the matching ones render.

@@ -522,6 +522,52 @@ export function getRegisteredMatchPatterns(): readonly URLPattern[] {
   return [...registeredMatchPatterns]
 }
 
+/**
+ * Stable signature for a URLPattern — the concatenation of every
+ * pattern component. URLPattern doesn't expose a single canonical
+ * source string (the constructor accepts both string and dict forms),
+ * so we read every component back and join with NUL. Two URLPatterns
+ * built from the same input produce byte-identical signatures.
+ */
+function patternSignature(pattern: URLPattern): string {
+  return [
+    pattern.protocol,
+    pattern.username,
+    pattern.password,
+    pattern.hostname,
+    pattern.port,
+    pattern.pathname,
+    pattern.search,
+    pattern.hash,
+  ].join(" ")
+}
+
+/**
+ * Compute a routeKey from a URL: a stable hash of WHICH registered
+ * URLPatterns match. Two URLs that match the same set of patterns
+ * collapse to one routeKey, so the variant-hint table scales with
+ * pattern combinations (a small finite space) instead of distinct
+ * pathnames. 50k product URLs that all match `/p/:slug` share one
+ * hint entry instead of evicting each other from the LRU; spam
+ * traffic to junk URLs that all match the same pattern can't displace
+ * real hot routes.
+ *
+ * Returns `__no-pattern` when nothing matches — those requests don't
+ * commit to the registry anyway (`notFound()` throws past the commit),
+ * so the sentinel just keeps lookups deterministic on the read side.
+ */
+export function computeRouteKey(url: string): string {
+  const matched: string[] = []
+  for (const pattern of registeredMatchPatterns) {
+    if (pattern.exec(url) !== null) {
+      matched.push(patternSignature(pattern))
+    }
+  }
+  if (matched.length === 0) return "__no-pattern"
+  matched.sort()
+  return djb2(matched.join(""))
+}
+
 // ─── The constructor ──────────────────────────────────────────────────
 
 interface InternalSpec<V> {
@@ -1099,7 +1145,19 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     }
   }
 
-  const route = requestUrl.pathname
+  const routeKey = computeRouteKey(getRequest().url)
+
+  // Pre-enter the registry context so the lookups below
+  // (`resolveSelectorToIds`, the registry-miss probe) see this
+  // request's routeKey via `activeRouteKey(ctx)`. Without this they
+  // fall back to the pathname and never resolve any hint, since hints
+  // are keyed by the pattern-signature routeKey (see
+  // `partial-registry.ts`'s header). Mode is tentative — the streaming
+  // branch below re-enters with `"streaming"` if the probe finds no
+  // hits. The pre-entered ctx accumulates no pending writes during
+  // read-only lookups, so replacing it is safe.
+  enterRequestRegistry(routeKey, "cache")
+
   const combinedRequestedIds = resolveSelectorToIds(partialsParam, tagsParam)
   const hasGlobalFilter = partialsParam != null || tagsParam != null
   const isPartialRefetch = hasGlobalFilter || populateCache
@@ -1141,7 +1199,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
   }
 
   if (!state.isPartialRefetch || registryMiss) {
-    enterRequestRegistry(route, "streaming")
+    enterRequestRegistry(routeKey, "streaming")
     const streamState: PartialRequestState = {
       ...state,
       requestedIds: null,
@@ -1151,7 +1209,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     return <PartialsClient mode="streaming">{children}</PartialsClient>
   }
 
-  enterRequestRegistry(route, "cache")
+  // Already in cache-mode ctx from the pre-enter above.
   enterPartialState(state)
 
   const activeIds = [...(state.requestedIds ?? [])]

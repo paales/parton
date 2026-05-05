@@ -20,8 +20,10 @@ miss).
    - Renders, registering a snapshot via `<PartialBoundary>`.
 4. On stream flush, `commitRequestRegistry` writes the rendered
    snapshots to the deduplicated variant store and replaces the
-   route's hint table wholesale (so ids no longer on the page drop
-   off this route's hint).
+   current routeKey's hint wholesale (so ids no longer on the
+   page drop off the hint). The routeKey is the hash of matched
+   URLPatterns for the request URL, not the URL itself — see
+   [`registry-internals.md`](./registry-internals.md).
 
 ## Cache mode
 
@@ -30,13 +32,13 @@ ids the route's hint table knows about.
 
 1. `PartialRoot` opens a request-scoped registry context (`mode:
    "cache"`).
-2. For each requested id, look up the snapshot via the route hint,
-   find the spec component (`getSpecComponentById(id)` or via spec
-   catalog by `snap.type` for slot blocks), invoke it as a flat
-   sibling.
+2. For each requested id, look up the snapshot via the routeKey
+   hint, find the spec component (`getSpecComponentById(id)` or
+   via spec catalog by `snap.type` for slot blocks), invoke it as
+   a flat sibling.
 3. The spec's body re-runs (vary, fingerprint, skip / render). No
    ancestor execution.
-4. On commit, the route's hint is patched (not replaced) — ids
+4. On commit, the routeKey's hint is patched (not replaced) — ids
    that didn't refetch keep their existing variant pointers.
 
 ## Snapshot shape
@@ -107,7 +109,7 @@ a registry miss).
 ## Fingerprint protocol
 
 Each spec emits its `fp` via `<PartialErrorBoundary partialId,
-partialFingerprint>`; the client's `_fingerprints` map captures it.
+partialFingerprint>`; the client's `_currentPageFingerprints` map captures it.
 On the next nav the client serializes the map as `?cached=`. The
 server's spec body skips when its current `fp` matches.
 

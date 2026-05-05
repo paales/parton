@@ -172,8 +172,8 @@ function getPlaceholderId(node: React.ReactElement): string | null {
 
 /**
  * Collect every partial id reachable inside a node — wrapper OR
- * placeholder. Read-only walk: doesn't mutate `_cache` or
- * `_fingerprints`. Used by the streaming-mode prune to expand `seen`
+ * placeholder. Read-only walk: doesn't mutate `_currentPagePartials` or
+ * `_currentPageFingerprints`. Used by the streaming-mode prune to expand `seen`
  * with nested ids that live inside cached wrappers — when the server
  * fp-skips an outer partial, the new tree carries only its top-level
  * placeholder, so the nested ids backing the rendered region (via
@@ -394,7 +394,7 @@ function cacheFromStreamingChildren(
     if (id) {
       seen?.add(id)
       cache.set(id, node)
-      // Populate `_fingerprints` synchronously from the tree walk
+      // Populate `_currentPageFingerprints` synchronously from the tree walk
       // rather than waiting for each `<PartialErrorBoundary>` to
       // commit on the client. The commit order is non-deterministic
       // across transitions (React may defer subtrees such as the
@@ -403,7 +403,7 @@ function cacheFromStreamingChildren(
       // late-committing ids. The wrapper already carries the
       // fingerprint — just lift it off.
       const fp = getPartialFingerprint(node)
-      if (fp) _fingerprints.set(id, fp)
+      if (fp) _currentPageFingerprints.set(id, fp)
     }
     // Descend: nested partial wrappers need their own top-level cache
     // entries so subsequent parent-only refetches with inner
@@ -418,7 +418,7 @@ function cacheFromStreamingChildren(
     // as seen so the streaming-mode prune step keeps the cache /
     // fingerprint entries that back this placeholder. Without this,
     // a nested partial whose server confirmed an fp match would be
-    // pruned out of `_cache` and the next render's `substituteNested`
+    // pruned out of `_currentPagePartials` and the next render's `substituteNested`
     // call would leave the `<i hidden>` placeholder in the DOM —
     // blanking the partial's region until a hard reload.
     const id = getPlaceholderId(node)
@@ -517,8 +517,17 @@ function renderTemplate(template: ReactNode, cache: Map<string, ReactNode>): Rea
  * remount in entry.browser.tsx. Without this, each refetch would wipe the
  * cache and force every partial to re-render.
  */
-const _cache = new Map<string, ReactNode>()
-const _fingerprints = new Map<string, string>()
+/**
+ * Module-level state scoped to the CURRENT page only. Pruned on every
+ * streaming-mode render against the harvested `seen` set, so entries
+ * for partials that aren't on the new page are dropped immediately.
+ * Survives the two-phase void→payload remount in entry.browser.tsx so
+ * cache-mode refetches don't wipe everything between commits — but
+ * doesn't accumulate across navigations. Steady-state size is bounded
+ * by the largest single page the user visits, not by browsing history.
+ */
+const _currentPagePartials = new Map<string, ReactNode>()
+const _currentPageFingerprints = new Map<string, string>()
 
 /**
  * Structural layout skeleton, derived from the most recent full-payload
@@ -536,12 +545,12 @@ let _template: ReactNode = null
  * Register a partial's fingerprint from the client side.
  *
  * Called by `<PartialErrorBoundary>` during its render, which is how
- * each `<Partial>`'s fingerprint gets into `_fingerprints` without a
+ * each `<Partial>`'s fingerprint gets into `_currentPageFingerprints` without a
  * server prop round-trip. Later `getCachedPartialIds()` reads from
  * here to tell the server what's already cached.
  */
 export function registerClientPartial(id: string, fingerprint: string): void {
-  _fingerprints.set(id, fingerprint)
+  _currentPageFingerprints.set(id, fingerprint)
 }
 
 /**
@@ -549,18 +558,18 @@ export function registerClientPartial(id: string, fingerprint: string): void {
  * Returns "id:fingerprint" pairs so the server can detect shape changes.
  * Used by the browser entry to send ?cached= during navigation.
  *
- * Source of truth is `_fingerprints`, not `_cache`. Every rendered
+ * Source of truth is `_currentPageFingerprints`, not `_currentPagePartials`. Every rendered
  * Partial — top-level OR deep (`.map()`-generated, nested inside an
  * ancestor's subtree) — registers its fingerprint client-side as its
  * wrapper mounts via `PartialErrorBoundary`. Reporting from
- * `_fingerprints` means the skip-on-unchanged optimization applies
+ * `_currentPageFingerprints` means the skip-on-unchanged optimization applies
  * uniformly across the entire tree; deep Partials that live inside
- * an ancestor's `_cache` entry (rather than as a standalone key) are
+ * an ancestor's `_currentPagePartials` entry (rather than as a standalone key) are
  * reported correctly. See `docs/partial.md`.
  */
 export function getCachedPartialIds(): string[] {
   const out: string[] = []
-  for (const [id, fp] of _fingerprints) {
+  for (const [id, fp] of _currentPageFingerprints) {
     out.push(`${id}:${fp}`)
   }
   return out
@@ -1758,7 +1767,7 @@ export function useScrollRestore<T extends HTMLElement = HTMLElement>(
 }
 
 export function PartialsClient({ mode = "cache", children }: PartialsClientProps) {
-  const cache = _cache
+  const cache = _currentPagePartials
 
   // ── Streaming mode ──────────────────────────────────────────────────
   //
@@ -1772,7 +1781,7 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
   // state so subsequent cache-mode refetches can reuse it without a
   // server round-trip.
   //
-  // Fingerprints land in `_fingerprints` primarily via the synchronous
+  // Fingerprints land in `_currentPageFingerprints` primarily via the synchronous
   // walk inside `cacheFromStreamingChildren` (the wrapper props carry
   // the fingerprint, so we don't have to wait for every
   // `<PartialErrorBoundary>` to commit). Each boundary's render still
@@ -1784,9 +1793,9 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
     // means "the server confirmed your cache entry is current", so its
     // cache + fingerprint MUST survive the prune below.
     //
-    // Clearing `_fingerprints` up-front (the previous design) wiped
+    // Clearing `_currentPageFingerprints` up-front (the previous design) wiped
     // skipped partials' fingerprints because the walk only re-sets
-    // them for fresh wrappers. Likewise pruning `_cache` against just
+    // them for fresh wrappers. Likewise pruning `_currentPagePartials` against just
     // the top-level placeholders from `deriveTemplate` (which stops
     // at any wrapper, so nested ids are never visited) deleted the
     // cache entries for nested partials whose ancestor was re-rendered
@@ -1835,11 +1844,11 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
     // page. `seen` covers fresh wrappers, placeholders from the new
     // tree, AND nested ids harvested from cached wrappers, so any
     // partial still backing the rendered tree survives.
-    for (const id of [..._cache.keys()]) {
-      if (!seen.has(id)) _cache.delete(id)
+    for (const id of [..._currentPagePartials.keys()]) {
+      if (!seen.has(id)) _currentPagePartials.delete(id)
     }
-    for (const id of [..._fingerprints.keys()]) {
-      if (!seen.has(id)) _fingerprints.delete(id)
+    for (const id of [..._currentPageFingerprints.keys()]) {
+      if (!seen.has(id)) _currentPageFingerprints.delete(id)
     }
 
     const rendered = renderTemplate(derived, cache)

@@ -9,10 +9,13 @@
  * Users hitting different routes where the same id is mounted under
  * different parents register distinct variants → both coexist.
  *
- * A per-route hint table maps `(route, id) → variantKey` so cache-mode
- * refetches can find the right variant for the current request without
- * paying the per-route snapshot storage cost the previous design did.
- * The hint table is LRU-bounded by route count.
+ * A hint table maps `(routeKey, id) → variantKey` so cache-mode
+ * refetches can find the right variant for the current request. The
+ * routeKey is a hash of which registered URLPatterns match the current
+ * URL — NOT the literal pathname — so 50k product URLs that all match
+ * `/p/:slug` collapse to a single hint entry, and spam traffic to
+ * arbitrary URLs that hit the same pattern can't displace real hot
+ * entries. The table is LRU-bounded by routeKey count.
  *
  * The snapshot does NOT capture the spec's `varyResult` — vary is
  * recomputed per-request inside the spec component, and no consumer of
@@ -82,8 +85,8 @@ interface ScopeStore {
   /** id → variantKey → snapshot. Variants are bounded by spec topology
    *  (placement combinations), not by request content — so no LRU. */
   partials: Map<string, Map<string, PartialSnapshot>>
-  /** route → id → variantKey. LRU on the outer Map by insertion order;
-   *  inner Map bounded by partials-per-page. */
+  /** routeKey → id → variantKey. LRU on the outer Map by insertion
+   *  order; inner Map bounded by partials-per-page. */
   hints: Map<string, Map<string, string>>
 }
 
@@ -109,9 +112,9 @@ function variantKeyOf(snap: PartialSnapshot): string {
   )
 }
 
-function touchHint(store: ScopeStore, route: string, hint: Map<string, string>): void {
-  store.hints.delete(route)
-  store.hints.set(route, hint)
+function touchHint(store: ScopeStore, routeKey: string, hint: Map<string, string>): void {
+  store.hints.delete(routeKey)
+  store.hints.set(routeKey, hint)
   while (store.hints.size > HINT_LRU_MAX) {
     const oldest = store.hints.keys().next().value
     if (oldest === undefined) break
@@ -125,7 +128,9 @@ export type RegistryMode = "streaming" | "cache"
 
 export interface RequestRegistry {
   scope: string
-  route: string
+  /** Pattern-signature key for the current request — NOT the literal
+   *  pathname. See `computeRouteKey` in `partial.tsx`. */
+  routeKey: string
   mode: RegistryMode
   pendingWrites: Map<string, PartialSnapshot>
   pendingHints: Map<string, string>
@@ -136,11 +141,11 @@ export interface RequestRegistry {
 
 const registryAls = new AsyncLocalStorage<RequestRegistry>()
 
-export function enterRequestRegistry(route: string, mode: RegistryMode): RequestRegistry {
+export function enterRequestRegistry(routeKey: string, mode: RegistryMode): RequestRegistry {
   const scope = getScope()
   const ctx: RequestRegistry = {
     scope,
-    route,
+    routeKey,
     mode,
     pendingWrites: new Map(),
     pendingHints: new Map(),
@@ -163,8 +168,16 @@ export function deferRequestRegistryCommit(): void {
   _deferRegistryCommit()
 }
 
-function activeRoute(ctx: RequestRegistry | undefined): string | undefined {
-  if (ctx) return ctx.route
+/**
+ * Best-effort routeKey accessor. In normal request flow `ctx` is always
+ * set by `enterRequestRegistry` before any read happens, so this hits
+ * the first branch. The pathname fallback is for edge cases (HMR-time
+ * registrations, catalog prerender) that shouldn't be doing lookups
+ * anyway — it returns a string that won't match any committed routeKey,
+ * so lookups fall through to streaming-mode. Same effect as today.
+ */
+function activeRouteKey(ctx: RequestRegistry | undefined): string | undefined {
+  if (ctx) return ctx.routeKey
   try {
     return new URL(getRequest().url).pathname
   } catch {
@@ -219,9 +232,9 @@ export function lookupPartial(id: string): PartialSnapshot | undefined {
     }
   }
 
-  const route = activeRoute(ctx)
-  if (route === undefined) return undefined
-  const hint = store.hints.get(route)
+  const routeKey = activeRouteKey(ctx)
+  if (routeKey === undefined) return undefined
+  const hint = store.hints.get(routeKey)
   const variantKey = hint?.get(id)
   if (!variantKey) return undefined
   return store.partials.get(id)?.get(variantKey)
@@ -231,11 +244,11 @@ export function getRouteSnapshots(): Map<string, PartialSnapshot> | undefined {
   const ctx = registryAls.getStore()
   const scope = ctx?.scope ?? getScope()
   const store = canonical.get(scope)
-  const route = activeRoute(ctx)
+  const routeKey = activeRouteKey(ctx)
 
   const merged = new Map<string, PartialSnapshot>()
-  if (store && route !== undefined) {
-    const hint = store.hints.get(route)
+  if (store && routeKey !== undefined) {
+    const hint = store.hints.get(routeKey)
     if (hint) {
       for (const [id, vk] of hint) {
         const snap = store.partials.get(id)?.get(vk)
@@ -303,16 +316,16 @@ export function commitRequestRegistry(ctx: RequestRegistry): void {
   }
 
   if (ctx.mode === "streaming") {
-    // Whole-page render: replace the route's hint wholesale. Removes
-    // hints for ids no longer on the page.
-    touchHint(store, ctx.route, new Map(ctx.pendingHints))
+    // Whole-page render: replace this routeKey's hint wholesale.
+    // Removes hints for ids no longer on the page.
+    touchHint(store, ctx.routeKey, new Map(ctx.pendingHints))
   } else {
     // Cache-mode refetch: patch the hint for ids touched this render.
-    const existing = store.hints.get(ctx.route)
+    const existing = store.hints.get(ctx.routeKey)
     const hint = existing ? new Map(existing) : new Map<string, string>()
     for (const id of ctx.invalidations) hint.delete(id)
     for (const [id, vk] of ctx.pendingHints) hint.set(id, vk)
-    touchHint(store, ctx.route, hint)
+    touchHint(store, ctx.routeKey, hint)
   }
 }
 
@@ -334,7 +347,7 @@ export function _registryStats(): {
   const byRoute: Record<string, string[]> = {}
   let variants = 0
   if (store) {
-    for (const [route, hint] of store.hints) byRoute[route] = [...hint.keys()]
+    for (const [routeKey, hint] of store.hints) byRoute[routeKey] = [...hint.keys()]
     for (const v of store.partials.values()) variants += v.size
   }
   return {
