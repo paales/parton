@@ -26,6 +26,7 @@
     "test:watch": "vitest --project=node",
     "test:watch:rsc": "NODE_OPTIONS='--conditions=react-server' vitest --project=rsc",
     "test:e2e": "yarn workspace @react-cms/e2e-testing test:e2e",
+    "test:e2e:preview": "yarn workspace @react-cms/e2e-testing test:e2e:preview",
     "gql:generate": "yarn workspace @react-cms/e2e-testing gql:generate"
   },
   "devDependencies": {

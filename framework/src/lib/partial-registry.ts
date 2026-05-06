@@ -194,6 +194,34 @@ export function registerPartial(id: string, snapshot: PartialSnapshot): void {
     ctx.invalidations.delete(id)
     ctx.pendingWrites.set(id, snapshot)
     ctx.pendingHints.set(id, variantKey)
+
+    // Eagerly publish to the canonical store so a CONCURRENT request
+    // can see this partial before our commit fires. Without this, an
+    // activator-driven refetch that lands while the initial page's
+    // RSC stream is still flushing falls into `registryMiss` territory
+    // and the server returns a streaming-mode response that ignores
+    // `partialProps` — the activator's payload is dropped and the
+    // fallback persists in the DOM. The atomic-prune at commit time
+    // (in `commitRequestRegistry`) still owns the FINAL hint shape;
+    // the eager publish is purely additive ("this id is live for this
+    // routeKey, with this variantKey") so concurrent reads succeed.
+    const store = scopeStore(ctx.scope)
+    let variants = store.partials.get(id)
+    if (!variants) {
+      variants = new Map()
+      store.partials.set(id, variants)
+    }
+    variants.set(variantKey, snapshot)
+    const existing = store.hints.get(ctx.routeKey)
+    if (existing) {
+      existing.set(id, variantKey)
+      // Re-touch so the LRU keeps this routeKey hot.
+      store.hints.delete(ctx.routeKey)
+      store.hints.set(ctx.routeKey, existing)
+    } else {
+      const hint = new Map<string, string>([[id, variantKey]])
+      touchHint(store, ctx.routeKey, hint)
+    }
     return
   }
   // No active request context — write straight to canonical (HMR /

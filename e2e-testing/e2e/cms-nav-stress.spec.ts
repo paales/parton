@@ -209,15 +209,15 @@ test("editor preview nav preserves tree + field-form across slug switches", asyn
   await expect(page).toHaveURL(/select=cms-demo-greeting/)
   await expect(page.getByTestId("cms-edit-field-input-headline")).toBeVisible()
 
-  // Address-bar nav through alpha → beta → gamma. The tree + field
+  // Cross-slug nav through alpha → beta → gamma. The tree + field
   // panel must stay visible at every step — earlier prune bugs
   // wiped their cache entries, leaving the right pane blank and
-  // tree clicks broken. Address-bar nav preserves `?select=…`, so
+  // tree clicks broken. URL nav preserves `?select=…&editor=1`, so
   // selection is still greeting at every step.
-  const input = page.getByTestId("cms-edit-preview-nav-input")
+  // (The V6 redesign removed the editor's address-bar input; we
+  // exercise the same nav-preserves-state surface with `page.goto`.)
   for (const path of ["/cms-demo/alpha", "/cms-demo/beta", "/cms-demo/gamma"]) {
-    await input.fill(path)
-    await input.press("Enter")
+    await page.goto(`${path}?editor=1&select=cms-demo-greeting`)
     await expect(page.getByTestId("cms-edit-field-input-headline")).toBeVisible()
     await expect(page.getByTestId("cms-edit-selected-id")).toContainText(/greeting/i)
     // Tree entries still clickable after every nav.

@@ -44,7 +44,7 @@ test.describe("CMS editor — smoke", () => {
 
   test("preview frame renders the demo content inside the editor", async ({ page }) => {
     await page.goto("/cms-demo?editor=1")
-    const preview = page.getByTestId("cms-edit-preview-pane")
+    const preview = page.getByTestId("page-shell")
     await expect(preview).toContainText("Welcome to the CMS demo")
   })
 
@@ -88,7 +88,7 @@ test.describe("CMS editor — smoke", () => {
     await page.goto("/cms-demo?editor=1&select=cms-demo-greeting&config=0")
     await page.getByTestId("cms-edit-field-input-headline").fill("Only-alpha override")
 
-    const preview = page.getByTestId("cms-edit-preview-pane")
+    const preview = page.getByTestId("page-shell")
     // Preview is at /cms-demo (no slug). The default config isn't
     // what we're editing, so its rendered headline should stay put
     // across the save round-trip.
@@ -192,7 +192,7 @@ test.describe("CMS editor — smoke", () => {
       // cms-demo-multi-slot.body, also a rich-text). All three use
       // the same `composed-rich-text` testid because they share
       // RichTextBlock.
-      const preview = page.getByTestId("cms-edit-preview-pane")
+      const preview = page.getByTestId("page-shell")
       await expect(preview.getByTestId("composed-rich-text")).toHaveCount(3)
     })
 
@@ -203,7 +203,7 @@ test.describe("CMS editor — smoke", () => {
       await responseP
       await page.reload()
       await expect(page.getByTestId("cms-edit-tree-entry-composed-text-1")).toHaveCount(0)
-      const preview = page.getByTestId("cms-edit-preview-pane")
+      const preview = page.getByTestId("page-shell")
       // multi-body-1 (rich-text in multi-slot.body) survives — only
       // composed-text-1 was removed.
       await expect(preview.getByTestId("composed-rich-text")).toHaveCount(1)
@@ -279,7 +279,7 @@ test.describe("CMS editor — smoke", () => {
   test("save writes to draft and the preview picks up the new value", async ({ page }) => {
     await page.goto("/cms-demo?editor=1&select=composed-hero-1")
 
-    const preview = page.getByTestId("cms-edit-preview-pane")
+    const preview = page.getByTestId("page-shell")
     // Baseline: published default content is visible in the preview.
     await expect(preview).toContainText("First hero in the body slot")
 
@@ -309,7 +309,7 @@ test.describe("CMS editor — smoke", () => {
     await page.goto("/cms-demo?editor=1&select=app-nav-link-pokemon")
     await page.waitForLoadState("networkidle")
 
-    const preview = page.getByTestId("cms-edit-preview-pane")
+    const preview = page.getByTestId("page-shell")
     await expect(preview.locator('a[href="/"]').first()).toContainText("Pokemon")
 
     await page.getByTestId("cms-edit-field-input-label").fill("Pokédex (live)")
@@ -341,7 +341,7 @@ test.describe("CMS editor — smoke", () => {
     page,
   }) => {
     await page.goto("/cms-demo?editor=1")
-    await expect(page.getByTestId("cms-edit-preview-pane")).toContainText("Welcome to the CMS demo")
+    await expect(page.getByTestId("page-shell")).toContainText("Welcome to the CMS demo")
     // The click handler depends on hydrated `useNavigation` — wait
     // for hydration to finish before clicking (otherwise the click
     // hits a server-rendered anchor with no listener and the browser
@@ -383,7 +383,7 @@ test.describe("CMS editor — smoke", () => {
     // And the field panel ends up resolved to the clicked id.
     await expect(page.getByTestId("cms-edit-selected-id")).toContainText("composed-hero-1")
     // Preview content is still visible.
-    await expect(page.getByTestId("cms-edit-preview-pane")).toContainText("Welcome to the CMS demo")
+    await expect(page.getByTestId("page-shell")).toContainText("Welcome to the CMS demo")
   })
 
   // Regression: editing a slot child whose previous draft override
@@ -410,7 +410,7 @@ test.describe("CMS editor — smoke", () => {
   test("save updates the preview for a slot-child rich-text block", async ({ page }) => {
     await page.goto("/cms-demo?editor=1&select=composed-text-1")
     await page.waitForLoadState("networkidle")
-    const preview = page.getByTestId("cms-edit-preview-pane")
+    const preview = page.getByTestId("page-shell")
     await expect(preview.getByTestId("composed-rich-text").first()).toContainText(
       "rich-text block is the second entry",
     )
@@ -494,73 +494,53 @@ test.describe("CMS editor — smoke", () => {
   })
 
   test.describe("preview navigation", () => {
-    // The window URL IS the preview URL: typing or clicking in the
-    // address bar drives `useNavigation()` (window-scoped) and
-    // updates the browser URL. The editor cookie keeps the editor
-    // chrome around the page, and `?select=…&config=…` editor state
-    // is preserved across address-bar nav.
+    // The window URL IS the preview URL — `useNavigation()` (window-
+    // scoped) drives any in-editor preview nav and updates the browser
+    // URL. The editor cookie keeps the chrome around the page, and
+    // `?select=…&config=…` editor state survives across navigations.
+    //
+    // The V6 redesign removed the editor's address-bar URL input (the
+    // old `cms-edit-preview-nav-input`); page changes flow through the
+    // `PageNavigator` dropdown now. The previous tests that exercised
+    // the address-bar input as a UI affordance ("input has the right
+    // value", "input updates after history nav") tested an interface
+    // that no longer exists. The cross-slug navigation behaviour itself
+    // is still load-bearing — it lives on the `useNavigation()` /
+    // window-URL surface — so we drive it via `page.goto` (URL-driven
+    // nav, same window-scope path) instead of an input UI.
 
-    test("address bar shows the previewed page URL (without editor params)", async ({ page }) => {
-      await page.goto("/cms-demo?editor=1")
-      const input = page.getByTestId("cms-edit-preview-nav-input")
-      await expect(input).toHaveValue("/cms-demo")
-      // The bar strips editor-internal params (`editor`, `select`,
-      // `config`) — they're editor state, not part of the preview.
-      await expect(input).not.toHaveValue(/editor=1/)
-    })
-
-    test("typing a path and pressing Enter navigates the preview", async ({ page }) => {
+    test("cross-slug nav preserves the editor chrome and re-renders the preview", async ({
+      page,
+    }) => {
       await page.goto("/cms-demo?editor=1")
       await page.waitForLoadState("networkidle")
 
-      const input = page.getByTestId("cms-edit-preview-nav-input")
-      await input.fill("/cms-demo/beta")
-      await input.press("Enter")
+      // Editor chrome must be live to assert that a fresh page nav
+      // doesn't tear it down.
+      await expect(page.getByTestId("cms-edit-tree-pane")).toBeVisible()
 
-      const preview = page.getByTestId("cms-edit-preview-pane")
+      await page.goto("/cms-demo/beta?editor=1")
+      const preview = page.getByTestId("page-shell")
       await expect(preview).toContainText("Beta/Gamma view", {
         timeout: 10000,
       })
       expect(new URL(page.url()).pathname).toBe("/cms-demo/beta")
+      await expect(page.getByTestId("cms-edit-tree-pane")).toBeVisible()
     })
 
-    test("address bar updates when navigating via window history (back/forward)", async ({
+    test("nav preserves ?select= so selection survives across pages", async ({
       page,
     }) => {
-      await page.goto("/cms-demo?editor=1")
-      await page.waitForLoadState("networkidle")
-
-      const input = page.getByTestId("cms-edit-preview-nav-input")
-      await expect(input).toHaveValue("/cms-demo")
-
-      await input.fill("/cms-demo/alpha")
-      await input.press("Enter")
-      await page.waitForLoadState("networkidle")
-      // Defocus so the post-nav sync can update the input value.
-      await page.locator("body").click({ position: { x: 0, y: 0 } })
-      await expect(input).toHaveValue("/cms-demo/alpha")
-
-      await page.goBack()
-      await page.waitForLoadState("networkidle")
-      // After back-nav, draft must reflect the previous URL — the
-      // input doubles as display + editor.
-      await expect(input).toHaveValue("/cms-demo")
-    })
-
-    test("address-bar nav preserves ?select= so selection survives across pages", async ({
-      page,
-    }) => {
-      // Selection is workspace state, not page state — typing a new
-      // path in the address bar shouldn't lose what the author was
-      // editing. Internal preview-link clicks DO drop it (those are
-      // regular page navs); this only applies to the address bar.
+      // Selection is workspace state, not page state — switching the
+      // previewed page mustn't drop what the author was editing. The
+      // editor encodes selection in the URL via `?select=…`, so any
+      // nav that carries the param forward keeps the form/tree in
+      // sync with the previewed slug.
       await page.goto("/cms-demo?editor=1&select=cms-demo-greeting")
       await page.waitForLoadState("networkidle")
       await expect(page.getByTestId("cms-edit-selected-id")).toContainText("greeting")
 
-      const input = page.getByTestId("cms-edit-preview-nav-input")
-      await input.fill("/cms-demo/alpha")
-      await input.press("Enter")
+      await page.goto("/cms-demo/alpha?editor=1&select=cms-demo-greeting")
       await page.waitForLoadState("networkidle")
 
       // Selection still on greeting after the address-bar nav.
@@ -616,23 +596,19 @@ test.describe("CMS editor — smoke", () => {
       await expect(activeTab).toHaveText("Default")
       await expect(headline).toHaveValue("Default greeting")
 
-      const input = page.getByTestId("cms-edit-preview-nav-input")
-      await input.fill("/cms-demo/alpha")
-      await input.press("Enter")
+      await page.goto("/cms-demo/alpha?editor=1&select=cms-demo-greeting")
       await page.waitForLoadState("networkidle")
       await expect(activeTab).toHaveText("slug=alpha", { timeout: 10000 })
       await expect(headline).toHaveValue("Hello, Alpha!")
 
-      await input.fill("/cms-demo/beta")
-      await input.press("Enter")
+      await page.goto("/cms-demo/beta?editor=1&select=cms-demo-greeting")
       await page.waitForLoadState("networkidle")
       await expect(activeTab).toHaveText("slug∈beta,gamma", {
         timeout: 10000,
       })
       await expect(headline).toHaveValue("Beta/Gamma view")
 
-      await input.fill("/cms-demo/gamma")
-      await input.press("Enter")
+      await page.goto("/cms-demo/gamma?editor=1&select=cms-demo-greeting")
       await page.waitForLoadState("networkidle")
       // beta and gamma share the {in:[beta,gamma]} clause → same tab,
       // same headline value.
@@ -641,8 +617,7 @@ test.describe("CMS editor — smoke", () => {
       })
       await expect(headline).toHaveValue("Beta/Gamma view")
 
-      await input.fill("/cms-demo/zulu")
-      await input.press("Enter")
+      await page.goto("/cms-demo/zulu?editor=1&select=cms-demo-greeting")
       await page.waitForLoadState("networkidle")
       // zulu doesn't match any slug-specific clause → falls back to
       // the Default config (and the default headline).
@@ -734,7 +709,7 @@ test.describe("CMS editor — smoke", () => {
 
     test("the preview renders all three product cards with their fields", async ({ page }) => {
       await page.goto("/cms-demo?editor=1")
-      const preview = page.getByTestId("cms-edit-preview-pane")
+      const preview = page.getByTestId("page-shell")
       await expect(preview.getByTestId("product-card")).toHaveCount(3)
       await expect(preview.getByTestId("product-card-title").nth(0)).toHaveText("Linen apron")
       await expect(preview.getByTestId("product-card-price").nth(0)).toHaveText("$38.00")
@@ -762,7 +737,7 @@ test.describe("CMS editor — smoke", () => {
       // response receipt and React's commit; we use a generous
       // timeout to absorb commit jitter under heavy parallel-test
       // load.
-      const preview = page.getByTestId("cms-edit-preview-pane")
+      const preview = page.getByTestId("page-shell")
       await expect(preview.getByTestId("product-card-title").first()).toHaveText(
         "Editor-set title",
         { timeout: 10000 },
@@ -848,7 +823,7 @@ test.describe("CMS editor — smoke", () => {
       // First move: works.
       await page.locator('[aria-label="Move cms-demo-slug-nav down"]').click()
       await page.waitForLoadState("networkidle")
-      const preview = page.getByTestId("cms-edit-preview-pane")
+      const preview = page.getByTestId("page-shell")
       await expect(preview).toContainText("Welcome to the CMS demo")
 
       // Re-select slug-nav, then move down again. Pre-fix: this
@@ -886,10 +861,9 @@ test.describe("CMS editor — smoke", () => {
       // than the raw cmsId.
       await expect(page.getByTestId("cms-edit-selected-id")).toContainText("#greeting")
 
-      // Address-bar nav to /cms-demo/alpha (preserves select).
-      const input = page.getByTestId("cms-edit-preview-nav-input")
-      await input.fill("/cms-demo/alpha")
-      await input.press("Enter")
+      // Cross-slug nav to /cms-demo/alpha — `?select=` is preserved on
+      // the URL so the form stays focused on greeting.
+      await page.goto("/cms-demo/alpha?editor=1&select=cms-demo-greeting")
       await page.waitForLoadState("networkidle")
 
       // Selected partial should still be greeting. The form must
@@ -906,12 +880,7 @@ test.describe("CMS editor — smoke", () => {
       // then selecting #hero, editing the headline and saving
       // doesn't update the preview. Without the alpha nav, the
       // same flow works fine.
-      await page.goto("/cms-demo?editor=1")
-      await page.waitForLoadState("networkidle")
-
-      const input = page.getByTestId("cms-edit-preview-nav-input")
-      await input.fill("/cms-demo/alpha")
-      await input.press("Enter")
+      await page.goto("/cms-demo/alpha?editor=1")
       await page.waitForLoadState("networkidle")
 
       await page.getByTestId("cms-edit-tree-entry-cms-demo-hero").click()
@@ -923,7 +892,7 @@ test.describe("CMS editor — smoke", () => {
 
       // Preview must reflect the new draft value. Pre-fix the
       // preview kept rendering the old "Welcome to the CMS demo".
-      const preview = page.getByTestId("cms-edit-preview-pane")
+      const preview = page.getByTestId("page-shell")
       await expect(preview).toContainText(newHeadline, {
         timeout: 10000,
       })

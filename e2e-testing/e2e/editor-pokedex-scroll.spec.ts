@@ -22,7 +22,7 @@ test.beforeEach(async ({ baseURL }) => {
 test("editor preview keeps Pokedex grid visible after a LoadMore scroll", async ({ page }) => {
   await page.goto("/?editor=1")
 
-  const preview = page.getByTestId("cms-edit-preview-pane")
+  const preview = page.getByTestId("page-shell")
   await expect(preview).toBeVisible()
   await expect(preview.getByRole("link", { name: /#1\s+bulbasaur/i })).toBeVisible()
 

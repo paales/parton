@@ -1767,6 +1767,42 @@ export function useScrollRestore<T extends HTMLElement = HTMLElement>(
 }
 
 export function PartialsClient({ mode = "cache", children }: PartialsClientProps) {
+  // PartialsClient is a `"use client"` component — but client components
+  // STILL execute during SSR's render-to-HTML pass (entry.ssr.tsx ->
+  // renderToReadableStream decodes the Flight tree and runs every
+  // client-component body to produce the HTML). On the server we skip
+  // the cache/template machinery entirely:
+  //
+  //   1. `_currentPagePartials`, `_currentPageFingerprints`, `_template`
+  //      are module-level state — session-scoped for the BROWSER tab.
+  //      The same module is reused across every request in the server
+  //      process, so any write would leak request N's state into
+  //      request N+1. That leak is what produced the production-preview
+  //      "subsequent GET returns empty body" regression.
+  //
+  //   2. The cache-populating walk in `cacheFromStreamingChildren` calls
+  //      `unwrapLazy(node)`, which returns `null` for unresolved Flight
+  //      lazies (the form unrendered partial wrappers take while their
+  //      chunks are still in flight). `deriveTemplate` likewise walks
+  //      past lazies. In a production build the streamed children
+  //      contain exactly those lazies — so a cache-walk-then-render
+  //      path on the server outputs an EMPTY tree where the partial
+  //      wrappers should have rendered, and the SSR HTML loses every
+  //      partial body. Letting React see `children` directly preserves
+  //      the lazies and resolves them through React's native Suspense /
+  //      streaming machinery the way the bypass intended.
+  //
+  // Symmetry note for hydration: the browser path returns
+  // `<Fragment>{...rendered}</Fragment>` (an explicit Fragment from
+  // `renderChildren`). useId positions are sensitive to tree shape, so
+  // returning raw `children` on the server while wrapping the client
+  // tree in a Fragment desyncs hydration — `useId`-driven attributes
+  // mismatch and the subtree ends up patched up imperfectly, breaking
+  // the cache-mode merge path defer activators rely on. We mirror the
+  // wrapper here so the SSR DOM and the client's first render share
+  // the same useId tree positions.
+  if (typeof document === "undefined") return renderChildren([children])
+
   const cache = _currentPagePartials
 
   // ── Streaming mode ──────────────────────────────────────────────────

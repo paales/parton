@@ -117,6 +117,19 @@
             ]
           },
           {
+            "id": "app-nav-link-inspect-stack",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/inspect",
+                  "label": "Stack"
+                }
+              }
+            ]
+          },
+          {
             "id": "app-nav-link-cms-demo",
             "type": "nav-link",
             "configs": [
@@ -205,10 +218,7 @@
                 "match": {
                   "pathname:/cms-demo/:slug": {
                     "slug": {
-                      "in": [
-                        "beta",
-                        "gamma"
-                      ]
+                      "in": ["beta", "gamma"]
                     }
                   }
                 },

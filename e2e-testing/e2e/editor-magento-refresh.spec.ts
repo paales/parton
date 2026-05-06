@@ -31,7 +31,13 @@ test("editor mode + magento + refresh prices does not throw HoistingViolation", 
   await page.goto("/magento")
   await page.waitForLoadState("networkidle")
 
-  await page.locator('[data-testid="refresh-all-prices"]').click()
+  // V6's editor docks side panels at `position: fixed; left/right: 0`
+  // (each 320px). On the default Playwright viewport the page-shell's
+  // 900px-wide centred column overlaps the right panel, and the
+  // refresh-all-prices button sits in that overlap. We aren't testing
+  // hit-testing here — the test is about the server-side hoisting
+  // violation surfacing on refresh — so bypass actionability.
+  await page.locator('[data-testid="refresh-all-prices"]').click({ force: true })
   await page.waitForTimeout(1500)
 
   // The hoisting violation surfaces as a server render error inside

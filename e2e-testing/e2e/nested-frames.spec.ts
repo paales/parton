@@ -124,7 +124,19 @@ test("browser back stays attached to real page navigations — nested tab navs d
   page,
 }) => {
   await page.goto("/frames-demo")
-  await awaitHydrated(page)
+  // Wait for hydration without expanding the partials-debug overlay.
+  // `awaitHydrated` (used by the other tests in this file) toggles the
+  // debug rows visible so they can read per-Partial state — but the
+  // expanded overlay parks itself bottom-left of the viewport with
+  // unbounded width, and on this test's flow the cart-open-btn ends up
+  // under it after `main-open-beta` reflows the column. This test
+  // doesn't reference any partial-debug-* row, so we only wait for the
+  // hydration signal and skip the toggle.
+  await page.waitForFunction(() => {
+    const el = document.querySelector('[data-testid="partial-debug-cart-hash-cart"]')
+    if (!el) return false
+    return Object.keys(el).some((k) => k.startsWith("__reactFiber"))
+  })
 
   // Real page nav — creates a browser entry.
   await page.getByTestId("main-open-beta").click()

@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test",
+    "test:e2e:preview": "playwright test --config=playwright.preview.config.ts",
     "gql:generate": "gql.tada generate-output"
   },
   "dependencies": {
