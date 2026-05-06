@@ -1207,6 +1207,29 @@ function nullNavigation(name: string | null): FrameworkNavigation {
  * `reload()` (targeted refetch without a URL change). Everything
  * else passes straight through to the browser.
  */
+/**
+ * Apply client-side cookie writes from a navigate / reload options
+ * bag. Called synchronously at the entry of `windowNavigate` /
+ * `windowReload` so the new cookie values are present in
+ * `document.cookie` before the refetch fetch issues — the browser
+ * picks them up automatically and ships them in the `Cookie` header.
+ *
+ * Empty string deletes the cookie (`max-age=0`). Defaults: `path=/`,
+ * `samesite=lax`, `max-age=31536000`. Callers that need different
+ * attributes can append them in the value string (cookies do not
+ * have a structured-write API in browsers).
+ */
+function applyClientCookies(cookies: Record<string, string> | undefined): void {
+  if (!cookies) return
+  for (const [name, value] of Object.entries(cookies)) {
+    if (value === "") {
+      document.cookie = `${encodeURIComponent(name)}=; path=/; max-age=0; samesite=lax`
+    } else {
+      document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; max-age=31536000; samesite=lax`
+    }
+  }
+}
+
 function buildWindowNavigationHandle(): FrameworkNavigation {
   const nav = getNavigation()
   if (!nav) return nullNavigation(null)
@@ -1215,6 +1238,7 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
   ): FrameworkNavigationResult => {
+    applyClientCookies(options?.cookies)
     const url = resolveWindowTarget(target)
     const parsed = parseOptionsSelector(options)
     const filtered = parsed.uniqueTokens.length > 0 || parsed.sharedTokens.length > 0
@@ -1253,6 +1277,7 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
   }
 
   const windowReload = (options?: FrameworkReloadOptions): FrameworkNavigationResult => {
+    applyClientCookies(options?.cookies)
     const parsed = parseOptionsSelector(options)
     if (parsed.uniqueTokens.length > 0 || parsed.sharedTokens.length > 0) {
       return syntheticResult(

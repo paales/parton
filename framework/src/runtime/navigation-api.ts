@@ -144,6 +144,19 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    * `<WhenStored>` uses the same wire format under the hood.
    */
   props?: Record<string, Record<string, unknown>>
+  /**
+   * Cookies to write client-side BEFORE the refetch fetch is issued.
+   * Each key is set via `document.cookie = "name=value; path=/; …"`,
+   * so the new value travels with the upcoming request and any
+   * subsequent navigation. Use this for sticky preferences (theme,
+   * editor on/off) where the cookie is the source of truth and a
+   * server action would just round-trip the same string.
+   *
+   * Pass an empty string to delete a cookie (max-age=0). Defaults
+   * applied per cookie: `path=/`, `samesite=lax`, `max-age=31536000`
+   * (one year) — pass a `; max-age=0` suffix in the value to override.
+   */
+  cookies?: Record<string, string>
 }
 
 /**
@@ -157,6 +170,8 @@ export interface FrameworkReloadOptions extends NavigationReloadOptions {
   disableTransition?: boolean
   /** See `FrameworkNavigateOptions.props`. */
   props?: Record<string, Record<string, unknown>>
+  /** See `FrameworkNavigateOptions.cookies`. */
+  cookies?: Record<string, string>
 }
 
 /**

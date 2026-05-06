@@ -37,6 +37,7 @@ import {
 } from "@react-cms/framework"
 import { CmsEditTreeLink } from "./components/tree-link.tsx"
 import { CmsEditAddBlock } from "./components/add-block.tsx"
+import { EditorCloseLink } from "./components/editor-close-link.tsx"
 import { Icon, SixDot } from "./components/icon.tsx"
 import { PanelTabBar, type PanelTab } from "./components/panel-tab-bar.tsx"
 import { PageNavigator } from "./components/page-navigator.tsx"
@@ -64,15 +65,11 @@ const saveCmsFields = _saveCmsFields
 // URL-bound editor params (shareable / browser-history). Tweaks
 // (palette / surface / attachment / device / tree style / left tab)
 // are session-backed via the `session.*` vary surface — see the
-// session.enum reads in each vary block below. `editor` keeps its
-// URL toggle so `?editor=1` opens the chrome and stamps the cookie
-// for sticky reload.
-const EDITOR_RESERVED_PARAMS = [
-  "editor",
-  "select",
-  "config",
-  "tabs",
-] as const
+// session.enum reads in each vary block below. `editor=1|0` is a
+// deep-link trigger that writes the cookie on the next render;
+// click-driven entry/exit goes through `nav.navigate({cookies})`
+// and never appears in the URL.
+const EDITOR_RESERVED_PARAMS = ["editor", "select", "config", "tabs"] as const
 const FRAMEWORK_INTERNAL_PARAMS = [
   "partials",
   "cached",
@@ -184,7 +181,10 @@ function iconForType(type: string | undefined): string {
 
 function readMultiTabs(currentUrl: URL): string[] {
   const raw = currentUrl.searchParams.get("tabs") ?? ""
-  return raw.split(",").map((s) => s.trim()).filter(Boolean)
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
 }
 
 // ─── Tree pane ─────────────────────────────────────────────────────────
@@ -301,11 +301,7 @@ export const EditorTreePartial = ReactCms.partial(
           const showJsx = treeStyle === "jsx"
           const hasChildren = entry.depth === 0 // page-level rows usually expand
           return (
-            <div
-              key={entry.id}
-              className="cms-tree-row-wrapper"
-              style={{ paddingLeft: indent }}
-            >
+            <div key={entry.id} className="cms-tree-row-wrapper" style={{ paddingLeft: indent }}>
               <CmsEditTreeLink
                 href={cmsEditHref(currentUrl, { select: entry.id })}
                 className="cms-tree-row"
@@ -415,12 +411,7 @@ export const EditorTreePartial = ReactCms.partial(
                     </form>
                     <form
                       action={asFormAction(
-                        removeBlockFromSlot.bind(
-                          null,
-                          entry.parentId!,
-                          entry.slotName!,
-                          entry.id,
-                        ),
+                        removeBlockFromSlot.bind(null, entry.parentId!, entry.slotName!, entry.id),
                       )}
                       style={{ display: "contents" }}
                     >
@@ -463,14 +454,19 @@ export const EditorSettingsPartial = ReactCms.partial(
   function EditorSettingsRender({ pathname }: { pathname: string } & RenderArgs) {
     return (
       <div className="cms-panel-body">
-        <div className="cms-section-head" style={{ marginTop: 6 }}>Page</div>
+        <div className="cms-section-head" style={{ marginTop: 6 }}>
+          Page
+        </div>
         <div className="cms-row">
           <span className="cms-row-label">Title</span>
           <span className="cms-wf-field">Home page</span>
         </div>
         <div className="cms-row">
           <span className="cms-row-label">Handle</span>
-          <span className="cms-wf-field" style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+          <span
+            className="cms-wf-field"
+            style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}
+          >
             {pathname}
           </span>
         </div>
@@ -534,11 +530,12 @@ export const EditorFieldPanelPartial = ReactCms.partial(
     const manifest = node?.type ? catalog[node.type] : undefined
     const hasDraft = listAllCmsNodes().some((e) => e.id === selected && e.hasDraft)
     const configs = node?.configs ?? []
-    const effectiveIndex = vEffectiveIndex >= 0 && vEffectiveIndex < configs.length
-      ? vEffectiveIndex
-      : configs.length > 0
-        ? 0
-        : -1
+    const effectiveIndex =
+      vEffectiveIndex >= 0 && vEffectiveIndex < configs.length
+        ? vEffectiveIndex
+        : configs.length > 0
+          ? 0
+          : -1
     const currentConfig = effectiveIndex >= 0 ? configs[effectiveIndex] : null
     const fieldMap = buildFieldMap(currentConfig, manifest)
 
@@ -547,10 +544,7 @@ export const EditorFieldPanelPartial = ReactCms.partial(
         <div className="cms-selected-head">
           <Icon name={iconForType(node?.type)} size={14} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{ fontSize: 13, fontWeight: 500 }}
-              data-testid="cms-edit-selected-id"
-            >
+            <div style={{ fontSize: 13, fontWeight: 500 }} data-testid="cms-edit-selected-id">
               {node?.displayName ?? `#${selected}`}
             </div>
             <div
@@ -952,10 +946,30 @@ function SpacingVisualizer() {
         <div className="cms-spacing-margin cms-stripes-margin" />
         <div className="cms-spacing-padding cms-stripes-padding" />
         <div className="cms-spacing-content" />
-        <span className="cms-spacing-num" style={{ left: "50%", top: 2, transform: "translateX(-50%)" }}>80</span>
-        <span className="cms-spacing-num" style={{ left: "50%", bottom: 2, transform: "translateX(-50%)" }}>80</span>
-        <span className="cms-spacing-num" style={{ left: 2, top: "50%", transform: "translateY(-50%)" }}>24</span>
-        <span className="cms-spacing-num" style={{ right: 2, top: "50%", transform: "translateY(-50%)" }}>24</span>
+        <span
+          className="cms-spacing-num"
+          style={{ left: "50%", top: 2, transform: "translateX(-50%)" }}
+        >
+          80
+        </span>
+        <span
+          className="cms-spacing-num"
+          style={{ left: "50%", bottom: 2, transform: "translateX(-50%)" }}
+        >
+          80
+        </span>
+        <span
+          className="cms-spacing-num"
+          style={{ left: 2, top: "50%", transform: "translateY(-50%)" }}
+        >
+          24
+        </span>
+        <span
+          className="cms-spacing-num"
+          style={{ right: 2, top: "50%", transform: "translateY(-50%)" }}
+        >
+          24
+        </span>
       </div>
     </>
   )
@@ -990,15 +1004,13 @@ function EditorToolbar({
           <SixDot />
         </span>
       )}
-      <a
-        href="?editor=0"
+      <EditorCloseLink
         className="cms-toolbar-icon"
         title="Exit design mode"
-        aria-label="Close editor"
-        data-testid="cms-edit-close"
+        testId="cms-edit-close"
       >
         <Icon name="exit" size={16} />
-      </a>
+      </EditorCloseLink>
       <Sep />
       <PageNavigator currentPath={previewUrl.split("?")[0]} homeLabel={homeLabel} />
       <Sep />
@@ -1111,10 +1123,7 @@ function CanvasChrome({
         <span className="cms-selection-corner" style={{ right: -4, top: -4 }} />
         <span className="cms-selection-corner" style={{ left: -4, bottom: -4 }} />
         <span className="cms-selection-corner" style={{ right: -4, bottom: -4 }} />
-        <span
-          className="cms-selection-tag"
-          style={{ left: -1, top: "100%", marginTop: 22 }}
-        >
+        <span className="cms-selection-tag" style={{ left: -1, top: "100%", marginTop: 22 }}>
           <span className="tag">{tagName}</span>
           <span className="dim">selected</span>
         </span>
@@ -1162,6 +1171,9 @@ export const EditorShell = ReactCms.partial(
     previewUrl: string
     isPreviewFrameRefetch: boolean
   } & RenderArgs) {
+    // The `?editor=1|0` URL trigger writes the cookie so subsequent
+    // requests read correctly. Click-driven entry/exit flows through
+    // `nav.navigate({cookies})` and never hits this branch.
     if (sync === "1") setCookie(EDITOR_COOKIE, "1")
     else if (sync === "0") setCookie(EDITOR_COOKIE, "", 0)
 
@@ -1182,11 +1194,12 @@ export const EditorShell = ReactCms.partial(
     // to the next one.
     const openTabIds = new Set<string>(readMultiTabs(currentUrl))
     if (selected) openTabIds.add(selected)
-    const tabs: Array<{ id: string; label: string; type: string | undefined }> = [...openTabIds]
-      .map((id) => {
-        const n = lookupDraftNode(id)
-        return { id, label: n?.displayName ?? `#${id}`, type: n?.type }
-      })
+    const tabs: Array<{ id: string; label: string; type: string | undefined }> = [
+      ...openTabIds,
+    ].map((id) => {
+      const n = lookupDraftNode(id)
+      return { id, label: n?.displayName ?? `#${id}`, type: n?.type }
+    })
     function closeHrefFor(id: string): string {
       const next = [...openTabIds].filter((x) => x !== id).join(",")
       const newSelect = id === selected ? null : selected
@@ -1294,10 +1307,18 @@ export const EditorShell = ReactCms.partial(
     vary: ({
       url,
       search: { editor: editorParam = null, select: selectedParam = null },
-      cookies: { [EDITOR_COOKIE]: cookieFlag },
+      cookies,
       session,
     }) => {
-      const editor = editorParam === "1" ? true : editorParam === "0" ? false : cookieFlag === "1"
+      // Cookie is the source of truth; `?editor=1` / `?editor=0` are
+      // deep-link entry/exit triggers (bookmarks, tests). The sync
+      // side-effect (writing the cookie to match the URL trigger)
+      // lives in the render so the next request reads correctly
+      // without the URL param. Click-driven exit flows through
+      // `EditorCloseLink` and `nav.navigate({cookies})` instead — no
+      // URL pollution there.
+      const editor =
+        editorParam === "1" ? true : editorParam === "0" ? false : cookies[EDITOR_COOKIE] === "1"
       const isPreviewFrameRefetch = url.searchParams.getAll("__frame").includes("preview")
       return {
         editor,
@@ -1308,11 +1329,7 @@ export const EditorShell = ReactCms.partial(
         palette: session.enum("editor-palette", ["light", "dark"], "light"),
         // Translucent ("blur") is the canonical surface; light + solid
         // remain in the type for future toolbar wiring.
-        surface: session.enum(
-          "editor-surface",
-          ["light", "translucent", "solid"],
-          "translucent",
-        ),
+        surface: session.enum("editor-surface", ["light", "translucent", "solid"], "translucent"),
         attachment: session.enum("editor-attachment", ["floating", "docked"], "docked"),
         device: session.enum("editor-device", ["desktop", "tablet", "mobile"], "desktop"),
         currentUrl: url.toString(),
@@ -1325,15 +1342,25 @@ export const EditorShell = ReactCms.partial(
 
 function ResizeGrip() {
   return (
-    <svg
-      className="cms-panel-resize"
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      aria-hidden
-    >
-      <line x1="11" y1="5" x2="5" y2="11" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-      <line x1="11" y1="9" x2="9" y2="11" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+    <svg className="cms-panel-resize" width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+      <line
+        x1="11"
+        y1="5"
+        x2="5"
+        y2="11"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="round"
+      />
+      <line
+        x1="11"
+        y1="9"
+        x2="9"
+        y2="11"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinecap="round"
+      />
     </svg>
   )
 }
