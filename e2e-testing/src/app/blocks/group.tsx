@@ -3,7 +3,8 @@
  * padding/wrap. Children plug in via the `items` slot (any block).
  */
 
-import { Children, ReactCms, type RenderArgs } from "@react-cms/framework"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import type { ReactNode } from "react"
 import { cn } from "@react-cms/copies/lib/utils"
 
 const DIRECTIONS = ["column", "row"] as const
@@ -28,7 +29,7 @@ const JUSTIFY_CONTENT: Record<(typeof JUSTIFY_VALUES)[number], string> = {
   around: "justify-around",
 }
 
-export const GroupBlock = ReactCms.partial(
+export const GroupBlock = ReactCms.block(
   function GroupRender({
     direction,
     align,
@@ -36,8 +37,7 @@ export const GroupBlock = ReactCms.partial(
     gap,
     padding,
     wrap,
-    parent,
-    cmsId,
+    items,
   }: {
     direction: (typeof DIRECTIONS)[number]
     align: (typeof ALIGN_VALUES)[number]
@@ -45,6 +45,7 @@ export const GroupBlock = ReactCms.partial(
     gap: number
     padding: number
     wrap: "nowrap" | "wrap"
+    items: ReactNode
   } & RenderArgs) {
     return (
       <div
@@ -58,20 +59,20 @@ export const GroupBlock = ReactCms.partial(
         style={{ gap: `${gap}px`, padding: padding > 0 ? `${padding}px` : undefined }}
         data-testid="group-block"
       >
-        <Children name="items" allow="*" host={parent} hostCmsId={cmsId} />
+        {items}
       </div>
     )
   },
   {
-    type: "group",
-    tags: [".page-block", ".group-item"],
-    vary: ({ cms }) => ({
+    selector: ".page-block .group-item",
+    schema: ({ cms }) => ({
       direction: cms.enum("direction", DIRECTIONS),
       align: cms.enum("align", ALIGN_VALUES),
       justify: cms.enum("justify", JUSTIFY_VALUES),
       gap: cms.number("gap"),
       padding: cms.number("padding"),
       wrap: cms.enum("wrap", ["nowrap", "wrap"] as const),
+      items: cms.blocks("items"),
     }),
   },
 )

@@ -53,3 +53,17 @@
 - What a bizarre situation that you would need to postpone the render of a page just to get the head title and meta description in. I'm not sure if I'd like the developer experience of everything streaming, what is the advise here? Should we make a separate stream for dumb user agents and just flush everything sync, would that even work with the title or would that still require JS?
 
 - Next.js did request deduplication by patching fetch, is that something that is still happening or solved with React.cache?
+
+---
+
+- Forkable data architecture, almost all data is a tree and forkable. Inheritance in some form and a mix of other data. Should data be modelled as its relation between each other. An invoice is partially an order. A name is forkable of in locales or domains. An inventory quantity is forkable to a location to a shelf to a batch, to a condition, etc. Ecommerce is like 20 entities that interact with each other and isn't much more difficult than that. Shopify variants / Magento configurables, exactly the same functionality, even the GraphQL API's do not differ except from superficial stuff.
+
+- The ecommerce space has been figured out since like 2001 and hasn't changed mutch. I've come from a background of ecommerce since 2007 and have been in this space ever since. In the end commerce is what makes the world go round, but recent changes in the space make things more unclear than ever. millions of saas products, few ecommerce ecosystems, etc. Everybody is trying to gather crumbs in the space and not sure what is happening from heron out.
+
+- Hoe moet een frontend framework met community extensibility omgaan en tegelijkertijd kunnen omgaan met de multi dimenionaliteit van styling en conventies. In Shopify heb je bijvoorbeeld heel erg het probleem dat er geen API contract op de frontend is. Als je als app bouwer iets wil toevoegen aan de frontend dan moet je je eigen styling etc. toepassen en die matcht nooit met het geinstalleerde thema. Je kan alles zelf doen, kiezen om het met horizon of dawn op te maken en dat is het zo ongeveer. Elk third party thema is eigenlijk f-ed want styling past daar niet altijd goed op. De classnames zijn het contract en JS is helemaal het wilde westen. Shopify Admin extensies kiezen er voor om pre-defined blocks te gebruiken zonder verdere styling mogelijkheden (s-stack etc.).
+
+De industrie maakt continue dezelfde fout: We bouwen een css api abstractie die net kut is en vervolgens bloat deze zo gigantisch dat we daarna weer terug aan naar een HTML/CSS want dan halen we iig onze performance targets weer.. We kiezen voor MUI/Shadcn/Radix/etc. en we beginnen weer opnieuw. Hele frontends opnieuw gebouwd zonder dat het eigenlijk boeit. GraphCommerce bijvoorbeeld draait op MUI, maar moet eigenlijk helemaal op de schop omdat we niet direct met tailwind aan de slag gingen, maar tailwind is ook al weer passé een beetje en je wilt misschien gewoon css schrijven... Dit gevecht op styling gebied is op een bepaalde manier echt triviaal, maar vereist een continue churn in frontend architectuur.
+
+---
+
+- Hoe gaat een systeem om met het genereren en op slaan van URL's en routes?

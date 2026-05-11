@@ -1,23 +1,42 @@
 # Frames + navigation
 
 A **frame** is a server-iframe — a region of the page whose URL
-scope is independent of the window URL. A spec opens a frame by
-declaring `frame: "name"` in its options. Descendants' `vary`
-callbacks see the frame-resolved request, not the page request.
+scope is independent of the window URL. Wrap a subtree in `<Frame
+name initialUrl>` to open a frame scope. Partials inside see the
+frame-resolved request via their normal `vary` (the framework
+swaps the request URL via the ambient frame chain).
 
 ```tsx
-const CartFramePartial = ReactCms.partial(CartFrameRender, {
+const CartContent = ReactCms.partial(CartContentRender, {
   selector: "#cart",
-  frame: "cart",
-  frameUrl: "/cart/closed",
-  vary: ({ request }) => ({
-    state: parseCartState(new URL(request.url).pathname),
-  }),
+  vary: ({ pathname }) => ({ state: parseCartState(pathname) }),
 })
+
+<Frame name="cart" initialUrl="/cart/closed" parent={parent}>
+  {(p) => <CartContent parent={p} />}
+</Frame>
 ```
 
-The `request` arg here resolves against the frame's URL (e.g.
-`/cart/open`), not the window URL.
+`<Frame>` is a plain React component — no constructor. It extends
+`parent.frameChain` with its name, writes `initialUrl` to the
+session-frame-URL store (so descendants find it via session lookup),
+and provides the `useNavigation("cart")` context to client
+descendants. The render-prop child receives the extended
+`PartialCtx`; thread it as `parent` to every spec inside.
+
+Multiple sibling partials can live in one frame:
+
+```tsx
+<Frame name="cart" initialUrl="/cart/closed" parent={parent}>
+  {(p) => (
+    <>
+      <CartHeader parent={p} />
+      <CartBody parent={p} />
+      <CartFooter parent={p} />
+    </>
+  )}
+</Frame>
+```
 
 ## Resolution order
 
@@ -30,24 +49,25 @@ For a frame at path `[outer, inner]` (joined as `"outer.inner"`):
 
 ## Nested frames
 
-```tsx
-const CartTabPartial = ReactCms.partial(CartTabRender, {
-  selector: "#cart-tab",
-  frame: "tab",
-  frameUrl: "/items",
-  vary: ({ request }) => ({ pathname: new URL(request.url).pathname }),
-})
+Nest a `<Frame>` inside another to extend the frame chain:
 
-// Inside the cart frame's render:
-function CartFrameRender({ parent }) {
-  return <CartTabPartial parent={parent} />
-}
+```tsx
+<Frame name="cart" initialUrl="/cart/closed" parent={parent}>
+  {(p) => (
+    <CartContent parent={p}>
+      <Frame name="tab" initialUrl="/items" parent={p}>
+        {(tabParent) => <CartTab parent={tabParent} />}
+      </Frame>
+    </CartContent>
+  )}
+</Frame>
 ```
 
-The cart-tab spec inherits the cart frame from `parent.frameChain`,
-appends its own `tab` name, and resolves against the `cart.tab`
-session entry. A second `tab` frame nested under `menu` resolves to
-`menu.tab` — independent state.
+The inner `<Frame>` extends `parent.frameChain` from `["cart"]` to
+`["cart", "tab"]`. Inside `CartTab`, `useNavigation("tab")` binds to
+the nested frame and resolves against the `cart.tab` session entry.
+A second `tab` frame nested under `menu` resolves to `menu.tab` —
+independent state.
 
 ## Navigation
 
@@ -125,10 +145,10 @@ named frame pick up the new URL via `getSessionFrameUrl()`.
   app see each other's frame state through the session cookie.
   Per-tab frame state would require per-tab session ids (not yet
   implemented).
-- **`frameUrl` is a fallback, not an override.** Once the session
-  has a URL for the frame, the option is ignored. Use
-  `clearSessionFrame(path)` to drop it.
-- **Nested frames need explicit threading.** A nested frame spec
-  must receive its `parent` from the host spec's render args
-  (`<CartTabPartial parent={parent} />`); placing it with `ROOT` as
-  parent strips the ambient frame chain.
+- **`initialUrl` is a fallback, not an override.** `<Frame>` writes
+  it to session on first render only if the session has no entry for
+  the frame path. Once the user navigates the frame, the session URL
+  takes over. Use `clearSessionFrame(path)` to drop it.
+- **Nested frames need explicit threading.** The inner `<Frame>` must
+  receive its `parent` from the outer render-prop callback (not
+  `ROOT`); passing `ROOT` strips the ambient frame chain.

@@ -8,6 +8,7 @@
  */
 
 import { ReactCms, type PartialCtx, type RenderArgs } from "@react-cms/framework"
+import { Frame } from "@react-cms/framework/lib/frame.tsx"
 import { ChatMessage } from "./piece.tsx"
 import {
   AutoScrollToBottom,
@@ -104,12 +105,10 @@ export const ChatListPartial = ReactCms.partial(
 export const ChatOverlayPartial = ReactCms.partial(
   function ChatOverlayRender({
     open,
-    msgIds,
     nextHref,
     parent,
   }: {
     open: boolean
-    msgIds: string[]
     nextHref: string | null
   } & RenderArgs) {
     if (!open) return <ChatOpenPill />
@@ -135,7 +134,6 @@ export const ChatOverlayPartial = ReactCms.partial(
   },
   {
     selector: "#chat-overlay",
-    frame: "chat-overlay",
     vary: ({ search: { chat, msgs = null } }) => {
       const msgIds = parseMsgs(msgs)
       return { open: chat === "open", msgIds, nextHref: computeNextHref(msgIds) }
@@ -144,5 +142,9 @@ export const ChatOverlayPartial = ReactCms.partial(
 )
 
 export function ChatOverlay({ parent }: { parent: PartialCtx }) {
-  return <ChatOverlayPartial parent={parent} />
+  return (
+    <Frame name="chat-overlay" parent={parent}>
+      {(p) => <ChatOverlayPartial parent={p} />}
+    </Frame>
+  )
 }

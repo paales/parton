@@ -45,19 +45,17 @@ export interface PartialSnapshot {
    *  blocks rendered with a cmsId override). */
   type: string
   fallback: ReactNode
-  errorWith: ReactNode | undefined
   uniqueTokens: string[]
   sharedTokens: string[]
   cache?: CacheOptions
-  /** The spec's own frame chain — equals `parentFrameChain` for
-   *  non-frame-opening specs, or `[...parentFrameChain, opts.frame]`
-   *  for frame-opening ones. Used for debug + session-frame lookups. */
+  /** The frame chain this spec was rendered under — populated from
+   *  the `parent.frameChain` flowing in from a `<Frame>` ancestor (or
+   *  empty when not framed). Used for session-frame lookups + debug. */
   framePath: readonly string[]
-  /** The parent's frame chain. Cache-mode reconstruction passes this
-   *  back in as `parent.frameChain` so the spec component re-derives
-   *  `ourFrameChain` correctly regardless of whether it opens a frame. */
+  /** Same as `framePath` after the frame-opening branch on specs was
+   *  removed; kept as a separate field for cache-mode reconstruction
+   *  (passed back in as `parent.frameChain` when re-rendering). */
   parentFrameChain: readonly string[]
-  frameUrl?: string
   parentPath: readonly string[]
   cmsId?: string
   /** Call-site JSX props captured during the streaming render. Cache-
@@ -111,7 +109,6 @@ function variantKeyOf(snap: PartialSnapshot): string {
     stableStringify([
       snap.parentPath,
       snap.parentFrameChain,
-      snap.frameUrl ?? null,
       snap.cmsId ?? null,
     ]),
   )

@@ -14,7 +14,7 @@ const SLUG_LINKS: ReadonlyArray<[href: string, label: string]> = [
   ["/cms-demo/zulu", "zulu (unmatched)"],
 ]
 
-export const PageSlugNavBlock = ReactCms.partial(
+export const PageSlugNavBlock = ReactCms.block(
   function PageSlugNavRender({}: RenderArgs) {
     return (
       <nav
@@ -30,5 +30,5 @@ export const PageSlugNavBlock = ReactCms.partial(
       </nav>
     )
   },
-  { type: "page-slug-nav", tags: [".page-block"] },
+  { selector: ".page-block" },
 )

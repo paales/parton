@@ -2,12 +2,13 @@
 
 import type { ReactNode } from "react"
 import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
-// `EDITOR_COOKIE` is a plain const re-exported through the
-// server-side barrel — importing it from a `"use client"` file via
-// the barrel mis-resolves the Flight reference (same caveat as the
-// `useNavigation` / `setSessionValue` cases). Deep-import keeps the
-// const as a literal string at bundle time.
-import { EDITOR_COOKIE } from "@react-cms/framework/runtime/cms-runtime.ts"
+// Deep-import from `cms-constants.ts` (zero side-effect imports)
+// rather than `cms-runtime.ts` (which transitively loads
+// `context.ts` → `node:async_hooks`, externalised for browser, throws
+// at module-evaluation time). Importing through the barrel
+// mis-resolves the Flight reference; both paths must be avoided
+// from `"use client"` files.
+import { EDITOR_COOKIE } from "@react-cms/framework/runtime/cms-constants.ts"
 
 /**
  * Closes design mode by flipping `EDITOR_COOKIE` off via the

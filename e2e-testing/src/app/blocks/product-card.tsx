@@ -4,7 +4,7 @@
 
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
 
-export const ProductCardBlock = ReactCms.partial(
+export const ProductCardBlock = ReactCms.block(
   function ProductCardRender({
     title,
     price,
@@ -42,9 +42,8 @@ export const ProductCardBlock = ReactCms.partial(
     )
   },
   {
-    type: "product-card",
-    tags: [".group-item"],
-    vary: ({ cms }) => ({
+    selector: ".group-item",
+    schema: ({ cms }) => ({
       title: cms.text("title"),
       price: cms.number("price"),
       imageSrc: cms.text("imageSrc"),

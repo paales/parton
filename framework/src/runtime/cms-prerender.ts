@@ -1,11 +1,10 @@
 /**
  * Block catalog manifest builder.
  *
- * For the new define-step API, the manifest is reconstructed from the
- * spec catalog directly: walk each registered spec, invoke its `vary`
- * function with a tracking CMS surface, and record what fields it
- * touched. No JSX walking — `vary` is a pure function declaring the
- * dependency surface.
+ * Walks each registered block spec, invokes its `schema` callback with
+ * a tracking CMS surface, and records what fields it touched. No JSX
+ * walking — `schema` is a pure function declaring the CMS dependency
+ * surface.
  */
 
 import {
@@ -24,15 +23,15 @@ export interface BlockManifest {
   readonly childSlots: Record<string, SlotSpec>
 }
 
-const PRERENDER_URL = new URL("http://localhost/__prerender/")
-
 function trackingCms(): {
   surface: CmsReadSurface
   contentFields: Map<string, ContentFieldKind>
   references: Map<string, string>
+  childSlots: Map<string, SlotSpec>
 } {
   const contentFields = new Map<string, ContentFieldKind>()
   const references = new Map<string, string>()
+  const childSlots = new Map<string, SlotSpec>()
   const surface: CmsReadSurface = {
     text(name) {
       contentFields.set(name, "text")
@@ -62,28 +61,29 @@ function trackingCms(): {
       references.set(name, type)
       return null
     },
+    block(slot, selector) {
+      childSlots.set(slot, { multi: false, allow: selector })
+      return null
+    },
+    blocks(slot, selector) {
+      childSlots.set(slot, { multi: true, allow: selector })
+      return null
+    },
   }
-  return { surface, contentFields, references }
+  return { surface, contentFields, references, childSlots }
 }
 
 export async function prerenderBlock(type: string): Promise<BlockManifest | null> {
   const spec = getSpecByType(type)
   if (!spec) return null
   const tracker = trackingCms()
-  if (spec.vary) {
+  if (spec.schema) {
     try {
-      spec.vary({
-        url: PRERENDER_URL,
-        pathname: PRERENDER_URL.pathname,
-        search: {},
-        cookies: {},
-        headers: {},
-        params: {},
-        cms: tracker.surface,
-      })
+      spec.schema({ cms: tracker.surface })
     } catch {
-      // vary may reference params that aren't present in the prerender
-      // request; we still get the field reads it did before throwing.
+      // schema may throw if it expects content shape that isn't
+      // present in the empty tracking surface; we still get the field
+      // reads it did before throwing.
     }
   }
   return {
@@ -91,7 +91,7 @@ export async function prerenderBlock(type: string): Promise<BlockManifest | null
     tags: spec.selectorTokens.sharedTokens.map((t) => `.${t}` as `.${string}`),
     contentFields: Object.fromEntries(tracker.contentFields),
     references: Object.fromEntries(tracker.references),
-    childSlots: {},
+    childSlots: Object.fromEntries(tracker.childSlots),
   }
 }
 

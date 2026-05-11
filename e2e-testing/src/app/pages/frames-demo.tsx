@@ -5,6 +5,7 @@
  */
 
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { Frame } from "@react-cms/framework/lib/frame.tsx"
 import { FrameNavigateButton, UpdateEntryStateButton } from "../components/frames-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
 
@@ -89,8 +90,6 @@ export const CartTabPartial = ReactCms.partial(
   },
   {
     selector: "#cart-tab",
-    frame: "tab",
-    frameUrl: "/items",
     vary: ({ pathname }) => ({ pathname }),
   },
 )
@@ -147,7 +146,9 @@ export const CartFramePartial = ReactCms.partial(
               />
             </div>
             <NestedFrameShell label="cart.tab">
-              <CartTabPartial parent={parent} />
+              <Frame name="tab" initialUrl="/items" parent={parent}>
+                {(p) => <CartTabPartial parent={p} />}
+              </Frame>
             </NestedFrameShell>
           </div>
         )
@@ -172,8 +173,6 @@ export const CartFramePartial = ReactCms.partial(
   },
   {
     selector: "#cart",
-    frame: "cart",
-    frameUrl: "/cart/closed",
     vary: ({ pathname: pn }) => {
       const state: "closed" | "open" | "checkout" | "unknown" =
         pn === "/cart/closed"
@@ -217,8 +216,6 @@ export const MenuTabPartial = ReactCms.partial(
   },
   {
     selector: "#menu-tab",
-    frame: "tab",
-    frameUrl: "/general",
     vary: ({ pathname }) => ({ pathname }),
   },
 )
@@ -273,7 +270,9 @@ export const MenuFramePartial = ReactCms.partial(
             <p className="mb-3">Demo of the Frame primitive.</p>
             <FrameNavigateButton url="/menu/closed" label="Close" testId="menu-close-btn" />
             <NestedFrameShell label="menu.tab">
-              <MenuTabPartial parent={parent} />
+              <Frame name="tab" initialUrl="/general" parent={parent}>
+                {(p) => <MenuTabPartial parent={p} />}
+              </Frame>
             </NestedFrameShell>
           </div>
         )
@@ -309,8 +308,6 @@ export const MenuFramePartial = ReactCms.partial(
   },
   {
     selector: "#menu",
-    frame: "menu",
-    frameUrl: "/menu/closed",
     vary: ({ pathname: pn }) => {
       const state: "closed" | "about" | "settings" | "slow" | "unknown" =
         pn === "/menu/closed"
@@ -348,7 +345,9 @@ export const FramesDemoPage = ReactCms.partial(
             <CardTitle className="text-base">Cart frame</CardTitle>
           </CardHeader>
           <CardContent className="px-0">
-            <CartFramePartial parent={parent} />
+            <Frame name="cart" initialUrl="/cart/closed" parent={parent}>
+              {(p) => <CartFramePartial parent={p} />}
+            </Frame>
           </CardContent>
         </Card>
         <Card className="mb-4 p-5">
@@ -356,7 +355,9 @@ export const FramesDemoPage = ReactCms.partial(
             <CardTitle className="text-base">Menu frame</CardTitle>
           </CardHeader>
           <CardContent className="px-0">
-            <MenuFramePartial parent={parent} />
+            <Frame name="menu" initialUrl="/menu/closed" parent={parent}>
+              {(p) => <MenuFramePartial parent={p} />}
+            </Frame>
           </CardContent>
         </Card>
       </main>

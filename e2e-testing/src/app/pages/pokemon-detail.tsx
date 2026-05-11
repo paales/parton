@@ -8,6 +8,7 @@
  */
 
 import { ReactCms, notFound, type RenderArgs } from "@react-cms/framework"
+import { Frame } from "@react-cms/framework/lib/frame.tsx"
 import { client } from "../data.ts"
 import { graphql } from "../pokeapi-graphql.ts"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
@@ -244,7 +245,9 @@ export const PokemonDetailPage = ReactCms.partial(
       <>
         <HeaderPartial parent={parent} showControls={true} />
         <SearchAreaPage parent={parent} />
-        <SearchAreaFrame parent={parent} />
+        <Frame name="search" initialUrl="/" parent={parent}>
+          {(p) => <SearchAreaFrame parent={p} />}
+        </Frame>
         <Hero parent={parent} id={id} />
         <Stats parent={parent} id={id} />
         <Species parent={parent} id={id} />

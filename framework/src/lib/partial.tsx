@@ -29,7 +29,7 @@ import { djb2 } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
-import { FrameNameProvider, PartialsClient } from "./partial-client.tsx"
+import { PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
 import type { CacheOptions } from "./cache-options.ts"
 import {
@@ -94,8 +94,6 @@ export interface VaryScope {
   /** Match params populated by `match` (URLPattern groups for the
    *  pathname). */
   params: Record<string, string>
-  /** CMS read surface bound to the spec's effective cmsId. */
-  cms: CmsReadSurface
   /** Per-session read surface. Each `session.<type>(name, …)` call
    *  records `name` as a dependency on this spec — server actions
    *  that mutate the same name (`setSessionValue`) walk every
@@ -103,6 +101,13 @@ export interface VaryScope {
    *  Sync; values are stored in the framework session store, written
    *  by the `setSessionValue` action. */
   session: SessionReadSurface
+}
+
+/** Scope passed into `schema` callbacks on `ReactCms.block`. CMS reads
+ *  live here exclusively — `vary` is request-dimensions-only. */
+export interface SchemaScope {
+  /** CMS read surface bound to the block's effective cmsId. */
+  cms: CmsReadSurface
 }
 
 /** Build a plain `{key: value}` object from a URLSearchParams. */
@@ -144,27 +149,61 @@ export interface RenderArgs {
 export type MatchPattern = string | URLPatternInit
 
 export interface PartialOptions<V> {
+  /** URLPattern gate. Spec emits nothing on miss. */
   match?: MatchPattern
+  /** Request-dimensions dependency surface. Sync; result is the
+   *  cache-key surface and merged into Render's prop bag. */
   vary?: (scope: VaryScope) => V | null
-  /** Class-only selector tokens (e.g. `[".hero"]`). When set, the spec
-   *  is usable as a slot block — slot entries form effective selectors
-   *  as `[#<entry.id>, ...tags]` and override the spec's cmsId per
-   *  instance. */
-  tags?: ReadonlyArray<`.${string}`>
   /** Selector for non-slot (page-position) specs. Auto-derived from
    *  `Render.name` when omitted. */
   selector?: SelectorTokens
-  /** Fallback CMS storage key. Slot instances override via the
-   *  Component's `cmsId` prop. */
-  cmsId?: string
-  /** Spec catalog tag (slot lookup). Defaults to the auto-derived id. */
-  type?: string
   cache?: CacheOptions
-  frame?: string
-  frameUrl?: string
   defer?: DeferSpec
   fallback?: ReactNode
-  errorWith?: ReactNode
+}
+
+/**
+ * Options for `ReactCms.block(R, opts)` — a slot-placeable CMS-driven
+ * spec with a declared `schema`. Internally produces a partial; same
+ * fingerprint / cache / refetch path.
+ */
+export interface BlockOptions<V, S> {
+  /** CSS-style selector declaring this block's class identity (and
+   *  optionally a `#singleton` token). `".page-block .composed-hero"`
+   *  registers under `.page-block` and `.composed-hero` class tokens
+   *  for slot-allow matching + shared-token refetch.
+   *  `"#app-nav .nav-root"` makes the block a singleton bound to
+   *  cmsId `"app-nav"`. Auto-derived from `Render.name` when omitted. */
+  selector?: SelectorTokens
+  /** CMS field reads + child slots. Runs at render time with a real
+   *  `cms` surface; the result is merged into Render's prop bag
+   *  alongside `vary`'s. The editor's catalog prerender invokes it
+   *  with a tracking surface to discover content fields + child slot
+   *  declarations. */
+  schema?: (scope: SchemaScope) => S
+  /** Request-dimensions dependency surface (no `cms` — that lives on
+   *  `schema`). Optional; most blocks don't have request deps. */
+  vary?: (scope: VaryScope) => V | null
+  cache?: CacheOptions
+  defer?: DeferSpec
+  fallback?: ReactNode
+}
+
+/**
+ * Internal merged options consumed by `buildSpecComponent`. Public APIs
+ * (`ReactCms.partial`, `ReactCms.block`) marshal to this shape.
+ */
+interface InternalSpecConfig<V> {
+  match?: MatchPattern
+  vary?: (scope: VaryScope) => V | null
+  selector?: SelectorTokens
+  cache?: CacheOptions
+  defer?: DeferSpec
+  fallback?: ReactNode
+  schema?: (scope: SchemaScope) => unknown
+  /** `true` when constructed via `ReactCms.block` — controls slot-block
+   *  catalog registration + selector parsing rules. */
+  isSlotBlock?: boolean
 }
 
 /**
@@ -175,7 +214,13 @@ export interface PartialOptions<V> {
  */
 export interface PartialComponentProps {
   parent: PartialCtx
-  /** Per-instance cmsId override (used by slots). */
+  /** Per-instance cmsId override. Slot wiring sets this via the
+   *  framework-internal `__cmsId` channel; for direct JSX placements,
+   *  pass `cmsId="..."` explicitly. The cmsId is the CMS storage key
+   *  AND the unique selector token for refetch addressing
+   *  (`reload({selector: "#<cmsId>"})`). For singletons whose id is
+   *  baked into the spec, embed `#token` in the spec's `selector`
+   *  rather than passing this prop. */
   cmsId?: string
   /** Pass-through children — surfaced to `Render` as `children` in
    *  its props bag. Lets specs act as JSX wrappers (e.g. opening a
@@ -198,18 +243,55 @@ export interface PartialComponentProps {
 export type SpecExtraProps<R, V> = Omit<R, keyof RenderArgs | keyof V>
 
 /**
- * Parse a route pattern at the type level into a `{param: string}`
- * shape. `/pokemon/:id` → `{ id: string }`,
- * `/p/:slug/reviews/:page` → `{ slug: string; page: string }`.
- * Patterns with no `:param` segments resolve to `object` (empty
- * surface). Wildcards (`/*`) don't contribute typed params.
+ * Read a URLPattern parameter name from the start of a string,
+ * stopping at the first character that terminates the name. URLPattern
+ * names run until any of `/`, `(` (start of regex), `?`/`+`/`*`
+ * (modifiers), `{`/`}` (group brackets), or `.`.
+ */
+type ReadParamName<S extends string, Acc extends string = ""> =
+  S extends `${infer C}${infer R}`
+    ? C extends "/" | "(" | "?" | "+" | "*" | "{" | "}" | "."
+      ? [Acc, S]
+      : ReadParamName<R, `${Acc}${C}`>
+    : [Acc, S]
+
+/**
+ * Skip a `(regex)` modifier following a parameter name. URLPattern
+ * lets authors constrain a param's accepted shape via regex
+ * (`:id(\\d+)`); the constraint affects matching at runtime but the
+ * TS surface stays `string`. We just need to skip the parens.
+ *
+ * Doesn't handle nested parens; URLPattern itself doesn't either.
+ */
+type SkipParamRegex<S extends string> =
+  S extends `(${string})${infer After}` ? After : S
+
+/**
+ * Parse a URLPattern path string into a `{ name: string }` shape at
+ * the type level. Handled tokens:
+ *   `/:foo`               → `{ foo: string }`
+ *   `/:foo?`              → `{ foo?: string }`               (optional)
+ *   `/:foo+ /:foo*`       → `{ foo: string }`                (URLPattern flattens repeating to one string)
+ *   `/:foo(<regex>)`      → `{ foo: string }`                (regex constraint, value still string)
+ *   `/*`                  → not in result                    (anonymous wildcard captures don't contribute)
+ *   `/{group}?`           → group brackets are stripped; named params inside parse normally
+ *
+ * Patterns with no named `:param` segments resolve to `object`. The
+ * runtime URLPattern is the source of truth for what actually matches;
+ * unparseable corners fall through and the prop is just absent.
  */
 export type ParseRoute<T extends string> =
-  T extends `${string}:${infer Param}/${infer Rest}`
-    ? { [K in Param]: string } & ParseRoute<`/${Rest}`>
-    : T extends `${string}:${infer Param}`
-      ? { [K in Param]: string }
+  T extends `${string}:${infer Rest}`
+    ? ReadParamName<Rest> extends [infer Name extends string, infer Tail extends string]
+      ? Name extends ""
+        ? ParseRoute<Tail>
+        : SkipParamRegex<Tail> extends `?${infer After}`
+          ? { [K in Name]?: string } & ParseRoute<After>
+          : SkipParamRegex<Tail> extends `${"+" | "*"}${infer After}`
+            ? { [K in Name]: string } & ParseRoute<After>
+            : { [K in Name]: string } & ParseRoute<SkipParamRegex<Tail>>
       : object
+    : object
 
 /**
  * Infer the framework-supplied prop surface (`V`) from the options
@@ -239,9 +321,61 @@ export type InferV<Opts> = Opts extends string
           : object
       : object
 
-/** Spec component type. The JSX call-site sees framework props
- *  AND any Render prop the `vary` return doesn't already provide. */
-export type SpecComponent<Extra = unknown> = FC<PartialComponentProps & Extra>
+/** Flatten a `T1 & T2 & …` intersection into a single object literal
+ *  shape so editor hovers display the merged keys, not a chain. */
+type Prettify<T> = { [K in keyof T]: T[K] } & {}
+
+/**
+ * The full prop bag a spec's Render function receives:
+ * vary-derived (or match-derived) keys + framework-managed keys.
+ * Re-exposed as `Spec.props` (type-only phantom) for ergonomic
+ * inference at the call site (`function R(p: typeof Spec.props)`).
+ */
+export type InferRenderProps<Opts> = Prettify<InferV<Opts> & RenderArgs>
+
+/**
+ * Spec component type. The JSX call-site sees framework props AND
+ * any Render prop the `vary` return doesn't already provide.
+ *
+ * `Props` (second generic) is a phantom that exposes the Render-side
+ * prop bag via `typeof Spec.props`. The runtime never reads it; it's
+ * a TypeScript-only static. Use it to derive the function signature
+ * without retyping vary's return:
+ *
+ *     const Hero = ReactCms.partial(HeroRender, { match: "/p/:id" })
+ *     type HeroProps = typeof Hero.props        // { id: string } & RenderArgs
+ *
+ * `typeof Hero.props` resolves AFTER the spec is constructed. The
+ * builder overload (`partial(opts)`) handles the forward-reference
+ * pattern where the Render needs the type before the spec exists.
+ */
+export type SpecComponent<Extra = unknown, Props = unknown> = FC<
+  PartialComponentProps & Extra
+> & {
+  /** Phantom — `typeof Spec.props` resolves to the prop bag the
+   *  framework supplies to Render. No runtime value. */
+  readonly props: Props
+}
+
+/**
+ * Builder returned by the single-argument `partial(opts)` form.
+ * Lets author derive `typeof Builder.props` BEFORE the Render
+ * function exists, sidestepping the circular initializer that
+ * `const Spec = partial(R, opts); function R(p: typeof Spec.props)`
+ * triggers.
+ *
+ *     const HeroBuilder = ReactCms.partial({ match: "/p/:id" })
+ *     function HeroRender(p: typeof HeroBuilder.props) { … }
+ *     const Hero = HeroBuilder(HeroRender)
+ *
+ * The builder is callable: passing the Render finishes the spec.
+ */
+export type PartialBuilder<Opts, V = InferV<Opts>> = {
+  /** Phantom — `typeof Builder.props` is the Render prop bag. */
+  readonly props: Prettify<V & RenderArgs>
+  /** Bind a Render to produce the final spec component. */
+  (Render: (props: V & RenderArgs) => ReactNode): SpecComponent<object, Prettify<V & RenderArgs>>
+}
 
 // ─── Selector parsing & id derivation ─────────────────────────────────
 
@@ -335,15 +469,16 @@ function extractNamedParams(result: URLPatternResult): Record<string, string> {
   return out
 }
 
-function resolveFrameRequest(
-  framePath: readonly string[],
-  initialUrl: string | undefined,
-): Request {
+/**
+ * Resolve the request URL for a partial under a frame chain. Reads
+ * the session-bound URL for the chain (populated by `<Frame>`); falls
+ * back to the page request when no session entry exists.
+ */
+function resolveFrameRequest(framePath: readonly string[]): Request {
   const pageRequest = getRequest()
   const sessionUrl = getSessionFrameUrl(framePath)
-  const effective = sessionUrl ?? initialUrl
-  if (effective == null) return pageRequest
-  const resolved = new URL(effective, pageRequest.url).toString()
+  if (sessionUrl == null) return pageRequest
+  const resolved = new URL(sessionUrl, pageRequest.url).toString()
   return new Request(resolved, { headers: pageRequest.headers, method: "GET" })
 }
 
@@ -358,11 +493,9 @@ interface PartialBoundaryProps {
   sharedTokens: string[]
   framePath: readonly string[]
   parentFrameChain: readonly string[]
-  frameUrl?: string
   cmsId?: string
   cache?: CacheOptions
   fallback: ReactNode
-  errorWith: ReactNode | undefined
   /** Call-site JSX props (e.g. `id` from a parent wrapper). Stored
    *  in the snapshot so partial-refetch in cache mode can replay
    *  them when re-rendering the spec without its parent. */
@@ -386,11 +519,9 @@ export function PartialBoundary({
   sharedTokens,
   framePath,
   parentFrameChain,
-  frameUrl,
   cmsId,
   cache,
   fallback,
-  errorWith,
   props,
   varyKey,
   sessionDeps,
@@ -399,12 +530,10 @@ export function PartialBoundary({
   registerPartial(id, {
     type,
     fallback,
-    errorWith,
     uniqueTokens,
     sharedTokens,
     framePath,
     parentFrameChain,
-    frameUrl,
     parentPath,
     cmsId,
     cache,
@@ -417,7 +546,10 @@ export function PartialBoundary({
 
 // ─── Registry of spec components, keyed by effective id ────────────────
 
-const componentById = new Map<string, SpecComponent<Record<string, unknown>>>()
+/** Internal map type — narrower than the public `SpecComponent` (no
+ *  `.props` phantom needed for slot lookups). */
+type StoredSpecFC = FC<PartialComponentProps & Record<string, unknown>>
+const componentById = new Map<string, StoredSpecFC>()
 
 /**
  * Compute the descendant-fp fold for a spec.
@@ -493,12 +625,19 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
   }
 
   if (!spec.vary) {
-    // No vary → only match params + props contribute. The propsKey
-    // from the snapshot still distinguishes per-instance call sites.
-    return `${descId}:${stableStringify(params)}|${stableStringify(snap.props ?? null)}`
+    // No vary → only match params + props + CMS content contribute.
+    // The propsKey from the snapshot distinguishes per-instance call
+    // sites; cmsFingerprintContribution covers blocks with `schema`
+    // (which don't have vary), so slot-host wrappers fp-track their
+    // CMS-driven block descendants correctly.
+    const cmsKey = snap.cmsId ? cmsFingerprintContribution(snap.cmsId, request) : ""
+    return `${descId}:${stableStringify(params)}|${stableStringify(snap.props ?? null)}|${cmsKey}`
   }
 
-  // Build a vary scope from the current request and resolve.
+  // Build a vary scope from the current request and resolve. No `cms`
+  // surface needed — vary is request-dimensions only after the
+  // partial/block split; CMS content is covered by
+  // `cmsFingerprintContribution` below.
   const url = new URL(request.url)
   let result: unknown
   try {
@@ -509,7 +648,6 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
       cookies: parseCookies(request),
       headers: headersToRecord(request.headers),
       params,
-      cms: createCmsReadSurface(snap.cmsId ?? "", request),
       // Discard the deps set — the descendant fold consumes the
       // resolved `result` only (it's folded into the ancestor's fp).
       // Snapshot dep recording happens during the descendant's own
@@ -615,7 +753,7 @@ interface InternalSpec<V> {
   /** Spec catalog type tag (slot lookup). */
   type: string
   parsed: ParsedSelector
-  options: PartialOptions<V>
+  options: InternalSpecConfig<V>
   /** Compiled URLPattern for `options.match`, or `undefined` when
    *  the spec has no match. Compiled once at constructor time so
    *  every render-phase `exec` is cheap. */
@@ -647,15 +785,25 @@ function effectiveIdForInstance(spec: InternalSpec<unknown>, cmsIdOverride: stri
 
 function createSpecComponent<V>(
   spec: InternalSpec<V>,
-): SpecComponent<Record<string, unknown>> {
-  const Component: SpecComponent<Record<string, unknown>> = (props) => {
+): FC<PartialComponentProps & Record<string, unknown>> {
+  const Component: FC<PartialComponentProps & Record<string, unknown>> = (props) => {
     const {
       parent,
-      cmsId: cmsIdOverride,
+      cmsId: directCmsIdOverride,
+      __cmsId: slotCmsIdOverride,
       children: outerChildren,
       ...extraProps
-    } = props as PartialComponentProps & Record<string, unknown>
+    } = props as PartialComponentProps & {
+      __cmsId?: string
+      children?: ReactNode
+    } & Record<string, unknown>
     const opts = spec.options
+    // Effective cmsId resolution, in priority order:
+    //   1. `cmsId` — JSX prop override (direct placement).
+    //   2. `__cmsId` — framework-internal, set by slot wiring.
+    //   3. spec.cmsId — the spec's own id (auto-derived or from `#`
+    //      token in selector for singletons).
+    const cmsIdOverride = directCmsIdOverride ?? slotCmsIdOverride
     const effectiveCmsId = cmsIdOverride ?? spec.cmsId
     const { id, parsed } = effectiveIdForInstance(
       spec as InternalSpec<unknown>,
@@ -675,18 +823,15 @@ function createSpecComponent<V>(
     }
 
     // ── Frame phase ──
-    const ourFrameChain: readonly string[] = opts.frame
-      ? [...parent.frameChain, opts.frame]
-      : parent.frameChain
+    // Specs inherit the frame chain from their parent (a `<Frame>`
+    // ancestor extends it). The spec itself never opens a new frame.
+    const ourFrameChain = parent.frameChain
     const ourRequest =
-      opts.frame != null
-        ? resolveFrameRequest(ourFrameChain, opts.frameUrl)
-        : ourFrameChain.length > 0
-          ? resolveFrameRequest(ourFrameChain, undefined)
-          : getRequest()
+      ourFrameChain.length > 0 ? resolveFrameRequest(ourFrameChain) : getRequest()
 
     // ── Vary phase ──
-    const cms = createCmsReadSurface(effectiveCmsId, ourRequest)
+    // `vary` is request-dimensions only. CMS reads on block specs run
+    // through `schema` (merged into varyResult by the block builder).
     const sessionDepsSet = new Set<string>()
     const session = createSessionReadSurface(sessionDepsSet)
     let varyResult: unknown
@@ -699,7 +844,6 @@ function createSpecComponent<V>(
         cookies: parseCookies(ourRequest),
         headers: headersToRecord(ourRequest.headers),
         params,
-        cms,
         session,
       })
       if (v === null) return null
@@ -714,6 +858,29 @@ function createSpecComponent<V>(
       // The page-URL fingerprint contribution is added below so
       // every spec re-renders on URL changes by default.
       varyResult = { ...params }
+    }
+
+    // ── Schema phase (block specs only) ──
+    // Schema reads CMS via the supplied surface. Result is merged
+    // into `varyResult` so it flows into Render's prop bag and
+    // contributes to the cache key alongside vary's output. The CMS
+    // surface is bound to the host `childCtx` so `cms.blocks()` /
+    // `cms.block()` render their slot entries as descendants under
+    // this spec (matches the previous `<Children host={parent}>`
+    // threading).
+    const childCtxForSchema: PartialCtx = {
+      path: Object.freeze([...parent.path, id]) as readonly string[],
+      frameChain: parent.frameChain,
+    }
+    if (opts.schema) {
+      const cmsSurface = createCmsReadSurface(effectiveCmsId, ourRequest, childCtxForSchema)
+      let schemaResult: unknown
+      try {
+        schemaResult = opts.schema({ cms: cmsSurface })
+      } catch {
+        schemaResult = {}
+      }
+      varyResult = { ...(varyResult as object), ...(schemaResult as object) }
     }
 
     // ── Fingerprint ──
@@ -731,22 +898,17 @@ function createSpecComponent<V>(
     const cmsKey = effectiveCmsId
       ? cmsFingerprintContribution(effectiveCmsId, ourRequest)
       : ""
-    const ownFrameKey = opts.frame ? `|frame=${ourFrameChain.join(".")}:${ourRequest.url}` : ""
     const ambientFrameKey =
-      opts.frame == null && ourFrameChain.length > 0
+      ourFrameChain.length > 0
         ? `|inFrame=${ourFrameChain.join(".")}:${ourRequest.url}`
         : ""
     const propsKey =
       Object.keys(extraProps).length > 0 ? `|props=${stableStringify(extraProps)}` : ""
     const varyKey = stableStringify(varyResult)
-    const ownStructuralFp = djb2(
-      `${id}|vary=${varyKey}${propsKey}${cmsKey}${ownFrameKey}`,
-    )
+    const ownStructuralFp = djb2(`${id}|vary=${varyKey}${propsKey}${cmsKey}`)
     const descendantFold = computeDescendantFold(id)
     const structuralFp = djb2(`${ownStructuralFp}${descendantFold}`)
-    const fp = djb2(
-      `${ownStructuralFp}${ambientFrameKey}${descendantFold}`,
-    )
+    const fp = djb2(`${ownStructuralFp}${ambientFrameKey}${descendantFold}`)
 
     // ── Skip decisions ──
     // When the client has the spec's rendered output cached and its
@@ -786,7 +948,7 @@ function createSpecComponent<V>(
       state.seenIds.add(id)
     }
 
-    const childCtx = _childContext(parent, id, opts.frame)
+    const childCtx = _childContext(parent, id)
     // Render receives: extra JSX-prop pass-through, vary result,
     // framework-managed (parent / cmsId / children). vary wins on
     // key collision — vary's return is the canonical surface.
@@ -811,11 +973,9 @@ function createSpecComponent<V>(
           sharedTokens={parsed.sharedTokens}
           framePath={ourFrameChain}
           parentFrameChain={parent.frameChain}
-          frameUrl={opts.frameUrl}
           cmsId={effectiveCmsId}
           cache={opts.cache}
           fallback={fallback}
-          errorWith={opts.errorWith}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
           varyKey={varyKey}
           sessionDeps={sessionDeps}
@@ -846,11 +1006,9 @@ function createSpecComponent<V>(
           sharedTokens={parsed.sharedTokens}
           framePath={ourFrameChain}
           parentFrameChain={parent.frameChain}
-          frameUrl={opts.frameUrl}
           cmsId={effectiveCmsId}
           cache={opts.cache}
           fallback={fallback}
-          errorWith={opts.errorWith}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
           varyKey={varyKey}
           sessionDeps={sessionDeps}
@@ -863,7 +1021,6 @@ function createSpecComponent<V>(
             debugSharedTokens={parsed.sharedTokens}
             debugFramePath={ourFrameChain}
             debugParentPath={parent.path}
-            fallback={opts.errorWith}
           >
             {dormant}
           </PartialErrorBoundary>
@@ -881,16 +1038,6 @@ function createSpecComponent<V>(
       )
     }
 
-    if (opts.frame != null) {
-      const url = new URL(ourRequest.url)
-      const initialUrl = url.pathname + url.search
-      body = (
-        <FrameNameProvider path={ourFrameChain} initialUrl={initialUrl}>
-          {body}
-        </FrameNameProvider>
-      )
-    }
-
     if (fallback != null) {
       // With fallback: outer Suspense carries the key (wrapper
       // detection: keyed Suspense). Inner PartialErrorBoundary
@@ -899,11 +1046,7 @@ function createSpecComponent<V>(
         <Suspense
           key={id}
           fallback={
-            <PartialErrorBoundary
-              partialId={id}
-              partialFingerprint={fp}
-              fallback={opts.errorWith}
-            >
+            <PartialErrorBoundary partialId={id} partialFingerprint={fp}>
               {fallback}
             </PartialErrorBoundary>
           }
@@ -915,7 +1058,6 @@ function createSpecComponent<V>(
             debugSharedTokens={parsed.sharedTokens}
             debugFramePath={ourFrameChain}
             debugParentPath={parent.path}
-            fallback={opts.errorWith}
           >
             {body}
           </PartialErrorBoundary>
@@ -934,7 +1076,6 @@ function createSpecComponent<V>(
           debugSharedTokens={parsed.sharedTokens}
           debugFramePath={ourFrameChain}
           debugParentPath={parent.path}
-          fallback={opts.errorWith}
         >
           {body}
         </PartialErrorBoundary>
@@ -950,11 +1091,9 @@ function createSpecComponent<V>(
         sharedTokens={parsed.sharedTokens}
         framePath={ourFrameChain}
         parentFrameChain={parent.frameChain}
-        frameUrl={opts.frameUrl}
         cmsId={effectiveCmsId}
         cache={opts.cache}
         fallback={fallback}
-        errorWith={opts.errorWith}
         props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
         varyKey={varyKey}
         sessionDeps={sessionDeps}
@@ -969,7 +1108,103 @@ function createSpecComponent<V>(
 
 // ─── Public constructor ───────────────────────────────────────────────
 
-export const ReactCms = {
+/**
+ * Build the spec component from a Render function + options. Shared
+ * between the single-step (`partial(Render, opts)`) and two-step
+ * (`partial(opts)(Render)`) call paths.
+ *
+ * Returns a `SpecComponent` with the `.props` phantom statically
+ * typed to `V & RenderArgs`. The phantom has no runtime value;
+ * `typeof Spec.props` resolves from the static type.
+ */
+function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
+  Render: (props: V & RenderArgs) => ReactNode,
+  options: InternalSpecConfig<V>,
+): SpecComponent<Extra, Prettify<V & RenderArgs>> {
+  const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
+  if (matchPattern) registeredMatchPatterns.push(matchPattern)
+
+  // `isSlotBlock` is passed by `ReactCms.block`. `ReactCms.partial`
+  // omits it (or sets `false`). The flag drives selector parsing,
+  // catalog registration, and per-instance cmsId override semantics.
+  const isSlotBlock = options.isSlotBlock === true
+
+  let parsed: ParsedSelector
+  let id: string
+  if (isSlotBlock) {
+    // Block specs: `selector` declares class tokens + optional `#`
+    // singleton. Without an explicit `#`, the block is multi-instance
+    // and gets its per-instance unique token from slot wiring (the
+    // entry's id), so the spec catalogs under its auto-derived id
+    // (from Render.name).
+    const selectorInput = options.selector
+    if (selectorInput != null) {
+      parsed = parseSelector(selectorInput)
+    } else {
+      parsed = { uniqueTokens: [], sharedTokens: [] }
+    }
+    if (parsed.uniqueTokens.length > 0) {
+      // Singleton — `#token` baked into selector.
+      id = parsed.uniqueTokens[0]
+    } else {
+      // Multi-instance block — id from auto-derive for catalog registration.
+      id = autoSelector(Render).toString().slice(1)
+    }
+  } else {
+    const selectorInput = options.selector ?? autoSelector(Render)
+    parsed = parseSelector(selectorInput)
+    id = effectiveIdFromSelector(parsed)
+  }
+
+  const type = id
+  const cmsId = id
+
+  const spec: InternalSpec<V> = {
+    id,
+    cmsId,
+    type,
+    parsed,
+    options,
+    matchPattern,
+    Render,
+    isSlotBlock,
+  }
+
+  const baseComponent = createSpecComponent(spec)
+  componentById.set(id, baseComponent)
+
+  registerSpec({
+    id,
+    cmsId,
+    type,
+    selectorTokens: parsed,
+    // Slot lookup invokes the component with only framework props
+    // (`parent`, optional `cmsId`/`children`); call sites that pass
+    // extra `Extra` props go through the typed `SpecComponent<Extra>`
+    // surface returned to the spec author. The catalog signature is
+    // narrower than the public component, so we cast at the boundary.
+    Component: baseComponent as unknown as FC<PartialComponentProps>,
+    isSlotBlock,
+    vary: options.vary as SpecCatalogVary | undefined,
+    schema: options.schema,
+    matchPattern,
+    displayName:
+      (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
+  })
+
+  // Attach `.props` as a phantom field. The runtime value is
+  // `undefined`; the type declares it as `V & RenderArgs` so
+  // `typeof Spec.props` resolves cleanly.
+  return baseComponent as unknown as SpecComponent<Extra, Prettify<V & RenderArgs>>
+}
+
+/** Catalog vary signature — kept loose because the catalog stores
+ *  every spec's vary regardless of its `V`. The shape here mirrors
+ *  the public `VaryScope` minus the `cms` field that used to live on it.
+ */
+type SpecCatalogVary = (scope: Omit<VaryScope, never>) => unknown
+
+interface ReactCmsApi {
   /**
    * Construct a placeable spec component from a Render function plus
    * an options object (or a `match` shorthand).
@@ -987,6 +1222,10 @@ export const ReactCms = {
    * `<HeroSpec parent={...} id={pokemonId} />`). When `vary` (or the
    * URL pattern) already covers the entire surface, `Extra` is empty
    * and the call site is just `<HeroSpec parent={...} />`.
+   *
+   * The returned spec carries a phantom `.props` type — `typeof
+   * Spec.props` resolves to the prop bag the framework supplies to
+   * Render (vary-derived + RenderArgs), without re-typing.
    */
   partial<
     const Opts extends string | PartialOptions<object> = PartialOptions<object>,
@@ -995,75 +1234,102 @@ export const ReactCms = {
   >(
     Render: (props: R) => ReactNode,
     matchOrOpts?: Opts,
-  ): SpecComponent<SpecExtraProps<R, V>> {
-    const options: PartialOptions<V> =
-      typeof matchOrOpts === "string"
-        ? { match: matchOrOpts }
-        : ((matchOrOpts ?? {}) as PartialOptions<V>)
+  ): SpecComponent<SpecExtraProps<R, V>, Prettify<V & RenderArgs>>
 
-    const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
-    if (matchPattern) registeredMatchPatterns.push(matchPattern)
+  /**
+   * Two-step form: `partial(opts)` returns a builder. The builder is
+   * callable — pass the Render to finish — and exposes `.props` as a
+   * phantom for forward-reference inference:
+   *
+   *     const HeroBuilder = ReactCms.partial({ match: "/p/:id" })
+   *     function HeroRender(p: typeof HeroBuilder.props) { … }
+   *     const Hero = HeroBuilder(HeroRender)
+   *
+   * Use this when you want to derive Render's props type before the
+   * Render function exists (which the single-step form can't do —
+   * `const S = partial(R, opts); function R(p: typeof S.props)` hits
+   * a circular initializer).
+   */
+  partial<const Opts extends PartialOptions<object> = PartialOptions<object>>(
+    opts: Opts,
+  ): PartialBuilder<Opts>
 
-    const isSlotBlock = options.tags != null && options.tags.length > 0
+  /**
+   * Construct a slot-placeable CMS-driven spec.
+   *
+   * A block is a partial with two extras: `tags` for slot-allow class
+   * tokens (the spec catalog registers blocks under their auto-derived
+   * `type` for slot lookup), and a `schema` callback that reads CMS
+   * fields. `schema`'s result is merged into Render's prop bag
+   * alongside `vary`'s output and folded into the cache key.
+   *
+   *     const Hero = ReactCms.block(HeroRender, {
+   *       tags: [".page-block"],
+   *       schema: ({ cms }) => ({ headline: cms.text("headline") }),
+   *     })
+   *
+   * The catalog type defaults to the auto-derived name from
+   * `Render.name` (e.g. `HeroRender` → `"hero"`); override via `name`.
+   */
+  block<
+    V extends object = object,
+    S extends object = object,
+    R extends V & S & RenderArgs = V & S & RenderArgs,
+  >(
+    Render: (props: R) => ReactNode,
+    opts?: BlockOptions<V, S>,
+  ): SpecComponent<SpecExtraProps<R, V & S>, Prettify<V & S & RenderArgs>>
+}
 
-    let parsed: ParsedSelector
-    let id: string
-    if (isSlotBlock) {
-      // Slot-block specs have no #-token by default; their effective
-      // selector is materialized per-instance from the entry's cmsId.
-      // For catalog purposes we use the type tag.
-      parsed = {
-        uniqueTokens: [],
-        sharedTokens: (options.tags ?? []).map((t) => t.slice(1)),
-      }
-      id = options.type ?? options.cmsId ?? autoSelector(Render).toString().slice(1)
-    } else {
-      const selectorInput = options.selector ?? autoSelector(Render)
-      parsed = parseSelector(selectorInput)
-      id = effectiveIdFromSelector(parsed)
+function buildPartialFromOptions<V extends object>(
+  Render: (props: V & RenderArgs) => ReactNode,
+  opts: PartialOptions<V>,
+): SpecComponent<object, Prettify<V & RenderArgs>> {
+  return buildSpecComponent(Render, opts as InternalSpecConfig<V>)
+}
+
+function buildBlock<V extends object, S extends object>(
+  Render: (props: V & S & RenderArgs) => ReactNode,
+  opts: BlockOptions<V, S>,
+): SpecComponent<object, Prettify<V & S & RenderArgs>> {
+  const config: InternalSpecConfig<V & S> = {
+    isSlotBlock: true,
+    selector: opts.selector,
+    cache: opts.cache,
+    defer: opts.defer,
+    fallback: opts.fallback,
+    vary: opts.vary as InternalSpecConfig<V & S>["vary"],
+    schema: opts.schema as InternalSpecConfig<V & S>["schema"],
+  }
+  return buildSpecComponent(Render, config)
+}
+
+export const ReactCms: ReactCmsApi = {
+  partial: (function partialImpl(arg1: unknown, arg2?: unknown) {
+    // Two-step: a single non-function argument is the options object.
+    // Returns a callable builder that builds the spec when invoked
+    // with a Render.
+    if (typeof arg1 !== "function") {
+      const options = (arg1 ?? {}) as PartialOptions<object>
+      const builder = (Render: (props: object & RenderArgs) => ReactNode) =>
+        buildPartialFromOptions(Render, options)
+      // `.props` is type-only; the runtime value is undefined.
+      return builder
     }
-
-    const cmsId = options.cmsId ?? id
-    const type = options.type ?? id
-
-    const spec: InternalSpec<V> = {
-      id,
-      cmsId,
-      type,
-      parsed,
-      options,
-      matchPattern,
-      // The internal renderer is invoked with the merged
-      // (extraProps + varyResult + framework) prop bag — the type
-      // narrows down to `R` at the public signature, but inside
-      // `createSpecComponent` we only know the V-shape side.
-      Render: Render as unknown as (props: V & RenderArgs) => ReactNode,
-      isSlotBlock,
-    }
-
-    const Component = createSpecComponent(spec) as SpecComponent<SpecExtraProps<R, V>>
-    componentById.set(id, Component as SpecComponent<Record<string, unknown>>)
-
-    registerSpec({
-      id,
-      cmsId,
-      type,
-      selectorTokens: parsed,
-      // Slot lookup invokes the component with only framework props
-      // (`parent`, optional `cmsId`/`children`); call sites that pass
-      // extra `Extra` props go through the typed `SpecComponent<Extra>`
-      // surface returned to the spec author. The catalog signature is
-      // narrower than `SpecComponent<Extra>`, so we cast at the boundary.
-      Component: Component as FC<PartialComponentProps>,
-      isSlotBlock,
-      vary: options.vary as ((scope: VaryScope) => unknown) | undefined,
-      matchPattern,
-      displayName:
-        (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
-    })
-
-    return Component
-  },
+    // Single-step: arg1 is Render, arg2 is options-or-match-shorthand.
+    const Render = arg1 as (props: object & RenderArgs) => ReactNode
+    const options =
+      typeof arg2 === "string"
+        ? ({ match: arg2 } as PartialOptions<object>)
+        : ((arg2 ?? {}) as PartialOptions<object>)
+    return buildPartialFromOptions(Render, options)
+  }) as ReactCmsApi["partial"],
+  block: (function blockImpl<V extends object, S extends object>(
+    Render: (props: V & S & RenderArgs) => ReactNode,
+    opts?: BlockOptions<V, S>,
+  ) {
+    return buildBlock(Render, opts ?? {})
+  }) as ReactCmsApi["block"],
 }
 
 // ─── PartialRoot ──────────────────────────────────────────────────────
@@ -1273,7 +1539,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
 export function getSpecComponentById(
   id: string,
 ): SpecComponent<Record<string, unknown>> | undefined {
-  return componentById.get(id)
+  return componentById.get(id) as SpecComponent<Record<string, unknown>> | undefined
 }
 
 export function lookupSpecComponentForCmsId(

@@ -3,9 +3,17 @@
 A React Server Components based framework layer for pages composed
 of independently re-renderable, addressable, cacheable subtrees.
 
-The primitive is `ReactCms.partial(Render, options)`. A spec is
-constructed once at module scope; every dependency it has on the
-request, route, or CMS lives in a single sync `vary` callback.
+The public surface is three things:
+
+| | What it is | When you reach for it |
+|---|---|---|
+| `ReactCms.partial(R, opts)` | Addressable render unit. Optionally URL-gated via `match`. | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all. |
+| `ReactCms.block(R, opts)` | Slot-placeable partial with a `schema` for CMS content. | Content blocks the CMS can place into slots or render directly via `cmsId` override. |
+| `<Frame name initialUrl>` | Scope opener — extends `parent.frameChain` so descendants see the frame-resolved request. | Any region whose URL is independent of the window URL. |
+
+A spec is constructed once at module scope; every dependency it has on
+the request lives in a single sync `vary` callback (CMS reads live on
+blocks' `schema`).
 
 ```tsx
 const PokemonPage = ReactCms.partial(PokemonRender, "/pokemon/:id")
@@ -60,16 +68,21 @@ placements.
 
 ## Reading order
 
-1. [`partial.md`](./partial.md) — the constructor surface.
-2. [`cache.md`](./cache.md) — server-side render-output cache.
-3. [`cms.md`](./cms.md) — CMS layer + editor.
-4. [`frames-navigation.md`](./frames-navigation.md) — frames
-   and the `useNavigation` API.
+1. [`partial.md`](./partial.md) — the base constructor.
+2. [`block.md`](./block.md) — the CMS-slot-placeable constructor.
+3. [`cache.md`](./cache.md) — server-side render-output cache.
+4. [`cms.md`](./cms.md) — CMS layer + editor.
+5. [`frames-navigation.md`](./frames-navigation.md) — `<Frame>`
+   component and the `useNavigation` API.
 
-## What changed (2026-04-28)
+## What changed (2026-05-11)
 
-The framework just went through a rewrite from `<Partial>` JSX
-wrappers + tracked accessors (`getCookie`, `getSearchParam`, …) to
-the define-step constructor. The old API and internals docs are in
-[`archive/`](../archive/); the design rationale lives in
-[`notes/partial-define-step-api.md`](../notes/partial-define-step-api.md).
+Split `ReactCms.partial` into three public surfaces — `partial`,
+`block`, and the new `<Frame>` component. `partial` is the base
+addressable subtree (request-dimensions vary only, no CMS reads).
+`block` is the slot-placeable variant with a `schema` callback for
+CMS reads. `<Frame>` replaces the old `partial({frame, frameUrl})`
+options as a plain scope-opening component. Dead options (`cmsId`,
+`errorWith`) stripped. See
+[`docs/adr/0001-partial-block-frame-split.md`](../adr/0001-partial-block-frame-split.md)
+for the rationale.

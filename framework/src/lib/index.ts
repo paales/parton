@@ -7,32 +7,31 @@ export {
   ROOT,
   type PartialCtx,
   type PartialOptions,
+  type BlockOptions,
   type PartialComponentProps,
+  type PartialBuilder,
   type SpecComponent,
   type SpecExtraProps,
   type SelectorToken,
   type SelectorTokens,
   type VaryScope,
+  type SchemaScope,
   type RenderArgs,
   type ActivatorProps,
   type DeferSpec,
+  type InferV,
+  type InferRenderProps,
+  type ParseRoute,
   getSpecComponentById,
   lookupSpecComponentForCmsId,
   getRegisteredMatchPatterns,
 } from "./partial.tsx"
 
 export {
-  Children,
-  Child,
-  type ChildrenProps,
-  type ChildProps,
-} from "./slot.tsx"
-
-
-export {
   PartialsClient,
   getCachedPartialIds,
   useActivate,
+  useEnclosingPartialId,
   useNavigation,
   useScrollRestore,
   type ActivatorFire,

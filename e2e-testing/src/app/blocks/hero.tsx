@@ -6,7 +6,7 @@ import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 import { cn } from "@react-cms/copies/lib/utils"
 
-export const HeroBlock = ReactCms.partial(
+export const HeroBlock = ReactCms.block(
   function HeroRender({
     headline,
     subhead,
@@ -34,9 +34,8 @@ export const HeroBlock = ReactCms.partial(
     )
   },
   {
-    type: "hero",
-    tags: [".demo-block", ".composed-hero"],
-    vary: ({ cms }) => ({
+    selector: ".demo-block .composed-hero",
+    schema: ({ cms }) => ({
       headline: cms.text("headline"),
       subhead: cms.text("subhead"),
       tone: cms.enum("tone", ["calm", "loud"] as const),

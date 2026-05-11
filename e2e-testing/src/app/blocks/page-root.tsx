@@ -2,11 +2,16 @@
  * Page-level root container — single `body` slot accepting `.page-block`.
  */
 
-import { Children, ReactCms, type RenderArgs } from "@react-cms/framework"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import type { ReactNode } from "react"
 
-export const PageRootBlock = ReactCms.partial(
-  function PageRootRender({ parent, cmsId }: RenderArgs) {
-    return <Children name="body" allow=".page-block" host={parent} hostCmsId={cmsId} />
+export const PageRootBlock = ReactCms.block(
+  function PageRootRender({ body }: { body: ReactNode } & RenderArgs) {
+    return body
   },
-  { type: "page-root", tags: [] as never },
+  {
+    schema: ({ cms }) => ({
+      body: cms.blocks("body", ".page-block"),
+    }),
+  },
 )

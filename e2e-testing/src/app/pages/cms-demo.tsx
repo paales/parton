@@ -3,25 +3,31 @@
  *
  * One spec matches both `/cms-demo` and `/cms-demo/:slug` via the
  * `/cms-demo{/*}?` URLPattern (optional `/*` tail). The render is a
- * `<Children name="body">` slot whose entries (registered as `page-*`
- * blocks in the catalog) compose the page.
+ * single `body` slot whose entries (registered as `page-*` blocks in
+ * the catalog) compose the page.
  */
 
-import { Children, ReactCms } from "@react-cms/framework"
+import { ReactCms } from "@react-cms/framework"
+import type { ReactNode } from "react"
+import type { RenderArgs } from "@react-cms/framework"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 
-export const CmsDemoRootPartial = ReactCms.partial(
-  function CmsDemoRootRender({ cmsId, parent }) {
-    return <Children name="body" allow=".page-block" host={parent} hostCmsId={cmsId} />
+export const CmsDemoRootBlock = ReactCms.block(
+  function CmsDemoRootRender({ body }: { body: ReactNode } & RenderArgs) {
+    return body
   },
-  { cmsId: "cms-demo-root" },
+  {
+    schema: ({ cms }) => ({
+      body: cms.blocks("body", ".page-block"),
+    }),
+  },
 )
 
 export const CmsDemoPage = ReactCms.partial(
   function CmsDemoExplainerRender({ parent }) {
     return (
       <>
-        <CmsDemoRootPartial parent={parent} />
+        <CmsDemoRootBlock parent={parent} />
 
         <Card className="mt-8 p-5">
           <CardContent className="px-0 text-sm text-muted-foreground">
@@ -32,9 +38,9 @@ export const CmsDemoPage = ReactCms.partial(
                 <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
                   #cms-demo-root
                 </code>
-                ) whose render is a{" "}
+                ) whose schema reads a{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-                  &lt;Children name="body" /&gt;
+                  cms.blocks("body", ".page-block")
                 </code>{" "}
                 slot. Every visible piece is a slot child in the CMS store.
               </li>

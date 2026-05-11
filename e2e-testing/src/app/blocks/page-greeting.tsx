@@ -3,7 +3,7 @@ import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 import { Badge } from "@react-cms/copies/components/ui/badge"
 import { cn } from "@react-cms/copies/lib/utils"
 
-export const PageGreetingBlock = ReactCms.partial(
+export const PageGreetingBlock = ReactCms.block(
   function PageGreetingRender({
     headline,
     body,
@@ -47,9 +47,8 @@ export const PageGreetingBlock = ReactCms.partial(
     )
   },
   {
-    type: "page-greeting",
-    tags: [".page-block"],
-    vary: ({ cms }) => ({
+    selector: ".page-block",
+    schema: ({ cms }) => ({
       headline: cms.text("headline"),
       body: cms.text("body"),
       tone: cms.enum("tone", ["calm", "loud"] as const),

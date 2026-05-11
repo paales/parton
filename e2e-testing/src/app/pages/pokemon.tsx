@@ -10,6 +10,7 @@
  */
 
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { Frame } from "@react-cms/framework/lib/frame.tsx"
 import { client } from "../data.ts"
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts"
 import { Badge } from "@react-cms/copies/components/ui/badge"
@@ -155,8 +156,6 @@ function makeSearchArea(scope: "page" | "frame") {
 
   const Body = ReactCms.partial(SearchBodyRender, {
     selector: scope === "page" ? "#search-page .search-results" : "#search .search-results",
-    frame: scope === "frame" ? "search" : undefined,
-    frameUrl: scope === "frame" ? "/" : undefined,
     vary: ({ search: { search, q = "" } }) => ({ search, q }),
   })
 
@@ -360,7 +359,9 @@ export const PokemonOverviewPage = ReactCms.partial(
       <>
         <HeaderPartial parent={parent} showControls={false} />
         <SearchAreaPage parent={parent} />
-        <SearchAreaFrame parent={parent} />
+        <Frame name="search" initialUrl="/" parent={parent}>
+          {(p) => <SearchAreaFrame parent={p} />}
+        </Frame>
         {ListPagePartials.map((P, i) => (
           <P key={`list-page-${i + 1}`} parent={parent} />
         ))}

@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest"
 import { ReactCms, ROOT, type RenderArgs } from "../partial.tsx"
+import { Frame } from "../frame.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 
 async function flightAt(url: string, node: React.ReactNode): Promise<string> {
@@ -230,28 +231,89 @@ describe("ReactCms.partial — call-site prop pass-through", () => {
   })
 })
 
-describe("ReactCms.partial — frame scope", () => {
-  it("vary receives frame-resolved request when spec opens a frame", async () => {
-    // Without a session entry, the frame falls back to the spec's
-    // frameUrl option. The vary callback should see that URL, not
-    // the page URL.
+describe("ReactCms.partial — two-step builder", () => {
+  it("partial(opts) returns a callable builder that produces a spec", async () => {
+    // The builder form lets authors derive `typeof Builder.props`
+    // before the Render exists — the single-step form can't do that
+    // because `const S = partial(R, opts)` + `function R(p: typeof
+    // S.props)` hits a circular initializer.
+    const Builder = ReactCms.partial({ match: "/builder/:slug", selector: "#two-step" })
+    function BuilderRender(p: typeof Builder.props) {
+      return <span data-testid="two-step-out">{p.slug}</span>
+    }
+    const Page = Builder(BuilderRender)
+    const out = await flightAt("http://t/builder/hello", <Page parent={ROOT} />)
+    expect(out).toContain("two-step-out")
+    expect(out).toContain("hello")
+  })
+
+  it("builder threads vary's return through the same way single-step does", async () => {
+    const Builder = ReactCms.partial({
+      match: "/builder/:slug",
+      selector: "#two-step-vary",
+      vary: ({ params, search: { variant = "default" } }) => ({
+        slug: params.slug,
+        variant,
+      }),
+    })
+    function BuilderVaryRender(p: typeof Builder.props) {
+      return (
+        <span data-testid="two-step-vary-out">
+          {p.slug}:{p.variant}
+        </span>
+      )
+    }
+    const Page = Builder(BuilderVaryRender)
+    const out = await flightAt(
+      "http://t/builder/foo?variant=mint",
+      <Page parent={ROOT} />,
+    )
+    expect(out).toContain('"foo",":","mint"')
+  })
+})
+
+describe("ReactCms.partial — match grammar inference", () => {
+  it("optional `:foo?` flows through as optional prop", async () => {
     const Page = ReactCms.partial(
-      function FramedRender({
-        framePath,
-      }: {
-        framePath: string
-      } & RenderArgs) {
+      function OptionalParamRender({
+        slug,
+        page,
+      }: { slug: string; page?: string } & RenderArgs) {
+        return (
+          <span data-testid="opt-out">
+            {slug}/{page ?? "none"}
+          </span>
+        )
+      },
+      { match: "/opt/:slug{/:page}?", selector: "#opt-spec" },
+    )
+    const withPage = await flightAt("http://t/opt/x/2", <Page parent={ROOT} />)
+    expect(withPage).toContain('"x","/","2"')
+    const withoutPage = await flightAt("http://t/opt/x", <Page parent={ROOT} />)
+    expect(withoutPage).toContain('"x","/","none"')
+  })
+})
+
+describe("<Frame> — scope opener", () => {
+  it("descendant partials see the frame-resolved request in vary", async () => {
+    // <Frame> writes its initialUrl to session if absent; the inner
+    // partial's resolveFrameRequest then reads that URL via session,
+    // and `vary` sees it as `pathname` instead of the page URL.
+    const Inner = ReactCms.partial(
+      function FramedInnerRender({ framePath }: { framePath: string } & RenderArgs) {
         return <span data-testid="frame-pathname">{framePath}</span>
       },
       {
-        match: "/frame-host",
-        selector: "#framed-spec",
-        frame: "drawer",
-        frameUrl: "/drawer/initial",
+        selector: "#framed-inner",
         vary: ({ pathname }) => ({ framePath: pathname }),
       },
     )
-    const out = await flightAt("http://t/frame-host", <Page parent={ROOT} />)
+    const out = await flightAt(
+      "http://t/frame-host",
+      <Frame name="drawer-test" initialUrl="/drawer/initial" parent={ROOT}>
+        {(p) => <Inner parent={p} />}
+      </Frame>,
+    )
     expect(out).toContain("/drawer/initial")
     expect(out).not.toContain(">/frame-host<")
   })

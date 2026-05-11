@@ -25,18 +25,12 @@ export const ROOT: PartialCtx = Object.freeze({
   frameChain: EMPTY,
 })
 
-/** Build the child context a spec passes to its render fn. */
-export function _childContext(
-  parent: PartialCtx,
-  selfId: string,
-  frame: string | undefined,
-): PartialCtx {
+/** Build the child context a spec passes to its render fn. Frame
+ *  scope opening lives on `<Frame>`, not on partial specs — `parent`'s
+ *  `frameChain` flows through unchanged. */
+export function _childContext(parent: PartialCtx, selfId: string): PartialCtx {
   const path = Object.freeze([...parent.path, selfId]) as readonly string[]
-  const frameChain =
-    frame != null
-      ? (Object.freeze([...parent.frameChain, frame]) as readonly string[])
-      : parent.frameChain
-  return { path, frameChain }
+  return { path, frameChain: parent.frameChain }
 }
 
 export function _joinFrameChain(chain: readonly string[]): string {

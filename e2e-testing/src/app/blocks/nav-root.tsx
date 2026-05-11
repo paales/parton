@@ -1,17 +1,20 @@
 /**
  * App nav root — styled `<nav>` chrome around the editable list of
- * `.nav-item` blocks.
+ * `.nav-item` blocks. Singleton block bound to cmsId `app-nav` via the
+ * `#app-nav` token in its selector.
  */
 
-import { Children, ReactCms, type RenderArgs } from "@react-cms/framework"
+import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import type { ReactNode } from "react"
 
-export const NavRootBlock = ReactCms.partial(
-  function NavRootRender({ parent, cmsId }: RenderArgs) {
-    return (
-      <nav className="mb-6 flex flex-wrap gap-1 border-b pb-3">
-        <Children name="links" allow=".nav-item" host={parent} hostCmsId={cmsId} />
-      </nav>
-    )
+export const AppNavBlock = ReactCms.block(
+  function AppNavRender({ links }: { links: ReactNode } & RenderArgs) {
+    return <nav className="mb-6 flex flex-wrap gap-1 border-b pb-3">{links}</nav>
   },
-  { type: "nav-root", tags: [] as never },
+  {
+    selector: "#app-nav",
+    schema: ({ cms }) => ({
+      links: cms.blocks("links", ".nav-item"),
+    }),
+  },
 )

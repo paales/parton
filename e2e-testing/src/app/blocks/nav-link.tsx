@@ -5,7 +5,7 @@
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { buttonVariants } from "@react-cms/copies/components/ui/button"
 
-export const NavLinkBlock = ReactCms.partial(
+export const NavLinkBlock = ReactCms.block(
   function NavLinkRender({ href, label }: { href: string; label: string } & RenderArgs) {
     return (
       <a href={href} className={buttonVariants({ variant: "ghost", size: "sm" })}>
@@ -14,9 +14,8 @@ export const NavLinkBlock = ReactCms.partial(
     )
   },
   {
-    type: "nav-link",
-    tags: [".nav-item"],
-    vary: ({ cms }) => ({
+    selector: ".nav-item",
+    schema: ({ cms }) => ({
       href: cms.text("href"),
       label: cms.text("label"),
     }),

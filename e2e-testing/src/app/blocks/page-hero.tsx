@@ -2,7 +2,7 @@ import { ReactCms, type RenderArgs } from "@react-cms/framework"
 import { Card, CardContent } from "@react-cms/copies/components/ui/card"
 import { cn } from "@react-cms/copies/lib/utils"
 
-export const PageHeroBlock = ReactCms.partial(
+export const PageHeroBlock = ReactCms.block(
   function PageHeroRender({
     headline,
     subhead,
@@ -26,9 +26,8 @@ export const PageHeroBlock = ReactCms.partial(
     )
   },
   {
-    type: "page-hero",
-    tags: [".page-block"],
-    vary: ({ cms }) => ({
+    selector: ".page-block",
+    schema: ({ cms }) => ({
       headline: cms.text("headline"),
       subhead: cms.text("subhead"),
       tone: cms.enum("tone", ["calm", "loud"] as const),

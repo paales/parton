@@ -11,8 +11,7 @@
  *   2. The error is thrown so render short-circuits. Root's sync
  *      try/catch handles it for page-level throws; deep async throws
  *      bubble to a Partial error boundary that re-throws the sentinel
- *      (so `errorWith` doesn't swallow it) and ultimately surface via
- *      the control channel regardless.
+ *      and ultimately surface via the control channel regardless.
  *
  *   // /app/pages/product.tsx
  *   async function ProductPage() {

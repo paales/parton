@@ -21,14 +21,17 @@ export function LivePriceFallback({
 }
 
 /**
- * Per-SKU live price as a slot-block-typed partial. The catalog
- * registers ONE spec under type `"live-price"`; product cards render
- * it with a per-SKU `cmsId` override (e.g. `"price-FOO123"`), giving
- * each instance its own effective id and `#price-FOO123 .price`
- * selector — refetchable individually via the refresh button or in
- * bulk via `nav.reload({ selector: ".price" })`.
+ * Per-SKU live price as a block. The catalog registers ONE spec under
+ * type `"live-price"`; product cards render it directly via JSX with a
+ * per-SKU `cmsId` override (e.g. `"price-FOO123"`), giving each
+ * instance its own effective id and `#price-FOO123 .price` selector —
+ * refetchable individually via the refresh button or in bulk via
+ * `nav.reload({ selector: ".price" })`. No `schema` — content comes
+ * from JSX props (basePrice, currency, sku), not the CMS store. Blocks
+ * don't require `schema`; the catalog registration is what enables
+ * cache-mode refetch when the spec is placed with a `cmsId` override.
  */
-export const LivePricePartial = ReactCms.partial(
+export const LivePricePartial = ReactCms.block(
   async function LivePriceRender({
     sku,
     basePrice,
@@ -54,7 +57,6 @@ export const LivePricePartial = ReactCms.partial(
     )
   },
   {
-    type: "live-price",
-    tags: [".price"],
+    selector: ".price",
   },
 )

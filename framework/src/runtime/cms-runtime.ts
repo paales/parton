@@ -19,9 +19,12 @@
  * the dependency surface.
  */
 
-import type { ReactNode } from "react"
+import React, { type ReactNode } from "react"
 import { matchRoutePattern } from "./context.ts"
 import { getCmsStorage, type LoadedStore } from "./cms-storage.ts"
+import { CMS_DRAFT_COOKIE, EDITOR_COOKIE } from "./cms-constants.ts"
+
+export { CMS_DRAFT_COOKIE, EDITOR_COOKIE }
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
@@ -37,7 +40,10 @@ export interface Reference<T extends string = string> {
   readonly value: string | null
 }
 
-/** Read surface passed into `vary` callbacks. All sync. */
+/** Read surface passed into `schema` callbacks on `ReactCms.block`.
+ *  Field reads return values; `block`/`blocks` return ReactNodes for
+ *  the host's slot children, rendered via the spec catalog's
+ *  type→Component lookup. */
 export interface CmsReadSurface {
   text(name: string): string
   richText(name: string): string
@@ -46,6 +52,12 @@ export interface CmsReadSurface {
   enum<T extends string>(name: string, values: readonly T[]): T
   image(name: string): { src: string; alt: string }
   reference(name: string, type: string): string | null
+  /** Render a single slot entry (the first one) under `slot`. Returns
+   *  `null` when the slot is empty or no entry matches the selector. */
+  block(slot: string, selector?: string): ReactNode
+  /** Render every slot entry under `slot` in stored order. Returns
+   *  `null` when the slot is empty. */
+  blocks(slot: string, selector?: string): ReactNode
 }
 
 // ─── Store schema ──────────────────────────────────────────────────────
@@ -81,9 +93,6 @@ export interface CmsStore {
 function emptyStore(): CmsStore {
   return { partials: {} }
 }
-
-export const CMS_DRAFT_COOKIE = "cms-draft"
-export const EDITOR_COOKIE = "__editor"
 
 interface CacheSlot {
   store: CmsStore
@@ -537,12 +546,21 @@ function readCookieRaw(request: Request, name: string): string | undefined {
 const EMPTY_IMAGE = Object.freeze({ src: "", alt: "" })
 
 /**
- * Build a sync `CmsReadSurface` bound to `cmsId` + `request`. The
- * resolver runs once on first read and memoizes; subsequent reads hit
- * the cached fields map. Empty defaults for everything when the store
- * has nothing — vary still returns a stable shape on first authoring.
+ * Build a sync `CmsReadSurface` bound to `cmsId` + `request` + `host`
+ * context. Field reads resolve from this node's configs; `block`/
+ * `blocks` calls render slot entries from `node.slots[name]` through
+ * the spec catalog (type → Component) with the host's frame chain
+ * + parent threaded in.
+ *
+ * `host` is the host spec's child PartialCtx — slot-rendered blocks
+ * are descendants under it. Optional only because the prerender's
+ * tracking surface doesn't have a real one.
  */
-export function createCmsReadSurface(cmsId: string | undefined, request: Request): CmsReadSurface {
+export function createCmsReadSurface(
+  cmsId: string | undefined,
+  request: Request,
+  host?: import("../lib/partial-context.ts").PartialCtx,
+): CmsReadSurface {
   let resolved: Record<string, unknown> | null | undefined
   const resolve = (): Record<string, unknown> | null => {
     if (resolved !== undefined) return resolved
@@ -590,7 +608,76 @@ export function createCmsReadSurface(cmsId: string | undefined, request: Request
       if (typeof v === "number") return String(v)
       return null
     },
+    block(slot, selector) {
+      if (cmsId == null || host == null) return null
+      const node = lookupCmsNode(cmsId, request)
+      const entries = node?.slots?.[slot] ?? []
+      const matched = filterEntriesBySelector(entries, selector)
+      const first = matched[0]
+      if (!first) return null
+      return renderSlotEntry(first, host)
+    },
+    blocks(slot, selector) {
+      if (cmsId == null || host == null) return null
+      const node = lookupCmsNode(cmsId, request)
+      const entries = node?.slots?.[slot] ?? []
+      const matched = filterEntriesBySelector(entries, selector)
+      if (matched.length === 0) return null
+      return matched.map((entry) => renderSlotEntry(entry, host))
+    },
   }
+}
+
+/** Filter slot entries against an optional class-selector filter (e.g.
+ *  `".page-block"`). Each entry's type → spec → spec.selectorTokens
+ *  provides the class tokens to match against. */
+function filterEntriesBySelector(
+  entries: readonly CmsNode[],
+  selector: string | undefined,
+): readonly CmsNode[] {
+  if (!selector) return entries
+  const wanted = selector
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.startsWith("."))
+    .map((t) => t.slice(1))
+  if (wanted.length === 0) return entries
+  return entries.filter((entry) => {
+    const type = entry.type
+    if (!type) return false
+    const spec = getSpecByType(type)
+    if (!spec) return false
+    return wanted.some((w) => spec.selectorTokens.sharedTokens.includes(w))
+  })
+}
+
+function renderSlotEntry(
+  entry: CmsNode,
+  host: import("../lib/partial-context.ts").PartialCtx,
+): React.ReactElement | null {
+  const type = entry.type
+  if (!type) return null
+  const spec = getSpecByType(type)
+  if (!spec) {
+    if (import.meta.env?.DEV) {
+      console.warn(
+        `[cms] slot entry "${entry.id}" has type "${type}" which is not registered. ` +
+          `Register with ReactCms.block(...).`,
+      )
+    }
+    return null
+  }
+  // Slot wiring passes the entry's id via the framework-internal
+  // `__cmsId` prop — underscore-prefixed because it isn't part of the
+  // public surface (authors set per-instance ids by either embedding
+  // `#token` in the spec selector for singletons, or by relying on the
+  // framework's props-hash derivation for multi-instance JSX
+  // placements).
+  const Component = spec.Component as React.FC<{
+    parent: import("../lib/partial-context.ts").PartialCtx
+    __cmsId?: string
+  }>
+  return React.createElement(Component, { key: entry.id, parent: host, __cmsId: entry.id })
 }
 
 // ─── Spec catalog (block + page registration) ─────────────────────────
@@ -615,7 +702,11 @@ export interface SpecCatalogEntry {
   /** True when this spec was constructed with `tags` — usable as a
    *  slot block. Only slot blocks register in the type catalog. */
   isSlotBlock: boolean
-  /** Used by the editor's catalog prerender to discover content fields. */
+  /** Request-dimensions vary callback. Used by the descendant-fp fold
+   *  (`computeDescendantFold`) to re-resolve a descendant's vary
+   *  against the current request without rendering. The shape mirrors
+   *  `VaryScope` in partial.tsx; kept inline here to avoid the
+   *  runtime → lib import edge. */
   vary?: (scope: {
     url: URL
     pathname: string
@@ -623,8 +714,13 @@ export interface SpecCatalogEntry {
     cookies: Partial<Record<string, string>>
     headers: Partial<Record<string, string>>
     params: Record<string, string>
-    cms: CmsReadSurface
+    session: import("./session.ts").SessionReadSurface
   }) => unknown
+  /** Schema callback on `ReactCms.block` specs. Reads CMS fields via
+   *  the supplied `cms` surface. The editor's catalog prerender
+   *  invokes it with a tracking surface to discover what fields the
+   *  block reads. */
+  schema?: (scope: { cms: CmsReadSurface }) => unknown
   /** Compiled URLPattern for the spec's `match` option, if any. The
    *  framework's descendant-fp fold needs to evaluate descendants'
    *  matches against the current request URL when computing

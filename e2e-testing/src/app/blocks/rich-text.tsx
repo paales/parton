@@ -1,6 +1,6 @@
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
 
-export const RichTextBlock = ReactCms.partial(
+export const RichTextBlock = ReactCms.block(
   function RichTextRender({ body }: { body: string } & RenderArgs) {
     return (
       <div
@@ -12,8 +12,7 @@ export const RichTextBlock = ReactCms.partial(
     )
   },
   {
-    type: "rich-text",
-    tags: [".demo-block", ".composed-rich-text"],
-    vary: ({ cms }) => ({ body: cms.richText("body") }),
+    selector: ".demo-block .composed-rich-text",
+    schema: ({ cms }) => ({ body: cms.richText("body") }),
   },
 )

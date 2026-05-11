@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { _windowNav, registerClientPartial } from "./partial-client.tsx"
+import { _windowNav, PartialIdContext, registerClientPartial } from "./partial-client.tsx"
 import { registerDebugPartial } from "./partial-debug.tsx"
 
 interface Props {
@@ -134,6 +134,15 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
         </div>
       )
     }
-    return this.props.children
+    // Provide the enclosing-partial id to client descendants. Hooks
+    // like `useEnclosingPartialId()` read this for self-targeting
+    // refetch — e.g. an in-block `<RefreshButton>` that resolves to
+    // `nav.reload({ selector: "#" + id })` regardless of how the
+    // instance is externally addressable.
+    return (
+      <PartialIdContext.Provider value={this.props.partialId}>
+        {this.props.children}
+      </PartialIdContext.Provider>
+    )
   }
 }

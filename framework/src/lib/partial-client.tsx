@@ -775,6 +775,27 @@ export const FrameNameContext = createContext<readonly string[]>(
   Object.freeze([]) as readonly string[],
 )
 
+/**
+ * Enclosing partial instance id. Set by every spec's render via the
+ * `<PartialIdContext.Provider>` wrapper around its body. Client
+ * descendants read it via `useEnclosingPartialId()` to self-target
+ * for refetch (`nav.reload({ selector: \`#\${id}\` })`) when external
+ * code can only address them by class.
+ */
+export const PartialIdContext = createContext<string | null>(null)
+
+/**
+ * Read the enclosing partial's effective instance id. Returns `null`
+ * when called outside any spec render (shouldn't happen in practice).
+ *
+ *     const id = useEnclosingPartialId()
+ *     const nav = useNavigation()
+ *     onClick={() => nav.reload({ selector: \`#\${id}\` })}
+ */
+export function useEnclosingPartialId(): string | null {
+  return useContext(PartialIdContext)
+}
+
 /** Dotted canonical name for a frame path. */
 function joinFramePath(path: readonly string[]): string {
   return path.join(".")

@@ -1,27 +1,25 @@
 # CMS
 
-A thin layer on top of `ReactCms.partial`. A spec with a `cmsId`
-opens a CMS scope; its `vary` callback receives a sync `cms` read
-surface bound to that id, and its render function gets the resolved
-field values.
+CMS-driven content lives on [`ReactCms.block`](./block.md) specs via
+a `schema` callback. The callback receives a sync `cms` read surface
+bound to the block's effective `cmsId`; its return is merged into the
+Render function's prop bag.
 
 ```tsx
-const PromoBlock = ReactCms.partial(PromoRender, {
-  type: "promo",
-  tags: [".promo"],
-  vary: ({ cms }) => ({
-    headline: cms.text("headline"),
-    body: cms.text("body"),
-    tone: cms.enum("tone", ["info", "warn"] as const),
-    dismissAfter: cms.number("dismissAfter"),
-  }),
-})
-
-function PromoRender({
-  headline, body, tone, dismissAfter,
-}: { ... } & RenderArgs) {
-  return <div data-tone={tone}>...</div>
-}
+const PromoBlock = ReactCms.block(
+  function PromoRender({ headline, body, tone, dismissAfter }) {
+    return <div data-tone={tone}>...</div>
+  },
+  {
+    tags: [".promo"],
+    schema: ({ cms }) => ({
+      headline: cms.text("headline"),
+      body: cms.text("body"),
+      tone: cms.enum("tone", ["info", "warn"] as const),
+      dismissAfter: cms.number("dismissAfter"),
+    }),
+  },
+)
 ```
 
 ## Read surface
@@ -37,8 +35,8 @@ function PromoRender({
 | `cms.reference(name, type)` | `string \| null` | `null` |
 
 All sync. Every getter resolves against the already-loaded config
-cascade for the spec's `cmsId`. `cms.reference` returns the **id
-only** — async loaders run inside `Render`, not `vary`.
+cascade for the block's `cmsId`. `cms.reference` returns the **id
+only** — async loaders run inside `Render`, not `schema`.
 
 ## Content store schema
 
@@ -95,14 +93,13 @@ break by config-array order (earlier wins).
 // e2e-testing/src/app/blocks/promo.tsx
 import { ReactCms, type RenderArgs } from "../../lib"
 
-export const PromoBlock = ReactCms.partial(
+export const PromoBlock = ReactCms.block(
   function PromoRender({ headline, body, tone }: { ... } & RenderArgs) {
     return <div data-tone={tone}>...</div>
   },
   {
-    type: "promo",
     tags: [".promo", ".demo-block"],
-    vary: ({ cms }) => ({
+    schema: ({ cms }) => ({
       headline: cms.text("headline"),
       body: cms.text("body"),
       tone: cms.enum("tone", ["calm", "loud"] as const),
@@ -112,58 +109,65 @@ export const PromoBlock = ReactCms.partial(
 ```
 
 That's it — no `registerBlock` call. The constructor self-registers
-under `type` (or auto-derived id). Import the file once for its side
-effect (`e2e-testing/src/app/blocks/catalog.ts` does this for the demo app).
+under its auto-derived name (`PromoRender` → `"promo"`); override via
+`name`. Import the file once for its side effect
+(`e2e-testing/src/app/blocks/catalog.ts` does this for the demo app).
 
 ## Slots
 
-```tsx
-import { Children, Child } from "../../lib"
+Slot composition lives on the schema. `cms.blocks(slot, selector?)`
+returns a ReactNode that resolves every entry under `node.slots[slot]`
+to a rendered block via the type catalog. `cms.block(slot, selector?)`
+is the singular variant (at most one entry).
 
-export const PageRootBlock = ReactCms.partial(
-  function PageRootRender({ parent, cmsId }: RenderArgs) {
+```tsx
+import type { ReactNode } from "react"
+
+export const PageRootBlock = ReactCms.block(
+  function PageRootRender({ body, sidebar }: {
+    body: ReactNode
+    sidebar: ReactNode
+  } & RenderArgs) {
     return (
       <main>
-        <Children name="body" allow=".page-block" host={parent} hostCmsId={cmsId} />
-        <aside>
-          <Child name="sidebar" allow=".widget" host={parent} hostCmsId={cmsId} />
-        </aside>
+        {body}
+        <aside>{sidebar}</aside>
       </main>
     )
   },
-  { type: "page-root", tags: [] as never },
+  {
+    schema: ({ cms }) => ({
+      body: cms.blocks("body", ".page-block"),
+      sidebar: cms.block("sidebar", ".widget"),
+    }),
+  },
 )
 ```
 
-| Component | Renders |
-|---|---|
-| `<Children name allow host hostCmsId>` | Every entry in `node.slots[name]` in stored order; each rendered through its registered spec with `cmsId={entry.id}` override. |
-| `<Child name allow host hostCmsId>` | At most one entry. |
-
-`host` is the `parent: PartialCtx` from the host spec's render args.
-`hostCmsId` is the host's effective cmsId — pass `cmsId` from
-`RenderArgs`.
+The framework wires host context (parent + effective cmsId) into the
+`cms` surface implicitly. Author code doesn't thread `host` /
+`hostCmsId`. Each slot entry's id becomes its block instance's
+effective cmsId via the framework-internal slot wiring.
 
 ## References + entity loaders
 
 ```tsx
-const ProductHero = ReactCms.partial(
+const ProductHero = ReactCms.block(
   async function ProductHeroRender({ productRef }: { productRef: string | null } & RenderArgs) {
     const product = productRef ? await getProduct(productRef) : null
     if (!product) return null
     return <Hero product={product} />
   },
   {
-    type: "product-hero",
-    cmsId: "product-hero",
-    vary: ({ cms }) => ({
+    tags: [".product-hero"],
+    schema: ({ cms }) => ({
       productRef: cms.reference("featured", "product"),
     }),
   },
 )
 ```
 
-The id contributes to the cache key via the vary result; the async
+The id contributes to the cache key via the schema result; the async
 loader runs in `Render`. Loaders are userspace (`e2e-testing/src/app/loaders/`).
 
 ## Draft + published
@@ -176,7 +180,7 @@ loader runs in `Render`. Loaders are userspace (`e2e-testing/src/app/loaders/`).
 
 `lookupCmsNode(cmsId, request)` checks draft first when any of these
 hold, else falls back to published. Cache keys naturally vary across
-modes because `cms.text/...` reads return different values.
+modes because `cms.*` reads return different values inside `schema`.
 
 ## Editor mode
 

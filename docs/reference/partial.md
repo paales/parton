@@ -1,10 +1,18 @@
 # `ReactCms.partial(Render, …)`
 
-The framework's only public render primitive. A spec is constructed
-once at module scope from a `Render` function and an options object;
-the call returns a placeable React component. Every dependency the
-spec has on the request, route, or CMS lives in a single sync `vary`
-function whose result is also the cache-key surface.
+The framework's base addressable-render-unit constructor. A spec is
+constructed once at module scope from a `Render` function and an
+options object; the call returns a placeable React component. Every
+request dependency the spec has — URL, search, cookies, headers,
+session — lives in a single sync `vary` function whose result is the
+cache-key surface.
+
+> **Three constructors, one engine.** `partial` is the base case.
+> Slot-placeable CMS-driven units use [`ReactCms.block`](./block.md);
+> frame-scope openers use the `<Frame>` component
+> ([frames-navigation.md](./frames-navigation.md)). All three produce
+> partials at runtime — same registry, same fingerprint pipeline,
+> same refetch path.
 
 ```tsx
 import { ReactCms, ROOT, type RenderArgs } from "./lib"
@@ -30,28 +38,50 @@ const HomePage = ReactCms.partial(Home, "/")
 const PokemonPage = ReactCms.partial(PokemonRender, "/pokemon/:id")
 ```
 
+### Match grammar — what flows into props
+
+`ParseRoute<T>` infers a `{ name: string }` shape from the pattern at
+the type level. URLPattern syntax handled:
+
+| Pattern | Type |
+|---|---|
+| `/:foo` | `{ foo: string }` |
+| `/:foo?` | `{ foo?: string }` (optional) |
+| `/:foo+` / `/:foo*` | `{ foo: string }` (URLPattern flattens repeats to one string) |
+| `/:foo(\d+)` | `{ foo: string }` (regex constraint at runtime; value stays string) |
+| `/*` | not in result (anonymous wildcard) |
+| `/{group}?` | bracket-stripped; named params inside parse normally |
+
+URLPattern is the source of truth for what actually matches at runtime;
+unparseable corners fall through and the prop is just absent. Coerce
+inside `vary` (or `Render`) when you need a non-string shape:
+
+```tsx
+vary: ({ params }) => ({ id: Number(params.id) })
+```
+
 ## Tier 2 — options object
 
 ```tsx
 const ProductHero = ReactCms.partial(ProductHeroRender, {
   match: "/p/:slug",
-  cmsId: "product-hero",
   cache: { maxAge: 60 },
-  vary: ({ params, request, cms }) => ({
+  vary: ({ params, search: { variant = "default" } }) => ({
     slug: params.slug,
-    variant: new URL(request.url).searchParams.get("variant") ?? "default",
-    headline: cms.text("headline"),
-    productRef: cms.reference("featured", "product"),
+    variant,
   }),
 })
 
 async function ProductHeroRender({
-  slug, variant, headline, productRef, parent,
-}: { slug: string; variant: string; headline: string; productRef: string | null } & RenderArgs) {
-  const product = productRef ? await getProduct(productRef) : null
-  return <Hero parent={parent} product={product} headline={headline} />
+  slug, variant, parent,
+}: { slug: string; variant: string } & RenderArgs) {
+  const product = await getProduct(slug)
+  return <Hero parent={parent} product={product} variant={variant} />
 }
 ```
+
+For CMS-driven content (text, images, references), use
+[`ReactCms.block`](./block.md) with a `schema` callback.
 
 `match` runs first; on miss, `vary` doesn't run. On match, the
 pattern's params land in `vary`'s `params` arg. When `vary` returns
@@ -61,54 +91,44 @@ pattern's params land in `vary`'s `params` arg. When `vary` returns
 
 ```ts
 interface PartialOptions<V> {
-  match?: string                                  // pathname pattern
-  vary?: (scope: VaryScope) => V | null           // null = skip render
-  selector?: SelectorTokens                       // auto-derived from Render.name
-  cmsId?: string                                  // defaults to selector
-  type?: string                                   // catalog tag (slot lookup)
-  tags?: ReadonlyArray<`.${string}`>              // class tokens for slot blocks
+  match?: MatchPattern                             // URLPattern gate
+  vary?: (scope: VaryScope) => V | null            // null = skip render
+  selector?: SelectorTokens                        // auto-derived from Render.name
   cache?: CacheOptions
-  frame?: string
-  frameUrl?: string
   defer?: true | ReactElement<ActivatorProps>
   fallback?: ReactNode
-  errorWith?: ReactNode
 }
 ```
 
 | Option | Notes |
 |---|---|
 | `match` | URLPattern pathname (or full `URLPatternInit`). `/p/:slug`, `/p/:slug/reviews/:page`, `/inspect/*` (descendants only), `/inspect{/*}?` (bare + descendants). Pattern miss → spec emits nothing. Anonymous `*` captures don't flow into the default fingerprint — only named groups (`:foo`) do. |
-| `vary` | Sync function. Receives `{ request, params, cms }`. Returns the dependency surface or `null`. |
-| `selector` | Defaults to `#<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. |
-| `cmsId` | Defaults to the effective id (selector minus `#`). |
-| `tags` | When set, the spec is a slot block — `[#<entry.id>, ...tags]` per instance. |
-| `frame` | Opens a frame scope. `vary` receives the frame-resolved request. |
+| `vary` | Sync function. Receives `{ url, pathname, search, cookies, headers, params, session }`. Returns the request-dimensions dependency surface or `null`. **No `cms` here** — CMS reads live on `ReactCms.block`'s `schema` callback. |
+| `selector` | Defaults to `#<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. Accepts both `#unique` and `.shared` class tokens for refetch targeting (e.g. `"#hero .featured"`). |
+| `cache` | See [`cache.md`](./cache.md). |
 | `defer` | `true` for app-driven, an activator element to wire automatically. |
+| `fallback` | React node rendered while the partial's body is suspended. |
 
 ## `VaryScope`
 
 ```ts
 interface VaryScope {
-  request: Request                  // frame-resolved if framed
-  params: Record<string, string>    // populated by `match`
-  cms: CmsReadSurface               // sync getters bound to this spec's cmsId
-}
-
-interface CmsReadSurface {
-  text(name: string): string
-  richText(name: string): string
-  number(name: string): number
-  boolean(name: string): boolean
-  enum<T extends string>(name: string, values: readonly T[]): T
-  image(name: string): { src: string; alt: string }
-  reference(name: string, type: string): string | null
+  url: URL                                  // frame-resolved if framed
+  pathname: string                          // shortcut for url.pathname
+  search: Partial<Record<string, string>>   // destructurable
+  cookies: Partial<Record<string, string>>  // destructurable
+  headers: Partial<Record<string, string>>  // lowercase keys
+  params: Record<string, string>            // from `match`
+  session: SessionReadSurface               // per-key session reads
 }
 ```
 
-`cms.reference` returns the **id only**. Async loaders run inside
-`Render`. The reference id contributes to the cache key; entity-
-content invalidation is the loader's concern.
+`vary` is strictly request-dimensions: URL fields, cookies, headers,
+match params, session values. CMS content reads happen on
+[`ReactCms.block`](./block.md)'s `schema` callback (which receives a
+`{ cms }` scope) — the framework folds the resolved CMS shape into
+the block's fingerprint via `cmsFingerprintContribution` independently
+of whether the block's render touched specific fields.
 
 ## `Render` props
 
@@ -126,6 +146,44 @@ site, the `vary` result spread, the framework-injected
 
 `parent` is what nested specs and slot hosts use; `cmsId` is what
 slot primitives pass as `hostCmsId`.
+
+### `typeof Spec.props` — derive the prop bag from the spec
+
+The returned spec carries a phantom `.props` type that resolves to the
+prop bag the framework supplies to `Render` (`vary` result + match
+params + `RenderArgs`). Use it to skip retyping the same shape across
+sibling factories or hooks:
+
+```tsx
+const Hero = ReactCms.partial(HeroRender, { match: "/pokemon/:id" })
+type HeroProps = typeof Hero.props          // { id: string } & RenderArgs
+function HeroRender({ id }: HeroProps) { … }
+
+// `.props` has no runtime value — it's a type-only phantom.
+```
+
+The forward-reference shape (`const Spec = partial(R, opts);
+function R(p: typeof Spec.props)`) hits a circular initializer in TS.
+Use the two-step builder below if you need the type before the Render
+exists.
+
+### Two-step builder — `partial(opts)`
+
+When the Render is declared after the spec OR you want the prop type
+to drive the function signature directly, call `partial` with just
+options. The result is a callable builder that exposes `.props` for
+forward-reference inference:
+
+```tsx
+const HeroBuilder = ReactCms.partial({ match: "/pokemon/:id" })
+function HeroRender(p: typeof HeroBuilder.props) {
+  return <article>#{p.id}</article>
+}
+const Hero = HeroBuilder(HeroRender)
+```
+
+The two-step form produces an identical spec to the single-step form;
+it just orders the type plumbing differently to dodge the cycle.
 
 ### Call-site prop pass-through
 
@@ -198,6 +256,11 @@ so refetches carry the props they were originally rendered with.
 
 ## Slots
 
+A partial (or block) that hosts CMS-managed children uses `<Children>`
+/ `<Child>` to render entries from a CMS slot. The entries are looked
+up in the type catalog — see [`block.md`](./block.md) for how blocks
+register and get placed into slots.
+
 ```tsx
 import { Children, Child } from "./lib"
 
@@ -215,10 +278,10 @@ function PageRootRender({ parent, cmsId }: RenderArgs) {
 
 | Component | Renders |
 |---|---|
-| `<Children name allow host hostCmsId>` | Every entry in `node.slots[name]` in stored order, each rendered through its registered spec with `cmsId={entry.id}` override. |
+| `<Children name allow host hostCmsId>` | Every entry in `node.slots[name]` in stored order, each rendered through its registered block spec with `cmsId={entry.id}` override. |
 | `<Child name allow host hostCmsId>` | At most one entry. |
 
-`host` becomes the slot block's `parent`. `hostCmsId` is the parent
+`host` becomes the placed block's `parent`. `hostCmsId` is the parent
 node whose `slots[name]` array to read.
 
 ## Selector grammar
@@ -327,22 +390,20 @@ The set is populated as a side-effect of every `ReactCms.partial(…,
 
 ## Sharp edges
 
-- **Slot block specs need `tags`.** Specs without `tags` aren't
-  registered as slot blocks; they always render with their fixed
-  selector / cmsId. To author a reusable block, set `tags:
-  [".my-block"]` and an explicit `type`.
-- **`closest` / ancestor `provides`.** Punted out of this design
-  pass. Specs that need ancestor data should accept it as a render
-  prop (manual threading from a parent spec's `vary`).
+- **Slot-placeable units use `ReactCms.block`.** `ReactCms.partial`
+  produces non-slot-placeable specs — they're placed by JSX, addressed
+  by selector. Slots look up their entries through the type catalog,
+  which only `block`-constructed specs register in. See
+  [`block.md`](./block.md).
+- **CMS reads live on blocks, not partials.** `vary` is strictly
+  request-dimensions (URL / cookies / headers / session). To bind a
+  partial's content to the CMS, either use `ReactCms.block` with
+  `schema`, or have the partial host a `<Children>` slot whose
+  entries are blocks.
+- **`closest` / ancestor `provides`.** Punted. Specs that need
+  ancestor data should accept it as a render prop (manual threading
+  from a parent spec's `vary`).
 - **Spec metadata doesn't cross the RSC boundary.** Spec components
   are server-only — don't import a spec into a client component to
   reach for its `id`. Reload calls stay stringly-typed
   (`reload({ selector: "#hero" })`).
-
-## Migration notes (2026-04-28)
-
-The previous `<Partial>` JSX wrapper, tracked accessors
-(`getSearchParam`, `getCookie`, …), per-Partial frame/CMS/manifest
-ALS cells, `HoistingViolationError`, and `registerBlock` are gone.
-See `archive/VARY_RENDER_API.md` and
-`notes/partial-define-step-api.md` for the design rationale.
