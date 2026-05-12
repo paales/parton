@@ -246,6 +246,39 @@ injectable (not just ambient); pays large DX dividends.
 across swaps, live-region announcements. Currently on the app —
 will be pile-of-ad-hoc in a year without framework-level defaults.
 
+### Abolish cmsId
+
+The cmsId concept resolves through too many paths (spec auto-derive,
+JSX prop, slot-wiring's `__cmsId` internal channel, singleton via
+selector `#token`). Goal is to remove it almost entirely from the
+public surface — identity should fall out of placement, not be
+threaded as a separate prop. Touches partial.tsx, slot wiring, and
+the CMS storage layer.
+
+### Finish navigate({ cookies }) surface
+
+Foundational plumbing for client-side cookie writes via
+`nav.navigate({ cookies })` / `nav.reload({ cookies })` landed but
+isn't fully threaded through. Audit remaining gaps (docs, server
+action-return parity, integration with `vary`'s cookie reads).
+
+### Split framework barrel into server + client
+
+Replace the single `framework/index.ts` barrel with explicit
+`framework/server.ts` and `framework/client.ts` entry points. Today's
+single barrel can't re-export `"use client"` hooks or `"use server"`
+actions without footguns (see the cross-`"use *"` caveat in
+CLAUDE.md); deep-imports work around it. Two barrels match the
+actual `"use *"` boundary. Related: `framework/src/lib/` and
+`framework/src/runtime/` could re-organize along the same client /
+server axis instead of their current names.
+
+### Audit frame-state write paths
+
+`<Frame>` writes session on cold render; `PartialRoot` also writes
+session from `?__frame=&__frameUrl=` URL params on every request.
+Two paths into one store — worth checking if they can collapse.
+
 ---
 
 ## Meta principle — prefer runtime discovery to static analysis
