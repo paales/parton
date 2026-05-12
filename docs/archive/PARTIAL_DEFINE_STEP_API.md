@@ -1,5 +1,17 @@
 # `ReactCms.partial(Render, …)` — define-step constructor
 
+> **Superseded 2026-05-12 by [`docs/adr/0001-partial-block-frame-split.md`](../adr/0001-partial-block-frame-split.md)
+> + [`docs/reference/partial.md`](../reference/partial.md) + [`docs/reference/block.md`](../reference/block.md).**
+>
+> This was the design proposal for the 2026-04-28 constructor rewrite.
+> The proposal landed, then the 2026-05-11 split refactor reshaped the
+> surface again: `cmsId`, `errorWith`, `frame`, `frameUrl` are no
+> longer `PartialOptions`; `cms` is no longer on `VaryScope` (CMS reads
+> now live on `ReactCms.block`'s `schema` callback); `<Frame>` is a
+> plain component, not a partial option. Keep this note for the
+> pre-split design rationale; consult the reference docs for current
+> API shape.
+
 Replaces the call-site `<Partial>` JSX wrapper, the implicit
 tracked-accessor manifest, the per-Partial frame/CMS/manifest ALS
 cells, and the separate `registerBlock` catalog API. One spec call

@@ -5,13 +5,16 @@ of independently re-renderable, addressable, cacheable subtrees.
 Research project — does this primitive shape hold up as a CMS data
 layer?
 
-The primitive is `<Partial>`. Pages are JSX trees of Partials; each
-one self-registers at render time, computes a structural fingerprint,
-and is independently refetchable. Targeted refetches re-run only the
-requested Partial body — without re-executing any ancestor — by
-replaying registry snapshots. State that varies between refetches
-flows through URLs (page or frame) and is read server-side via
-tracked accessors, which auto-derive cache keys for `<Partial cache>`.
+The primitive is `ReactCms.partial(Render, options)` — a define-step
+constructor that returns a placeable React component. Pages are JSX
+trees of those components; each one self-registers at render time,
+computes a structural fingerprint, and is independently refetchable.
+Targeted refetches re-run only the requested spec's body — without
+re-executing any ancestor — by replaying registry snapshots. State
+that varies between refetches flows through URLs (page or frame) and
+is read server-side via a sync `vary` callback whose return value is
+also the cache-key surface. Slot-placeable, CMS-driven units use
+`ReactCms.block`; per-name URL scopes are opened with `<Frame>`.
 
 For the full mental model, start with [`docs/reference/intro.md`](./docs/reference/intro.md).
 
@@ -22,12 +25,13 @@ package.
 
 | Folder | For |
 |---|---|
-| [`docs/reference/`](./docs/reference/) | Framework reference. `intro` · `partial` · `frames-navigation` · `cache` · `cms` · `prior-art`. |
-| [`docs/internals/`](./docs/internals/) | Framework internals. `testing` · `render-pipeline` · `cache-internals` · `frame-scope` · `manifest-internals` · `server-isolation` · `flight-gotchas`. |
+| [`docs/reference/`](./docs/reference/) | Framework reference. `intro` · `partial` · `block` · `frames-navigation` · `cache` · `cms` · `prior-art`. |
+| [`docs/internals/`](./docs/internals/) | Framework internals. `testing` · `render-pipeline` · `cache-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `flight-gotchas`. |
 | [`docs/notes/`](./docs/notes/) | Active research and forward-looking design (`IDEAS.md`). |
+| [`docs/adr/`](./docs/adr/) | Architecture Decision Records. |
 | [`docs/archive/`](./docs/archive/) | Superseded designs and debugging logs. Reference only. |
 | [`CLAUDE.md`](./CLAUDE.md) | Project structure, tooling, dev workflow. |
-| `framework/` | The Partials library + RSC plumbing + in-process test harness. |
+| `framework/` | The partials library + RSC plumbing + in-process test harness. |
 | `cms/` | CMS editor UI (three-pane shell) and committed content store. |
 | `copies/` | Local copies of shadcn UI primitives + AI-elements + shared hooks. |
 | `e2e-testing/` | Example testing app (PokeAPI + GraphCommerce Magento backends) and Playwright specs. |

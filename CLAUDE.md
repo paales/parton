@@ -26,7 +26,7 @@ package; cross-package imports go through workspace package names
 
 | Path | Role |
 |---|---|
-| `framework/` (`@react-cms/framework`) | The framework runtime. `framework/index.ts` is the public barrel; internals live under `framework/src/{lib,runtime,test}/`. `lib/` holds partials primitives (`partial.tsx` for `ReactCms.partial` + `ReactCms.block`, `frame.tsx` for `<Frame>`, `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `flight-runtime.ts`, `slot.tsx`, `hash.ts`, `multipart.ts`). `runtime/` holds RSC plumbing (`context.ts` request ALS, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`). `test/` is the in-process Flight test harness (`rsc-server.ts`, fixtures). The vitest configs for the rsc + browser tiers also live here, plus the node-tier setup file (jsdom navigation API shim). |
+| `framework/` (`@react-cms/framework`) | The framework runtime. `framework/index.ts` is the public barrel; internals live under `framework/src/{lib,runtime,test}/`. `lib/` holds partials primitives (`partial.tsx` for `ReactCms.partial` + `ReactCms.block`, `frame.tsx` for `<Frame>`, `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `flight-runtime.ts`, `hash.ts`, `stable-stringify.ts`, `multipart.ts`). `runtime/` holds RSC plumbing (`context.ts` request ALS, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `session-actions.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`). `test/` is the in-process Flight test harness (`rsc-server.ts`, fixtures). The vitest configs for the rsc + browser tiers also live here, plus the node-tier setup file (jsdom navigation API shim). |
 | `cms/` (`@react-cms/cms`) | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/{address-bar,tree-link,add-block}.tsx`). The committed content store + per-author drafts live alongside as data: `cms/data/content.json` (committed) + `cms/data/draft.json` (gitignored). Public barrel `cms/index.ts` exports `EditorShell`. |
 | `copies/` (`@react-cms/copies`) | Local copies of shadcn UI primitives (`src/components/ui/`), the AI-elements library (`src/components/ai-elements/`), shared hooks (`src/hooks/`), and the `cn` helper (`src/lib/utils.ts`). `components.json` (shadcn config) lives here too — that's where new components are added. |
 | `e2e-testing/` (`@react-cms/e2e-testing`) | Example testing app (PokeAPI + GraphCommerce Magento backends) and Playwright specs. `src/entry.{rsc,ssr,browser}.tsx` are the framework entries (they import the local `Root`). `vite.config.ts` owns dev/build for this app. `e2e/` contains the Playwright specs + fixtures. |
@@ -118,13 +118,11 @@ restart is rarely needed during dev.
 
 ## Spec authoring rules
 
-- Specs are constructed once at module scope:
-  `const MyPage = ReactCms.partial(MyRender, '/path')` (string
-  shorthand) or `ReactCms.partial(MyRender, {match, vary, ...})`
-  (full options).
-- `vary` is sync and must be pure; CMS reads (`cms.text(...)`,
-  `cms.enum(...)`, `cms.reference(...)`) live inside `vary`. Async
-  loaders run in `render`.
+- Three constructors, one engine. Pick by role:
+  - `ReactCms.partial(Render, '/path')` / `ReactCms.partial(Render, {match, vary, …})` — addressable subtree, request-dimensions only. The everything-else case.
+  - `ReactCms.block(Render, {selector, schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is where CMS reads live.
+  - `<Frame name initialUrl parent>{(p) => …}</Frame>` — plain component, opens a per-name URL scope for descendants.
+- `vary` is sync and must be pure. It sees `{url, pathname, search, cookies, headers, params, session}` — **no `cms`**. CMS reads (`cms.text(...)`, `cms.enum(...)`, `cms.reference(...)`, `cms.blocks(...)`, `cms.block(...)`) live inside a block's `schema` callback. Async loaders run in `render`.
 - **Wrapper specs need a `vary` that captures their descendants'
   URL deps**, otherwise fp-skip on the wrapper blocks descendant
   re-renders. With no `vary`, only NAMED `match` params (`:id`)
@@ -137,13 +135,8 @@ restart is rarely needed during dev.
 - **`match` is strict URLPattern** — no auto-suffixing. `match:
   "/inspect/*"` means `/inspect/<rest>` and does NOT match bare
   `/inspect`. To match both, use `match: "/inspect{/*}?"`.
-- **Slot blocks** (specs with `tags: [".x"]`) are catalog-registered
-  by `type` so slots can look them up. Page specs (with `selector`
-  or auto-derived from Render name) are not slot-listable.
-- `parent: PartialCtx` is required on every spec call site. The
-  spec's render function receives `{...vary, parent, cmsId}` —
-  pass `parent` to descendant `<SpecComponent>` calls and `cmsId`
-  to `<Children hostCmsId>` / `<Child hostCmsId>`.
+- **Slot blocks** are constructed via `ReactCms.block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` declares class identity (`".page-block"`) for slot-allow filters and shared-token refetch; embed a `#token` to make it a singleton. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / `hostCmsId`; the framework wires it.
+- `parent: PartialCtx` is required on every spec call site. `Render` receives `{...vary, ...schema, parent, cmsId, children}` — pass `parent` to descendant spec calls.
 
 ## Workflow — after a task is done
 
@@ -189,4 +182,4 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. Neither exists yet — skills create them lazily. See `docs/reference/agents/domain.md`.
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. `docs/adr/` is wired up (one ADR landed); `CONTEXT.md` is still lazy — the `improve-codebase-architecture` skill creates it on first use. See `docs/reference/agents/domain.md`.

@@ -15,10 +15,11 @@ and stable lives in `../reference/` (user-facing) or `../internals/`
 ## Where else to look
 
 - [`../reference/`](../reference/) — framework reference (intro,
-  partial, frames-navigation, cache, cms, prior-art).
+  partial, block, frames-navigation, cache, cms, prior-art).
 - [`../internals/`](../internals/) — framework internals (testing,
-  render-pipeline, cache-internals, frame-scope, manifest-internals,
+  render-pipeline, cache-internals, registry-internals, frame-scope,
   server-isolation, flight-gotchas).
+- [`../adr/`](../adr/) — architecture decision records.
 - [`../../CLAUDE.md`](../../CLAUDE.md) — project structure, tooling,
   dev workflow.
 - [`../archive/`](../archive/) — superseded designs, debugging logs,

@@ -1,7 +1,7 @@
 # 0001 — Partial / Block / Frame split
 
 Date: 2026-05-11
-Status: Planned (in-flight refactor)
+Status: Shipped 2026-05-11 (commit `8b7f579`)
 
 ## TL;DR
 
