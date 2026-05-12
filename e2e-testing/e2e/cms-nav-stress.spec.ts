@@ -2,19 +2,17 @@
  * Stress tests for the client-side `_cache` / `_fingerprints` prune
  * logic in `<PartialsClient>` during streaming-mode navigation.
  *
- * Earlier bugs ("alpha → beta → gamma blanks the slug nav", "/cms-edit
- * frame nav loses the field form") all traced back to the same shape:
- * when the server fp-skipped an OUTER partial, the new streamed tree
- * carried only its placeholder, the prune set saw only top-level ids,
- * and every NESTED partial's cache entry got deleted out from under
- * the next render's `substituteNested` walk.
- *
- * The fix expands the prune set transitively through cached wrappers:
- * for every id seen on the new tree (fresh wrapper OR placeholder),
+ * The prune set expands transitively through cached wrappers: for
+ * every id seen on the new tree (fresh wrapper OR placeholder),
  * harvest the nested partial ids from its cache entry, and keep
- * harvesting until no new ids appear. This pins the design — any
- * future regression that breaks the expansion shows up as a vanished
- * test block on a multi-step navigation.
+ * harvesting until no new ids appear. Without that, a server fp-skip
+ * of an OUTER partial would leave the prune set seeing only top-
+ * level ids, and every NESTED partial's cache entry would be deleted
+ * out from under the next render's `substituteNested` walk —
+ * surfacing as vanished test blocks on multi-step navigation
+ * ("alpha → beta → gamma blanks the slug nav", "/cms-edit frame nav
+ * loses the field form"). These tests pin the expansion behaviour so
+ * any regression that breaks it shows up here first.
  */
 import { expect, test, request as apiRequest } from "./fixtures.ts"
 
@@ -210,12 +208,12 @@ test("editor preview nav preserves tree + field-form across slug switches", asyn
   await expect(page.getByTestId("cms-edit-field-input-headline")).toBeVisible()
 
   // Cross-slug nav through alpha → beta → gamma. The tree + field
-  // panel must stay visible at every step — earlier prune bugs
-  // wiped their cache entries, leaving the right pane blank and
-  // tree clicks broken. URL nav preserves `?select=…&editor=1`, so
-  // selection is still greeting at every step.
-  // (The V6 redesign removed the editor's address-bar input; we
-  // exercise the same nav-preserves-state surface with `page.goto`.)
+  // panel must stay visible at every step — prune expansion keeps
+  // their cache entries alive when an outer partial fp-skips, so the
+  // right pane stays painted and tree clicks keep working. URL nav
+  // preserves `?select=…&editor=1`, so selection is still greeting
+  // at every step. There's no editor address-bar input; we drive the
+  // same nav-preserves-state surface with `page.goto`.
   for (const path of ["/cms-demo/alpha", "/cms-demo/beta", "/cms-demo/gamma"]) {
     await page.goto(`${path}?editor=1&select=cms-demo-greeting`)
     await expect(page.getByTestId("cms-edit-field-input-headline")).toBeVisible()

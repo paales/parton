@@ -1,10 +1,8 @@
 # Frame scope internals
 
-After the 2026-04-28 rewrite, frame scoping is no longer a
-React.cache-backed mutable cell. Each spec computes its frame chain
-explicitly from `parent.frameChain` plus its own `frame` option;
-its `vary` callback receives the frame-resolved `Request` as an
-argument.
+Each spec computes its frame chain explicitly from
+`parent.frameChain` plus its own `frame` option; its `vary` callback
+receives the frame-resolved `Request` as an argument.
 
 ```ts
 // inside createSpecComponent (framework/src/lib/partial.tsx):
@@ -23,21 +21,15 @@ const ourRequest =
 and falls back to the spec's `frameUrl` option, then to the page
 request.
 
-## Why no cell anymore
+## Why explicit props, not an ALS cell
 
-The previous design used a per-request mutable cell that descendants
-read post-await. This drifted under RSC sibling interleaving — a
-sibling spec's body could overwrite the cell between an ancestor's
-setup and its descendant's body. The "read accessors at the sync
-top of the body" rule was a workaround.
-
-With the constructor model:
-
-- Each spec receives `parent: PartialCtx` as an explicit prop. The
-  `frameChain` propagates without any ALS / cell, immune to sibling
-  interleaving.
-- Vary runs once per spec invocation with the resolved request as
-  an argument. There's no cell to drift.
+RSC sibling interleaving makes a per-request mutable cell unsafe: a
+sibling spec's body can overwrite the cell between an ancestor's
+setup and its descendant's body. Threading `parent: PartialCtx` as
+an explicit prop sidesteps that — the `frameChain` propagates
+without any ALS / cell, immune to sibling interleaving — and `vary`
+runs once per spec invocation with the resolved request as an
+argument, so there's no cell to drift.
 
 ## Wire protocol
 

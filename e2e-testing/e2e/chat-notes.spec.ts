@@ -1,9 +1,8 @@
 import { test, expect, request, type Page } from "./fixtures"
 
-// Skipped: the `/chat-notes` route + the `defaultOpen` / `frameUrl`
-// plumbing on `<ChatOverlay/>` were removed from `root.tsx`. These
-// specs exercise that surface and will pass again once the route is
-// reintroduced.
+// Skipped: requires the `/chat-notes` route + the `defaultOpen` /
+// `frameUrl` plumbing on `<ChatOverlay/>`, neither of which is wired
+// in `root.tsx`. Reactivate when both land.
 
 /**
  * /chat-notes — bounded-recursion streaming with server-side compaction.

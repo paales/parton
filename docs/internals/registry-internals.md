@@ -56,15 +56,13 @@ function variantKeyOf(snap: PartialSnapshot): string {
 
 `hash()` is a 64-bit composite (16 hex chars; see `framework/src/lib/hash.ts`):
 two independent 32-bit mixers (djb2-with-xor + FNV-1a) each finalised
-through MurmurHash3's `fmix32` and concatenated. Pure JS so the module
-graph stays portable across every runtime RSC might land on (an
-earlier `node:crypto` SHA-256 implementation tripped Vite's browser-
-externalisation warning whenever the module reached the client bundle,
-even indirectly). The `djb2` export name still exists as a deprecated
-alias for back-compat — it's the same function now. Variant-key
-collision would cause cache-mode to reconstruct the wrong snapshot for
-a given `(route, id)` lookup, so the upgrade from the original 32-bit
-djb2 was a correctness fix, not a perf change.
+through MurmurHash3's `fmix32` and concatenated. Pure JS keeps the
+module graph portable across every runtime RSC might land on —
+`node:crypto` triggers Vite's browser-externalisation warning
+whenever the hash module reaches the client bundle, even indirectly.
+Variant-key collision would cause cache-mode to reconstruct the
+wrong snapshot for a given `(route, id)` lookup, so the 64-bit
+composite is a correctness requirement, not a perf choice.
 
 The variant key captures the **structural placement axes** that
 distinguish two registrations of the same id:

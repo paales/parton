@@ -1,27 +1,18 @@
 import { test, expect } from "./fixtures"
 
-// Skipped: depends on the `/chat-notes` route + the `defaultOpen`
-// plumbing on `<ChatOverlay/>`, both removed from `root.tsx`.
+// Skipped: requires the `/chat-notes` route + the `defaultOpen`
+// plumbing on `<ChatOverlay/>`, neither of which is wired in
+// `root.tsx`. Reactivate when both land.
 
 /**
  * Cross-page navigation must preserve the already-streamed chat
- * overlay — the bug this spec guards against:
- *
- * Before the `ambientFrameKey` fix, the `<ChatOverlay>` `<Partial
- * frame="chat-overlay">` rendered on `/` (Pokemon) and `/magento`
- * computed different fingerprints, because `/` has a sibling
- * `<Partial frame="search">` that mutated the per-request frame-scope
- * cell before ChatOverlay ran, while `/magento` had no sibling
- * frame. The client-cached overlay fp (from `/`) didn't match the
- * server's fresh fp on `/magento`, so the server re-rendered the
- * overlay instead of emitting a fingerprint-skip placeholder —
- * visible to the user as the streamed chat content disappearing or
- * re-streaming from scratch.
- *
- * With the fix, a `<Partial>` that opens its own frame no longer
- * folds the ambient sibling frame into its fp. The overlay's fp is
- * identical on both routes, the server skips, and the cached
- * overlay survives the cross-page nav untouched.
+ * overlay. The `<ChatOverlay>` `<Partial frame="chat-overlay">`
+ * computes the same fingerprint on `/` (Pokemon) and `/magento`
+ * even though `/` has a sibling `<Partial frame="search">`: a
+ * `<Partial>` that opens its own frame doesn't fold ambient sibling
+ * frames into its fp. The server emits a fingerprint-skip
+ * placeholder on the second route, and the cached overlay survives
+ * the cross-page nav untouched.
  */
 
 test.beforeEach(async ({ page }) => {

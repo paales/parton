@@ -494,8 +494,8 @@ test.describe("CMS editor — smoke", () => {
       page,
     }) => {
       await page.goto("/cms-demo?editor=1&select=cms-demo-multi-slot")
-      // Slot management isn't in the field pane anymore —
-      // `cms-edit-slot-panel-*` testids no longer render.
+      // Slot management is not in the field pane — `cms-edit-slot-
+      // panel-*` testids must not render.
       await expect(page.getByTestId("cms-edit-slot-panel-body")).toHaveCount(0)
       await expect(page.getByTestId("cms-edit-slot-panel-sidebar")).toHaveCount(0)
     })
@@ -507,15 +507,11 @@ test.describe("CMS editor — smoke", () => {
     // URL. The editor cookie keeps the chrome around the page, and
     // `?select=…&config=…` editor state survives across navigations.
     //
-    // The V6 redesign removed the editor's address-bar URL input (the
-    // old `cms-edit-preview-nav-input`); page changes flow through the
-    // `PageNavigator` dropdown now. The previous tests that exercised
-    // the address-bar input as a UI affordance ("input has the right
-    // value", "input updates after history nav") tested an interface
-    // that no longer exists. The cross-slug navigation behaviour itself
-    // is still load-bearing — it lives on the `useNavigation()` /
-    // window-URL surface — so we drive it via `page.goto` (URL-driven
-    // nav, same window-scope path) instead of an input UI.
+    // Page changes flow through the `PageNavigator` dropdown; there's
+    // no address-bar URL input. The cross-slug navigation behaviour
+    // lives on the `useNavigation()` / window-URL surface, so these
+    // tests drive it via `page.goto` (URL-driven nav, same window-
+    // scope path).
 
     test("cross-slug nav preserves the editor chrome and re-renders the preview", async ({
       page,
@@ -633,19 +629,18 @@ test.describe("CMS editor — smoke", () => {
       await expect(headline).toHaveValue("Default greeting")
     })
 
-    test("intersection observer (infinite scroll) still fires inside editor mode", async ({
+    test("intersection observer (infinite scroll) fires inside editor mode", async ({
       page,
     }) => {
-      // Regression: the editor used to wrap the preview in an
-      // overflow-y-auto pane that broke any IntersectionObserver
-      // defaulting to the viewport root. Pokemon's load-more-on-
-      // scroll, the trivia activator, and any defer={<WhenVisible/>}
-      // partial inside a previewed page would never fire.
-      // The shell now flows the preview content with the window's
-      // scroll axis so observers see real intersections, AND the
-      // preview Partial's children are a `<RouteSwitch />` component
-      // (not a baked-in pickRoute() return value) so cache-mode
-      // refetches re-invoke the route handler.
+      // The editor shell flows the preview content with the window's
+      // scroll axis (no nested overflow-y-auto pane), so any
+      // IntersectionObserver defaulting to the viewport root sees
+      // real intersections — Pokemon's load-more-on-scroll, the
+      // trivia activator, and any defer={<WhenVisible/>} partial
+      // inside a previewed page all fire normally. The preview
+      // Partial's children are a `<RouteSwitch />` component (not a
+      // baked-in pickRoute() return value) so cache-mode refetches
+      // re-invoke the route handler.
       await page.goto("/?editor=1")
       await page.waitForLoadState("networkidle")
 

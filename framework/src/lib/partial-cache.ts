@@ -22,7 +22,7 @@
  */
 
 import { getScope } from "../runtime/context.ts"
-import { djb2 as hashQuery } from "./hash.ts"
+import { hash as hashQuery } from "./hash.ts"
 
 interface CacheEntry {
   data: Record<string, unknown>

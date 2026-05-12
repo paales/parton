@@ -8,9 +8,8 @@
  * Proxy manifests defined below — tests inspecting the Flight
  * payload or the element tree work without shipping real chunks.
  *
- * Replaces the old subprocess dance in `flight-streaming-helper.cjs`:
- * we build a Flight stream from a real server tree inside the
- * Vitest worker itself, no dev server required.
+ * Builds a Flight stream from a real server tree inside the Vitest
+ * worker itself — no dev server, no subprocess.
  *
  * Shape is intentionally small and close to the Storybook
  * vitest-plugin-rsc surface, so we can swap in / out if it ever

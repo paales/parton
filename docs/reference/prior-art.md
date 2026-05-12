@@ -142,8 +142,8 @@ takes the opposite position — async server components are
 first-class, manifest tracking handles the cache key surface, and
 the data layer is hand-written GraphQL rather than a constrained
 query graph. The structural promise (no waterfalls because the
-framework can see the dependency graph) is gone, replaced by a
-softer one (you write `await`, you own the latency).
+framework can see the dependency graph) is traded for a softer one
+(you write `await`, you own the latency).
 
 **Shopify theme editor.** Three-pane layout (sections panel /
 preview / fields), drag-drop inside named sections, configuration

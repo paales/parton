@@ -9,9 +9,9 @@ import { SessionToggleLink } from "./session-toggle.tsx"
  *   surface=light | solid → chrome-style overlap-shoulder tabs
  *   surface=translucent   → flat segmented pill (cms-wf-segment)
  *
- * The V6 design switches representations in translucent mode because
- * the chrome shoulders rely on a solid strip background for contrast;
- * over a glass surface they read as smudges. The segmented pill stays
+ * The representation switches in translucent mode because the chrome
+ * shoulders rely on a solid strip background for contrast; over a
+ * glass surface they read as smudges. The segmented pill stays
  * legible.
  *
  * `tabs[*].closeHref` renders a close × on that tab. For chrome tabs

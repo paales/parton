@@ -74,15 +74,3 @@ placements.
 4. [`cms.md`](./cms.md) — CMS layer + editor.
 5. [`frames-navigation.md`](./frames-navigation.md) — `<Frame>`
    component and the `useNavigation` API.
-
-## What changed (2026-05-11)
-
-Split `ReactCms.partial` into three public surfaces — `partial`,
-`block`, and the new `<Frame>` component. `partial` is the base
-addressable subtree (request-dimensions vary only, no CMS reads).
-`block` is the slot-placeable variant with a `schema` callback for
-CMS reads. `<Frame>` replaces the old `partial({frame, frameUrl})`
-options as a plain scope-opening component. Dead options (`cmsId`,
-`errorWith`) stripped. See
-[`docs/adr/0001-partial-block-frame-split.md`](../adr/0001-partial-block-frame-split.md)
-for the rationale.

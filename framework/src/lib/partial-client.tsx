@@ -438,12 +438,10 @@ function cacheFromStreamingChildren(
  * partial wrappers replaced with `<i data-partial hidden key={id}>`
  * placeholders.
  *
- * This is the client-side replacement for the old server-side
- * `buildTemplate` walk. Running on the client means we see the tree
- * AFTER `<Partial>` bodies have decided fresh-vs-skip, so opaque
- * server components only execute once (via the streamed `children`
- * path). No more "Partial inside an opaque component must be wrapped
- * at the callsite" invariant.
+ * Runs on the client so the tree is observed AFTER `<Partial>` bodies
+ * have decided fresh-vs-skip — opaque server components execute once,
+ * via the streamed `children` path, no matter where a Partial sits
+ * inside them.
  *
  * Same lazy-safety rule as `cacheFromStreamingChildren`: stop at
  * partial wrappers (don't descend into their children, which may be
@@ -1665,7 +1663,7 @@ export function useNavigation(name?: string): FrameworkNavigation {
  * re-subscribe on prop changes, remount the activator by setting a
  * `key` that changes with those props.
  *
- * Note: activators no longer pass prop overrides to the Partial.
+ * Note: activators do not pass prop overrides to the Partial.
  * If the activated content needs dynamic data, the activator should
  * write that data to a URL (page URL via `useNavigation().navigate`
  * or a frame URL via `useNavigation("name").navigate`) so the server reads

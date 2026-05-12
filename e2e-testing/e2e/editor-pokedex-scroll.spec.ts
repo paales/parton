@@ -1,16 +1,11 @@
 import { expect, test, request as apiRequest } from "./fixtures.ts"
 
 /**
- * Regression: scrolling the Pokedex while the editor is open used to
- * blank the preview pane. The editor previously wrapped the previewed
- * page in a `frame: "preview"` spec; LoadMore (a client component)
- * resolved its ambient frame from React context and routed its
- * `?pages=` bump through the FRAME handle, which refetched the
- * wrapper alone and rendered `<>{children}</>` empty in cache mode.
- *
- * Fix: the wrapper is gone; the previewed content renders inline. The
- * scroll-driven refetch is now a window-scoped targeted refetch
- * (`partials=page-N,load-more`) and the existing pages stay rendered.
+ * Scrolling the Pokedex while the editor is open must keep the
+ * preview pane populated. The editor renders previewed content
+ * inline (no `frame: "preview"` wrapper), so LoadMore's
+ * scroll-driven refetch is a window-scoped targeted refetch
+ * (`partials=page-N,load-more`) and existing pages stay rendered.
  */
 
 test.beforeEach(async ({ baseURL }) => {

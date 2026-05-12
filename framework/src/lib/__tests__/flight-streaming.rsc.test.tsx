@@ -4,12 +4,9 @@ import { consumePayload, renderServerToFlight } from "../../test/rsc-server.ts"
 /**
  * Flight client streaming semantics.
  *
- * Previously shelled out to a CJS subprocess (see
- * `flight-streaming-helper.cjs`) because the vendored browser Flight
- * client fought with Vitest's ESM transform. We now run everything
- * in-process inside the `rsc` Vitest project, which provides the
- * `react-server` condition and uses the edge variants of the Flight
- * runtime — no `__webpack_require__` dance needed.
+ * Runs in-process inside the `rsc` Vitest project, which provides
+ * the `react-server` condition and uses the edge variants of the
+ * Flight runtime — no `__webpack_require__` dance needed.
  */
 
 function timedStream(chunks: Array<[delayMs: number, data: string]>): ReadableStream<Uint8Array> {

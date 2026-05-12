@@ -170,9 +170,6 @@ export function readCookie(name: string): string | undefined {
   return match?.[1]
 }
 
-/** @internal alias kept for session.ts back-compat. */
-export const _readCookieUntracked = readCookie
-
 /**
  * Parse the entire `Cookie` header from a request into a record.
  * Vary scope uses this to expose cookies declaratively.

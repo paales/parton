@@ -63,9 +63,9 @@ export async function getPokemon(ref: Reference<"pokemon">): Promise<Pokemon | n
       spriteUrl: extractSprite(p.pokemon_v2_pokemonsprites[0]?.sprites),
     }
   }
-  // ancestor-`closest` fallback is deferred; the constructor API
-  // currently passes per-instance data via render props rather than
-  // through an ALS-backed provides chain. Loaders that need it should
-  // accept the entity as a prop until the successor design lands.
+  // ancestor-`closest` fallback is not wired: the constructor API
+  // passes per-instance data via render props rather than through an
+  // ALS-backed provides chain, so loaders that need an ancestor's
+  // entity must accept it as a prop. See notes/IDEAS.md.
   return null
 }

@@ -3,12 +3,11 @@
  * variant keys.
  *
  * Implementation: two independent 32-bit mixers (djb2 + FNV-1a),
- * concatenated into 16 hex chars. Pure JS so the module graph is
+ * concatenated into 16 hex chars. Pure JS keeps the module graph
  * portable across every runtime React Server Components might land
- * on (Node, Bun, browsers, edge workers) — an earlier `node:crypto`
- * SHA-256 implementation tripped Vite's browser-externalization
- * warning whenever the hash module reached the client bundle, even
- * indirectly.
+ * on (Node, Bun, browsers, edge workers) — `node:crypto` trips
+ * Vite's browser-externalization warning whenever the hash module
+ * reaches the client bundle, even indirectly.
  *
  * Collision space: ~50% probability at 2^32 distinct values, which
  * is comfortable for the cache + registry sizes we expect (hundreds
@@ -46,8 +45,3 @@ function fmix32(h: number): number {
   return h
 }
 
-/**
- * @deprecated Use `hash` instead. Kept as an alias so call sites that
- * imported the old name keep working.
- */
-export const djb2 = hash

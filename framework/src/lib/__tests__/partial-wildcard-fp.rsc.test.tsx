@@ -42,11 +42,9 @@ async function flightAt(url: string, node: React.ReactNode): Promise<string> {
 
 describe("wildcard match — fingerprint stability", () => {
   it("string match patterns are NOT auto-suffixed: '/inspect' is exact, '/inspect/*' requires a tail", async () => {
-    // Pre-fix the framework auto-rewrote `/x/*` into `/x{/*}?`, which
-    // collapsed the distinction between exact and prefix matches. The
-    // strict reading is now the only one — authors who want both the
-    // bare path AND its descendants spell that with `{/*}?` (see the
-    // tests below).
+    // Strict URLPattern semantics: `/x` matches only `/x`; `/x/*`
+    // requires a tail. Authors who want both the bare path AND its
+    // descendants spell that with `{/*}?` (see the tests below).
     clearRegistry("all")
     const Exact = ReactCms.partial(
       function ExactMatchTestRender(_: RenderArgs) {

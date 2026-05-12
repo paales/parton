@@ -25,7 +25,7 @@ import React, {
   type ReactElement,
   type ReactNode,
 } from "react"
-import { djb2 } from "./hash.ts"
+import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
@@ -551,11 +551,10 @@ const componentById = new Map<string, StoredSpecFC>()
  * fingerprint move whenever any descendant's deps would have moved,
  * so fp-skipping the ancestor never serves a stale subtree.
  *
- * Mirrors the OLD `<Partial>` `computeDescendantManifestKey` exactly:
- * a stored manifest schema (here, the snapshot+spec catalog pair)
- * resolved at the parent's render time, not via lagged stored
- * values. Returns a string suffix to fold into the parent's hash —
- * empty string when there are no descendants.
+ * The stored manifest schema (snapshot + spec catalog) is resolved at
+ * the parent's render time rather than via lagged stored values.
+ * Returns a string suffix to fold into the parent's hash — empty
+ * string when there are no descendants.
  */
 function computeDescendantFold(ancestorId: string): string {
   const snapshots = getRouteSnapshots()
@@ -571,7 +570,7 @@ function computeDescendantFold(ancestorId: string): string {
   // Order shouldn't matter for fingerprint stability, but sorting
   // keeps it deterministic across registry iteration order changes.
   parts.sort()
-  return `|desc=${djb2(parts.join(","))}`
+  return `|desc=${hash(parts.join(","))}`
 }
 
 /**
@@ -730,7 +729,7 @@ export function computeRouteKey(url: string): string {
   }
   if (matched.length === 0) return "__no-pattern"
   matched.sort()
-  return djb2(matched.join(""))
+  return hash(matched.join(""))
 }
 
 // ─── The constructor ──────────────────────────────────────────────────
@@ -882,18 +881,17 @@ function createSpecComponent<V>(
     // stale subtree. The fold reads each descendant's `varyKey`
     // from the previous-render snapshot AND re-evaluates its vary
     // against the CURRENT request so URL changes are reflected at
-    // ancestor fp time without lag (mirrors the OLD `<Partial>`
-    // `computeDescendantManifestKey` mechanism).
+    // ancestor fp time without lag.
     const cmsKey = effectiveCmsId ? cmsFingerprintContribution(effectiveCmsId, ourRequest) : ""
     const ambientFrameKey =
       ourFrameChain.length > 0 ? `|inFrame=${ourFrameChain.join(".")}:${ourRequest.url}` : ""
     const propsKey =
       Object.keys(extraProps).length > 0 ? `|props=${stableStringify(extraProps)}` : ""
     const varyKey = stableStringify(varyResult)
-    const ownStructuralFp = djb2(`${id}|vary=${varyKey}${propsKey}${cmsKey}`)
+    const ownStructuralFp = hash(`${id}|vary=${varyKey}${propsKey}${cmsKey}`)
     const descendantFold = computeDescendantFold(id)
-    const structuralFp = djb2(`${ownStructuralFp}${descendantFold}`)
-    const fp = djb2(`${ownStructuralFp}${ambientFrameKey}${descendantFold}`)
+    const structuralFp = hash(`${ownStructuralFp}${descendantFold}`)
+    const fp = hash(`${ownStructuralFp}${ambientFrameKey}${descendantFold}`)
 
     // ── Skip decisions ──
     // When the client has the spec's rendered output cached and its

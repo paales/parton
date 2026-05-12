@@ -37,9 +37,10 @@ describe("hash", () => {
     expect(diff).toBeGreaterThanOrEqual(16)
   })
 
-  it("distinguishes inputs that djb2 was prone to colliding on", () => {
-    // djb2 has known collisions in short ASCII pairs. SHA-256 doesn't.
-    // Pick a few that are easy to verify don't collide.
+  it("distinguishes short ASCII inputs that single-mixer hashes collide on", () => {
+    // A single multiplicative mixer like plain djb2 collides on short
+    // ASCII pairs. The 64-bit composite (djb2 + FNV-1a, each through
+    // fmix32) separates them.
     const samples = ["aa", "bb", "ab", "ba", "", "a", "aaa", "aaaa"]
     const seen = new Set<string>()
     for (const s of samples) {

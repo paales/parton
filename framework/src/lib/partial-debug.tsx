@@ -14,18 +14,12 @@ import { useNavigation } from "./partial-client.tsx"
  * registered Partial with reload pills, frame back/forward, the
  * Partial's frame-or-page URL, and the current frame-entry state.
  *
- * Design note: an earlier revision tried to wrap each Partial's
- * rendered output in a `<div style="display:contents">` (or
- * Fragment-with-markers) so the debugger could draw a per-Partial
- * rect overlay on top of each Partial. Both approaches broke
- * refetch reconciliation — any injected element around the Partial
- * subtree interferes with `cacheFromStreamingChildren` /
- * `renderTemplate` and cache-mode cache hits lose client state.
- * The registry-only approach here is the workable shape; the rect
- * overlay is dropped (see notes/IDEAS.md).
- *
  * Self-contained: raw HTML + inline styles, no UI-lib components,
- * only `useNavigation` as an outside dependency.
+ * only `useNavigation` as an outside dependency. The debugger never
+ * injects DOM around a Partial's subtree — any wrapping element
+ * interferes with `cacheFromStreamingChildren` / `renderTemplate`
+ * and cache-mode hits lose client state, so per-Partial rect overlays
+ * are out of reach without a different mechanism (see notes/IDEAS.md).
  */
 
 interface DebugInfo {

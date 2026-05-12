@@ -1,12 +1,12 @@
 import type { ReactNode } from "react"
 
 /**
- * Chrome-style tab strip from the V6 design — curved top corners +
- * outward-flaring bottom shoulders so adjacent active tabs read as
- * one continuous chrome row. Active tab paints an SVG path; inactive
- * tabs are flat label rows. Close-X tabs render the close as a
- * separate sibling anchor (NOT nested) so the markup stays valid +
- * server-renderable (no event handlers).
+ * Chrome-style tab strip — curved top corners + outward-flaring
+ * bottom shoulders so adjacent active tabs read as one continuous
+ * chrome row. Active tab paints an SVG path; inactive tabs are flat
+ * label rows. Close-X tabs render the close as a separate sibling
+ * anchor (NOT nested) so the markup stays valid + server-renderable
+ * (no event handlers).
  */
 
 const TAB_H = 26

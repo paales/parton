@@ -7,9 +7,9 @@ import { stableStringify } from "../stable-stringify.ts"
  *  - distinct encodings for primitives JSON conflates
  *    (undefined / NaN / Infinity / -0 / BigInt)
  *  - Date round-trip via ms timestamp
- *  - Set / Map normalization (the previous impl conflated all of
- *    these to "{}")
- *  - circular reference detection (previously infinite recursion)
+ *  - Set / Map normalization (so they don't all serialize to "{}")
+ *  - circular reference detection (terminates with a sentinel
+ *    instead of recursing)
  *  - non-serializable values produce a stable sentinel rather than
  *    being silently dropped
  */

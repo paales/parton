@@ -36,7 +36,7 @@ import {
   getScope,
 } from "../runtime/context.ts"
 import type { CacheOptions } from "./cache-options.ts"
-import { djb2 } from "./hash.ts"
+import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 
 export interface PartialSnapshot {
@@ -105,7 +105,7 @@ function scopeStore(scope: string): ScopeStore {
 }
 
 function variantKeyOf(snap: PartialSnapshot): string {
-  return djb2(
+  return hash(
     stableStringify([
       snap.parentPath,
       snap.parentFrameChain,
@@ -291,12 +291,6 @@ export function getRouteSnapshots(): Map<string, PartialSnapshot> | undefined {
     for (const [id, snap] of ctx.pendingWrites) merged.set(id, snap)
   }
   return merged.size > 0 ? merged : undefined
-}
-
-/** Snapshots from the previous render — alias for `getRouteSnapshots`,
- *  kept for back-compat with `cache.tsx`. */
-export function getPreviousRouteSnapshots(): Map<string, PartialSnapshot> | undefined {
-  return getRouteSnapshots()
 }
 
 export function invalidateSnapshot(id: string): void {

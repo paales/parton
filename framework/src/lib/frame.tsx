@@ -56,8 +56,7 @@ export function Frame({ name, initialUrl, parent, children }: FrameProps): React
   // Cold-session: write initialUrl so descendants' frame-resolution
   // (and cache-mode re-renders that don't see the <Frame> ancestor)
   // find a URL via `getSessionFrameUrl`. Mirrors `PartialRoot`'s
-  // handling of `?__frame=&__frameUrl=` URL params and the old
-  // `partial({frame, frameUrl})` spec's render-time fallback.
+  // handling of `?__frame=&__frameUrl=` URL params.
   if (initialUrl != null && getSessionFrameUrl(ourFrameChain) == null) {
     setSessionFrameUrl(ourFrameChain, initialUrl)
   }

@@ -6,10 +6,9 @@ import { Icon } from "./icon.tsx"
 /**
  * BlockPicker dropdown for the editor's slot `+ Add block` row.
  *
- * Native `<details>` was used previously to avoid hydration mismatches
- * around random-id popovers. Now that the surrounding chrome is
- * client-rendered the popover can use plain React state, which lets
- * the picker offer search + keyboard nav without a portal library.
+ * The surrounding chrome is client-rendered, so the popover uses
+ * plain React state — no portal library, search + keyboard nav land
+ * directly in the dropdown.
  *
  * Each menu item is a `<form>` whose action is a bound server action
  * — the bind goes through RSC's serialization layer unchanged so the
@@ -26,8 +25,8 @@ interface AddBlockOption {
 }
 
 /**
- * Bucket a block type into the V6 design's three categories using
- * tag heuristics. Anything that doesn't match falls into "Blocks".
+ * Bucket a block type into the three palette categories using tag
+ * heuristics. Anything that doesn't match falls into "Blocks".
  */
 function bucketFor(opt: AddBlockOption): string {
   const t = opt.type
@@ -84,7 +83,7 @@ export function CmsEditAddBlock({
   }, [q, options])
 
   // Bucket filtered options into Layout / Content / Commerce / Blocks
-  // sections, matching the V6 design's structure.
+  // sections.
   const sections = useMemo(() => {
     const order = ["Layout", "Content", "Commerce", "Blocks"]
     const buckets: Record<string, AddBlockOption[]> = {}

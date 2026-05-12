@@ -1,8 +1,7 @@
 # Flight gotchas
 
-A few RSC-specific quirks the framework works around. Mostly
-unchanged after the 2026-04-28 rewrite — they live one level below
-the API surface.
+A few RSC-specific quirks the framework works around. They live one
+level below the API surface.
 
 ## Composite keys on dynamic partials
 

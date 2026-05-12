@@ -1,20 +1,15 @@
 import { test, expect, request } from "./fixtures"
 
 /**
- * Regression: client state inside a `<Partial>` survives a refetch.
+ * Client state inside a `<Partial>` must survive a refetch.
  *
- * Before the bare-key refactor, the framework version-stamped each
- * refetched Suspense's `key` (`id#version`) so React would unmount +
- * remount it to force fallback flash + progressive streaming. That
- * also destroyed any client state inside the partial (`useState`,
- * `useRef`, form focus/selection, etc.).
- *
- * With bare keys + a flushSync commit, React reconciles the Suspense
- * in place. The old children are hidden behind the fallback while the
- * new children stream in; their DOM nodes (and the React state
- * attached to client components inside) survive. This test tags each
- * RefreshPriceButton's DOM node with a random instance id and asserts
- * the id is the same before and after a refetch.
+ * Refetched Suspense boundaries use a bare key + a flushSync commit,
+ * so React reconciles the Suspense in place: the old children are
+ * hidden behind the fallback while the new children stream in, and
+ * their DOM nodes (and the React state attached to client components
+ * inside) are preserved. This test tags each RefreshPriceButton's
+ * DOM node with a random instance id and asserts the id is the same
+ * before and after a refetch.
  */
 test.beforeEach(async ({ baseURL }) => {
   const ctx = await request.newContext()

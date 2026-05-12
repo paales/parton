@@ -32,10 +32,9 @@ test.describe("notFound + redirect", () => {
     // /pokemon/9999999 — PokeAPI returns no pokemon for that id;
     // HeroPartial awaits the query, sees an empty result, and calls
     // notFound(). The throw happens during async rendering, not in
-    // Root's sync path — prior to this mechanism the response would
-    // have been 200 with a broken page. The framework control channel
-    // is flagged eagerly inside notFound() so the RSC entry can still
-    // set status 404 after renderHTML awaits the full tree.
+    // Root's sync path. The framework control channel is flagged
+    // eagerly inside notFound() so the RSC entry can still set
+    // status 404 after renderHTML awaits the full tree.
     const response = await page.goto("/pokemon/9999999")
     expect(response?.status(), "async notFound should surface as HTTP 404").toBe(404)
     await expect(page.locator('[data-testid="not-found"]')).toBeVisible({

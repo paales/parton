@@ -29,7 +29,7 @@ import {
   type ReactNode,
 } from "react"
 import { createFromReadableStream, renderToReadableStream } from "./flight-runtime.ts"
-import { djb2 } from "./hash.ts"
+import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { PartialBoundary, getSpecComponentById } from "./partial.tsx"
 import { getScope } from "../runtime/context.ts"
@@ -131,7 +131,7 @@ function setSnapshots(key: string, snaps: Map<string, PartialSnapshot>): void {
 }
 
 function hashParts(...parts: unknown[]): string {
-  return djb2(stableStringify(parts))
+  return hash(stableStringify(parts))
 }
 
 // ─── Lazy-ref resolution ───────────────────────────────────────────────
@@ -461,7 +461,7 @@ async function cacheImpl(
   const { store, snapshotIndex, refreshing, inFlightMiss } = state()
 
   const { stripped, partials, ids } = stripPartials(children)
-  const baseKey = `${id}:${fingerprint}:${djb2(ids.join(","))}`
+  const baseKey = `${id}:${fingerprint}:${hash(ids.join(","))}`
   const key = `${baseKey}:${hashParts(varyResult, options.vary ?? null)}`
   const now = Date.now()
 

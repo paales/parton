@@ -1,5 +1,5 @@
 /**
- * Editor shell — floating-panel layout from the V6 design.
+ * Editor shell — floating-panel layout.
  *
  *   ┌──────────────── top toolbar (pill) ────────────────┐
  *   │  ⠿ ⤴ 🏠 Home page ⌄  ▭ ▯ ▮  ↶↷  ⛶ ☾ </> ● Draft ⌄ │
@@ -882,8 +882,8 @@ function FieldInput({
     default: {
       const str = String(value ?? "")
       // If the value looks like it references a binding (e.g. `{{x}}`),
-      // render a "dynamic source" decoration with a database icon —
-      // matches the V6 design's `Source` row.
+      // render a "dynamic source" decoration with a database icon as
+      // the `Source` row.
       const dyn = /\{\{[^}]+\}\}/.exec(str)
       if (dyn) {
         const before = str.slice(0, dyn.index)
@@ -1101,10 +1101,10 @@ function CanvasChrome({
   // The DOM-rect overlay flagged in IDEAS.md as future work — without
   // a way to map cmsId → DOM rect of the rendered partial, the canvas
   // chrome anchors generically to the preview pane. The visual is a
-  // 1380×200 block centered horizontally, painted as the V6 design
-  // shows it: blue-purple dashed selection, corner markers, bottom-
-  // left attached element-name tag, pink margin bands above/below,
-  // and the +-circle insertion line above.
+  // 1380×200 block centered horizontally: blue-purple dashed
+  // selection, corner markers, bottom-left attached element-name tag,
+  // pink margin bands above/below, and the +-circle insertion line
+  // above.
   const tagName = selectedType ? blockTypeToPascal(selectedType) : selectedLabel
   return (
     <div className="cms-canvas-overlay">

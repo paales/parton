@@ -3,10 +3,10 @@
  * `<EditorShell>`. Lives only when the editor is mounted — no global
  * cost when previewing the site outside design mode.
  *
- * Visual vocabulary from the V6 design: light "paper" surface with
- * floating panels, chrome-style tab strips, devtools-flavored stripes
- * for margin / padding visualization, and shadcn-ish form primitives
- * (wf-field / wf-segment / wf-slider).
+ * Visual vocabulary: light "paper" surface with floating panels,
+ * chrome-style tab strips, devtools-flavored stripes for margin /
+ * padding visualization, and shadcn-ish form primitives (wf-field
+ * / wf-segment / wf-slider).
  *
  * Mode matrix (driven by `data-*` attributes on `.cms-editor`):
  *   data-attachment=floating | docked

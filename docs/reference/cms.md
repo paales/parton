@@ -84,7 +84,7 @@ Multi-key matches AND together. Empty `match: {}` always matches
 
 The resolver picks every config whose match is satisfied, scores by
 matched-dimension count, then merges fields least-specific-first so
-more-specific overrides win. V1 specificity: longer score wins; ties
+more-specific overrides win. Specificity: longer score wins; ties
 break by config-array order (earlier wins).
 
 ## Authoring a block
@@ -219,6 +219,6 @@ its `vary` once with a stub request and a tracking CMS surface, and
 records the field reads.
 
 `vary` is sync and pure-of-state — the prerender doesn't enter
-React, doesn't render JSX, doesn't suspend. The old "render the
-component once and hope reads happen at sync top before first await"
-sharp edge is gone.
+React, doesn't render JSX, doesn't suspend. Every accessor read in
+`vary` is captured, regardless of order or position relative to
+hypothetical awaits.

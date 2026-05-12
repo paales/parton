@@ -31,7 +31,7 @@ test("editor mode + magento + refresh prices does not throw HoistingViolation", 
   await page.goto("/magento")
   await page.waitForLoadState("networkidle")
 
-  // V6's editor docks side panels at `position: fixed; left/right: 0`
+  // The editor docks side panels at `position: fixed; left/right: 0`
   // (each 320px). On the default Playwright viewport the page-shell's
   // 900px-wide centred column overlaps the right panel, and the
   // refresh-all-prices button sits in that overlap. We aren't testing
