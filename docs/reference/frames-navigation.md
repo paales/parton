@@ -126,8 +126,46 @@ one public refetch path.
 | Option | Effect |
 |---|---|
 | `disableTransition: true` | Commit without `startTransition`, so Suspense fallbacks paint and Flight chunks reveal per-row. Default is transition-wrapped (atomic swap, no fallback flash). |
-| `silent: true` | Update the URL without firing any refetch. Wins over `selector` if both are set. Ignored on frame handles. |
+| `silent: true` | Update the URL without firing any refetch. Wins over `selector` if both are set. Ignored on frame handles. `navigate`-only. |
 | `props` | See above. |
+| `cookies` | Write client-side cookies before the refetch fires. `navigate`-only — `reload` does not accept it. |
+
+### Cookies
+
+`navigate` accepts a `cookies` option that writes `document.cookie`
+synchronously before the refetch fetch is issued, so the new values
+travel in the upcoming request's `Cookie` header:
+
+```tsx
+nav.navigate(window.location.pathname + window.location.search, {
+  cookies: { theme: "dark" },
+  selector: "#theme-aware",
+})
+```
+
+The example above passes the current URL, so `history: "auto"` (the
+default) resolves to **replace** — no new history entry, just a
+refetch with the new cookie. To navigate AND set a cookie, pass a
+different URL:
+
+```tsx
+nav.navigate("/checkout", { cookies: { currency: "EUR" } })
+```
+
+Here `auto` resolves to **push** and the cookie rides along into
+the navigation.
+
+`reload` deliberately does NOT accept `cookies` — cookies represent
+a client-state change, and that change implies a `navigate`. The
+`navigate(currentUrl, { cookies })` form is the canonical
+"refetch with new cookies" call.
+
+`cookies` is a plain `Record<string, string>`. An empty string
+deletes the cookie (`max-age=0`); any other value writes it with
+defaults `path=/`, `samesite=lax`, `max-age=31536000` (one year).
+Frame handles also write to `document.cookie` — a global write, the
+same any other handle would do. There is no per-frame cookie scope
+today.
 
 ## Frame URL on the wire
 

@@ -167,16 +167,11 @@ function isDraftRequest(request: Request | undefined): boolean {
   if (!request) return false
   const url = new URL(request.url)
   if (url.searchParams.get("cms-draft") === "1") return true
-  if (url.searchParams.get("editor") === "1") return true
   if (readCookieFromRequest(request, CMS_DRAFT_COOKIE) === "1") return true
   return readCookieFromRequest(request, EDITOR_COOKIE) === "1"
 }
 
 export function isEditorRequest(request: Request): boolean {
-  const url = new URL(request.url)
-  const flag = url.searchParams.get("editor")
-  if (flag === "1") return true
-  if (flag === "0") return false
   return readCookieFromRequest(request, EDITOR_COOKIE) === "1"
 }
 

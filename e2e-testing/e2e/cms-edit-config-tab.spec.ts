@@ -27,7 +27,11 @@
  */
 import { expect, test, request as apiRequest } from "./fixtures.ts"
 
-test.beforeEach(async ({ baseURL }) => {
+test.beforeEach(async ({ baseURL, context }) => {
+  // Editor on/off lives in the `__editor` cookie. There's no URL
+  // trigger — set the cookie before navigating so the editor chrome
+  // renders on the very first response.
+  await context.addCookies([{ name: "__editor", value: "1", url: baseURL! }])
   const ctx = await apiRequest.newContext({ baseURL })
   await ctx.get("/__test/clear-caches")
   await ctx.dispose()
@@ -36,7 +40,7 @@ test.beforeEach(async ({ baseURL }) => {
 test("click greeting → click slug=alpha config tab — form reflects alpha config", async ({
   page,
 }) => {
-  await page.goto("/cms-demo?editor=1")
+  await page.goto("/cms-demo")
   await page.waitForLoadState("networkidle")
 
   await page.getByTestId("cms-edit-tree-entry-cms-demo-greeting").click()
@@ -57,7 +61,7 @@ test("click greeting → click slug=alpha config tab — form reflects alpha con
 })
 
 test("switching back to default config restores default fields", async ({ page }) => {
-  await page.goto("/cms-demo?editor=1&select=cms-demo-greeting&config=0")
+  await page.goto("/cms-demo?select=cms-demo-greeting&config=0")
   await page.waitForLoadState("networkidle")
 
   await expect(page.getByTestId("cms-edit-field-input-headline")).toHaveValue("Hello, Alpha!")

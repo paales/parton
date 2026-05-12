@@ -8,14 +8,18 @@ import { expect, test, request as apiRequest } from "./fixtures.ts"
  * (`partials=page-N,load-more`) and existing pages stay rendered.
  */
 
-test.beforeEach(async ({ baseURL }) => {
+test.beforeEach(async ({ baseURL, context }) => {
+  // Editor on/off lives in the `__editor` cookie. There's no URL
+  // trigger — set the cookie before navigating so the editor chrome
+  // renders on the very first response.
+  await context.addCookies([{ name: "__editor", value: "1", url: baseURL! }])
   const ctx = await apiRequest.newContext({ baseURL })
   await ctx.get("/__test/clear-caches")
   await ctx.dispose()
 })
 
 test("editor preview keeps Pokedex grid visible after a LoadMore scroll", async ({ page }) => {
-  await page.goto("/?editor=1")
+  await page.goto("/")
 
   const preview = page.getByTestId("page-shell")
   await expect(preview).toBeVisible()

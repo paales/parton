@@ -155,6 +155,14 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    * Pass an empty string to delete a cookie (max-age=0). Defaults
    * applied per cookie: `path=/`, `samesite=lax`, `max-age=31536000`
    * (one year) — pass a `; max-age=0` suffix in the value to override.
+   *
+   * `cookies` lives on `navigate` only — not on `reload`. With
+   * `history: "auto"` (the default), `navigate(currentUrl, {cookies})`
+   * resolves to `replace` because the URL is unchanged, so it's the
+   * canonical "refetch with new cookies" call; `navigate(newUrl,
+   * {cookies})` resolves to `push` and carries the cookie into the
+   * navigation. Frame handles also write to `document.cookie` (a
+   * global write — there's no per-frame cookie scoping today).
    */
   cookies?: Record<string, string>
 }
@@ -164,14 +172,19 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
  * framework's targeted-refetch knobs. `reload({ selector: "#cart" })`
  * refetches a single Partial; `reload({ selector: ".price" })` refetches
  * every Partial carrying the `.price` label.
+ *
+ * No `cookies` here — cookie writes live on `navigate` only (see
+ * `FrameworkNavigateOptions.cookies`). To refetch with new cookies,
+ * call `navigate(currentUrl, {cookies, selector?})`; with
+ * `history: "auto"` the URL-unchanged case resolves to a replace,
+ * which is functionally the same refetch as `reload()` plus the
+ * cookie write.
  */
 export interface FrameworkReloadOptions extends NavigationReloadOptions {
   selector?: string | string[]
   disableTransition?: boolean
   /** See `FrameworkNavigateOptions.props`. */
   props?: Record<string, Record<string, unknown>>
-  /** See `FrameworkNavigateOptions.cookies`. */
-  cookies?: Record<string, string>
 }
 
 /**

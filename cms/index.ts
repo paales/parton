@@ -12,3 +12,4 @@ export {
   EditorFieldPanelPartial,
   formatMatchLabel,
 } from "./src/editor/shell.tsx"
+export { EditorOpenLink } from "./src/editor/components/editor-open-link.tsx"

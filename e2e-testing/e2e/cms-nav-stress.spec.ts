@@ -197,8 +197,13 @@ test("rapid multi-click survives — last URL wins, blocks all present", async (
   await expectAllBlocks(page)
 })
 
-test("editor preview nav preserves tree + field-form across slug switches", async ({ page }) => {
-  await page.goto("/cms-demo?editor=1")
+test("editor preview nav preserves tree + field-form across slug switches", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await context.addCookies([{ name: "__editor", value: "1", url: baseURL! }])
+  await page.goto("/cms-demo")
   await page.waitForLoadState("networkidle")
 
   // Select a node — sidebar URL becomes ?select=... and the field
@@ -211,11 +216,11 @@ test("editor preview nav preserves tree + field-form across slug switches", asyn
   // panel must stay visible at every step — prune expansion keeps
   // their cache entries alive when an outer partial fp-skips, so the
   // right pane stays painted and tree clicks keep working. URL nav
-  // preserves `?select=…&editor=1`, so selection is still greeting
-  // at every step. There's no editor address-bar input; we drive the
-  // same nav-preserves-state surface with `page.goto`.
+  // preserves `?select=…`, so selection is still greeting at every
+  // step. There's no editor address-bar input; we drive the same
+  // nav-preserves-state surface with `page.goto`.
   for (const path of ["/cms-demo/alpha", "/cms-demo/beta", "/cms-demo/gamma"]) {
-    await page.goto(`${path}?editor=1&select=cms-demo-greeting`)
+    await page.goto(`${path}?select=cms-demo-greeting`)
     await expect(page.getByTestId("cms-edit-field-input-headline")).toBeVisible()
     await expect(page.getByTestId("cms-edit-selected-id")).toContainText(/greeting/i)
     // Tree entries still clickable after every nav.

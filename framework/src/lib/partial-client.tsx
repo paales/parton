@@ -1227,11 +1227,24 @@ function nullNavigation(name: string | null): FrameworkNavigation {
  * else passes straight through to the browser.
  */
 /**
- * Apply client-side cookie writes from a navigate / reload options
- * bag. Called synchronously at the entry of `windowNavigate` /
- * `windowReload` so the new cookie values are present in
+ * Apply client-side cookie writes from a `navigate` options bag.
+ * Called synchronously at the entry of the window AND frame
+ * `navigate` paths so the new cookie values are present in
  * `document.cookie` before the refetch fetch issues — the browser
  * picks them up automatically and ships them in the `Cookie` header.
+ *
+ * Cookies are NOT supported on `reload` — refetches that need a new
+ * cookie value go through `navigate(currentUrl, {cookies})` instead.
+ * With `history: "auto"` the URL-unchanged case resolves to a
+ * replace, so the effect is identical to a reload plus the cookie
+ * write, but the API surface stays strict: cookies imply a
+ * `navigate`.
+ *
+ * Frame handles share this global write — `document.cookie` is not
+ * frame-scoped at the browser layer, so a frame.navigate({cookies})
+ * writes the same cookie any other handle would. Per-frame cookie
+ * scoping would need a different mechanism (a server-side cookie
+ * namespace, or a synthetic header) and can be layered later.
  *
  * Empty string deletes the cookie (`max-age=0`). Defaults: `path=/`,
  * `samesite=lax`, `max-age=31536000`. Callers that need different
@@ -1296,7 +1309,6 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
   }
 
   const windowReload = (options?: FrameworkReloadOptions): FrameworkNavigationResult => {
-    applyClientCookies(options?.cookies)
     const parsed = parseOptionsSelector(options)
     if (parsed.uniqueTokens.length > 0 || parsed.sharedTokens.length > 0) {
       return syntheticResult(
@@ -1362,6 +1374,7 @@ function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
   ): FrameworkNavigationResult => {
+    applyClientCookies(options?.cookies)
     const url = resolveFrameTarget(target, key)
     const historyMode: NavigationHistoryBehavior = options?.history ?? "auto"
 

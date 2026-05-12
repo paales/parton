@@ -26,7 +26,6 @@ import {
   lookupDraftNode,
   parseSlotEntryId,
   pickBestConfigIndex,
-  setCookie,
   setSessionFrameUrl,
   type BlockManifest,
   type CmsConfig,
@@ -65,10 +64,12 @@ const saveCmsFields = _saveCmsFields
 // URL-bound editor params (shareable / browser-history). Tweaks
 // (palette / surface / attachment / device / tree style / left tab)
 // are session-backed via the `session.*` vary surface — see the
-// session.enum reads in each vary block below. `editor=1|0` is a
-// deep-link trigger that writes the cookie on the next render;
-// click-driven entry/exit goes through `nav.navigate({cookies})`
-// and never appears in the URL.
+// session.enum reads in each vary block below. Editor on/off lives
+// in the `__editor` cookie (the sole source of truth); entry/exit
+// flows through `nav.navigate(url, {cookies: {[EDITOR_COOKIE]: …}})`.
+// `editor` stays in `EDITOR_RESERVED_PARAMS` only so stray legacy
+// bookmarks get stripped from internal hrefs — the param itself has
+// no effect.
 const EDITOR_RESERVED_PARAMS = ["editor", "select", "config", "tabs"] as const
 const FRAMEWORK_INTERNAL_PARAMS = [
   "partials",
@@ -1145,7 +1146,6 @@ function CanvasChrome({
 export const EditorShell = ReactCms.partial(
   function EditorShellRender({
     editor,
-    sync,
     parent,
     leftTab,
     treeStyle,
@@ -1159,7 +1159,6 @@ export const EditorShell = ReactCms.partial(
     isPreviewFrameRefetch,
   }: {
     editor: boolean
-    sync: string | null
     leftTab: "layers" | "settings"
     treeStyle: "jsx" | "plain"
     selected: string | null
@@ -1171,12 +1170,6 @@ export const EditorShell = ReactCms.partial(
     previewUrl: string
     isPreviewFrameRefetch: boolean
   } & RenderArgs) {
-    // The `?editor=1|0` URL trigger writes the cookie so subsequent
-    // requests read correctly. Click-driven entry/exit flows through
-    // `nav.navigate({cookies})` and never hits this branch.
-    if (sync === "1") setCookie(EDITOR_COOKIE, "1")
-    else if (sync === "0") setCookie(EDITOR_COOKIE, "", 0)
-
     // Editor off — the partial emits nothing. The page renders on its
     // own; this partial is a sibling overlay placed at body level.
     if (!editor) return null
@@ -1306,23 +1299,19 @@ export const EditorShell = ReactCms.partial(
   {
     vary: ({
       url,
-      search: { editor: editorParam = null, select: selectedParam = null },
+      search: { select: selectedParam = null },
       cookies,
       session,
     }) => {
-      // Cookie is the source of truth; `?editor=1` / `?editor=0` are
-      // deep-link entry/exit triggers (bookmarks, tests). The sync
-      // side-effect (writing the cookie to match the URL trigger)
-      // lives in the render so the next request reads correctly
-      // without the URL param. Click-driven exit flows through
-      // `EditorCloseLink` and `nav.navigate({cookies})` instead — no
-      // URL pollution there.
-      const editor =
-        editorParam === "1" ? true : editorParam === "0" ? false : cookies[EDITOR_COOKIE] === "1"
+      // Cookie is the sole source of truth for editor on/off.
+      // Entry/exit (deep-links, click triggers, tests) all flow through
+      // `nav.navigate(url, {cookies: {[EDITOR_COOKIE]: "1" | ""}})` —
+      // there's no URL-param sync side-effect. Tests set the cookie
+      // directly via `context.addCookies` before navigating.
+      const editor = cookies[EDITOR_COOKIE] === "1"
       const isPreviewFrameRefetch = url.searchParams.getAll("__frame").includes("preview")
       return {
         editor,
-        sync: editorParam,
         leftTab: session.enum("editor-left-tab", ["layers", "settings"], "layers"),
         treeStyle: session.enum("editor-tree-style", ["jsx", "plain"], "plain"),
         selected: selectedParam,

@@ -176,7 +176,7 @@ loader runs in `Render`. Loaders are userspace (`e2e-testing/src/app/loaders/`).
 |---|---|
 | `?cms-draft=1` | Editor stamps it on the preview URL. |
 | `Cookie: cms-draft=1` | Editor sets on first response. |
-| `?editor=1` / `Cookie: __editor=1` | Editor mode implies draft visibility. |
+| `Cookie: __editor=1` | Editor mode implies draft visibility. |
 
 `lookupCmsNode(cmsId, request)` checks draft first when any of these
 hold, else falls back to published. Cache keys naturally vary across
@@ -184,8 +184,14 @@ modes because `cms.*` reads return different values inside `schema`.
 
 ## Editor mode
 
-`/?editor=1` sets `__editor=1` cookie; subsequent requests render
-inside `<EditorShell>`. Three panes:
+The `__editor` cookie is the sole source of truth for editor on/off.
+Click-driven entry/exit flows through `nav.navigate(url, {cookies:
+{[EDITOR_COOKIE]: "1" | ""}, selector: "#editor-shell"})` —
+`EditorOpenLink` / `EditorCloseLink` wrap this pattern. Tests set the
+cookie directly via Playwright's `context.addCookies` before
+navigating. There is no `?editor=1` URL trigger.
+
+When the cookie is set, `<EditorShell>` paints three panes:
 
 - Tree (`#cms-edit-tree`) — registry-driven view of the cmsIds that
   rendered for the previewed page. The tree reads
