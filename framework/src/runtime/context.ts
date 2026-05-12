@@ -171,21 +171,50 @@ export function readCookie(name: string): string | undefined {
 }
 
 /**
- * Parse the entire `Cookie` header from a request into a record.
- * Vary scope uses this to expose cookies declaratively.
+ * Parse the request's `Cookie` header into a record, overlaying any
+ * `setCookie()` writes made earlier in the active request scope.
+ *
+ * Vary's `cookies` scope feeds off this. The overlay keeps vary
+ * consistent with `readCookie`: a partial re-rendered immediately
+ * after a server action calls `setCookie("cart_id", X) +
+ * return {invalidate: {selector: ".cart"}}` sees the new value, so
+ * its fingerprint moves and the action's invalidate directive
+ * produces fresh content on the same request rather than stale
+ * content that catches up on the next nav.
+ *
+ * Max-Age=0 follows browser deletion semantics — the cookie disappears
+ * from the overlay. A non-zero Max-Age with an empty value is a set,
+ * not a delete, and shows up as the empty string.
  */
 export function parseCookies(request: Request): Record<string, string> {
-  const header = request.headers.get("cookie") ?? ""
   const out: Record<string, string> = {}
-  if (!header) return out
-  for (const pair of header.split(";")) {
-    const trimmed = pair.trim()
-    if (!trimmed) continue
-    const eq = trimmed.indexOf("=")
-    if (eq <= 0) continue
-    const name = trimmed.slice(0, eq).trim()
-    const value = trimmed.slice(eq + 1).trim()
-    out[name] = value
+  const header = request.headers.get("cookie") ?? ""
+  if (header) {
+    for (const pair of header.split(";")) {
+      const trimmed = pair.trim()
+      if (!trimmed) continue
+      const eq = trimmed.indexOf("=")
+      if (eq <= 0) continue
+      const name = trimmed.slice(0, eq).trim()
+      const value = trimmed.slice(eq + 1).trim()
+      out[name] = value
+    }
+  }
+  const store = requestContext.getStore()
+  if (store) {
+    for (const cookie of store.cookies) {
+      const eq = cookie.indexOf("=")
+      if (eq <= 0) continue
+      const name = cookie.slice(0, eq).trim()
+      const sc = cookie.indexOf(";")
+      const value = cookie.slice(eq + 1, sc > 0 ? sc : cookie.length).trim()
+      const maxAge = cookie.match(/(?:^|;\s*)Max-Age=([^;]+)/i)
+      if (maxAge && Number(maxAge[1].trim()) <= 0) {
+        delete out[name]
+      } else {
+        out[name] = value
+      }
+    }
   }
   return out
 }

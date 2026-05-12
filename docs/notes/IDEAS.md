@@ -255,13 +255,6 @@ public surface — identity should fall out of placement, not be
 threaded as a separate prop. Touches partial.tsx, slot wiring, and
 the CMS storage layer.
 
-### Finish navigate({ cookies }) surface
-
-Foundational plumbing for client-side cookie writes via
-`nav.navigate({ cookies })` / `nav.reload({ cookies })` landed but
-isn't fully threaded through. Audit remaining gaps (docs, server
-action-return parity, integration with `vary`'s cookie reads).
-
 ### Split framework barrel into server + client
 
 Replace the single `framework/index.ts` barrel with explicit

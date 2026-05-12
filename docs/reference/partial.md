@@ -130,6 +130,14 @@ match params, session values. CMS content reads happen on
 the block's fingerprint via `cmsFingerprintContribution` independently
 of whether the block's render touched specific fields.
 
+`cookies` overlays any in-request `setCookie()` writes on top of the
+request header — so a partial re-rendered immediately after an action
+calls `setCookie("cart_id", X) + return {invalidate: {selector:
+".cart"}}` sees the new value in its vary scope (consistent with
+`readCookie`). `Max-Age=0` follows browser deletion semantics and
+removes the cookie from the overlay; a non-zero `Max-Age` with an
+empty value sets the cookie to the empty string.
+
 ## `Render` props
 
 `Render` receives, in order: any extra props passed at the JSX call

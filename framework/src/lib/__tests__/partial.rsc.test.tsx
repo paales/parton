@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 import { ReactCms, ROOT, type RenderArgs } from "../partial.tsx"
 import { Frame } from "../frame.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
+import { setCookie } from "../../runtime/context.ts"
 
 async function flightAt(url: string, node: React.ReactNode): Promise<string> {
   const { stream } = await renderWithRequest(url, node)
@@ -316,5 +317,67 @@ describe("<Frame> — scope opener", () => {
     )
     expect(out).toContain("/drawer/initial")
     expect(out).not.toContain(">/frame-host<")
+  })
+})
+
+describe("ReactCms.partial — vary sees mid-request setCookie writes", () => {
+  // The cart pattern (e2e-testing/src/app/pages/magento/cart-actions.ts):
+  // an action calls `setCookie("cart_id", X)` to persist a freshly-
+  // created cart, then returns `{invalidate: {selector: ".cart"}}`. The
+  // re-rendered cart spec's vary reads `cookies.cart_id` — without the
+  // overlay it sees the stale request header (undefined / old value),
+  // and the cart badge stays at 0 until the next nav. With the overlay,
+  // the immediate re-render sees the new id, hits Magento, and the
+  // badge updates as the action's invalidate intended.
+  it("setCookie before a descendant spec is visible to that spec's vary", async () => {
+    function CookiePreloader({ children }: { children: React.ReactNode }) {
+      setCookie("cart_id", "fresh-cart-123")
+      return children
+    }
+    const CartBadge = ReactCms.partial(
+      function CartBadgeRender({ cartId }: { cartId: string | undefined } & RenderArgs) {
+        return <span data-testid="cart-id-out">cart={cartId ?? "none"}</span>
+      },
+      {
+        selector: "#cart-vary-cookies",
+        vary: ({ cookies: { cart_id: cartId } }) => ({ cartId }),
+      },
+    )
+    const out = await flightAt(
+      "http://t/",
+      <CookiePreloader>
+        <CartBadge parent={ROOT} />
+      </CookiePreloader>,
+    )
+    // Flight serializes JSX children as an array `["cart=", "fresh-cart-123"]`.
+    expect(out).toContain('"cart=","fresh-cart-123"')
+    expect(out).not.toContain('"cart=","none"')
+  })
+
+  it("setCookie overrides a request-header cookie value for vary", async () => {
+    function ThemeFlipper({ children }: { children: React.ReactNode }) {
+      setCookie("theme", "dark")
+      return children
+    }
+    const Themed = ReactCms.partial(
+      function ThemedRender({ theme }: { theme: string } & RenderArgs) {
+        return <span data-testid="theme-out">theme={theme}</span>
+      },
+      {
+        selector: "#themed-vary-cookies",
+        vary: ({ cookies: { theme = "light" } }) => ({ theme }),
+      },
+    )
+    const { stream } = await renderWithRequest(
+      "http://t/",
+      <ThemeFlipper>
+        <Themed parent={ROOT} />
+      </ThemeFlipper>,
+      { headers: { cookie: "theme=light" } },
+    )
+    const out = await new Response(stream).text()
+    // Flight serializes JSX children as an array `["theme=", "dark"]`.
+    expect(out).toContain('"theme=","dark"')
+    expect(out).not.toContain('"theme=","light"')
   })
 })
