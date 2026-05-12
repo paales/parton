@@ -9,7 +9,8 @@ and stable lives in `../reference/` (user-facing) or `../internals/`
 
 | File | What it covers |
 |---|---|
-| [`IDEAS.md`](./IDEAS.md) | Forward-looking backlog. Open items only — resolved/shipped items are deleted, or moved to `../archive/` when the design exploration is worth preserving. |
+| [`IDEAS.md`](./IDEAS.md) | Concrete framework backlog — chapters describing what to build. Open items only; resolved/shipped items are deleted, or moved to `../archive/` when the design exploration is worth preserving. |
+| [`user-ideas.md`](./user-ideas.md) | Wider exploratory directions — "what if we…" / "should we investigate…" items, distinct from `IDEAS.md`'s concrete backlog. |
 | [`transient-client-state.md`](./transient-client-state.md) | Live design doc for the un-URL-able middle (drafts, optimistic UI, per-tab state, cross-tab leaks). Four candidate directions captured; decision still open. |
 | [`AA_CHAT_STREAMING.md`](./AA_CHAT_STREAMING.md) | Demo content for the chat overlay (the file the streaming-chat demo reads first). Not a design doc — kept here because the chat producer resolves filenames against `docs/notes/`. |
 
