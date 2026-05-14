@@ -13,3 +13,4 @@ export {
   formatMatchLabel,
 } from "./src/editor/shell.tsx"
 export { EditorOpenLink } from "./src/editor/components/editor-open-link.tsx"
+export { EditorOpenNavLink } from "./src/editor/components/editor-open-nav-link.tsx"
