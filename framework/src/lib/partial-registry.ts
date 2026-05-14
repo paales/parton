@@ -371,18 +371,31 @@ export function commitRequestRegistry(ctx: RequestRegistry): void {
     }
   }
 
-  if (ctx.mode === "streaming") {
-    // Whole-page render: replace this routeKey's hint wholesale.
-    // Removes hints for ids no longer on the page.
-    touchHint(store, ctx.routeKey, new Map(ctx.pendingHints))
-  } else {
-    // Cache-mode refetch: patch the hint for ids touched this render.
-    const existing = store.hints.get(ctx.routeKey)
-    const hint = existing ? new Map(existing) : new Map<string, string>()
-    for (const id of ctx.invalidations) hint.delete(id)
-    for (const [id, vk] of ctx.pendingHints) hint.set(id, vk)
-    touchHint(store, ctx.routeKey, hint)
-  }
+  // Both streaming and cache-mode commits MERGE pendingHints into the
+  // existing routeKey hint. Wholesale replace looks tempting for the
+  // streaming-mode case (where the whole page just rendered, so the
+  // pendingHints are an authoritative snapshot of what's on the page),
+  // but it breaks the fp-skip cascade: when an ancestor spec fp-skips,
+  // the skip path's `<PartialBoundary>` registers the ancestor BUT the
+  // body never runs, so descendants never get a chance to register.
+  // Their entries from the prior commit are then absent from
+  // pendingHints — and replace would wipe them. The next request reads
+  // an eroded canonical (missing the descendants of any fp-skipped
+  // ancestor), `computeDescendantFold` returns a partial value, the
+  // ancestor's fp drifts away from what the trailer shipped, and
+  // shouldSkip starts mis-firing further up the tree. Merging keeps
+  // the prior commit's descendant entries alive as long as the
+  // ancestor stays on the page.
+  //
+  // Stale entries that legitimately need removal (a CMS edit drops a
+  // block from a slot, a partial's match no longer fires for any URL
+  // on this route) flow through `ctx.invalidations` and are pruned by
+  // the loop above.
+  const existing = store.hints.get(ctx.routeKey)
+  const hint = existing ? new Map(existing) : new Map<string, string>()
+  for (const id of ctx.invalidations) hint.delete(id)
+  for (const [id, vk] of ctx.pendingHints) hint.set(id, vk)
+  touchHint(store, ctx.routeKey, hint)
 }
 
 export function clearRegistry(scope?: string | "all"): void {

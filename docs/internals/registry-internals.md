@@ -103,18 +103,33 @@ fall back to the route's committed hint:
 3. `pendingHints.get(id)` → resolve to the variant in `partials`.
 4. `hints.get(route)?.get(id)` → resolve to the canonical variant.
 
-`commitRequestRegistry` runs on stream flush and atomically
-applies the pending sets to the canonical store. Two modes:
+`commitRequestRegistry` runs on stream flush and atomically applies
+the pending sets to the canonical store. Snapshots merge into
+`partials[id][variantKey]` unconditionally — same structural
+placement → same variant key → idempotent. The hint table is also
+MERGED: `pendingHints` overlays the existing hint for the route,
+with `ctx.invalidations` removing specific ids.
 
-- **Streaming**: replace the route's hint wholesale with
-  `pendingHints`. Removes hints for ids no longer present on the
-  page.
-- **Cache**: patch the existing hint with `pendingHints` and any
-  invalidations. Untouched ids keep their hint pointers.
+Wholesale-replace (overwriting the hint with `pendingHints`) looks
+appealing for the streaming-mode case — pendingHints is an
+authoritative snapshot of what just rendered — but it breaks the
+fp-skip cascade. When an ancestor spec fp-skips, the skip path's
+`<PartialBoundary>` registers the ancestor's snapshot, but the body
+never runs, so descendants never get a chance to register. Their
+entries from the prior commit aren't in `pendingHints`, and replace
+would wipe them. The next request reads an eroded canonical
+(missing the descendants of every fp-skipped ancestor),
+`computeDescendantFold` returns a partial value, the ancestor's fp
+drifts away from what the trailer shipped, and `shouldSkip` starts
+mis-firing further up the tree. Merging keeps the prior commit's
+descendant entries alive as long as the ancestor stays on the page.
 
-In both modes, snapshots merge into `partials[id][variantKey]`
-unconditionally — same structural placement → same variant key →
-idempotent.
+Stale entries that legitimately need removal flow through
+`ctx.invalidations`: server actions return `{invalidate: {selector}}`
+which the dispatcher converts into id-wide invalidations
+(`invalidateSnapshot(id)` clears every variant of the id and every
+hint pointing at it), and CMS edits invalidate the affected blocks
+via the same path.
 
 ## Invalidation
 
