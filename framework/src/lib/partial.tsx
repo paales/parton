@@ -630,11 +630,16 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
   // catalog is still hydrating; lag of one render in this corner.
   if (!spec) return `${descId}:${snap.varyKey ?? ""}`
 
-  // Honor the descendant's match: a wrapper navigating to a URL
-  // that no longer matches a child's pattern means the child won't
-  // render, so its fp contribution should be a stable "no-render"
-  // marker rather than the resolved vary value.
-  const request = getRequest()
+  // Honor the descendant's framePath when re-resolving its vary. A
+  // descendant rendered under a frame chain (e.g. MenuTabPartial under
+  // ["menu","tab"]) sees the frame's URL in its render-time vary; the
+  // fold must use the same frame-resolved request so a nested-frame
+  // nav that only moves the inner frame's URL actually shifts the
+  // descendant's contribution and, through it, the outer wrapper's
+  // fp. Without this the outer wrapper fp-skips and the cached tab
+  // body persists across nested-frame moves.
+  const request =
+    snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath) : getRequest()
   let params: Record<string, string> = {}
   if (spec.matchPattern) {
     const result = spec.matchPattern.exec(request.url)

@@ -436,7 +436,24 @@ function cacheStore(
     inner = new Map()
     cache.set(id, inner)
   }
+  const replacing = inner.has(matchKey)
   inner.set(matchKey, node)
+  // Overwriting a cache slot invalidates any fingerprint that
+  // referred to the old content. Without this, fps from prior
+  // navs accumulate in `_currentPageFingerprints[id][matchKey]`
+  // and travel back to the server in `?cached=`; the next visit
+  // can fp-skip against a stale entry while the cache slot points
+  // at fresh content, and `substituteNested` lands the wrong
+  // subtree (or the right one for the wrong URL). Same matchKey
+  // with different vary outputs share a slot by design — the
+  // fingerprint set must shrink to "what the current slot
+  // actually represents", which is exactly the fp that
+  // `registerClientPartial` is about to write after this call.
+  // Cold→warm trailer adds for the same render still land
+  // additively after the walk completes.
+  if (replacing) {
+    _currentPageFingerprints.get(id)?.delete(matchKey)
+  }
 }
 
 function cacheFromStreamingChildren(

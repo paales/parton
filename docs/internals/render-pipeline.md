@@ -113,12 +113,24 @@ partialFingerprint>`; the client's `_currentPageFingerprints` map
 captures it. On the next nav the client serializes the map as
 `?cached=`. The server's spec body skips when its current `fp` matches.
 
-`_currentPageFingerprints` is `Map<id, Set<fp>>` — each id can carry
-multiple fingerprints. The set accumulates the COLD fp (what the spec
-emitted at first-render time) and the WARM fp (computed post-commit
-with full descendant fold; shipped via the trailer — see below). The
-server's `parseCachedFingerprints` mirrors the shape, and the fp-match
-check is `cachedFps.has(fp)`.
+`_currentPageFingerprints` is `Map<id, Map<matchKey, Set<fp>>>` —
+each (id, matchKey) variant can carry multiple fingerprints. The
+set accumulates the COLD fp (what the spec emitted at first-render
+time) and the WARM fp (computed post-commit with full descendant
+fold; shipped via the trailer — see below). The server's
+`parseCachedTokens` mirrors the shape, and the fp-match check is
+`cachedFps.has(fp)`.
+
+The fp set is bounded to "fps that match the cache slot's current
+contents". When `cacheStore` overwrites a `(id, matchKey)` slot,
+the corresponding fp set is cleared before the walk re-registers
+the current render's fp. Without this, fps from prior navigations
+accumulate (e.g. `frames-main-list` cycling between listing and
+product detail under a constant matchKey — see
+[`partial-client.tsx::cacheStore`](../../framework/src/lib/partial-client.tsx))
+and the next nav can fp-skip against a stale entry while the cache
+slot points at fresh content, surfacing the wrong subtree on
+substitution.
 
 The fp folds in:
 
@@ -130,7 +142,12 @@ The fp folds in:
 - every previously-registered descendant spec's `varyKey` snapshot,
   resolved against the *current* request via the spec catalog's
   `match` + `vary` (transitive descendant fp propagation — an
-  ancestor fp-skip can never serve a stale subtree)
+  ancestor fp-skip can never serve a stale subtree). The
+  descendant's request is frame-resolved through its stored
+  `framePath` so a nested-frame nav that moves only an inner
+  frame's URL still shifts the descendant's contribution — without
+  this, an outer `match`/`vary`-stable wrapper would fp-skip and
+  freeze a cached inner-frame body in place
 
 Wrappers called with `outerChildren` (transparent passthrough) skip
 fp-skip entirely — their output IS the children, which the JSX
