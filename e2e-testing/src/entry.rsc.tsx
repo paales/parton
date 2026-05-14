@@ -17,7 +17,6 @@ import {
   setRequest,
 } from "@react-cms/framework/runtime/context.ts"
 import { warmCmsCache } from "@react-cms/framework/runtime/cms-runtime.ts"
-import { deferRequestRegistryCommit } from "@react-cms/framework/lib/partial-registry.ts"
 import {
   wrapStreamWithFpTrailer,
   wrapStreamWithCommitOnly,
@@ -219,9 +218,12 @@ async function handleRequest(
   // chunk content). Instead: commit-only on the rscStream, and
   // append the fp-trailer as an `<!--fp-trailer:JSON-->` comment
   // AFTER the HTML output. The client's `_applyFpTrailerFromDocument`
-  // reads it on hydration.
+  // reads it on hydration. The `wrapStreamWithCommitOnly` /
+  // `wrapSsrStreamWithFpTrailer` helpers both call
+  // `deferRequestRegistryCommit()` internally, so the registry commit
+  // fires when the stream flushes (post-render) rather than at the
+  // moment this handler returns.
   const commit = _captureCommitHandle()
-  deferRequestRegistryCommit()
   const ssrEntryModule = await import.meta.viteRsc.loadModule<typeof import("./entry.ssr.tsx")>(
     "ssr",
     "index",
@@ -262,8 +264,7 @@ async function handleRequest(
     })
   }
 
-  // TEMP: skip HTML-comment trailer.
-  return new Response(wrapStreamWithCommitOnly(ssrResult.stream, commit), {
+  return new Response(wrapSsrStreamWithFpTrailer(ssrResult.stream, commit), {
     status: ssrResult.status,
     headers: { "Content-type": "text/html" },
   })

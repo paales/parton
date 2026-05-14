@@ -36,6 +36,7 @@ For that, start at [`../reference/intro.md`](../reference/intro.md).
 | `FRAME_SCOPING.md` | [`internals/frame-scope.md`](../internals/frame-scope.md) |
 | `TESTING_ARCHITECTURE.md` | [`internals/testing.md`](../internals/testing.md) |
 | `SERVER_ISOLATION.md` | [`internals/server-isolation.md`](../internals/server-isolation.md) |
+| `fp-trailer-wip.md` | [`internals/render-pipeline.md`](../internals/render-pipeline.md) § Cold → warm fp drift and the trailer / § Stream-driven commit timing |
 
 ## Pattern shipped, design retrospective archived
 

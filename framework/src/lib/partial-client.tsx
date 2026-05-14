@@ -585,17 +585,27 @@ function applyFpUpdates(updates: Record<string, string>): void {
 }
 
 /**
- * Scan the document for an `<!--fp-trailer:JSON-->` comment node
- * placed by the server's SSR response (see
- * `wrapSsrStreamWithFpTrailer` in `lib/fp-trailer.ts`). Returns the
- * parsed update map, or `null` when no trailer is present.
+ * Apply the `<!--fp-trailer:JSON-->` comment the server appends after
+ * `</html>` (see `wrapSsrStreamWithFpTrailer` in `lib/fp-trailer.ts`).
  *
- * The comment lives after `</html>` so browsers parse it as a
- * Comment node at the document root — we walk `document.childNodes`
- * and `document.documentElement.childNodes` to catch both rendering
- * conventions.
+ * The HTML parser places the comment as a `Document` child (alongside
+ * `documentElement`) or, in some browsers, as a `documentElement`
+ * child. We scan both lists and apply any update map we find.
+ *
+ * The hydration entry calls this at startup, but on a streaming HTML
+ * response the parser may not have reached the trailing comment yet —
+ * `document.readyState` is `"interactive"` (DOMContentLoaded fired)
+ * but the after-html comments are still in flight. In that case we
+ * defer to the `load` event, which only fires once the parser has
+ * fully consumed the response body (including the trailing comment).
+ *
+ * Calling once on startup AND again on `load` is safe: registration
+ * is set-additive, so re-applying the same map is a no-op. Calling
+ * on startup catches the common case (non-streaming response that
+ * arrives complete); the `load` listener covers the streaming case
+ * where the comment lands late.
  */
-export function _applyFpTrailerFromDocument(): void {
+function tryApplyTrailerNow(): boolean {
   const tag = "fp-trailer:"
   const candidates: Node[] = []
   for (const c of document.childNodes) candidates.push(c)
@@ -610,11 +620,32 @@ export function _applyFpTrailerFromDocument(): void {
       const json = text.slice(tag.length).replace(/-\\-/g, "--")
       const updates = JSON.parse(json) as Record<string, string>
       applyFpUpdates(updates)
+      return true
     } catch {
-      // Malformed trailer — ignore.
+      return false
     }
+  }
+  return false
+}
+
+export function _applyFpTrailerFromDocument(): void {
+  if (tryApplyTrailerNow()) return
+  if (typeof window === "undefined") return
+  // Streaming HTML: the trailing comment may not have been parsed
+  // into the DOM yet. The parser is fully done at the `load` event,
+  // so retry there. DOMContentLoaded fires earlier — for some browsers
+  // BEFORE post-`</html>` comments are committed — so we wait for
+  // `load`, which is guaranteed to fire after the entire response has
+  // been consumed.
+  //
+  // If `load` already fired (this code runs late on a slow-hydration
+  // path), one more synchronous attempt picks up the comment that
+  // landed between our two scans.
+  if (document.readyState === "complete") {
+    tryApplyTrailerNow()
     return
   }
+  window.addEventListener("load", () => tryApplyTrailerNow(), { once: true })
 }
 
 /**

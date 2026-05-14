@@ -67,7 +67,7 @@ the cold-emitted fp and the warm fp in its fp set. That fixes the
 cold→warm fp instability — the very next visit fp-skips against the
 warm value instead of paying a wasted re-render.
 
-Two extensions are still open:
+Three extensions are still open:
 
 - **Per-fingerprint variant pool for cached subtrees.** Multi-fp on
   the wire is wired up (`_currentPageFingerprints` is `Map<id, Set<fp>>`,
@@ -92,8 +92,22 @@ Two extensions are still open:
   the network round-trip for this id entirely; within SWR window:
   include in `?cached=` and revalidate in background; past both:
   include and treat as cold).
+- **Cold→warm activation on RSC-nav cold visits.** The HTML-comment
+  trailer rides the SSR HTML response only — a user who lands on
+  `/home` (SSR with trailer) and then RSC-navs to `/magento` for the
+  first time gets cold fps for `/magento`'s specs but no warm
+  trailer, so subsequent revisits to `/magento` re-render. A binary
+  trailer after the Flight bytes was prototyped (`fp-trailer-marker.ts`
+  + `fp-trailer-split.ts`) but disabled — emitting a segment after
+  Flight bytes stalls the response when Flight stops reading before
+  EOF (action POST response handling, in particular). Options for
+  unblocking: switch to a different channel for the RSC case (e.g.
+  HTTP response header containing the JSON, set just before the
+  response body starts streaming via the registry-commit hook), or
+  go back to the binary trailer with a Flight-stream-aware splitter
+  that doesn't stall on backpressure.
 
-Both can be layered on the current trailer + multi-fp infrastructure
+All can be layered on the current trailer + multi-fp infrastructure
 without breaking the API surface.
 
 ### Restart-streaming via segmented Flight (cursor-frequency updates)

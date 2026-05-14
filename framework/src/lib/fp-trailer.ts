@@ -25,7 +25,11 @@
 
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
-import { _readSnapshotsForRoute, type PartialSnapshot } from "./partial-registry.ts"
+import {
+  _readSnapshotsForRoute,
+  deferRequestRegistryCommit,
+  type PartialSnapshot,
+} from "./partial-registry.ts"
 import { computeRouteKey } from "./partial.tsx"
 import { getRequest, getScope } from "../runtime/context.ts"
 import { cmsFingerprintContribution } from "../runtime/cms-runtime.ts"
@@ -168,17 +172,27 @@ function resolveFrameRequest(framePath: readonly string[], baseRequest: Request)
  */
 /**
  * Wrap a stream so the registry commit fires at flush, without
- * emitting any trailer bytes. Used for SSR responses where the
- * rscStream is consumed by `rsc-html-stream`'s `injectRSCPayload`
- * (which inlines its chunks into `<script>(self.__FLIGHT_DATA||=[])
- * .push(...)</script>` tags) — emitting binary trailer bytes here
- * would make their JSON-stringified text content visible in the
- * rendered HTML source.
+ * emitting any trailer bytes. Used for RSC and SSR responses where
+ * the rscStream is consumed downstream (the SSR path's `rsc-html-stream`
+ * inlines its chunks into `<script>(self.__FLIGHT_DATA||=[]).push(...)
+ * </script>` tags, so binary trailer bytes can't go here — the
+ * JSON-stringified payload would leak into the rendered HTML source).
+ *
+ * Also defers the request-context auto-commit so the commit fires at
+ * stream flush (post-render) instead of immediately after the request
+ * handler returns. Flight's `renderToReadableStream` returns the
+ * stream eagerly while the actual render runs lazily as the stream
+ * is consumed; an auto-fire commit at return time would commit empty
+ * `pendingHints`, wiping the canonical hint table from the prior
+ * render (the streaming-mode commit replaces the routeKey hint
+ * wholesale). With deferral, commit fires AFTER specs have registered,
+ * preserving the snapshot set for subsequent requests.
  */
 export function wrapStreamWithCommitOnly(
   stream: ReadableStream<Uint8Array>,
   commit?: () => void,
 ): ReadableStream<Uint8Array> {
+  deferRequestRegistryCommit()
   return stream.pipeThrough(
     new TransformStream({
       transform(chunk, controller) {
@@ -217,6 +231,7 @@ export function wrapSsrStreamWithFpTrailer(
   } catch {
     // Outside a request context — trailer just won't fire.
   }
+  deferRequestRegistryCommit()
 
   return stream.pipeThrough(
     new TransformStream({
@@ -261,6 +276,7 @@ export function wrapStreamWithFpTrailer(
   } catch {
     // Outside a request context — trailer just won't fire.
   }
+  deferRequestRegistryCommit()
 
   return stream.pipeThrough(
     new TransformStream({

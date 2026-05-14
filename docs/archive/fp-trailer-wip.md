@@ -1,5 +1,19 @@
 # fp-trailer + multi-fp — WIP (paused 2026-05-14)
 
+> **Superseded 2026-05-14** by
+> [`docs/internals/render-pipeline.md`](../internals/render-pipeline.md)
+> § Cold → warm fp drift and the trailer / § Stream-driven commit
+> timing. The cart-badge regression noted here was a commit-timing bug
+> in the WIP commit's split of `wrapStreamWithRegistryCommit` into
+> `wrapStreamWithCommitOnly` (no defer) + an explicit
+> `deferRequestRegistryCommit()` call: the RSC response path lost the
+> defer, so `runWithRequestAsync`'s auto-commit fired with empty
+> `pendingHints` and the streaming-mode replace wiped the canonical
+> hint table between requests. The fix folds
+> `deferRequestRegistryCommit()` into each stream-wrap helper, so RSC
+> and SSR paths both get correct stream-driven commit timing without
+> the caller needing to remember.
+
 Status: paused mid-implementation. The infrastructure is in place
 and the cold→warm fp-skip mechanism works on its own; an interaction
 with `magento-add-to-cart` was uncovered just before pause and is

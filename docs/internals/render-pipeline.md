@@ -109,9 +109,16 @@ a registry miss).
 ## Fingerprint protocol
 
 Each spec emits its `fp` via `<PartialErrorBoundary partialId,
-partialFingerprint>`; the client's `_currentPageFingerprints` map captures it.
-On the next nav the client serializes the map as `?cached=`. The
-server's spec body skips when its current `fp` matches.
+partialFingerprint>`; the client's `_currentPageFingerprints` map
+captures it. On the next nav the client serializes the map as
+`?cached=`. The server's spec body skips when its current `fp` matches.
+
+`_currentPageFingerprints` is `Map<id, Set<fp>>` — each id can carry
+multiple fingerprints. The set accumulates the COLD fp (what the spec
+emitted at first-render time) and the WARM fp (computed post-commit
+with full descendant fold; shipped via the trailer — see below). The
+server's `parseCachedFingerprints` mirrors the shape, and the fp-match
+check is `cachedFps.has(fp)`.
 
 The fp folds in:
 
@@ -128,3 +135,81 @@ The fp folds in:
 Wrappers called with `outerChildren` (transparent passthrough) skip
 fp-skip entirely — their output IS the children, which the JSX
 parent renders directly, so there's nothing for fp-skip to gate.
+
+## Cold → warm fp drift and the trailer
+
+A spec's fp folds in `descendantFold`, which reads
+`getRouteSnapshots()` at fp-computation time. The fp computation
+runs INSIDE `createSpecComponent` BEFORE `<PartialBoundary>` registers
+the spec — so on the FIRST render of a route in a fresh scope, no
+descendants of this spec are in the snapshot map yet (they render
+later in the tree). The fold is empty; the spec emits `fp_cold`.
+
+After the render commits, every spec on the page has a snapshot. The
+same spec on the next request would compute a non-empty fold and a
+different `fp_warm`. Without intervention, the client sends `fp_cold`
+on the next visit, the server computes `fp_warm`, mismatch — and the
+client pays a wasted body re-run.
+
+The **fp-trailer** ships `fp_warm` to the client in the SAME response.
+It rides as an HTML comment after `</html>`:
+
+```html
+</html><!--fp-trailer:{"magento":"<fp_warm>","magento-header":"<fp_warm>"}-->
+```
+
+The server-side machinery (`wrapSsrStreamWithFpTrailer` in
+`framework/src/lib/fp-trailer.ts`):
+
+1. Captures the request URL + scope at wrap time.
+2. On stream flush (after `commitRequestRegistry` has fired),
+   re-reads the route's snapshot set from the canonical store and
+   recomputes each spec's fp via `recomputeFp` — same formula as the
+   render-time path, but against the post-commit snapshot map.
+3. For every spec where `recomputed !== emittedFp`, emits the drift
+   into the trailer JSON. Specs with no descendants (leaves) typically
+   produce no drift; specs with descendants typically do.
+
+The client-side `_applyFpTrailerFromDocument` (in
+`framework/src/lib/partial-client.tsx`) scans `document.childNodes` +
+`document.documentElement.childNodes` for the comment, parses the
+JSON, and calls `registerClientPartial` for each entry — adding to
+the Set rather than overwriting, so the client carries BOTH `fp_cold`
+(from PEB hydration) and `fp_warm` (from the trailer). The next nav's
+`?cached=` carries both, and the server's `shouldSkip` matches
+whichever applies.
+
+Comment-after-`</html>` is parsed late under streaming HTML — by the
+time hydration runs the comment may not yet be in the DOM.
+`_applyFpTrailerFromDocument` retries on the `load` event, which only
+fires once the response body has been fully consumed; the additive
+nature of `registerClientPartial` makes the double-scan safe.
+
+The trailer mechanism only covers the SSR HTML response (the
+common entry point: a fresh page load). RSC navigations don't carry
+a trailer of their own — a binary length-prefixed segment after the
+Flight bytes stalls Flight in some configurations (Flight stops
+reading once the root resolves; any splitter sitting between source
+and Flight stalls behind it). Cold→warm activation for a route the
+user reached purely via RSC nav is a follow-up; see
+`docs/notes/IDEAS.md`.
+
+## Stream-driven commit timing
+
+`commitRequestRegistry` runs on stream flush — not when the request
+handler returns. Flight's `renderToReadableStream` returns its stream
+eagerly while the actual render runs lazily as bytes are pulled, so
+the handler returns with `pendingWrites`/`pendingHints` empty. If
+commit fired at handler-return time, it would replace the route's
+hint with the empty set — wiping the prior render's snapshots and
+forcing the next request to recompute every spec's fold against
+canonical state that's been eroded.
+
+The wrappers in `fp-trailer.ts`
+(`wrapStreamWithCommitOnly`, `wrapStreamWithFpTrailer`,
+`wrapSsrStreamWithFpTrailer`) call `deferRequestRegistryCommit()`
+internally, which sets a flag on the request context that suppresses
+the runWithRequestAsync auto-commit. Commit then fires when the
+TransformStream's `flush` callback runs — which only happens after
+the upstream Flight render has emitted its last chunk, by which point
+every spec has registered.
