@@ -136,7 +136,7 @@ function ProductCard({ product, parent }: { product: ProductItem; parent: Partia
           <Suspense fallback={<LivePriceFallback sku={sku} basePrice={price} currency={currency} />}>
             <LivePricePartial
               parent={parent}
-              cmsId={`price-${sku}`}
+              partialKey={`price-${sku}`}
               sku={sku}
               basePrice={price}
               currency={currency}

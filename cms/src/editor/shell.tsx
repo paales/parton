@@ -100,7 +100,7 @@ function renderedCmsIdsForPreviewedPage(): string[] {
   const snapshots = getRouteSnapshots()
   if (snapshots) {
     for (const snap of snapshots.values()) {
-      if (snap.cmsId != null) ids.add(snap.cmsId)
+      if (snap.cmsContentKey != null) ids.add(snap.cmsContentKey)
     }
   }
   return [...ids]

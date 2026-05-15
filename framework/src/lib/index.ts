@@ -23,7 +23,7 @@ export {
   type InferRenderProps,
   type ParseRoute,
   getSpecComponentById,
-  lookupSpecComponentForCmsId,
+  lookupSpecComponentByType,
   getRegisteredMatchPatterns,
 } from "./partial.tsx"
 

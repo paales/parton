@@ -11,8 +11,9 @@
  *   const PokemonPage = ReactCms.partial(PokemonRender, '/pokemon/:id')
  *   <PokemonPage parent={ROOT} />
  *
- * Slot block instances pass `cmsId={entry.id}` to override the spec's
- * baked-in cmsId — same Component renders with per-instance content.
+ * Slot block instances receive the entry's id through the framework-
+ * internal `__cmsContentKey` channel — the same Component renders with
+ * per-instance CMS content.
  *
  * See `notes/partial-define-step-api.md`.
  */
@@ -48,7 +49,6 @@ import {
 import {
   cmsFingerprintContribution,
   createCmsReadSurface,
-  getSpecByCmsId,
   getSpecByType,
   registerSpec,
   type CmsReadSurface,
@@ -111,7 +111,7 @@ export interface VaryScope {
 /** Scope passed into `schema` callbacks on `ReactCms.block`. CMS reads
  *  live here exclusively — `vary` is request-dimensions-only. */
 export interface SchemaScope {
-  /** CMS read surface bound to the block's effective cmsId. */
+  /** CMS read surface bound to the block's effective CMS content key. */
   cms: CmsReadSurface
 }
 
@@ -133,9 +133,6 @@ export interface RenderArgs {
   /** PartialCtx for THIS spec's descendants — pass to slot host props
    *  and nested Spec components' `parent` prop. */
   parent: PartialCtx
-  /** Effective cmsId for THIS render (override-aware) — pass to slots'
-   *  `hostCmsId`. */
-  cmsId: string
   /** Outer `children` passed to the spec component, when used as a
    *  JSX wrapper. `undefined` when the spec was placed without
    *  children. */
@@ -155,13 +152,20 @@ export type MatchPattern = string | URLPatternInit
 
 export type PartialOptions<V> = Pick<
   InternalSpecConfig<V>,
-  "match" | "vary" | "cache" | "defer" | "fallback" | "keepalive"
+  "match" | "vary" | "cache" | "defer" | "fallback" | "keepalive" | "selector"
 >
 
 /**
  * Options for `ReactCms.block(R, opts)` — a slot-placeable CMS-driven
  * spec with a declared `schema`. Internally produces a partial; same
  * fingerprint / cache / refetch path.
+ *
+ * `cmsId` is the CMS storage key for a SINGLETON block — the one place
+ * in the public API where a CMS row is named explicitly. Multi-instance
+ * blocks (placed via slots) inherit their storage key from the slot
+ * entry's id at render time — no explicit cmsId needed. Specs without
+ * any CMS binding don't need `ReactCms.block` at all; use
+ * `ReactCms.partial`.
  */
 export type BlockOptions<V, S> = PartialOptions<V> & {
   /** CMS field reads + child slots. Runs at render time with a real
@@ -170,6 +174,13 @@ export type BlockOptions<V, S> = PartialOptions<V> & {
    *  with a tracking surface to discover content fields + child slot
    *  declarations. */
   schema?: (scope: SchemaScope) => S
+  /** CMS storage key for a singleton block (e.g. `"app-nav"`). The
+   *  spec's `schema` reads against this row by default; placement is
+   *  via direct JSX (`<AppNav parent={ROOT}/>`), no per-instance
+   *  override. For multi-instance blocks rendered through slot
+   *  wiring, omit `cmsId` — the slot entry's id flows through the
+   *  framework-internal `__cmsContentKey` channel automatically. */
+  cmsId?: string
 }
 
 /**
@@ -182,14 +193,11 @@ interface InternalSpecConfig<V> {
   /** Request-dimensions dependency surface. Sync; result is the
    *  cache-key surface and merged into Render's prop bag. */
   vary?: (scope: VaryScope) => V | null
-  /** Selector for non-slot (page-position) specs. Auto-derived from
-   *  `Render.name` when omitted. */
-  /** CSS-style selector declaring this block's class identity (and
-   *  optionally a `#singleton` token). `".page-block .composed-hero"`
-   *  registers under `.page-block` and `.composed-hero` class tokens
-   *  for slot-allow matching + shared-token refetch.
-   *  `"#app-nav .nav-root"` makes the block a singleton bound to
-   *  cmsId `"app-nav"`. Auto-derived from `Render.name` when omitted. */
+  /** CSS-style selector declaring this spec's refetch addressing
+   *  tokens. `".page-block"` carries the `.page-block` class label for
+   *  slot-allow matching + shared-token refetch. `"#hero"` is a
+   *  page-unique `#` token. Auto-derived from `Render.name` when
+   *  omitted. */
   selector?: SelectorTokens
   cache?: CacheOptions
   defer?: DeferSpec
@@ -210,8 +218,14 @@ interface InternalSpecConfig<V> {
    *  state is meaningful only while visible, debug-only specs). */
   keepalive?: boolean
   schema?: (scope: SchemaScope) => unknown
+  /** Singleton CMS storage key on a block spec. Block-only; partials
+   *  never have this. When omitted on a block, the block is
+   *  multi-instance and gets its CMS storage key from the slot entry
+   *  it's wired into (via the framework-internal `__cmsContentKey`
+   *  channel). */
+  cmsId?: string
   /** `true` when constructed via `ReactCms.block` — controls slot-block
-   *  catalog registration + selector parsing rules. */
+   *  catalog registration + per-instance content-key resolution. */
   isSlotBlock?: boolean
 }
 
@@ -223,14 +237,24 @@ interface InternalSpecConfig<V> {
  */
 export interface PartialComponentProps {
   parent: PartialCtx
-  /** Per-instance cmsId override. Slot wiring sets this via the
-   *  framework-internal `__cmsId` channel; for direct JSX placements,
-   *  pass `cmsId="..."` explicitly. The cmsId is the CMS storage key
-   *  AND the unique selector token for refetch addressing
-   *  (`reload({selector: "#<cmsId>"})`). For singletons whose id is
-   *  baked into the spec, embed `#token` in the spec's `selector`
-   *  rather than passing this prop. */
-  cmsId?: string
+  /** Per-instance render-identity discriminator. When a spec is placed
+   *  multiple times under the same parent (e.g. one `<LivePrice/>` per
+   *  product SKU), each placement needs a stable unique id so the
+   *  framework can address it for refetch and cache-mode lookups.
+   *  Pass a stable per-instance string (typically the same value you'd
+   *  pass to React's `key`):
+   *
+   *      <LivePrice key={sku} parent={p} partialKey={sku} sku={sku}/>
+   *
+   *  When omitted, the framework derives an id from placement
+   *  (`parentPath + label + sibling-index`) — stable across renders
+   *  as long as sibling order is stable.
+   *
+   *  This is purely a render-identity concept — NOT a CMS storage
+   *  key. For CMS-bound blocks, the storage key lives on the spec
+   *  (`cmsId:` on `ReactCms.block`) or flows in from slot wiring
+   *  internally. */
+  partialKey?: string
   /** Pass-through children — surfaced to `Render` as `children` in
    *  its props bag. Lets specs act as JSX wrappers (e.g. opening a
    *  frame around author content). */
@@ -239,7 +263,7 @@ export interface PartialComponentProps {
 
 /**
  * The Render function's props get split by the framework into three:
- *   - framework-managed (`parent`, `cmsId`, `children`) — `RenderArgs`,
+ *   - framework-managed (`parent`, `children`) — `RenderArgs`,
  *     always supplied by the framework.
  *   - vary-derived (`V`) — produced by `vary`, also framework-supplied.
  *   - everything else — must be passed as a JSX prop at the call site.
@@ -499,7 +523,11 @@ interface PartialBoundaryProps {
   sharedTokens: string[]
   framePath: readonly string[]
   parentFrameChain: readonly string[]
-  cmsId?: string
+  /** CMS storage key for this rendered instance, when the spec binds
+   *  to CMS content (block specs only). Drives `cmsFingerprintContribution`
+   *  and the schema CMS-read surface; orthogonal to the render-time
+   *  `id` above. */
+  cmsContentKey?: string
   cache?: CacheOptions
   fallback: ReactNode
   /** Call-site JSX props (e.g. `id` from a parent wrapper). Stored
@@ -534,7 +562,7 @@ export function PartialBoundary({
   sharedTokens,
   framePath,
   parentFrameChain,
-  cmsId,
+  cmsContentKey,
   cache,
   fallback,
   props,
@@ -552,7 +580,7 @@ export function PartialBoundary({
     framePath,
     parentFrameChain,
     parentPath,
-    cmsId,
+    cmsContentKey,
     cache,
     props,
     varyKey,
@@ -612,19 +640,12 @@ function computeDescendantFold(ancestorId: string): string {
  */
 function descendantContribution(descId: string, snap: PartialSnapshot): string {
   // Slot-block instances register their snapshot with a per-instance
-  // `cmsId` override (the entry id, e.g. `composed-hero-2`), but the
-  // spec catalog has them under their `type` (e.g. `hero`). Try cmsId
-  // first for ordinary specs, fall through to type for slot blocks.
-  // Without this, slot-block-instance descendants always hit the
-  // `snap.varyKey ?? ""` fallback below — frozen at the value
-  // captured on the descendant's last render — so the ancestor's fp
-  // never moves when only a slot block's CMS-resolved content
-  // changes. That's the cms-demo-slots regression: navigating
-  // `/cms-demo/alpha` → `/cms-demo/beta` swaps `composed-hero-2`'s
-  // resolved fields, but the wrapper fp-skips and serves alpha's
-  // cached content.
-  let spec = snap.cmsId ? getSpecByCmsId(snap.cmsId) : undefined
-  if (!spec && snap.type) spec = getSpecByType(snap.type)
+  // render id (the entry id, e.g. `composed-hero-2`), but the spec
+  // catalog has them under their `type` (e.g. `hero`). Resolve by
+  // `snap.type` directly — `type` is the spec catalog key for both
+  // page specs and slot blocks now that the cmsId/id conflation is
+  // gone.
+  let spec = snap.type ? getSpecByType(snap.type) : undefined
   // No live spec → fall back to last-known varyKey. Prevents the
   // fold from becoming all-stable when the registry is warm but the
   // catalog is still hydrating; lag of one render in this corner.
@@ -653,7 +674,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
     // sites; cmsFingerprintContribution covers blocks with `schema`
     // (which don't have vary), so slot-host wrappers fp-track their
     // CMS-driven block descendants correctly.
-    const cmsKey = snap.cmsId ? cmsFingerprintContribution(snap.cmsId, request) : ""
+    const cmsKey = snap.cmsContentKey ? cmsFingerprintContribution(snap.cmsContentKey, request) : ""
     return `${descId}:${stableStringify(params)}|${stableStringify(snap.props ?? null)}|${cmsKey}`
   }
 
@@ -684,7 +705,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
     return `${descId}:${snap.varyKey ?? ""}`
   }
   if (result === null) return `${descId}:varynull`
-  const cmsKey = snap.cmsId ? cmsFingerprintContribution(snap.cmsId, request) : ""
+  const cmsKey = snap.cmsContentKey ? cmsFingerprintContribution(snap.cmsContentKey, request) : ""
   const propsKey = stableStringify(snap.props ?? null)
   return `${descId}:${stableStringify(result)}|${propsKey}|${cmsKey}`
 }
@@ -769,10 +790,15 @@ export function computeRouteKey(url: string): string {
 // ─── The constructor ──────────────────────────────────────────────────
 
 interface InternalSpec<V> {
-  /** Spec's own id (when no cmsId override). */
+  /** Spec's own id (default render-time identity when no per-instance
+   *  override is supplied). Derived from `selector` or auto-named
+   *  from `Render.name`. */
   id: string
-  /** Spec's own cmsId fallback (used when no override). */
-  cmsId: string
+  /** Singleton CMS storage key — block specs only, only when the
+   *  author declared `cmsId:` explicitly. Undefined for partials and
+   *  for multi-instance blocks (where the storage key flows in via
+   *  slot wiring's `__cmsContentKey` channel at render time). */
+  cmsContentKey?: string
   /** Spec catalog type tag (slot lookup). */
   type: string
   parsed: ParsedSelector
@@ -782,7 +808,9 @@ interface InternalSpec<V> {
    *  every render-phase `exec` is cheap. */
   matchPattern?: URLPattern
   Render: (props: V & RenderArgs) => ReactNode
-  /** True iff `options.tags` was set — spec is usable as slot block. */
+  /** True iff constructed via `ReactCms.block` — spec is usable as a
+   *  slot block (registers in the type catalog; reads its CMS content
+   *  key from slot wiring or the explicit `cmsId:` option). */
   isSlotBlock: boolean
 }
 
@@ -822,7 +850,7 @@ export function deriveMatchKey(
   }
   const requestUrl = url ?? getRequest().url
   for (let i = parentPath.length - 1; i >= 0; i--) {
-    const ancestor = getSpecByCmsId(parentPath[i])
+    const ancestor = getSpecByType(parentPath[i])
     if (!ancestor?.matchPattern) continue
     const result = ancestor.matchPattern.exec(requestUrl)
     if (!result) continue
@@ -927,21 +955,37 @@ function emitWithVariantSiblings(
   )
 }
 
+/**
+ * Resolve the render-time identity for a placement of `spec`.
+ *
+ * Priority:
+ *  1. `partialKey` JSX prop — purely a per-instance render-id
+ *     discriminator (live-price's per-SKU pattern). Becomes the
+ *     spec's unique token at this placement.
+ *  2. `cmsContentKey` from slot wiring — block placements rendered
+ *     through a slot; the entry's id is the storage key AND
+ *     functions as the per-instance render discriminator.
+ *  3. Spec's own id — the default (singleton case).
+ *
+ * Returns the parsed token shape with a single `#<override>` unique
+ * token when there's an override (replacing whatever the spec's own
+ * `#token` was), preserving the spec's shared `.tokens` for class
+ * refetch.
+ */
 function effectiveIdForInstance(
   spec: InternalSpec<unknown>,
-  cmsIdOverride: string | undefined,
+  override: string | undefined,
 ): {
   id: string
   parsed: ParsedSelector
 } {
-  if (cmsIdOverride == null || cmsIdOverride === spec.cmsId) {
+  if (override == null || override === spec.id) {
     return { id: spec.id, parsed: spec.parsed }
   }
-  // Slot-block instance — selector is `[#<cmsId>, ...spec.tags]`
-  const uniqueTokens = [cmsIdOverride]
+  const uniqueTokens = [override]
   const sharedTokens = spec.parsed.sharedTokens
   return {
-    id: cmsIdOverride,
+    id: override,
     parsed: { uniqueTokens, sharedTokens },
   }
 }
@@ -952,23 +996,33 @@ function createSpecComponent<V>(
   const Component: FC<PartialComponentProps & Record<string, unknown>> = (props) => {
     const {
       parent,
-      cmsId: directCmsIdOverride,
-      __cmsId: slotCmsIdOverride,
+      partialKey: directPartialKey,
+      __cmsContentKey: slotContentKey,
       children: outerChildren,
       ...extraProps
     } = props as PartialComponentProps & {
-      __cmsId?: string
+      __cmsContentKey?: string
       children?: ReactNode
     } & Record<string, unknown>
     const opts = spec.options
-    // Effective cmsId resolution, in priority order:
-    //   1. `cmsId` — JSX prop override (direct placement).
-    //   2. `__cmsId` — framework-internal, set by slot wiring.
-    //   3. spec.cmsId — the spec's own id (auto-derived or from `#`
-    //      token in selector for singletons).
-    const cmsIdOverride = directCmsIdOverride ?? slotCmsIdOverride
-    const effectiveCmsId = cmsIdOverride ?? spec.cmsId
-    const { id, parsed } = effectiveIdForInstance(spec as InternalSpec<unknown>, cmsIdOverride)
+    // Render-time identity (the framework's `id` for snapshots, wire,
+    // cache lookup) — resolved in priority order:
+    //   1. `partialKey` — JSX prop override; pure render-id
+    //      discriminator. Has nothing to do with CMS storage.
+    //   2. `__cmsContentKey` — framework-internal channel set by
+    //      slot wiring. For slot-placed blocks the entry's id IS the
+    //      natural per-instance discriminator AND the CMS storage
+    //      key — one string playing both roles.
+    //   3. spec.id — the spec's own catalog id (singleton case).
+    //
+    // The CMS storage key for THIS render is separate (only meaningful
+    // for block specs): it's the slot-channel key, the spec's
+    // singleton `cmsContentKey`, or undefined for non-CMS placements.
+    const renderIdOverride = directPartialKey ?? slotContentKey
+    const effectiveCmsContentKey = spec.isSlotBlock
+      ? (slotContentKey ?? spec.cmsContentKey)
+      : undefined
+    const { id, parsed } = effectiveIdForInstance(spec as InternalSpec<unknown>, renderIdOverride)
     // Keepalive defaults to true. The flag governs both the active
     // emission (wrap body in `<Activity mode="visible">`) and the
     // parked emission on match-miss / vary-null (emit
@@ -1060,7 +1114,7 @@ function createSpecComponent<V>(
       frameChain: parent.frameChain,
     }
     if (opts.schema) {
-      const cmsSurface = createCmsReadSurface(effectiveCmsId, ourRequest, childCtxForSchema)
+      const cmsSurface = createCmsReadSurface(effectiveCmsContentKey, ourRequest, childCtxForSchema)
       let schemaResult: unknown
       try {
         schemaResult = opts.schema({ cms: cmsSurface })
@@ -1081,7 +1135,7 @@ function createSpecComponent<V>(
     // from the previous-render snapshot AND re-evaluates its vary
     // against the CURRENT request so URL changes are reflected at
     // ancestor fp time without lag.
-    const cmsKey = effectiveCmsId ? cmsFingerprintContribution(effectiveCmsId, ourRequest) : ""
+    const cmsKey = effectiveCmsContentKey ? cmsFingerprintContribution(effectiveCmsContentKey, ourRequest) : ""
     const ambientFrameKey =
       ourFrameChain.length > 0 ? `|inFrame=${ourFrameChain.join(".")}:${ourRequest.url}` : ""
     const propsKey =
@@ -1140,13 +1194,12 @@ function createSpecComponent<V>(
 
     const childCtx = _childContext(parent, id)
     // Render receives: extra JSX-prop pass-through, vary result,
-    // framework-managed (parent / cmsId / children). vary wins on
-    // key collision — vary's return is the canonical surface.
+    // framework-managed (parent / children). vary wins on key
+    // collision — vary's return is the canonical surface.
     const renderProps = {
       ...extraProps,
       ...(varyResult as object),
       parent: childCtx,
-      cmsId: effectiveCmsId,
       children: outerChildren,
     } as V & RenderArgs
     const fallback = opts.fallback ?? null
@@ -1177,7 +1230,7 @@ function createSpecComponent<V>(
           sharedTokens={parsed.sharedTokens}
           framePath={ourFrameChain}
           parentFrameChain={parent.frameChain}
-          cmsId={effectiveCmsId}
+          cmsContentKey={effectiveCmsContentKey}
           cache={opts.cache}
           fallback={fallback}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
@@ -1219,7 +1272,7 @@ function createSpecComponent<V>(
           sharedTokens={parsed.sharedTokens}
           framePath={ourFrameChain}
           parentFrameChain={parent.frameChain}
-          cmsId={effectiveCmsId}
+          cmsContentKey={effectiveCmsContentKey}
           cache={opts.cache}
           fallback={fallback}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
@@ -1305,7 +1358,7 @@ function createSpecComponent<V>(
         sharedTokens={parsed.sharedTokens}
         framePath={ourFrameChain}
         parentFrameChain={parent.frameChain}
-        cmsId={effectiveCmsId}
+        cmsContentKey={effectiveCmsContentKey}
         cache={opts.cache}
         fallback={fallback}
         props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
@@ -1342,26 +1395,33 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
 
   // `isSlotBlock` is passed by `ReactCms.block`. `ReactCms.partial`
   // omits it (or sets `false`). The flag drives selector parsing,
-  // catalog registration, and per-instance cmsId override semantics.
+  // catalog registration, and per-instance content-key resolution.
   const isSlotBlock = options.isSlotBlock === true
 
   let parsed: ParsedSelector
   let id: string
   if (isSlotBlock) {
-    // Block specs: `selector` declares class tokens + optional `#`
-    // singleton. Without an explicit `#`, the block is multi-instance
-    // and gets its per-instance unique token from slot wiring (the
-    // entry's id), so the spec catalogs under its auto-derived id
-    // (from Render.name).
+    // Block specs:
+    //  - With explicit `cmsId:` → SINGLETON. The cmsId is BOTH the
+    //    CMS storage key AND the spec's catalog id (refetch token).
+    //    Selector adds class labels alongside; the cmsId is folded
+    //    into the unique-token set automatically so external code can
+    //    address it via `#<cmsId>`.
+    //  - Without `cmsId:` → MULTI-INSTANCE. Catalog id auto-derives
+    //    from `Render.name`; per-instance render-id flows in from
+    //    slot wiring (the entry's id, via `__cmsContentKey`).
     const selectorInput = options.selector
-    if (selectorInput != null) {
-      parsed = parseSelector(selectorInput)
-    } else {
-      parsed = { uniqueTokens: [], sharedTokens: [] }
-    }
-    if (parsed.uniqueTokens.length > 0) {
-      // Singleton — `#token` baked into selector.
-      id = parsed.uniqueTokens[0]
+    parsed = selectorInput != null
+      ? parseSelector(selectorInput)
+      : { uniqueTokens: [], sharedTokens: [] }
+    if (options.cmsId != null) {
+      id = options.cmsId
+      if (!parsed.uniqueTokens.includes(id)) {
+        parsed = {
+          uniqueTokens: [id, ...parsed.uniqueTokens],
+          sharedTokens: parsed.sharedTokens,
+        }
+      }
     } else {
       // Multi-instance block — id from auto-derive for catalog registration.
       id = autoSelector(Render).toString().slice(1)
@@ -1373,11 +1433,14 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   }
 
   const type = id
-  const cmsId = id
+  // CMS storage key is block-only and only when `cmsId:` was declared
+  // (the singleton case). Multi-instance blocks read theirs from slot
+  // wiring at render time. Partials never have one.
+  const cmsContentKey = isSlotBlock ? options.cmsId : undefined
 
   const spec: InternalSpec<V> = {
     id,
-    cmsId,
+    cmsContentKey,
     type,
     parsed,
     options,
@@ -1391,14 +1454,15 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
 
   registerSpec({
     id,
-    cmsId,
+    cmsContentKey,
     type,
     selectorTokens: parsed,
     // Slot lookup invokes the component with only framework props
-    // (`parent`, optional `cmsId`/`children`); call sites that pass
-    // extra `Extra` props go through the typed `SpecComponent<Extra>`
-    // surface returned to the spec author. The catalog signature is
-    // narrower than the public component, so we cast at the boundary.
+    // (`parent`, optional `__cmsContentKey`/`children`); call sites
+    // passing extra `Extra` props go through the typed
+    // `SpecComponent<Extra>` surface returned to the spec author. The
+    // catalog signature is narrower than the public component, so we
+    // cast at the boundary.
     Component: baseComponent as unknown as FC<PartialComponentProps>,
     isSlotBlock,
     vary: options.vary as SpecCatalogVary | undefined,
@@ -1426,8 +1490,8 @@ interface ReactCmsApi {
    * an options object (or a `match` shorthand).
    *
    * Type inference splits the Render function's props into three:
-   *   1. framework-managed (`parent`, `cmsId`, `children`) — always
-   *      injected by the framework.
+   *   1. framework-managed (`parent`, `children`) — always injected
+   *      by the framework.
    *   2. vary-derived (`V`) — auto-inferred via `InferV<Opts>`. With
    *      `match` set, V defaults to the URL params (`Record<string,
    *      string>`); with `vary` declared, V is its return type.
@@ -1516,6 +1580,7 @@ function buildBlock<V extends object, S extends object>(
     fallback: opts.fallback,
     vary: opts.vary as InternalSpecConfig<V & S>["vary"],
     schema: opts.schema as InternalSpecConfig<V & S>["schema"],
+    cmsId: opts.cmsId,
   }
   return buildSpecComponent(Render, config)
 }
@@ -1658,13 +1723,14 @@ function partialFromSnapshot(
 ): ReactNode {
   // Try direct id lookup (page specs).
   let Component = componentById.get(id)
-  let cmsIdOverride: string | undefined
+  let contentKey: string | undefined
   if (!Component && snap.type) {
-    // Slot block — look up by spec type.
+    // Slot-placed block — look up by spec type and replay the per-
+    // instance CMS content key through the internal slot channel.
     const spec = getSpecByType(snap.type)
     if (spec) {
       Component = spec.Component
-      cmsIdOverride = snap.cmsId
+      contentKey = snap.cmsContentKey
     }
   }
   if (!Component) return null
@@ -1679,7 +1745,10 @@ function partialFromSnapshot(
   // without writing it into the URL.
   const replayProps = (snap.props ?? {}) as Record<string, unknown>
   const props = overrideProps ? { ...replayProps, ...overrideProps } : replayProps
-  return <Component parent={parent} cmsId={cmsIdOverride} {...props} />
+  // `__cmsContentKey` is the framework-internal slot channel — set
+  // here when re-spawning a slot block in cache-mode refetch so its
+  // schema reads the right CMS row.
+  return <Component parent={parent} __cmsContentKey={contentKey} {...props} />
 }
 
 export async function PartialRoot({ children }: PartialRootProps): Promise<ReactNode> {
@@ -1798,9 +1867,9 @@ export function getSpecComponentById(
   return componentById.get(id) as SpecComponent<Record<string, unknown>> | undefined
 }
 
-export function lookupSpecComponentForCmsId(
-  cmsId: string,
+export function lookupSpecComponentByType(
+  type: string,
 ): SpecComponent<Record<string, unknown>> | undefined {
-  const spec = getSpecByCmsId(cmsId)
+  const spec = getSpecByType(type)
   return spec?.Component as SpecComponent<Record<string, unknown>> | undefined
 }

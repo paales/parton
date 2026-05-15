@@ -42,7 +42,7 @@ import { stableStringify } from "./stable-stringify.ts"
 export interface PartialSnapshot {
   /** Spec catalog type tag (so cache-mode lookup can find the spec
    *  Component when the effective id was per-instance, e.g. slot
-   *  blocks rendered with a cmsId override). */
+   *  blocks rendered with a content-key override). */
   type: string
   fallback: ReactNode
   uniqueTokens: string[]
@@ -57,7 +57,11 @@ export interface PartialSnapshot {
    *  (passed back in as `parent.frameChain` when re-rendering). */
   parentFrameChain: readonly string[]
   parentPath: readonly string[]
-  cmsId?: string
+  /** CMS storage key, when this spec was rendered as a CMS-bound block
+   *  instance. Drives `cmsFingerprintContribution` and replay of the
+   *  schema's CMS-read surface on cache-mode refetch. Absent on
+   *  non-block specs (and on blocks without CMS binding). */
+  cmsContentKey?: string
   /** Call-site JSX props captured during the streaming render. Cache-
    *  mode partial-refetch reads them back so a child spec rendered
    *  via a parent wrapper still receives `flavor={...}` etc. when
@@ -123,7 +127,7 @@ function variantKeyOf(snap: PartialSnapshot): string {
     stableStringify([
       snap.parentPath,
       snap.parentFrameChain,
-      snap.cmsId ?? null,
+      snap.cmsContentKey ?? null,
     ]),
   )
 }

@@ -83,7 +83,7 @@ function recomputeFp(
   request: Request,
 ): string {
   const frameRequest = snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath, request) : request
-  const cmsKey = snap.cmsId ? cmsFingerprintContribution(snap.cmsId, frameRequest) : ""
+  const cmsKey = snap.cmsContentKey ? cmsFingerprintContribution(snap.cmsContentKey, frameRequest) : ""
   const ambientFrameKey =
     snap.framePath.length > 0 ? `|inFrame=${snap.framePath.join(".")}:${frameRequest.url}` : ""
   const propsKey =
@@ -139,7 +139,7 @@ function descendantContributionFromSnapshot(
   // already captures the same value the descendant emitted on this
   // request — re-running vary here would produce the identical string,
   // so we skip the extra work.
-  const cmsKey = snap.cmsId ? cmsFingerprintContribution(snap.cmsId, request) : ""
+  const cmsKey = snap.cmsContentKey ? cmsFingerprintContribution(snap.cmsContentKey, request) : ""
   return `${descId}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}|${cmsKey}`
 }
 

@@ -662,40 +662,53 @@ function renderSlotEntry(
     }
     return null
   }
-  // Slot wiring passes the entry's id via the framework-internal
-  // `__cmsId` prop — underscore-prefixed because it isn't part of the
-  // public surface (authors set per-instance ids by either embedding
-  // `#token` in the spec selector for singletons, or by relying on the
-  // framework's props-hash derivation for multi-instance JSX
-  // placements).
+  // Slot wiring passes the entry's id through the framework-internal
+  // `__cmsContentKey` channel — underscore-prefixed because it isn't
+  // part of the public surface. The same value serves two internal
+  // roles: it's the CMS storage key the block's `schema` reads
+  // against, AND the per-instance render-id discriminator the
+  // framework uses to address this placement.
   const Component = spec.Component as React.FC<{
     parent: import("../lib/partial-context.ts").PartialCtx
-    __cmsId?: string
+    __cmsContentKey?: string
   }>
-  return React.createElement(Component, { key: entry.id, parent: host, __cmsId: entry.id })
+  return React.createElement(Component, {
+    key: entry.id,
+    parent: host,
+    __cmsContentKey: entry.id,
+  })
 }
 
 // ─── Spec catalog (block + page registration) ─────────────────────────
 //
-// `ReactCms.partial(...)` self-registers each spec under its `cmsId`.
-// Slots resolve store entries by looking up `entry.type` here.
+// `ReactCms.partial(...)` and `ReactCms.block(...)` self-register each
+// spec under its `type` (= the spec's catalog id, derived from
+// `Render.name` or the spec's selector). Slots resolve store entries
+// by looking up `entry.type` here. Page-level partial-refetch resolves
+// by the same key.
 
 export interface SpecCatalogEntry {
+  /** Spec catalog id (same as `type`). Derived from selector or
+   *  auto-named from `Render.name`. */
   id: string
-  cmsId: string
+  /** CMS storage key, when this spec is a CMS-bound SINGLETON block.
+   *  Undefined for partials and for multi-instance blocks (which get
+   *  their storage key from slot wiring at render time). */
+  cmsContentKey?: string
   selectorTokens: { uniqueTokens: string[]; sharedTokens: string[] }
   /** The component returned by ReactCms.partial — render it as JSX.
-   *  Accepts the standard `parent` plus a per-instance `cmsId`
-   *  override for slot use. */
+   *  Accepts the standard `parent` plus the framework-internal
+   *  `__cmsContentKey` channel used by slot wiring to pass the entry's
+   *  id into a multi-instance block. */
   Component: React.FC<{
     parent: import("../lib/partial-context.ts").PartialCtx
-    cmsId?: string
+    __cmsContentKey?: string
     children?: ReactNode
   }>
-  /** Stable identifier for the catalog ("type" tag). Defaults to cmsId. */
+  /** Stable identifier for the catalog ("type" tag). Equal to `id`. */
   type: string
-  /** True when this spec was constructed with `tags` — usable as a
-   *  slot block. Only slot blocks register in the type catalog. */
+  /** True iff constructed via `ReactCms.block` — usable as a slot
+   *  block (registers in the type catalog for slot lookup). */
   isSlotBlock: boolean
   /** Request-dimensions vary callback. Used by the descendant-fp fold
    *  (`computeDescendantFold`) to re-resolve a descendant's vary
@@ -725,23 +738,10 @@ export interface SpecCatalogEntry {
   displayName: string
 }
 
-const specCatalog = new Map<string, SpecCatalogEntry>()
 const typeCatalog = new Map<string, SpecCatalogEntry>()
 
 export function registerSpec(entry: SpecCatalogEntry): void {
-  specCatalog.set(entry.cmsId, entry)
-  // Only slot-block specs go into the type catalog. A spec is a slot
-  // block when it has class-only tag tokens (no #-tokens) AND the
-  // explicit `type` was NOT auto-derived from a #-token. Page specs
-  // (which auto-derive id/type from their selector) shouldn't shadow
-  // slot blocks in the type catalog.
-  if (entry.isSlotBlock) {
-    typeCatalog.set(entry.type, entry)
-  }
-}
-
-export function getSpecByCmsId(cmsId: string): SpecCatalogEntry | undefined {
-  return specCatalog.get(cmsId)
+  typeCatalog.set(entry.type, entry)
 }
 
 export function getSpecByType(type: string): SpecCatalogEntry | undefined {
@@ -753,7 +753,6 @@ export function listSpecTypes(): string[] {
 }
 
 export function _clearSpecCatalog(): void {
-  specCatalog.clear()
   typeCatalog.clear()
 }
 
