@@ -332,10 +332,10 @@ injectable (not just ambient); pays large DX dividends.
 across swaps, live-region announcements. Currently on the app —
 will be pile-of-ad-hoc in a year without framework-level defaults.
 
-### Abolish cmsId
+### Abolish id
 
-The cmsId concept resolves through too many paths (spec auto-derive,
-JSX prop, slot-wiring's `__cmsId` internal channel, singleton via
+The id concept resolves through too many paths (spec auto-derive,
+JSX prop, slot-wiring's `__contentKey` internal channel, singleton via
 selector `#token`). Goal is to remove it almost entirely from the
 public surface — identity should fall out of placement, not be
 threaded as a separate prop. Touches partial.tsx, slot wiring, and

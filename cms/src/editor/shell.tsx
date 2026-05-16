@@ -100,7 +100,7 @@ function renderedCmsIdsForPreviewedPage(): string[] {
   const snapshots = getRouteSnapshots()
   if (snapshots) {
     for (const snap of snapshots.values()) {
-      if (snap.cmsContentKey != null) ids.add(snap.cmsContentKey)
+      if (snap.contentKey != null) ids.add(snap.contentKey)
     }
   }
   return [...ids]
@@ -284,7 +284,7 @@ export const EditorTreePartial = ReactCms.partial(
                 data-testid={`cms-edit-tree-entry-${entry.id}`}
               >
                 <CmsEditAddBlock
-                  parentCmsId={entry.parentId!}
+                  parentId={entry.parentId!}
                   slotName={entry.slotName!}
                   options={options}
                 />
@@ -1101,7 +1101,7 @@ function CanvasChrome({
 }) {
   if (!selectedLabel) return null
   // The DOM-rect overlay flagged in IDEAS.md as future work — without
-  // a way to map cmsId → DOM rect of the rendered partial, the canvas
+  // a way to map id → DOM rect of the rendered partial, the canvas
   // chrome anchors generically to the preview pane. The visual is a
   // 1380×200 block centered horizontally: blue-purple dashed
   // selection, corner markers, bottom-left attached element-name tag,

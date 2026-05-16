@@ -2,19 +2,19 @@
  * CMS runtime — content store + sync read surface.
  *
  * The source of truth for CMS content is `cms/data/content.json` — a
- * forest of `CmsNode`s keyed by `cmsId`. Each node holds one or more
+ * forest of `CmsNode`s keyed by `id`. Each node holds one or more
  * `configs` (match clause → fields). The resolver picks every config
  * whose match is satisfied by the current request, scores by
  * matched-dimension count, and cascade-merges fields.
  *
  * Read surface for `vary` callbacks:
  *
- *   const cms = createCmsReadSurface(cmsId, request)
+ *   const cms = createCmsReadSurface(id, request)
  *   cms.text("headline")                       // "Welcome"
  *   cms.enum("tone", ["info","warn"] as const) // T
  *   cms.reference("featured", "product")       // string id | null
  *
- * Pure function of `(cmsId, request)`. No ALS, no scope cells, no
+ * Pure function of `(id, request)`. No ALS, no scope cells, no
  * tracking — the sync surface is what `vary` returns; that result IS
  * the dependency surface.
  */
@@ -316,24 +316,24 @@ export function listAllCmsNodes(rootIds?: ReadonlyArray<string>): CmsTreeEntry[]
   )
 }
 
-export function lookupCmsNode(cmsId: string, request?: Request): CmsNode | null {
+export function lookupCmsNode(id: string, request?: Request): CmsNode | null {
   if (isDraftRequest(request)) {
-    const draftHit = loadDraftStore().index.get(cmsId)
+    const draftHit = loadDraftStore().index.get(id)
     if (draftHit) return draftHit
   }
-  return loadPublishedStore().index.get(cmsId) ?? null
+  return loadPublishedStore().index.get(id) ?? null
 }
 
-export function lookupDraftNode(cmsId: string): CmsNode | null {
-  const draftHit = loadDraftStore().index.get(cmsId)
+export function lookupDraftNode(id: string): CmsNode | null {
+  const draftHit = loadDraftStore().index.get(id)
   if (draftHit) return draftHit
-  return loadPublishedStore().index.get(cmsId) ?? null
+  return loadPublishedStore().index.get(id) ?? null
 }
 
-export async function writeDraftNode(cmsId: string, node: CmsNode): Promise<void> {
+export async function writeDraftNode(id: string, node: CmsNode): Promise<void> {
   const backend = getCmsStorage()
   const current = (await backend.loadDraft())?.store ?? emptyStore()
-  current.partials[cmsId] = { ...node, id: cmsId }
+  current.partials[id] = { ...node, id: id }
   await backend.saveDraft(current)
   _invalidateCmsStoreCache()
 }
@@ -351,11 +351,11 @@ export async function publishDraft(): Promise<void> {
   _invalidateCmsStoreCache()
 }
 
-export async function revertDraftNode(cmsId: string): Promise<void> {
+export async function revertDraftNode(id: string): Promise<void> {
   const backend = getCmsStorage()
   const current = (await backend.loadDraft())?.store
-  if (!current || !(cmsId in current.partials)) return
-  delete current.partials[cmsId]
+  if (!current || !(id in current.partials)) return
+  delete current.partials[id]
   if (Object.keys(current.partials).length === 0) {
     await backend.deleteDraft()
   } else {
@@ -377,10 +377,10 @@ export async function _clearCmsDraft(): Promise<void> {
 // ─── Resolver ──────────────────────────────────────────────────────────
 
 export function resolveCmsFields(
-  cmsId: string,
+  id: string,
   request: Request,
 ): Record<string, unknown> | null {
-  const node = lookupCmsNode(cmsId, request)
+  const node = lookupCmsNode(id, request)
   if (!node) return null
   return mergeMatchingConfigs(node.configs, request)
 }
@@ -411,10 +411,10 @@ export function pickBestConfigIndex(
  * the current request. Folded into the spec's fingerprint so a CMS
  * edit invalidates the partial even when its JSX is unchanged.
  */
-export function cmsFingerprintContribution(cmsId: string, request: Request): string {
-  const node = lookupCmsNode(cmsId, request)
-  if (!node) return `|cms=${cmsId}:miss`
-  return `|cms=${cmsId}:${contributionForNode(node, request)}`
+export function cmsFingerprintContribution(id: string, request: Request): string {
+  const node = lookupCmsNode(id, request)
+  if (!node) return `|cms=${id}:miss`
+  return `|cms=${id}:${contributionForNode(node, request)}`
 }
 
 function contributionForNode(node: CmsNode, request: Request): string {
@@ -541,7 +541,7 @@ function readCookieRaw(request: Request, name: string): string | undefined {
 const EMPTY_IMAGE = Object.freeze({ src: "", alt: "" })
 
 /**
- * Build a sync `CmsReadSurface` bound to `cmsId` + `request` + `host`
+ * Build a sync `CmsReadSurface` bound to `id` + `request` + `host`
  * context. Field reads resolve from this node's configs; `block`/
  * `blocks` calls render slot entries from `node.slots[name]` through
  * the spec catalog (type → Component) with the host's frame chain
@@ -552,18 +552,18 @@ const EMPTY_IMAGE = Object.freeze({ src: "", alt: "" })
  * tracking surface doesn't have a real one.
  */
 export function createCmsReadSurface(
-  cmsId: string | undefined,
+  id: string | undefined,
   request: Request,
   host?: import("../lib/partial-context.ts").PartialCtx,
 ): CmsReadSurface {
   let resolved: Record<string, unknown> | null | undefined
   const resolve = (): Record<string, unknown> | null => {
     if (resolved !== undefined) return resolved
-    if (cmsId == null) {
+    if (id == null) {
       resolved = null
       return null
     }
-    resolved = resolveCmsFields(cmsId, request)
+    resolved = resolveCmsFields(id, request)
     return resolved
   }
   return {
@@ -604,8 +604,8 @@ export function createCmsReadSurface(
       return null
     },
     block(slot, selector) {
-      if (cmsId == null || host == null) return null
-      const node = lookupCmsNode(cmsId, request)
+      if (id == null || host == null) return null
+      const node = lookupCmsNode(id, request)
       const entries = node?.slots?.[slot] ?? []
       const matched = filterEntriesBySelector(entries, selector)
       const first = matched[0]
@@ -613,8 +613,8 @@ export function createCmsReadSurface(
       return renderSlotEntry(first, host)
     },
     blocks(slot, selector) {
-      if (cmsId == null || host == null) return null
-      const node = lookupCmsNode(cmsId, request)
+      if (id == null || host == null) return null
+      const node = lookupCmsNode(id, request)
       const entries = node?.slots?.[slot] ?? []
       const matched = filterEntriesBySelector(entries, selector)
       if (matched.length === 0) return null
@@ -664,19 +664,19 @@ function renderSlotEntry(
     return null
   }
   // Slot wiring passes the entry's id through the framework-internal
-  // `__cmsContentKey` channel — underscore-prefixed because it isn't
+  // `__contentKey` channel — underscore-prefixed because it isn't
   // part of the public surface. The same value serves two internal
   // roles: it's the CMS storage key the block's `schema` reads
   // against, AND the per-instance render-id discriminator the
   // framework uses to address this placement.
   const Component = spec.Component as React.FC<{
     parent: import("../lib/partial-context.ts").PartialCtx
-    __cmsContentKey?: string
+    __contentKey?: string
   }>
   return React.createElement(Component, {
     key: entry.id,
     parent: host,
-    __cmsContentKey: entry.id,
+    __contentKey: entry.id,
   })
 }
 
@@ -699,11 +699,11 @@ export interface SpecCatalogEntry {
   labels: string[]
   /** The component returned by ReactCms.partial — render it as JSX.
    *  Accepts the standard `parent` plus the framework-internal
-   *  `__cmsContentKey` channel used by slot wiring to pass the entry's
+   *  `__contentKey` channel used by slot wiring to pass the entry's
    *  id into a multi-instance block. */
   Component: React.FC<{
     parent: import("../lib/partial-context.ts").PartialCtx
-    __cmsContentKey?: string
+    __contentKey?: string
     children?: ReactNode
   }>
   /** Stable identifier for the catalog ("type" tag). Equal to `id`. */

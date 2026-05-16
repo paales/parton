@@ -105,7 +105,7 @@ interface PartialOptions<V> {
 |---|---|
 | `match` | URLPattern pathname (or full `URLPatternInit`). `/p/:slug`, `/p/:slug/reviews/:page`, `/inspect/*` (descendants only), `/inspect{/*}?` (bare + descendants). Pattern miss → spec emits nothing. Anonymous `*` captures don't flow into the default fingerprint — only named groups (`:foo`) do. |
 | `vary` | Sync function. Receives `{ url, pathname, search, cookies, headers, params, session }`. Returns the request-dimensions dependency surface or `null`. **No `cms` here** — CMS reads live on `ReactCms.block`'s `schema` callback. |
-| `selector` | Defaults to `#<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. Accepts both `#unique` and `.shared` class tokens for refetch targeting (e.g. `"#hero .featured"`). |
+| `selector` | One or more refetch labels. Plain strings; leading `#` / `.` are cosmetic and stripped on parse (`"#hero"` and `"hero"` are equivalent). Defaults to `<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. The first label is the spec's catalog id; additional labels are extra fan-out targets. Multiple placements of the same spec share their labels; `nav.reload({selector: "label"})` hits every carrier. |
 | `cache` | See [`cache.md`](./cache.md). |
 | `defer` | `true` for app-driven, an activator element to wire automatically. |
 | `fallback` | React node rendered while the partial's body is suspended. |
@@ -144,18 +144,19 @@ empty value sets the cookie to the empty string.
 
 `Render` receives, in order: any extra props passed at the JSX call
 site, the `vary` result spread, the framework-injected
-`parent`/`cmsId`/`children`. Vary keys win on collision.
+`parent`/`children`. Vary keys win on collision.
 
 | Key | Source |
 |---|---|
 | `<JSX call-site props>` | parent spec, e.g. `<Hero parent={p} pokemonId={id} />` |
 | `<every key from vary's return>` | author |
 | `parent` | framework — fresh `PartialCtx` for descendants |
-| `cmsId` | framework — effective cmsId (override-aware) |
 | `children` | framework — passes outer JSX children through |
 
-`parent` is what nested specs and slot hosts use; `cmsId` is what
-slot primitives pass as `hostCmsId`.
+`parent` is what nested specs and slot hosts use. There is no
+`id` prop on the Render surface — CMS-bound blocks
+([`block.md`](./block.md)) get their content via `schema` reads,
+and the framework binds the read surface to the right row internally.
 
 ### `typeof Spec.props` — derive the prop bag from the spec
 
@@ -271,20 +272,39 @@ Slot composition is a block-spec concern. Partials don't have a
 that hosts CMS-managed children, use [`ReactCms.block`](./block.md)
 and declare the slot via `cms.blocks(slot, selector?)` /
 `cms.block(slot, selector?)` inside `schema`. A partial that happens
-to render a specific block can still place it directly via JSX
-(`<SomeBlock parent={parent} cmsId="…" />`); the framework wires
-host context through the block's effective cmsId.
+to render a singleton block can still place it directly via JSX
+(`<SomeBlock parent={parent} />`); the block's CMS row falls out of
+its spec id (the first selector label, or `Render.name`-derived).
 
 ## Selector grammar
 
-CSS-style. Tokens separated by whitespace.
+A flat list of labels — whitespace-separated tokens, OR an array. Each
+label is a refetch target; `nav.reload({selector: "label"})` matches
+every spec whose label list includes `"label"` (or whose catalog id
+equals it).
 
-- `#foo` — unique. A second spec with the same `#foo` is a render
-  error. Drives `reload({ selector: "#foo" })` lookup.
-- `.foo` — shared. Multiple specs may carry it. Refetches by `.foo`
-  union across every carrier.
+```ts
+selector: "hero"                   // one label
+selector: "page-block hero"        // two labels
+selector: ["page-block", "hero"]   // same
+```
 
-Auto-derived from `Render.name`: `PokemonHeroRender` → `#pokemon-hero`.
+Leading `#` and `.` are stripped on parse — cosmetic only, kept for
+back-compat. `"#hero"`, `".hero"`, and `"hero"` are equivalent.
+
+The **first label** is also the spec's catalog id (the wire `id`,
+the snapshot key, the value `useEnclosingPartialId()` returns). For
+singleton blocks, it's also the CMS storage row the spec reads from.
+
+Auto-derived from `Render.name` when omitted: `PokemonHeroRender` →
+`"pokemon-hero"`.
+
+There's no per-page uniqueness check. Multiple placements of the
+same spec share their labels and fan out under refetch — for the
+common LivePrice-per-product case, that's the intended model.
+Per-instance addressing for keyless multi-placements isn't a
+framework concern; if you need per-row identity, route the content
+through a CMS slot.
 
 ## Skip semantics
 
@@ -444,4 +464,4 @@ The set is populated as a side-effect of every `ReactCms.partial(…,
 - **Spec metadata doesn't cross the RSC boundary.** Spec components
   are server-only — don't import a spec into a client component to
   reach for its `id`. Reload calls stay stringly-typed
-  (`reload({ selector: "#hero" })`).
+  (`reload({ selector: "hero" })`).

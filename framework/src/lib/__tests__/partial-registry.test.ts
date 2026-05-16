@@ -27,7 +27,7 @@ function snap(parentPath: readonly string[], extra: Partial<PartialSnapshot> = {
     framePath: extra.framePath ?? [],
     parentFrameChain: extra.parentFrameChain ?? [],
     parentPath,
-    cmsContentKey: extra.cmsContentKey,
+    contentKey: extra.contentKey,
   }
 }
 

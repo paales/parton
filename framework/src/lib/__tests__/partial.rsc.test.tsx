@@ -121,7 +121,7 @@ describe("ReactCms.partial — vary + render", () => {
   })
 })
 
-describe("ReactCms.partial — selector & cmsId derivation", () => {
+describe("ReactCms.partial — selector & id derivation", () => {
   it("auto-derives selector from Render.name", async () => {
     function MyAutoSelectedRender({}: RenderArgs) {
       return <i data-testid="auto-selector-output">ok</i>

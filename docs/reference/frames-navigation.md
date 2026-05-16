@@ -79,13 +79,15 @@ const cartNav = useNavigation("cart")    // cart frame scope
 
 cartNav.navigate("/cart/open")
 nav.navigate("/products?page=2")
-nav.reload({ selector: "#cart" })
+nav.reload({ selector: "cart" })
 ```
 
 `navigate` accepts a string, a `URL`, or an updater function
 `(url: URL) => URL | void`. `reload` accepts an options bag with
-`selector` (CSS-style `#unique` / `.shared` tokens, space-joined)
-and various lifecycle flags.
+`selector` (one or more labels — whitespace-joined string or array;
+leading `#`/`.` is cosmetic and stripped) and various lifecycle
+flags. Refetch fans out across every spec whose labels include any
+of the wanted tokens (or whose id equals one of them).
 
 When called with no name, `useNavigation()` looks up the closest
 ambient frame from the React context (set by the spec's frame
@@ -100,12 +102,12 @@ threads JSX-style call-site props into the targeted refetch:
 
 ```tsx
 nav.navigate(url, {
-  selector: "#slow",
+  selector: "slow",
   props: { slow: { flavor: "chocolate" } },
 })
 ```
 
-Keys are partial ids (the selector token without the leading `#`).
+Keys are partial ids (the same string you'd pass as a selector).
 On the server, these props override the snapshot-replayed call-site
 props in `partialFromSnapshot`, so a deep partial-refetch can carry
 fresh values without re-running the parent wrapper. The values land
@@ -139,7 +141,7 @@ travel in the upcoming request's `Cookie` header:
 ```tsx
 nav.navigate(window.location.pathname + window.location.search, {
   cookies: { theme: "dark" },
-  selector: "#theme-aware",
+  selector: "theme-aware",
 })
 ```
 

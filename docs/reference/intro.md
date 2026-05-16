@@ -8,7 +8,7 @@ The public surface is three things:
 | | What it is | When you reach for it |
 |---|---|---|
 | `ReactCms.partial(R, opts)` | Addressable render unit. Optionally URL-gated via `match`. | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all. |
-| `ReactCms.block(R, opts)` | Slot-placeable partial with a `schema` for CMS content. | Content blocks the CMS can place into slots or render directly via `cmsId` override. |
+| `ReactCms.block(R, opts)` | Slot-placeable partial with a `schema` for CMS content. | Content blocks the CMS can place into slots or render directly as a singleton (storage row matches spec id). |
 | `<Frame name initialUrl>` | Scope opener — extends `parent.frameChain` so descendants see the frame-resolved request. | Any region whose URL is independent of the window URL. |
 
 A spec is constructed once at module scope; every dependency it has on
@@ -27,10 +27,11 @@ function PokemonRender({ id, parent }: { id: string } & RenderArgs) {
 
 A spec is:
 
-- **Addressable** — `selector="#cart"` (auto-derived from
+- **Addressable** — `selector="cart"` (auto-derived from
   `Render.name` when omitted) makes it the target of
-  `useNavigation().reload({ selector: "#cart" })` and of server-action
-  `return { invalidate: { selector: "#cart" } }`.
+  `useNavigation().reload({ selector: "cart" })` and of server-action
+  `return { invalidate: { selector: "cart" } }`. Cosmetic `#`/`.`
+  prefixes on labels are stripped and don't change behaviour.
 - **Independently re-renderable** — a targeted refetch re-runs only
   the requested spec's body without re-executing any ancestor.
 - **Fingerprinted** — every render computes a hash from the spec

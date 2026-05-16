@@ -578,7 +578,7 @@ test.describe("CMS editor — smoke", () => {
     })
 
     test("tree reflects what's rendered on the previewed page", async ({ page }) => {
-      // Discovery is registry-driven: the tree shows the cmsIds that
+      // Discovery is registry-driven: the tree shows the ids that
       // self-registered for the previewed route. Chrome that renders
       // on every page (`app-nav`) appears everywhere; per-page roots
       // (`cms-demo-root`) appear only where their partial mounts.
@@ -874,7 +874,7 @@ test.describe("CMS editor — smoke", () => {
       await page.waitForLoadState("networkidle")
       // The field pane renders the node's `displayName` ("#greeting"
       // here) when present, so we assert against that label rather
-      // than the raw cmsId.
+      // than the raw id.
       await expect(page.getByTestId("cms-edit-selected-id")).toContainText("#greeting")
 
       // Cross-slug nav to /cms-demo/alpha — `?select=` is preserved on

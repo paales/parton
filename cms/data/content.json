@@ -271,7 +271,7 @@
                     {
                       "match": {},
                       "fields": {
-                        "body": "This rich-text block is the second entry in the body slot. Ordering comes from content.json; each entry resolves its own fields through the CMS scope opened by <Partial cmsId>."
+                        "body": "This rich-text block is the second entry in the body slot. Ordering comes from content.json; each entry resolves its own fields through the CMS scope opened by <Partial id>."
                       }
                     }
                   ]

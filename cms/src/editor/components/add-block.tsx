@@ -46,11 +46,11 @@ function bucketFor(opt: AddBlockOption): string {
 }
 
 export function CmsEditAddBlock({
-  parentCmsId,
+  parentId,
   slotName,
   options,
 }: {
-  parentCmsId: string
+  parentId: string
   slotName: string
   options: ReadonlyArray<AddBlockOption>
 }) {
@@ -135,7 +135,7 @@ export function CmsEditAddBlock({
         onClick={() => setOpen((o) => !o)}
         className="cms-tree-add-row"
         style={{ width: "100%", border: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}
-        data-testid={`cms-edit-slot-add-trigger-${parentCmsId}-${slotName}`}
+        data-testid={`cms-edit-slot-add-trigger-${parentId}-${slotName}`}
         aria-haspopup="menu"
         aria-expanded={open}
       >
@@ -199,7 +199,7 @@ export function CmsEditAddBlock({
                             onMouseEnter={() => setActiveIdx(myIdx)}
                             className="cms-blockpicker-item"
                             data-active={myIdx === activeIdx || undefined}
-                            data-testid={`cms-edit-slot-add-${parentCmsId}-${slotName}-${opt.type}`}
+                            data-testid={`cms-edit-slot-add-${parentId}-${slotName}-${opt.type}`}
                             role="menuitem"
                           >
                             <span className="cms-blockpicker-item-icon">

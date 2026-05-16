@@ -85,9 +85,10 @@ component whose `vary` doesn't yet capture every dependency.
 Three axes:
 
 1. **Server-action directives.** An action returns `{invalidate:
-   {selector: "#cart .price"}}` and the framework refetches the
-   matching specs on the next render — bypassing their cache by
-   marking them as explicit refetch targets.
+   {selector: "cart price"}}` and the framework refetches every spec
+   whose id or label list contains "cart" or "price" on the next
+   render — bypassing their cache by marking them as explicit
+   refetch targets.
 2. **Vary-result change.** A page nav whose URL changes a value in
    the spec's vary result produces a different cache key. The old
    entry stays in the store but isn't queried.

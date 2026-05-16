@@ -47,15 +47,12 @@ ids the route's hint table knows about.
 interface PartialSnapshot {
   type: string                          // spec catalog tag
   fallback: ReactNode
-  errorWith: ReactNode | undefined
-  uniqueTokens: string[]
-  sharedTokens: string[]
+  labels: string[]                      // refetch labels (selector)
   cache?: CacheOptions
   framePath: readonly string[]
   parentFrameChain: readonly string[]   // for cache-mode reconstruction
-  frameUrl?: string
   parentPath: readonly string[]
-  cmsId?: string
+  contentKey?: string                // CMS storage row for this rendered instance, if any
   props?: Record<string, unknown>       // captured call-site JSX props
   varyKey?: string                      // hash of last varyResult, for descendant-fp fold
 }
@@ -93,18 +90,18 @@ Wire params:
 
 | Param | Carries |
 |---|---|
-| `partials` | `#`-token names (without `#`) |
-| `tags` | `.`-token names (without `.`) |
-| `cached` | `id:fp,id:fp,...` — fingerprints the client has |
+| `partials` | Selector labels (cosmetic `#`/`.` stripped). Resolves against snapshot `labels` AND `id` for fan-out targeting. |
+| `cached` | `id:matchKey:fp,…` — fingerprints the client has |
 | `partialProps` | JSON `{"<id>":{<propName>:<value>}}` — call-site prop overlay; overrides snapshot-replayed `props` |
 | `__populateCache` | flag to re-render fresh after a server-action invalidate, repopulating the client cache |
 | `__frame=...&__frameUrl=...` | session-write a frame URL before render |
 
-`PartialRoot` resolves `partials` / `tags` against the route's
-hint table to derive the union of ids to refetch. Unmatched
-`#`-tokens trigger a streaming-mode fallback (so a fresh range
-expansion like `?end=N+1` re-renders the page rather than producing
-a registry miss).
+`PartialRoot` resolves `partials` against the route's hint table to
+derive the union of ids to refetch — direct id match plus any
+snapshot whose label list contains a wanted token. Unmatched tokens
+trigger a streaming-mode fallback (so a fresh range expansion like
+`?end=N+1` re-renders the page rather than producing a registry
+miss).
 
 ## Fingerprint protocol
 
@@ -138,7 +135,7 @@ The fp folds in:
 - vary result (stable-stringified)
 - call-site JSX props (`extraProps`)
 - frame URL (own and ambient)
-- CMS resolved fields contribution (when `cmsId` is set)
+- CMS resolved fields contribution (when `contentKey` is set)
 - every previously-registered descendant spec's `varyKey` snapshot,
   resolved against the *current* request via the spec catalog's
   `match` + `vary` (transitive descendant fp propagation — an

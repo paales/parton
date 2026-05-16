@@ -3,7 +3,7 @@
  *
  * Snapshots are deduplicated by structural placement: the same spec
  * mounted under the same parent (same parentPath, parentFrameChain,
- * frameUrl, cmsId) hashes to one variant key, regardless of which
+ * frameUrl, id) hashes to one variant key, regardless of which
  * route triggered the registration. Concurrent users on the same
  * route register byte-identical snapshots → idempotent overwrite.
  * Users hitting different routes where the same id is mounted under
@@ -63,7 +63,7 @@ export interface PartialSnapshot {
    *  instance. Drives `cmsFingerprintContribution` and replay of the
    *  schema's CMS-read surface on cache-mode refetch. Absent on
    *  non-block specs (and on blocks without CMS binding). */
-  cmsContentKey?: string
+  contentKey?: string
   /** Call-site JSX props captured during the streaming render. Cache-
    *  mode partial-refetch reads them back so a child spec rendered
    *  via a parent wrapper still receives `flavor={...}` etc. when
@@ -129,7 +129,7 @@ function variantKeyOf(snap: PartialSnapshot): string {
     stableStringify([
       snap.parentPath,
       snap.parentFrameChain,
-      snap.cmsContentKey ?? null,
+      snap.contentKey ?? null,
     ]),
   )
 }

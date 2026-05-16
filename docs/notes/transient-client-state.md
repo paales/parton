@@ -51,7 +51,7 @@ DSL.
 ## Direction A — Durable draft as a server entity (Partial reads it)
 
 The CMS layer already has the precedent: `content.json` (published) +
-`draft.json` (gitignored), with `lookupCmsNode(cmsId, request)`
+`draft.json` (gitignored), with `lookupCmsNode(id, request)`
 checking draft first when `cms-draft=1` is set. Generalize that shape
 to **app draft state**:
 

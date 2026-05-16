@@ -48,8 +48,7 @@ function variantKeyOf(snap: PartialSnapshot): string {
   return hash(stableStringify([
     snap.parentPath,
     snap.parentFrameChain,
-    snap.frameUrl ?? null,
-    snap.cmsId ?? null,
+    snap.contentKey ?? null,
   ]))
 }
 ```
@@ -71,8 +70,7 @@ distinguish two registrations of the same id:
 |---|---|
 | `parentPath` | Same id mounted under different ancestors (e.g. `Header` under `PageRoot` vs under `EditorShell`) |
 | `parentFrameChain` | Same id rendered inside vs outside a frame |
-| `frameUrl` | Frame-opening spec with a different initial URL |
-| `cmsId` | Slot-block instance with a different effective cmsId override (also folded into the spec's effective id, but kept here defensively) |
+| `contentKey` | Slot-block instance bound to a different CMS row (also folded into the spec's effective id, but kept here defensively) |
 
 Per-user variation (cookies, search params, A/B test buckets) is
 *not* in the variant key — that divergence flows through the

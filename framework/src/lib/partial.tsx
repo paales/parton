@@ -12,7 +12,7 @@
  *   <PokemonPage parent={ROOT} />
  *
  * Slot block instances receive the entry's id through the framework-
- * internal `__cmsContentKey` channel — the same Component renders with
+ * internal `__contentKey` channel — the same Component renders with
  * per-instance CMS content.
  *
  * See `notes/partial-define-step-api.md`.
@@ -499,7 +499,7 @@ interface PartialBoundaryProps {
    *  to CMS content (block specs only). Drives `cmsFingerprintContribution`
    *  and the schema CMS-read surface; orthogonal to the render-time
    *  `id` above. */
-  cmsContentKey?: string
+  contentKey?: string
   cache?: CacheOptions
   fallback: ReactNode
   /** Call-site JSX props (e.g. `id` from a parent wrapper). Stored
@@ -533,7 +533,7 @@ export function PartialBoundary({
   labels,
   framePath,
   parentFrameChain,
-  cmsContentKey,
+  contentKey,
   cache,
   fallback,
   props,
@@ -550,7 +550,7 @@ export function PartialBoundary({
     framePath,
     parentFrameChain,
     parentPath,
-    cmsContentKey,
+    contentKey,
     cache,
     props,
     varyKey,
@@ -613,7 +613,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
   // render id (the entry id, e.g. `composed-hero-2`), but the spec
   // catalog has them under their `type` (e.g. `hero`). Resolve by
   // `snap.type` directly — `type` is the spec catalog key for both
-  // page specs and slot blocks now that the cmsId/id conflation is
+  // page specs and slot blocks now that the id/id conflation is
   // gone.
   let spec = snap.type ? getSpecByType(snap.type) : undefined
   // No live spec → fall back to last-known varyKey. Prevents the
@@ -644,7 +644,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
     // sites; cmsFingerprintContribution covers blocks with `schema`
     // (which don't have vary), so slot-host wrappers fp-track their
     // CMS-driven block descendants correctly.
-    const cmsKey = snap.cmsContentKey ? cmsFingerprintContribution(snap.cmsContentKey, request) : ""
+    const cmsKey = snap.contentKey ? cmsFingerprintContribution(snap.contentKey, request) : ""
     return `${descId}:${stableStringify(params)}|${stableStringify(snap.props ?? null)}|${cmsKey}`
   }
 
@@ -675,7 +675,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
     return `${descId}:${snap.varyKey ?? ""}`
   }
   if (result === null) return `${descId}:varynull`
-  const cmsKey = snap.cmsContentKey ? cmsFingerprintContribution(snap.cmsContentKey, request) : ""
+  const cmsKey = snap.contentKey ? cmsFingerprintContribution(snap.contentKey, request) : ""
   const propsKey = stableStringify(snap.props ?? null)
   return `${descId}:${stableStringify(result)}|${propsKey}|${cmsKey}`
 }
@@ -924,7 +924,7 @@ function emitWithVariantSiblings(
 /**
  * Resolve the render-time identity for a placement of `spec`.
  *
- *  - If the slot machinery passed `__cmsContentKey` (multi-instance
+ *  - If the slot machinery passed `__contentKey` (multi-instance
  *    block under a slot), the entry's id becomes both this placement's
  *    unique token AND its CMS storage key.
  *  - Otherwise the spec's own id is used (singleton case, or
@@ -960,17 +960,17 @@ function createSpecComponent<V>(
   const Component: FC<PartialComponentProps & Record<string, unknown>> = (props) => {
     const {
       parent,
-      __cmsContentKey: slotContentKey,
+      __contentKey: slotContentKey,
       children: outerChildren,
       ...extraProps
     } = props as PartialComponentProps & {
-      __cmsContentKey?: string
+      __contentKey?: string
       children?: ReactNode
     } & Record<string, unknown>
     const opts = spec.options
     // Render-time identity (the `id` keying snapshots, wire, cache
     // lookup) is `slotContentKey ?? spec.id`. The slot machinery
-    // sets `__cmsContentKey` to the entry's id when wiring a multi-
+    // sets `__contentKey` to the entry's id when wiring a multi-
     // instance block, so each placement under a slot gets its own
     // id; direct-JSX placements fall back to the spec's catalog id.
     //
@@ -979,7 +979,7 @@ function createSpecComponent<V>(
     // string serves both roles by design — entries persist with the
     // id the editor minted, and the same id addresses the render-time
     // instance.
-    const effectiveCmsContentKey = spec.isSlotBlock ? (slotContentKey ?? spec.id) : undefined
+    const effectiveContentKey = spec.isSlotBlock ? (slotContentKey ?? spec.id) : undefined
     const { id, parsed } = effectiveIdForInstance(spec as InternalSpec<unknown>, slotContentKey)
     // Keepalive defaults to true. The flag governs both the active
     // emission (wrap body in `<Activity mode="visible">`) and the
@@ -1072,7 +1072,7 @@ function createSpecComponent<V>(
       frameChain: parent.frameChain,
     }
     if (opts.schema) {
-      const cmsSurface = createCmsReadSurface(effectiveCmsContentKey, ourRequest, childCtxForSchema)
+      const cmsSurface = createCmsReadSurface(effectiveContentKey, ourRequest, childCtxForSchema)
       let schemaResult: unknown
       try {
         schemaResult = opts.schema({ cms: cmsSurface })
@@ -1093,7 +1093,7 @@ function createSpecComponent<V>(
     // from the previous-render snapshot AND re-evaluates its vary
     // against the CURRENT request so URL changes are reflected at
     // ancestor fp time without lag.
-    const cmsKey = effectiveCmsContentKey ? cmsFingerprintContribution(effectiveCmsContentKey, ourRequest) : ""
+    const cmsKey = effectiveContentKey ? cmsFingerprintContribution(effectiveContentKey, ourRequest) : ""
     const ambientFrameKey =
       ourFrameChain.length > 0 ? `|inFrame=${ourFrameChain.join(".")}:${ourRequest.url}` : ""
     const propsKey =
@@ -1180,7 +1180,7 @@ function createSpecComponent<V>(
           labels={parsed.labels}
           framePath={ourFrameChain}
           parentFrameChain={parent.frameChain}
-          cmsContentKey={effectiveCmsContentKey}
+          contentKey={effectiveContentKey}
           cache={opts.cache}
           fallback={fallback}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
@@ -1221,7 +1221,7 @@ function createSpecComponent<V>(
           labels={parsed.labels}
           framePath={ourFrameChain}
           parentFrameChain={parent.frameChain}
-          cmsContentKey={effectiveCmsContentKey}
+          contentKey={effectiveContentKey}
           cache={opts.cache}
           fallback={fallback}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
@@ -1306,7 +1306,7 @@ function createSpecComponent<V>(
         labels={parsed.labels}
         framePath={ourFrameChain}
         parentFrameChain={parent.frameChain}
-        cmsContentKey={effectiveCmsContentKey}
+        contentKey={effectiveContentKey}
         cache={opts.cache}
         fallback={fallback}
         props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
@@ -1374,7 +1374,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
     type,
     labels: parsed.labels,
     // Slot lookup invokes the component with only framework props
-    // (`parent`, optional `__cmsContentKey`/`children`); call sites
+    // (`parent`, optional `__contentKey`/`children`); call sites
     // passing extra `Extra` props go through the typed
     // `SpecComponent<Extra>` surface returned to the spec author. The
     // catalog signature is narrower than the public component, so we
@@ -1632,7 +1632,7 @@ function partialFromSnapshot(
     const spec = getSpecByType(snap.type)
     if (spec) {
       Component = spec.Component
-      contentKey = snap.cmsContentKey
+      contentKey = snap.contentKey
     }
   }
   if (!Component) return null
@@ -1647,10 +1647,10 @@ function partialFromSnapshot(
   // without writing it into the URL.
   const replayProps = (snap.props ?? {}) as Record<string, unknown>
   const props = overrideProps ? { ...replayProps, ...overrideProps } : replayProps
-  // `__cmsContentKey` is the framework-internal slot channel — set
+  // `__contentKey` is the framework-internal slot channel — set
   // here when re-spawning a slot block in cache-mode refetch so its
   // schema reads the right CMS row.
-  return <Component parent={parent} __cmsContentKey={contentKey} {...props} />
+  return <Component parent={parent} __contentKey={contentKey} {...props} />
 }
 
 export async function PartialRoot({ children }: PartialRootProps): Promise<ReactNode> {

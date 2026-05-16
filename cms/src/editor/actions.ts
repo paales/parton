@@ -3,10 +3,10 @@
 /**
  * CMS editor server actions.
  *
- *  - `saveCmsFields(cmsId, configIndex, formData)` — merge form
+ *  - `saveCmsFields(id, configIndex, formData)` — merge form
  *    entries into the draft node's chosen config (or create it).
  *  - `publishCmsDraft()` — copy draft → published, clear draft.
- *  - `resetCmsDraft(cmsId)` — drop a single id's draft override.
+ *  - `resetCmsDraft(id)` — drop a single id's draft override.
  *  - `addBlockToSlot` / `removeBlockFromSlot` / `moveBlockInSlot` —
  *    structural slot mutations.
  */
@@ -21,21 +21,21 @@ import {
   type CmsNode,
 } from "@react-cms/framework"
 
-function invalidateEditorAround(cmsId: string): { invalidate: { selector: string } } {
+function invalidateEditorAround(id: string): { invalidate: { selector: string } } {
   return {
-    invalidate: { selector: `#${cmsId} #cms-edit-tree #cms-edit-fields` },
+    invalidate: { selector: `#${id} #cms-edit-tree #cms-edit-fields` },
   }
 }
 
 export async function saveCmsFields(
-  cmsId: string,
+  id: string,
   configIndex: number,
   formData: FormData,
 ): Promise<{ invalidate: { selector: string } }> {
-  const existing: CmsNode = lookupDraftNode(cmsId) ?? { id: cmsId, configs: [] }
+  const existing: CmsNode = lookupDraftNode(id) ?? { id: id, configs: [] }
   const node: CmsNode = {
     ...existing,
-    id: cmsId,
+    id: id,
     configs: existing.configs.map((c) => ({
       match: { ...c.match },
       fields: { ...c.fields },
@@ -83,8 +83,8 @@ export async function saveCmsFields(
     if (!formData.has(name)) target.fields[name] = false
   }
 
-  await writeDraftNode(cmsId, node)
-  return invalidateEditorAround(cmsId)
+  await writeDraftNode(id, node)
+  return invalidateEditorAround(id)
 }
 
 export async function publishCmsDraft(): Promise<{ invalidate: { selector: string } }> {
@@ -93,10 +93,10 @@ export async function publishCmsDraft(): Promise<{ invalidate: { selector: strin
 }
 
 export async function resetCmsDraft(
-  cmsId: string,
+  id: string,
 ): Promise<{ invalidate: { selector: string } }> {
-  await revertDraftNode(cmsId)
-  return invalidateEditorAround(cmsId)
+  await revertDraftNode(id)
+  return invalidateEditorAround(id)
 }
 
 function cloneNode(node: CmsNode): CmsNode {
@@ -119,7 +119,7 @@ function generateBlockId(type: string): string {
 }
 
 export async function addBlockToSlot(
-  parentCmsId: string,
+  parentId: string,
   slotName: string,
   blockType: string,
 ): Promise<{ invalidate: { selector: string } }> {
@@ -129,10 +129,10 @@ export async function addBlockToSlot(
         `Add it to the catalog before wiring it into the palette.`,
     )
   }
-  const existing = lookupDraftNode(parentCmsId)
+  const existing = lookupDraftNode(parentId)
   if (!existing) {
     throw new Error(
-      `addBlockToSlot: parent "${parentCmsId}" not found in draft or published stores.`,
+      `addBlockToSlot: parent "${parentId}" not found in draft or published stores.`,
     )
   }
   const parent = cloneNode(existing)
@@ -144,51 +144,51 @@ export async function addBlockToSlot(
     configs: [{ match: {}, fields: {} }],
   }
   parent.slots = { ...slots, [slotName]: [...children, newChild] }
-  await writeDraftNode(parentCmsId, parent)
-  return invalidateEditorAround(parentCmsId)
+  await writeDraftNode(parentId, parent)
+  return invalidateEditorAround(parentId)
 }
 
 export async function removeBlockFromSlot(
-  parentCmsId: string,
+  parentId: string,
   slotName: string,
-  childCmsId: string,
+  childId: string,
 ): Promise<{ invalidate: { selector: string } }> {
-  const existing = lookupDraftNode(parentCmsId)
+  const existing = lookupDraftNode(parentId)
   if (!existing) {
-    throw new Error(`removeBlockFromSlot: parent "${parentCmsId}" not found.`)
+    throw new Error(`removeBlockFromSlot: parent "${parentId}" not found.`)
   }
   const parent = cloneNode(existing)
   const slots = parent.slots ?? {}
   const children = slots[slotName] ?? []
   parent.slots = {
     ...slots,
-    [slotName]: children.filter((c) => c.id !== childCmsId),
+    [slotName]: children.filter((c) => c.id !== childId),
   }
-  await writeDraftNode(parentCmsId, parent)
-  return invalidateEditorAround(parentCmsId)
+  await writeDraftNode(parentId, parent)
+  return invalidateEditorAround(parentId)
 }
 
 export async function moveBlockInSlot(
-  parentCmsId: string,
+  parentId: string,
   slotName: string,
-  childCmsId: string,
+  childId: string,
   direction: "up" | "down",
 ): Promise<{ invalidate: { selector: string } }> {
-  const existing = lookupDraftNode(parentCmsId)
+  const existing = lookupDraftNode(parentId)
   if (!existing) {
-    throw new Error(`moveBlockInSlot: parent "${parentCmsId}" not found.`)
+    throw new Error(`moveBlockInSlot: parent "${parentId}" not found.`)
   }
   const parent = cloneNode(existing)
   const slots = parent.slots ?? {}
   const children = [...(slots[slotName] ?? [])]
-  const idx = children.findIndex((c) => c.id === childCmsId)
-  if (idx < 0) return invalidateEditorAround(parentCmsId)
+  const idx = children.findIndex((c) => c.id === childId)
+  if (idx < 0) return invalidateEditorAround(parentId)
   const swapIdx = direction === "up" ? idx - 1 : idx + 1
-  if (swapIdx < 0 || swapIdx >= children.length) return invalidateEditorAround(parentCmsId)
+  if (swapIdx < 0 || swapIdx >= children.length) return invalidateEditorAround(parentId)
   const tmp = children[idx]
   children[idx] = children[swapIdx]
   children[swapIdx] = tmp
   parent.slots = { ...slots, [slotName]: children }
-  await writeDraftNode(parentCmsId, parent)
-  return invalidateEditorAround(parentCmsId)
+  await writeDraftNode(parentId, parent)
+  return invalidateEditorAround(parentId)
 }

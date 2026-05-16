@@ -24,3 +24,30 @@
 - [ ] So the CMS is a template builder that allows us to fix the strings of the templates and confiure the layout. However we also need to render those templates for the content, right? So is a sitemap created and how is the CMS section working here. Building a sitemap builds the available routes? Not completely because certain information might be private and completely arbitrary. But we do define routes with the match props and these props and it's vary options to render the variants of these sections.
 
 - [ ] So the page template editor ALSO can be the content of a wysiwyg editor, we don't want to build a wysiwyg editor, but there is overlap. In Shopify for example you quickly need to create separate blog templates to do something special because the wysiwyg editor doesn't give you enough leverage. Sooo, the block editor should be able to do recursive block editors? Where a template nests in another template?
+
+- [ ] Enable React.StrictMode always? Or why not?
+
+- [ ] Have better sugar for this so we have a flat hook, and should we be able to resolve the loading state of in the actual component itsself?
+
+Also each partial should have the equivalent of
+
+- https://developer.mozilla.org/en-US/docs/Web/API/Navigation/navigate_event
+- https://developer.mozilla.org/en-US/docs/Web/API/Navigation/navigatesuccess_event <- This is directly related to finished, right.
+
+```tsx
+const nav = useNavigation()
+const [isPending, setIsPending] = useState(false)
+
+async function refreshAll() {
+  setIsPending(true)
+  try {
+    await nav.reload({ selector: ".price" }).finished
+  } finally {
+    setIsPending(false)
+  }
+}
+```
+
+- [ ] Wrap fetch and then hoist all queries that are pure based on vary into a preload step so we can start of N+1 queries. Sooo, how can we make this pure? How can we survive 3 layers of indirection and still detect it correctly? Should the preload be explicit?
+
+- [ ] Create a prefetch primitive that allows us to prefetch partials with <Activity mode="hidden"> and place them in the DOM without any effects being run.

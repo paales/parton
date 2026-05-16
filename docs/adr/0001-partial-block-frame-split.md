@@ -20,7 +20,7 @@ and frame-scope openers. Split into:
   React component, no constructor. Extends `parent.frameChain` for
   descendants and wires `useNavigation(name)`.
 
-Dead/redundant options stripped: `cmsId`, `errorWith` (already gone),
+Dead/redundant options stripped: `id`, `errorWith` (already gone),
 plus `tags`/`type`/`frame`/`frameUrl` removed from `partial` (`tags`
 moves to `block`; `frame*` move to `<Frame>`).
 
@@ -68,7 +68,7 @@ most are irrelevant on any given call.
 
 Audited problems:
 
-- `cmsId` option had one user call site (`cms-demo.tsx`), and that
+- `id` option had one user call site (`cms-demo.tsx`), and that
   call site matched the auto-derive exactly. Stripped 2026-05-11.
 - `errorWith` had zero call sites outside the framework itself.
   Stripped 2026-05-11.
@@ -150,7 +150,7 @@ function Frame({ name, initialUrl, children }: FrameProps): ReactNode
 
 > Blocks are partials with a CMS content schema. They are placed by
 > slots, not by URL. A block reads CMS via `schema`; a partial does
-> not (it can host CMS-managed slots via `cmsId` binding, but it
+> not (it can host CMS-managed slots via `id` binding, but it
 > doesn't read individual fields).
 
 > Frames are not partials. They are scope openers — a `<Frame>` opens
@@ -180,7 +180,7 @@ function Frame({ name, initialUrl, children }: FrameProps): ReactNode
 
 | Symbol | Today | After |
 |---|---|---|
-| `PartialOptions.cmsId` | option, defaults to id | gone — stripped 2026-05-11 |
+| `PartialOptions.id` | option, defaults to id | gone — stripped 2026-05-11 |
 | `PartialOptions.errorWith` | option, dead | gone — stripped 2026-05-11 |
 | `PartialOptions.type` | option, used on blocks | moves to `BlockOptions.name` (auto-derived) |
 | `PartialOptions.tags` | option, used on blocks | moves to `BlockOptions.tags` |
@@ -191,7 +191,7 @@ function Frame({ name, initialUrl, children }: FrameProps): ReactNode
 ### What stays on partial
 
 `match`, `vary`, `selector`, `cache`, `defer`, `fallback`, plus
-framework props on the component itself (`parent`, `cmsId` runtime
+framework props on the component itself (`parent`, `id` runtime
 override, `children`).
 
 ### What's new on block
@@ -514,6 +514,6 @@ commit per CLAUDE.md "workflow after a task is done."
 - `SchemaScope` replaces the `cms` portion of `VaryScope`.
 - The internal `isSlotBlock` flag stays — `block()` always sets it,
   `partial()` never does.
-- Internal `cmsId` field stays on the spec (used for slot-instance
+- Internal `id` field stays on the spec (used for slot-instance
   overrides via JSX prop, and for `cmsFingerprintContribution` even
   for non-block slot-host partials like `CmsDemoRootPartial`).

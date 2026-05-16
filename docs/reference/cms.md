@@ -2,8 +2,9 @@
 
 CMS-driven content lives on [`ReactCms.block`](./block.md) specs via
 a `schema` callback. The callback receives a sync `cms` read surface
-bound to the block's effective `cmsId`; its return is merged into the
-Render function's prop bag.
+bound to the block's effective CMS content row (the storage key of
+the rendered instance); its return is merged into the Render
+function's prop bag.
 
 ```tsx
 const PromoBlock = ReactCms.block(
@@ -11,7 +12,7 @@ const PromoBlock = ReactCms.block(
     return <div data-tone={tone}>...</div>
   },
   {
-    tags: [".promo"],
+    selector: "promo",
     schema: ({ cms }) => ({
       headline: cms.text("headline"),
       body: cms.text("body"),
@@ -35,8 +36,8 @@ const PromoBlock = ReactCms.block(
 | `cms.reference(name, type)` | `string \| null` | `null` |
 
 All sync. Every getter resolves against the already-loaded config
-cascade for the block's `cmsId`. `cms.reference` returns the **id
-only** — async loaders run inside `Render`, not `schema`.
+cascade for the block's CMS content row. `cms.reference` returns the
+**id only** — async loaders run inside `Render`, not `schema`.
 
 ## Content store schema
 
@@ -46,8 +47,8 @@ Both share one shape:
 ```jsonc
 {
   "partials": {
-    "<cmsId>": {
-      "id": "<cmsId>",
+    "<id>": {
+      "id": "<id>",
       "type": "<blockType>",
       "displayName": "...",
       "configs": [
@@ -98,7 +99,7 @@ export const PromoBlock = ReactCms.block(
     return <div data-tone={tone}>...</div>
   },
   {
-    tags: [".promo", ".demo-block"],
+    selector: "promo demo-block",
     schema: ({ cms }) => ({
       headline: cms.text("headline"),
       body: cms.text("body"),
@@ -109,9 +110,10 @@ export const PromoBlock = ReactCms.block(
 ```
 
 That's it — no `registerBlock` call. The constructor self-registers
-under its auto-derived name (`PromoRender` → `"promo"`); override via
-`name`. Import the file once for its side effect
-(`e2e-testing/src/app/blocks/catalog.ts` does this for the demo app).
+under its auto-derived id (`PromoRender` → `"promo"`); override the
+first label in `selector` to pin a different id. Import the file once
+for its side effect (`e2e-testing/src/app/blocks/catalog.ts` does
+this for the demo app).
 
 ## Slots
 
@@ -137,17 +139,18 @@ export const PageRootBlock = ReactCms.block(
   },
   {
     schema: ({ cms }) => ({
-      body: cms.blocks("body", ".page-block"),
-      sidebar: cms.block("sidebar", ".widget"),
+      body: cms.blocks("body", "page-block"),
+      sidebar: cms.block("sidebar", "widget"),
     }),
   },
 )
 ```
 
-The framework wires host context (parent + effective cmsId) into the
-`cms` surface implicitly. Author code doesn't thread `host` /
-`hostCmsId`. Each slot entry's id becomes its block instance's
-effective cmsId via the framework-internal slot wiring.
+The framework wires host context (parent + the rendered instance's
+CMS storage key) into the `cms` surface implicitly. Author code
+doesn't thread any of it. Each slot entry's id becomes its rendered
+block instance's effective CMS row via the framework-internal slot
+wiring.
 
 ## References + entity loaders
 
@@ -159,7 +162,7 @@ const ProductHero = ReactCms.block(
     return <Hero product={product} />
   },
   {
-    tags: [".product-hero"],
+    selector: "product-hero",
     schema: ({ cms }) => ({
       productRef: cms.reference("featured", "product"),
     }),
@@ -178,7 +181,7 @@ loader runs in `Render`. Loaders are userspace (`e2e-testing/src/app/loaders/`).
 | `Cookie: cms-draft=1` | Editor sets on first response. |
 | `Cookie: __editor=1` | Editor mode implies draft visibility. |
 
-`lookupCmsNode(cmsId, request)` checks draft first when any of these
+`lookupCmsNode(id, request)` checks draft first when any of these
 hold, else falls back to published. Cache keys naturally vary across
 modes because `cms.*` reads return different values inside `schema`.
 
@@ -186,23 +189,23 @@ modes because `cms.*` reads return different values inside `schema`.
 
 The `__editor` cookie is the sole source of truth for editor on/off.
 Click-driven entry/exit flows through `nav.navigate(url, {cookies:
-{[EDITOR_COOKIE]: "1" | ""}, selector: "#editor-shell"})` —
+{[EDITOR_COOKIE]: "1" | ""}, selector: "editor-shell"})` —
 `EditorOpenLink` / `EditorCloseLink` wrap this pattern. Tests set the
 cookie directly via Playwright's `context.addCookies` before
 navigating. There is no `?editor=1` URL trigger.
 
 When the cookie is set, `<EditorShell>` paints three panes:
 
-- Tree (`#cms-edit-tree`) — registry-driven view of the cmsIds that
-  rendered for the previewed page. The tree reads
-  `getRouteSnapshots()` (every `<Spec cmsId>` self-registers at
-  render time) and walks each snapshot's id as a tree root through
-  `listAllCmsNodes(rootIds)`; slot-children-of-other-roots are
-  filtered out automatically. Chrome that renders on every page
-  (e.g. `<NavRootBlock cmsId="app-nav">` placed at the page root)
+- Tree (`cms-edit-tree`) — registry-driven view of the CMS content
+  rows that rendered for the previewed page. The tree reads
+  `getRouteSnapshots()` (every CMS-bound block self-registers at
+  render time) and walks each snapshot's `contentKey` as a tree
+  root through `listAllCmsNodes(rootIds)`; slot-children-of-other-
+  roots are filtered out automatically. Chrome that renders on every
+  page (e.g. the `AppNavBlock` singleton placed at the page root)
   appears on every page; per-page roots only appear where their
-  partial mounts. Folds the previewed `pathname` into its `vary`
-  so cross-page navigation invalidates the tree fp.
+  partial mounts. Folds the previewed `pathname` into its `vary` so
+  cross-page navigation invalidates the tree fp.
 - Preview — the page itself, rendered inline inside the editor's
   middle pane. Page placements receive `parent={ROOT}`; their `vary`
   callbacks see the window URL with editor-internal params present

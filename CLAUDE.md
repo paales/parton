@@ -135,8 +135,8 @@ restart is rarely needed during dev.
 - **`match` is strict URLPattern** — no auto-suffixing. `match:
   "/inspect/*"` means `/inspect/<rest>` and does NOT match bare
   `/inspect`. To match both, use `match: "/inspect{/*}?"`.
-- **Slot blocks** are constructed via `ReactCms.block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` declares class identity (`".page-block"`) for slot-allow filters and shared-token refetch; embed a `#token` to make it a singleton. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / `hostCmsId`; the framework wires it.
-- `parent: PartialCtx` is required on every spec call site. `Render` receives `{...vary, ...schema, parent, cmsId, children}` — pass `parent` to descendant spec calls.
+- **Slot blocks** are constructed via `ReactCms.block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` is a flat list of refetch labels (`"page-block"` or `["page-block", "composed-hero"]`); leading `#`/`.` is cosmetic and stripped. The first label is the spec's catalog id — and for singleton blocks, also the CMS storage key. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / per-instance content keys; the framework wires it internally.
+- `parent: PartialCtx` is required on every spec call site. `Render` receives `{...vary, ...schema, parent, children}` — pass `parent` to descendant spec calls. There is no `id` prop on the JSX call site and no `id` in the Render prop bag; CMS content flows via `schema` reads bound by the framework.
 
 ## Workflow — after a task is done
 
