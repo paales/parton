@@ -1,9 +1,10 @@
 /**
  * App nav root — styled `<nav>` chrome around the editable list of
- * `.nav-item` blocks. Singleton block bound to CMS content row
- * `app-nav` via the explicit `cmsId:` option. The cmsId is the storage
- * key AND the spec's catalog id, so external code can refetch via
- * `nav.reload({ selector: "#app-nav" })`.
+ * `.nav-item` blocks. Singleton block whose CMS storage key falls
+ * out of the spec's id: `selector: "#app-nav"` pins the id to
+ * `"app-nav"`, which is both the refetch token
+ * (`nav.reload({selector:"#app-nav"})`) and the row in `content.json`
+ * the schema reads from.
  */
 
 import { ReactCms, type RenderArgs } from "@react-cms/framework"
@@ -14,7 +15,7 @@ export const AppNavBlock = ReactCms.block(
     return <nav className="mb-6 flex flex-wrap gap-1 border-b pb-3">{links}</nav>
   },
   {
-    cmsId: "app-nav",
+    selector: "#app-nav",
     schema: ({ cms }) => ({
       links: cms.blocks("links", ".nav-item"),
     }),

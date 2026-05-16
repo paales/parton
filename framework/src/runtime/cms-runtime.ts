@@ -689,12 +689,10 @@ function renderSlotEntry(
 
 export interface SpecCatalogEntry {
   /** Spec catalog id (same as `type`). Derived from selector or
-   *  auto-named from `Render.name`. */
+   *  auto-named from `Render.name`. For singleton blocks, this is
+   *  ALSO the CMS storage key (the row in `content.json` whose
+   *  fields the spec's schema reads). */
   id: string
-  /** CMS storage key, when this spec is a CMS-bound SINGLETON block.
-   *  Undefined for partials and for multi-instance blocks (which get
-   *  their storage key from slot wiring at render time). */
-  cmsContentKey?: string
   selectorTokens: { uniqueTokens: string[]; sharedTokens: string[] }
   /** The component returned by ReactCms.partial — render it as JSX.
    *  Accepts the standard `parent` plus the framework-internal

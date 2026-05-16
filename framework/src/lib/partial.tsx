@@ -160,12 +160,13 @@ export type PartialOptions<V> = Pick<
  * spec with a declared `schema`. Internally produces a partial; same
  * fingerprint / cache / refetch path.
  *
- * `cmsId` is the CMS storage key for a SINGLETON block — the one place
- * in the public API where a CMS row is named explicitly. Multi-instance
- * blocks (placed via slots) inherit their storage key from the slot
- * entry's id at render time — no explicit cmsId needed. Specs without
- * any CMS binding don't need `ReactCms.block` at all; use
- * `ReactCms.partial`.
+ * The block's CMS storage key falls out of placement:
+ *   - Multi-instance (slot-placed): the slot entry's id flows in via
+ *     the framework-internal slot channel.
+ *   - Singleton (direct JSX): the spec's catalog id IS the storage
+ *     key. The catalog id auto-derives from `Render.name` (e.g.
+ *     `AppNavRender` → `"app-nav"`), or from an explicit
+ *     `selector: "#token"` for cross-rename stability.
  */
 export type BlockOptions<V, S> = PartialOptions<V> & {
   /** CMS field reads + child slots. Runs at render time with a real
@@ -174,13 +175,6 @@ export type BlockOptions<V, S> = PartialOptions<V> & {
    *  with a tracking surface to discover content fields + child slot
    *  declarations. */
   schema?: (scope: SchemaScope) => S
-  /** CMS storage key for a singleton block (e.g. `"app-nav"`). The
-   *  spec's `schema` reads against this row by default; placement is
-   *  via direct JSX (`<AppNav parent={ROOT}/>`), no per-instance
-   *  override. For multi-instance blocks rendered through slot
-   *  wiring, omit `cmsId` — the slot entry's id flows through the
-   *  framework-internal `__cmsContentKey` channel automatically. */
-  cmsId?: string
 }
 
 /**
@@ -218,14 +212,9 @@ interface InternalSpecConfig<V> {
    *  state is meaningful only while visible, debug-only specs). */
   keepalive?: boolean
   schema?: (scope: SchemaScope) => unknown
-  /** Singleton CMS storage key on a block spec. Block-only; partials
-   *  never have this. When omitted on a block, the block is
-   *  multi-instance and gets its CMS storage key from the slot entry
-   *  it's wired into (via the framework-internal `__cmsContentKey`
-   *  channel). */
-  cmsId?: string
-  /** `true` when constructed via `ReactCms.block` — controls slot-block
-   *  catalog registration + per-instance content-key resolution. */
+  /** `true` when constructed via `ReactCms.block` — drives slot-block
+   *  catalog registration and per-instance content-key resolution
+   *  (slot-channel key, falling back to spec.id for singletons). */
   isSlotBlock?: boolean
 }
 
@@ -237,24 +226,6 @@ interface InternalSpecConfig<V> {
  */
 export interface PartialComponentProps {
   parent: PartialCtx
-  /** Per-instance render-identity discriminator. When a spec is placed
-   *  multiple times under the same parent (e.g. one `<LivePrice/>` per
-   *  product SKU), each placement needs a stable unique id so the
-   *  framework can address it for refetch and cache-mode lookups.
-   *  Pass a stable per-instance string (typically the same value you'd
-   *  pass to React's `key`):
-   *
-   *      <LivePrice key={sku} parent={p} partialKey={sku} sku={sku}/>
-   *
-   *  When omitted, the framework derives an id from placement
-   *  (`parentPath + label + sibling-index`) — stable across renders
-   *  as long as sibling order is stable.
-   *
-   *  This is purely a render-identity concept — NOT a CMS storage
-   *  key. For CMS-bound blocks, the storage key lives on the spec
-   *  (`cmsId:` on `ReactCms.block`) or flows in from slot wiring
-   *  internally. */
-  partialKey?: string
   /** Pass-through children — surfaced to `Render` as `children` in
    *  its props bag. Lets specs act as JSX wrappers (e.g. opening a
    *  frame around author content). */
@@ -791,14 +762,10 @@ export function computeRouteKey(url: string): string {
 
 interface InternalSpec<V> {
   /** Spec's own id (default render-time identity when no per-instance
-   *  override is supplied). Derived from `selector` or auto-named
-   *  from `Render.name`. */
+   *  override is supplied). For blocks, ALSO the CMS storage key when
+   *  the spec is a singleton (no slot channel). Derived from
+   *  `selector` or auto-named from `Render.name`. */
   id: string
-  /** Singleton CMS storage key — block specs only, only when the
-   *  author declared `cmsId:` explicitly. Undefined for partials and
-   *  for multi-instance blocks (where the storage key flows in via
-   *  slot wiring's `__cmsContentKey` channel at render time). */
-  cmsContentKey?: string
   /** Spec catalog type tag (slot lookup). */
   type: string
   parsed: ParsedSelector
@@ -810,7 +777,7 @@ interface InternalSpec<V> {
   Render: (props: V & RenderArgs) => ReactNode
   /** True iff constructed via `ReactCms.block` — spec is usable as a
    *  slot block (registers in the type catalog; reads its CMS content
-   *  key from slot wiring or the explicit `cmsId:` option). */
+   *  key from slot wiring or falls back to `spec.id`). */
   isSlotBlock: boolean
 }
 
@@ -958,19 +925,15 @@ function emitWithVariantSiblings(
 /**
  * Resolve the render-time identity for a placement of `spec`.
  *
- * Priority:
- *  1. `partialKey` JSX prop — purely a per-instance render-id
- *     discriminator (live-price's per-SKU pattern). Becomes the
- *     spec's unique token at this placement.
- *  2. `cmsContentKey` from slot wiring — block placements rendered
- *     through a slot; the entry's id is the storage key AND
- *     functions as the per-instance render discriminator.
- *  3. Spec's own id — the default (singleton case).
+ *  - If the slot machinery passed `__cmsContentKey` (multi-instance
+ *    block under a slot), the entry's id becomes both this placement's
+ *    unique token AND its CMS storage key.
+ *  - Otherwise the spec's own id is used (singleton case, or
+ *    direct-JSX placement).
  *
  * Returns the parsed token shape with a single `#<override>` unique
- * token when there's an override (replacing whatever the spec's own
- * `#token` was), preserving the spec's shared `.tokens` for class
- * refetch.
+ * token when there's an override (replacing the spec's own `#token`),
+ * preserving the spec's shared `.tokens` for class refetch.
  */
 function effectiveIdForInstance(
   spec: InternalSpec<unknown>,
@@ -996,7 +959,6 @@ function createSpecComponent<V>(
   const Component: FC<PartialComponentProps & Record<string, unknown>> = (props) => {
     const {
       parent,
-      partialKey: directPartialKey,
       __cmsContentKey: slotContentKey,
       children: outerChildren,
       ...extraProps
@@ -1005,24 +967,19 @@ function createSpecComponent<V>(
       children?: ReactNode
     } & Record<string, unknown>
     const opts = spec.options
-    // Render-time identity (the framework's `id` for snapshots, wire,
-    // cache lookup) — resolved in priority order:
-    //   1. `partialKey` — JSX prop override; pure render-id
-    //      discriminator. Has nothing to do with CMS storage.
-    //   2. `__cmsContentKey` — framework-internal channel set by
-    //      slot wiring. For slot-placed blocks the entry's id IS the
-    //      natural per-instance discriminator AND the CMS storage
-    //      key — one string playing both roles.
-    //   3. spec.id — the spec's own catalog id (singleton case).
+    // Render-time identity (the `id` keying snapshots, wire, cache
+    // lookup) is `slotContentKey ?? spec.id`. The slot machinery
+    // sets `__cmsContentKey` to the entry's id when wiring a multi-
+    // instance block, so each placement under a slot gets its own
+    // id; direct-JSX placements fall back to the spec's catalog id.
     //
-    // The CMS storage key for THIS render is separate (only meaningful
-    // for block specs): it's the slot-channel key, the spec's
-    // singleton `cmsContentKey`, or undefined for non-CMS placements.
-    const renderIdOverride = directPartialKey ?? slotContentKey
-    const effectiveCmsContentKey = spec.isSlotBlock
-      ? (slotContentKey ?? spec.cmsContentKey)
-      : undefined
-    const { id, parsed } = effectiveIdForInstance(spec as InternalSpec<unknown>, renderIdOverride)
+    // The CMS storage key for THIS render is the same value when the
+    // spec is a block (`spec.isSlotBlock`); undefined otherwise. One
+    // string serves both roles by design — entries persist with the
+    // id the editor minted, and the same id addresses the render-time
+    // instance.
+    const effectiveCmsContentKey = spec.isSlotBlock ? (slotContentKey ?? spec.id) : undefined
+    const { id, parsed } = effectiveIdForInstance(spec as InternalSpec<unknown>, slotContentKey)
     // Keepalive defaults to true. The flag governs both the active
     // emission (wrap body in `<Activity mode="visible">`) and the
     // parked emission on match-miss / vary-null (emit
@@ -1186,9 +1143,12 @@ function createSpecComponent<V>(
         }
         state.seenUniqueTokens.add(tok)
       }
-      if (state.seenIds.has(id)) {
-        throw new Error(`Duplicate partial id "${id}".`)
-      }
+      // No per-id uniqueness check: multiple placements of a keyless
+      // multi-instance spec (e.g. `<LivePrice/>` per product card)
+      // share the same `spec.id` and fan out under class-token
+      // refetch (`reload({selector:".price"})`). The variant store
+      // dedupes structurally identical snapshots; cache-mode refetch
+      // by id collapses to spec-level fan-out for these.
       state.seenIds.add(id)
     }
 
@@ -1398,49 +1358,20 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   // catalog registration, and per-instance content-key resolution.
   const isSlotBlock = options.isSlotBlock === true
 
-  let parsed: ParsedSelector
-  let id: string
-  if (isSlotBlock) {
-    // Block specs:
-    //  - With explicit `cmsId:` → SINGLETON. The cmsId is BOTH the
-    //    CMS storage key AND the spec's catalog id (refetch token).
-    //    Selector adds class labels alongside; the cmsId is folded
-    //    into the unique-token set automatically so external code can
-    //    address it via `#<cmsId>`.
-    //  - Without `cmsId:` → MULTI-INSTANCE. Catalog id auto-derives
-    //    from `Render.name`; per-instance render-id flows in from
-    //    slot wiring (the entry's id, via `__cmsContentKey`).
-    const selectorInput = options.selector
-    parsed = selectorInput != null
-      ? parseSelector(selectorInput)
-      : { uniqueTokens: [], sharedTokens: [] }
-    if (options.cmsId != null) {
-      id = options.cmsId
-      if (!parsed.uniqueTokens.includes(id)) {
-        parsed = {
-          uniqueTokens: [id, ...parsed.uniqueTokens],
-          sharedTokens: parsed.sharedTokens,
-        }
-      }
-    } else {
-      // Multi-instance block — id from auto-derive for catalog registration.
-      id = autoSelector(Render).toString().slice(1)
-    }
-  } else {
-    const selectorInput = options.selector ?? autoSelector(Render)
-    parsed = parseSelector(selectorInput)
-    id = effectiveIdFromSelector(parsed)
-  }
-
+  // Selector parsing is identical for blocks and partials — both get
+  // `#unique` / `.shared` tokens. The spec catalog id (`spec.id`) is
+  // the first `#token` if present, otherwise the sorted-join, or
+  // `__anon:` of the shared tokens. For singleton blocks, that id is
+  // ALSO the CMS storage key — placing it via `selector: "#app-nav"`
+  // means CMS row `"app-nav"`. Auto-derives from `Render.name` when
+  // no selector is given (e.g. `AppNavRender` → `"#app-nav"`).
+  const selectorInput = options.selector ?? autoSelector(Render)
+  const parsed = parseSelector(selectorInput)
+  const id = effectiveIdFromSelector(parsed)
   const type = id
-  // CMS storage key is block-only and only when `cmsId:` was declared
-  // (the singleton case). Multi-instance blocks read theirs from slot
-  // wiring at render time. Partials never have one.
-  const cmsContentKey = isSlotBlock ? options.cmsId : undefined
 
   const spec: InternalSpec<V> = {
     id,
-    cmsContentKey,
     type,
     parsed,
     options,
@@ -1454,7 +1385,6 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
 
   registerSpec({
     id,
-    cmsContentKey,
     type,
     selectorTokens: parsed,
     // Slot lookup invokes the component with only framework props
@@ -1580,7 +1510,6 @@ function buildBlock<V extends object, S extends object>(
     fallback: opts.fallback,
     vary: opts.vary as InternalSpecConfig<V & S>["vary"],
     schema: opts.schema as InternalSpecConfig<V & S>["schema"],
-    cmsId: opts.cmsId,
   }
   return buildSpecComponent(Render, config)
 }

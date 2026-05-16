@@ -133,10 +133,11 @@ function ProductCard({ product, parent }: { product: ProductItem; parent: Partia
           <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">{sku}</code>
         </div>
         {sku && (
-          <Suspense fallback={<LivePriceFallback sku={sku} basePrice={price} currency={currency} />}>
+          <Suspense
+            fallback={<LivePriceFallback sku={sku} basePrice={price} currency={currency} />}
+          >
             <LivePricePartial
               parent={parent}
-              partialKey={`price-${sku}`}
               sku={sku}
               basePrice={price}
               currency={currency}

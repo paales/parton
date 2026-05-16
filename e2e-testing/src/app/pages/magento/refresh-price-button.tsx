@@ -1,25 +1,24 @@
 "use client"
 
 import { useState } from "react"
-import {
-  useEnclosingPartialId,
-  useNavigation,
-} from "@react-cms/framework/lib/partial-client.tsx"
+import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
 import { Button } from "@react-cms/copies/components/ui/button"
 
+/**
+ * Per-card refresh button. Triggers a class-scoped refetch
+ * (`reload({selector: ".price"})`) — every LivePrice on the page
+ * refreshes together. There's no per-instance addressing for
+ * keyless multi-instance specs; the underlying assumption is that
+ * a single price refresh and a fan-out refresh look the same to
+ * the user (both go through the same data source).
+ */
 export function RefreshPriceButton({ sku }: { sku: string }) {
   const nav = useNavigation()
-  // `useEnclosingPartialId()` resolves to this LivePrice instance's
-  // framework-internal id (derived from props hash). Externally,
-  // instances are only addressable by class (`.price`); from inside
-  // the block we can self-target via this hook.
-  const myId = useEnclosingPartialId()
   const [isPending, setIsPending] = useState(false)
   async function refresh() {
-    if (!myId) return
     setIsPending(true)
     try {
-      await nav.reload({ selector: [`#${myId}`] }).finished
+      await nav.reload({ selector: ".price" }).finished
     } finally {
       setIsPending(false)
     }

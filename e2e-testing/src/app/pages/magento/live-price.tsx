@@ -21,13 +21,13 @@ export function LivePriceFallback({
 }
 
 /**
- * Per-SKU live price. NOT a CMS-bound spec — the data (basePrice,
- * currency, sku) comes from JSX props at the call site, not from CMS
- * storage. Product cards place the spec with
- * `partialKey={`price-${sku}`}` so every instance gets its own
- * framework instance id (refetchable individually via the refresh
- * button), while the `.price` class label fan-outs across all of them
- * (`nav.reload({ selector: ".price" })`).
+ * Per-SKU live price. NOT CMS-bound — `basePrice`, `currency`, `sku`
+ * flow in as JSX props at the call site, not from CMS storage. The
+ * spec is placed once per product card; all instances share the
+ * `.price` class label and refetch together via
+ * `nav.reload({selector: ".price"})`. Per-instance addressing isn't
+ * a goal here — a single price refresh is functionally the same as
+ * refreshing all.
  */
 export const LivePricePartial = ReactCms.partial(
   async function LivePriceRender({
