@@ -67,9 +67,25 @@ export interface RemoteFrameProps {
 
 function defaultModuleRewrite(srcOrigin: string): (path: string) => string {
   return (path) => {
-    // Only rewrite paths that look local to the remote — leave
-    // already-absolute URLs and bare package specifiers alone.
+    // Already-absolute URLs and bare package specifiers: leave alone.
     if (path.startsWith("http://") || path.startsWith("https://")) return path
+
+    // Dev-mode filesystem-absolute paths (`/@fs/Users/...`). Both
+    // host and remote run on the same machine in development, so
+    // either process can serve the same path. Adding the remote
+    // origin would actually break the host's vite-rsc plugin —
+    // it rejects cross-origin URLs as invalid client references.
+    // For shared framework modules (PartialErrorBoundary etc.)
+    // the host can resolve `/@fs/...framework/...` against its own
+    // bundle. Leaving these alone makes dev "just work".
+    //
+    // Production cross-origin is a different shape entirely (the
+    // remote emits hashed asset URLs at its CDN; CORS on the
+    // bundle assets lets the host browser load them). Authors
+    // who need that can override via the `rewriteModuleRefs`
+    // prop.
+    if (path.startsWith("/@fs/") || path.startsWith("/@id/")) return path
+
     if (path.startsWith("./") || path.startsWith("../") || path.startsWith("/")) {
       try {
         return new URL(path, srcOrigin).href

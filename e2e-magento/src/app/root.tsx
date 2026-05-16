@@ -1,4 +1,7 @@
 import "./styles.css"
+// Side-effect import — registers the partons this app exposes as
+// `<RemoteFrame>` endpoints in the spec catalog.
+import "./remote-specs.tsx"
 import { PartialRoot } from "@parton/framework"
 
 export function Root() {

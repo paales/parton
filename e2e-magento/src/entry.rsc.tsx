@@ -9,6 +9,13 @@ import {
 import type { ReactFormState } from "react-dom/client"
 import { Root } from "./app/root.tsx"
 import { NotFoundPage } from "./app/pages/not-found.tsx"
+import { ROOT } from "@parton/framework"
+import { getSpecById } from "@parton/framework/lib/spec-catalog.ts"
+import {
+  enterRequestRegistry,
+  getActiveRegistry,
+} from "@parton/framework/lib/partial-registry.ts"
+import { wrapStreamWithSnapshotTrailer } from "@parton/framework/lib/snapshot-trailer.ts"
 import { parseRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
   _captureCommitHandle,
@@ -28,8 +35,61 @@ export type RscPayload = {
 export default { fetch: handler }
 
 async function handler(request: Request): Promise<Response> {
+  const url = new URL(request.url)
+
+  // Preflight CORS request from a cross-origin `<RemoteFrame>` —
+  // browsers send OPTIONS first for content types beyond the
+  // simple-request allowlist. The actual GET handler stamps the
+  // permissive CORS headers below.
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET, OPTIONS",
+        "access-control-allow-headers": "*",
+        "access-control-max-age": "600",
+      },
+    })
+  }
+
+  // `<RemoteFrame src="http://localhost:5181/__remote/<id>">` lands
+  // here. Identical wire shape to e2e-testing's local
+  // `/__remote/<id>` handler: bare Flight bytes + snapshot trailer
+  // so the host can re-register the remote's partials in its own
+  // request registry. CORS is stamped permissively for v1; v2
+  // capability scoping will tighten it.
+  if (url.pathname.startsWith("/__remote/")) {
+    const id = decodeURIComponent(url.pathname.slice("/__remote/".length))
+    const spec = getSpecById(id)
+    if (!spec) {
+      return new Response(`Unknown spec: ${id}`, {
+        status: 404,
+        headers: { "access-control-allow-origin": "*" },
+      })
+    }
+    const Component = spec.Component
+    const { result: stream } = await runWithRequestAsync(request, async () => {
+      enterRequestRegistry("__remote", "streaming")
+      const flightStream = renderToReadableStream(<Component parent={ROOT} />, {
+        onError: silenceClientDisconnect,
+      })
+      return wrapStreamWithSnapshotTrailer(flightStream, () => {
+        const reg = getActiveRegistry()
+        return reg ? reg.pendingWrites : new Map()
+      })
+    })
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        "content-type": "text/x-component;charset=utf-8",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "*",
+      },
+    })
+  }
+
   if (import.meta.env?.DEV) {
-    const url = new URL(request.url)
     if (url.pathname === "/__test/clear-caches") {
       const [
         { _clearCache },
