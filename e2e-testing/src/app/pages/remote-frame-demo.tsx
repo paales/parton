@@ -1,57 +1,157 @@
 /**
- * /remote-frame-demo — same-origin `<RemoteFrame>` validation.
+ * /remote-frame-demo — `<RemoteFrame>` validation surface.
  *
- * Two pieces:
+ * Exercises:
  *
- * 1. `RemoteGreeting` is a normal parton. Because every parton
- *    self-registers in the spec catalog, it's automatically
- *    addressable at `/__remote/remote-greeting` — the route handler
- *    in `entry.rsc.tsx` looks the id up via `getSpecById` and
- *    renders `<Component parent={ROOT} />` as a focused Flight
- *    stream. The bytes are exactly what an `await Component()` on
- *    the host side would produce.
+ * 1. Three remote frames embedded in one host page, fetched in
+ *    parallel against `/__remote/<id>`. Each spec self-registers
+ *    in the catalog so the route handler resolves them by id.
  *
- * 2. `RemoteFrameDemoPage` is the host page. It embeds the remote
- *    greeting via `<RemoteFrame src="/__remote/remote-greeting">`.
- *    The framework fetches that URL, pipes the Flight bytes through
- *    `flight-rewrite.ts` (passthrough for same-origin — no module
- *    refs to translate), and decodes them into a tree that the
- *    outer Flight encoder splices into the host's response.
+ * 2. Different remote latencies (200ms, 600ms, 1000ms) demonstrate
+ *    parallel streaming — the slowest doesn't block the fastest.
  *
- * Visual check: the page header has the host's request timestamp;
- * the remote greeting renders with the remote endpoint's render
- * timestamp. Both are server times, but distinguishable because
- * the remote endpoint and the host page run on slightly different
- * request boundaries.
+ * 3. A remote spec that renders a `"use client"` `<ClickCounter>` —
+ *    validates client components inside a remote payload hydrate
+ *    correctly in the host's browser.
+ *
+ * 4. A remote spec with `cache: { maxAge }` — second fetch hits the
+ *    cache, returns immediately.
+ *
+ * 5. A refresh button driving `nav.reload({selector: "..."})` to
+ *    re-fetch a remote frame. Same-origin v1: this round-trips
+ *    through the host's local spec (same process). v2 cross-origin
+ *    would need an explicit "this id is hosted at <origin>"
+ *    annotation in the snapshot.
  */
 
 import { parton, RemoteFrame, type RenderArgs } from "@parton/framework"
 import { Suspense } from "react"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
+import { Button } from "@parton/copies/components/ui/button"
+import { ClickCounter } from "../components/click-counter.tsx"
+import { RemoteRefreshButton } from "../components/remote-refresh-button.tsx"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-const RemoteGreeting = parton(
-  async function RemoteGreetingRender({ parent: _parent }: RenderArgs) {
-    // Simulate remote work — the host's render shouldn't block on
-    // this. The Suspense in the host wraps the RemoteFrame so the
-    // host paints its chrome first, then the remote streams in.
-    await delay(400)
+// ─── Remote specs (auto-addressable at /__remote/<id>) ──────────────────
+
+const RemoteFastGreeting = parton(
+  async function RemoteFastGreetingRender(_: RenderArgs) {
+    await delay(200)
     return (
-      <Card className="border-emerald-500/40 bg-emerald-500/5 p-4" data-testid="remote-greeting">
-        <CardContent className="px-0">
-          <div className="font-semibold text-emerald-300">Hello from the remote frame!</div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            Rendered at <code>{new Date().toISOString()}</code> via{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-              /__remote/remote-greeting
-            </code>
-          </div>
-        </CardContent>
-      </Card>
+      <RemoteCard tone="emerald" testid="remote-fast">
+        <strong>Fast remote</strong> · 200ms · {new Date().toISOString()}
+      </RemoteCard>
     )
   },
+  { selector: "remote-fast" },
 )
+
+const RemoteMidGreeting = parton(
+  async function RemoteMidGreetingRender(_: RenderArgs) {
+    await delay(600)
+    return (
+      <RemoteCard tone="amber" testid="remote-mid">
+        <strong>Mid remote</strong> · 600ms · {new Date().toISOString()}
+      </RemoteCard>
+    )
+  },
+  { selector: "remote-mid" },
+)
+
+const RemoteSlowGreeting = parton(
+  async function RemoteSlowGreetingRender(_: RenderArgs) {
+    await delay(1000)
+    return (
+      <RemoteCard tone="sky" testid="remote-slow">
+        <strong>Slow remote</strong> · 1000ms · {new Date().toISOString()}
+      </RemoteCard>
+    )
+  },
+  { selector: "remote-slow" },
+)
+
+const RemoteCounter = parton(
+  async function RemoteCounterRender(_: RenderArgs) {
+    await delay(300)
+    return (
+      <RemoteCard tone="violet" testid="remote-counter">
+        <strong>Remote with client component</strong>
+        <div className="mt-2 text-xs text-muted-foreground">
+          The button below is a `"use client"` component rendered inside the remote
+          spec. It hydrates after the remote payload reaches the browser; clicking it
+          bumps local state — proves client components inside a remote work end-to-end.
+        </div>
+        <div className="mt-3" data-testid="remote-counter-mount">
+          <ClickCounter />
+        </div>
+      </RemoteCard>
+    )
+  },
+  { selector: "remote-counter" },
+)
+
+const RemoteCachedGreeting = parton(
+  async function RemoteCachedGreetingRender(_: RenderArgs) {
+    // Without cache, this would delay 500ms every call. With cache,
+    // only the first call pays the cost; subsequent fetches replay
+    // stored bytes immediately.
+    await delay(500)
+    return (
+      <RemoteCard tone="pink" testid="remote-cached">
+        <strong>Cached remote</strong> · 500ms cold · {new Date().toISOString()}
+        <div className="mt-2 text-xs text-muted-foreground">
+          `cache: {`{ maxAge: 60 }`}` on the remote spec. The first request renders
+          fresh; subsequent same-key fetches hit the cache and return immediately.
+        </div>
+      </RemoteCard>
+    )
+  },
+  {
+    selector: "remote-cached",
+    cache: { maxAge: 60 },
+  },
+)
+
+// ─── Shared visual primitive ────────────────────────────────────────────
+
+function RemoteCard({
+  tone,
+  testid,
+  children,
+}: {
+  tone: "emerald" | "amber" | "sky" | "violet" | "pink"
+  testid: string
+  children: React.ReactNode
+}) {
+  const toneClass = {
+    emerald: "border-emerald-500/40 bg-emerald-500/5",
+    amber: "border-amber-500/40 bg-amber-500/5",
+    sky: "border-sky-500/40 bg-sky-500/5",
+    violet: "border-violet-500/40 bg-violet-500/5",
+    pink: "border-pink-500/40 bg-pink-500/5",
+  }[tone]
+  return (
+    <Card className={`mb-2 p-4 ${toneClass}`} data-testid={testid}>
+      <CardContent className="px-0 text-sm">{children}</CardContent>
+    </Card>
+  )
+}
+
+function RemoteFallback({ label, testid }: { label: string; testid: string }) {
+  return (
+    <Card
+      className="mb-2 border-dashed border-muted bg-muted/30 p-4"
+      data-testid={`${testid}-fallback`}
+    >
+      <CardContent className="px-0 italic text-muted-foreground">
+        Loading {label}…
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─── Host page ──────────────────────────────────────────────────────────
 
 export const RemoteFrameDemoPage = parton(
   function RemoteFrameDemoRender({ parent }: RenderArgs) {
@@ -60,43 +160,59 @@ export const RemoteFrameDemoPage = parton(
         <header className="mb-4" data-testid="rfd-header">
           <h1 className="text-2xl font-semibold">Remote Frame Demo</h1>
           <p className="text-sm text-muted-foreground">
-            Header (uncached host content) rendered at{" "}
-            <code>{new Date().toISOString()}</code>.
-          </p>
-          <p className="mt-2 text-xs text-muted-foreground">
-            The card below comes from a separate Flight stream fetched from{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-              /__remote/remote-greeting
-            </code>
-            . Same engine, separate request, stitched into this page via{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-              flight-rewrite
-            </code>
-            . The host's outer Flight encoder streams around the remote fetch — header
-            and footer paint without waiting for the remote.
+            Host rendered at <code>{new Date().toISOString()}</code>. Five remote
+            frames stream in parallel below.
           </p>
         </header>
 
-        <Suspense
-          fallback={
-            <Card
-              className="border-dashed border-muted bg-muted/30 p-4 italic"
-              data-testid="rfd-fallback"
-            >
-              <CardContent className="px-0 text-muted-foreground">
-                Fetching remote greeting…
-              </CardContent>
-            </Card>
-          }
-        >
-          <RemoteFrame src="/__remote/remote-greeting" parent={parent} />
+        <div className="mb-3 flex flex-wrap gap-2" data-testid="rfd-controls">
+          <RemoteRefreshButton selector="remote-fast" label="Refresh fast" />
+          <RemoteRefreshButton selector="remote-mid" label="Refresh mid" />
+          <RemoteRefreshButton selector="remote-slow" label="Refresh slow" />
+          <RemoteRefreshButton selector="remote-counter" label="Refresh counter" />
+          <RemoteRefreshButton selector="remote-cached" label="Refresh cached" />
+        </div>
+
+        <Suspense fallback={<RemoteFallback label="fast" testid="remote-fast" />}>
+          <RemoteFrame src="/__remote/remote-fast" parent={parent} />
         </Suspense>
 
-        <footer className="mt-6 text-xs text-muted-foreground" data-testid="rfd-footer">
-          Footer rendered at <code>{new Date().toISOString()}</code>.
+        <Suspense fallback={<RemoteFallback label="mid" testid="remote-mid" />}>
+          <RemoteFrame src="/__remote/remote-mid" parent={parent} />
+        </Suspense>
+
+        <Suspense fallback={<RemoteFallback label="slow" testid="remote-slow" />}>
+          <RemoteFrame src="/__remote/remote-slow" parent={parent} />
+        </Suspense>
+
+        <Suspense fallback={<RemoteFallback label="counter" testid="remote-counter" />}>
+          <RemoteFrame src="/__remote/remote-counter" parent={parent} />
+        </Suspense>
+
+        <Suspense fallback={<RemoteFallback label="cached" testid="remote-cached" />}>
+          <RemoteFrame src="/__remote/remote-cached" parent={parent} />
+        </Suspense>
+
+        <footer className="mt-4 text-xs text-muted-foreground" data-testid="rfd-footer">
+          Footer rendered at <code>{new Date().toISOString()}</code>. The five remote
+          frames above stream into the response independently — host chrome paints
+          immediately, each card arrives when its remote spec resolves. Click any
+          refresh button to re-fetch that frame's content via{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
+            nav.reload(&#123;selector&#125;)
+          </code>
+          .
         </footer>
       </>
     )
   },
   { match: "/remote-frame-demo" },
 )
+
+// Side-effect — these declarations must execute so the spec catalog
+// registers them and `/__remote/<id>` can look them up.
+void RemoteFastGreeting
+void RemoteMidGreeting
+void RemoteSlowGreeting
+void RemoteCounter
+void RemoteCachedGreeting
