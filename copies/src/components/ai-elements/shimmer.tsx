@@ -1,6 +1,6 @@
 "use client"
 
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 import type { MotionProps } from "motion/react"
 import { motion } from "motion/react"
 import type { CSSProperties, ElementType, JSX } from "react"

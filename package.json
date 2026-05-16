@@ -1,5 +1,5 @@
 {
-  "name": "react-cms",
+  "name": "parton",
   "packageManager": "yarn@4.14.1",
   "private": true,
   "type": "module",
@@ -12,12 +12,12 @@
     "docs"
   ],
   "scripts": {
-    "dev": "yarn workspace @react-cms/e2e-testing dev",
-    "dev:clean": "yarn workspace @react-cms/e2e-testing dev --mode clean",
-    "dev:magento": "yarn workspace @react-cms/e2e-magento dev",
-    "build": "yarn workspace @react-cms/e2e-testing build",
-    "build:magento": "yarn workspace @react-cms/e2e-magento build",
-    "preview": "yarn workspace @react-cms/e2e-testing preview",
+    "dev": "yarn workspace @parton/e2e-testing dev",
+    "dev:clean": "yarn workspace @parton/e2e-testing dev --mode clean",
+    "dev:magento": "yarn workspace @parton/e2e-magento dev",
+    "build": "yarn workspace @parton/e2e-testing build",
+    "build:magento": "yarn workspace @parton/e2e-magento build",
+    "preview": "yarn workspace @parton/e2e-testing preview",
     "test": "yarn test:node && yarn test:rsc",
     "test:node": "vitest run --project=node",
     "test:rsc": "NODE_OPTIONS='--conditions=react-server' vitest run --project=rsc",
@@ -25,9 +25,9 @@
     "test:all": "yarn test:node && yarn test:rsc && yarn test:browser",
     "test:watch": "vitest --project=node",
     "test:watch:rsc": "NODE_OPTIONS='--conditions=react-server' vitest --project=rsc",
-    "test:e2e": "yarn workspace @react-cms/e2e-testing test:e2e",
-    "test:e2e:preview": "yarn workspace @react-cms/e2e-testing test:e2e:preview",
-    "gql:generate": "yarn workspace @react-cms/e2e-testing gql:generate"
+    "test:e2e": "yarn workspace @parton/e2e-testing test:e2e",
+    "test:e2e:preview": "yarn workspace @parton/e2e-testing test:e2e:preview",
+    "gql:generate": "yarn workspace @parton/e2e-testing gql:generate"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.4",

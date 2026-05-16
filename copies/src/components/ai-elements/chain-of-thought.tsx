@@ -1,9 +1,9 @@
 "use client"
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@react-cms/copies/components/ui/collapsible"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@parton/copies/components/ui/collapsible"
+import { cn } from "@parton/copies/lib/utils"
 import type { LucideIcon } from "lucide-react"
 import { BrainIcon, ChevronDownIcon, DotIcon } from "lucide-react"
 import type { ComponentProps, ReactNode } from "react"

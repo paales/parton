@@ -1,7 +1,7 @@
 "use client"
 
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@react-cms/copies/components/ui/collapsible"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@parton/copies/components/ui/collapsible"
+import { cn } from "@parton/copies/lib/utils"
 import { BookIcon, ChevronDownIcon } from "lucide-react"
 import type { ComponentProps } from "react"
 

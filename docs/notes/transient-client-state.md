@@ -56,7 +56,7 @@ checking draft first when `cms-draft=1` is set. Generalize that shape
 to **app draft state**:
 
 ```tsx
-const CheckoutForm = ReactCms.partial(CheckoutFormRender, {
+const CheckoutForm = parton(CheckoutFormRender, {
   match: "/checkout",
   draft: { kind: "checkout", scope: "session" }, // new option
   vary: ({ request, draft }) => ({

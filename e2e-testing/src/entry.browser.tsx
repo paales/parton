@@ -9,8 +9,8 @@ import React from "react"
 import { createRoot, hydrateRoot } from "react-dom/client"
 import { rscStream } from "rsc-html-stream/client"
 import type { RscPayload } from "./entry.rsc"
-import { GlobalErrorBoundary } from "@react-cms/framework/runtime/error-boundary.tsx"
-import { createRscRenderRequest } from "@react-cms/framework/runtime/request.tsx"
+import { GlobalErrorBoundary } from "@parton/framework/runtime/error-boundary.tsx"
+import { createRscRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
   _applyFpTrailerFromDocument,
   _applyFpUpdates,
@@ -19,9 +19,9 @@ import {
   _readFramesSnapshot,
   getCachedPartialIds,
   isFrameworkSilentInfo,
-} from "@react-cms/framework/lib/partial-client.tsx"
-import { splitAtFpTrailer } from "@react-cms/framework/lib/fp-trailer-split.ts"
-import { getNavigation } from "@react-cms/framework/runtime/navigation-api.ts"
+} from "@parton/framework/lib/partial-client.tsx"
+import { splitAtFpTrailer } from "@parton/framework/lib/fp-trailer-split.ts"
+import { getNavigation } from "@parton/framework/runtime/navigation-api.ts"
 
 async function main() {
   let setPayload: (v: RscPayload) => void

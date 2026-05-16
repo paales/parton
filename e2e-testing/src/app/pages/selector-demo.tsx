@@ -3,9 +3,9 @@
  * `.`-shared tokens.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { parton, type RenderArgs } from "@parton/framework"
 import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx"
-import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 
 function ServerTime({ label }: { label: string }) {
   return (
@@ -19,35 +19,35 @@ function InlineCode({ children }: { children: React.ReactNode }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">{children}</code>
 }
 
-export const ProductAnonymousPartial = ReactCms.partial(
+export const ProductAnonymousPartial = parton(
   function ProductAnonymousRender({}: RenderArgs) {
     return <ServerTime label="product" />
   },
   { selector: ".product" },
 )
 
-export const PriceAPartial = ReactCms.partial(
+export const PriceAPartial = parton(
   function PriceARender({}: RenderArgs) {
     return <ServerTime label="price-a" />
   },
   { selector: "#price-a .price" },
 )
 
-export const PriceBPartial = ReactCms.partial(
+export const PriceBPartial = parton(
   function PriceBRender({}: RenderArgs) {
     return <ServerTime label="price-b" />
   },
   { selector: "#price-b .price .featured" },
 )
 
-export const PriceCPartial = ReactCms.partial(
+export const PriceCPartial = parton(
   function PriceCRender({}: RenderArgs) {
     return <ServerTime label="price-c" />
   },
   { selector: "#price-c .price .featured" },
 )
 
-export const SelectorDemoPage = ReactCms.partial(
+export const SelectorDemoPage = parton(
   function SelectorDemoRender({ parent }: RenderArgs) {
     return (
       <main className="py-4">

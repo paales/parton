@@ -1,6 +1,6 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
+import { Button } from "@parton/copies/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,8 +8,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@react-cms/copies/components/ui/dropdown-menu"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/dropdown-menu"
+import { cn } from "@parton/copies/lib/utils"
 import { ChevronDownIcon, ExternalLinkIcon, MessageCircleIcon } from "lucide-react"
 import type { ComponentProps } from "react"
 import { createContext, useContext, useMemo } from "react"

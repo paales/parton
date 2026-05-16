@@ -13,9 +13,9 @@
  * other page wrappers; the gating is automatic.
  */
 
-import { ReactCms, getRegisteredMatchPatterns, notFound } from "@react-cms/framework"
+import { parton, getRegisteredMatchPatterns, notFound } from "@parton/framework"
 
-export const NotFoundFallback = ReactCms.partial(
+export const NotFoundFallback = parton(
   function NotFoundFallbackRender() {
     notFound()
     return null

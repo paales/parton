@@ -7,8 +7,8 @@ The public surface is three things:
 
 | | What it is | When you reach for it |
 |---|---|---|
-| `ReactCms.partial(R, opts)` | Addressable render unit. Optionally URL-gated via `match`. | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all. |
-| `ReactCms.block(R, opts)` | Slot-placeable partial with a `schema` for CMS content. | Content blocks the CMS can place into slots or render directly as a singleton (storage row matches spec id). |
+| `parton(R, opts)` | Addressable render unit. Optionally URL-gated via `match`. | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all. |
+| `block(R, opts)` | Slot-placeable partial with a `schema` for CMS content. | Content blocks the CMS can place into slots or render directly as a singleton (storage row matches spec id). |
 | `<Frame name initialUrl>` | Scope opener — extends `parent.frameChain` so descendants see the frame-resolved request. | Any region whose URL is independent of the window URL. |
 
 A spec is constructed once at module scope; every dependency it has on
@@ -16,7 +16,7 @@ the request lives in a single sync `vary` callback (CMS reads live on
 blocks' `schema`).
 
 ```tsx
-const PokemonPage = ReactCms.partial(PokemonRender, "/pokemon/:id")
+const PokemonPage = parton(PokemonRender, "/pokemon/:id")
 
 function PokemonRender({ id, parent }: { id: string } & RenderArgs) {
   return <article>...{id}...</article>

@@ -2,9 +2,9 @@
  * Product card — title + price + image, slots into `.group-item`.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { block, type RenderArgs } from "@parton/framework"
 
-export const ProductCardBlock = ReactCms.block(
+export const ProductCardBlock = block(
   function ProductCardRender({
     title,
     price,

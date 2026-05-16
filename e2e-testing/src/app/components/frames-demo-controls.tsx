@@ -1,7 +1,7 @@
 "use client"
 
-import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
-import { Button } from "@react-cms/copies/components/ui/button"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { Button } from "@parton/copies/components/ui/button"
 
 /**
  * Button that navigates a named frame to a URL. Used from INSIDE a

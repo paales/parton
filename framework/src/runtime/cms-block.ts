@@ -1,7 +1,6 @@
 /**
- * `ReactCms.block(...)` constructor — CMS-aware wrapper around
- * `ReactCms.partial(...)`. Lives here, in the CMS layer, so
- * `partial.tsx` stays CMS-free.
+ * `block(...)` constructor — CMS-aware wrapper around `parton(...)`.
+ * Lives here, in the CMS layer, so `partial.tsx` stays CMS-free.
  *
  * A block:
  *   - Resolves its CMS content row at render time. The row id is
@@ -20,7 +19,6 @@
 
 import { createElement, type ReactNode } from "react"
 import {
-  ReactCms,
   _buildPartial,
   type PartialOptions,
   type RenderArgs,
@@ -42,7 +40,7 @@ export interface SchemaScope {
   cms: CmsReadSurface
 }
 
-/** Options for `ReactCms.block(R, opts)` — a slot-placeable
+/** Options for `block(R, opts)` — a slot-placeable
  *  CMS-driven spec with a declared `schema`. Internally produces a
  *  partial; same fingerprint / cache / refetch path. */
 export type BlockOptions<V, S> = PartialOptions<V> & {
@@ -202,17 +200,6 @@ export function block<
   })
 
   return spec as unknown as SpecComponent<SpecExtraProps<R, V & S>, R>
-}
-
-// Augment the ReactCms namespace so `ReactCms.block` works.
-// (`partial.tsx` only defines `ReactCms.partial`; `block` is added
-// here as an additive surface.)
-;(ReactCms as { block?: typeof block }).block = block
-
-declare module "../lib/partial.tsx" {
-  interface ReactCmsApi {
-    block: typeof block
-  }
 }
 
 // Re-export `createElement` to make sure tree-shaking doesn't drop

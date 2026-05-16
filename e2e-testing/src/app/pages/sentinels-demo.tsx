@@ -8,15 +8,15 @@
  */
 
 import {
-  ReactCms,
+  parton,
   Redirect,
   notFound,
   setFrameworkControl,
   type RenderArgs,
-} from "@react-cms/framework"
-import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { buttonVariants } from "@react-cms/copies/components/ui/button"
+} from "@parton/framework"
+import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { buttonVariants } from "@parton/copies/components/ui/button"
 
 function InlineCode({ children }: { children: React.ReactNode }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">{children}</code>
@@ -31,14 +31,14 @@ function StatusBadge({ status }: { status: 404 | 302 | 200 }) {
   )
 }
 
-export const NotFoundDemoPage = ReactCms.partial(
+export const NotFoundDemoPage = parton(
   function NotFoundDemoTriggerRender() {
     notFound()
   },
   { match: "/not-found-demo" },
 )
 
-export const RedirectDemoPage = ReactCms.partial(
+export const RedirectDemoPage = parton(
   function RedirectDemoTriggerRender() {
     // Set framework control so the HTML path emits a 302; render
     // <Redirect> so the RSC path commits with a client-side
@@ -50,7 +50,7 @@ export const RedirectDemoPage = ReactCms.partial(
   { match: "/redirect-demo" },
 )
 
-export const SentinelsDemoPage = ReactCms.partial(
+export const SentinelsDemoPage = parton(
   function SentinelsDemoRender({}: RenderArgs) {
     return (
       <main className="py-4">

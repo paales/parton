@@ -1,7 +1,7 @@
 > **Superseded 2026-04-28** by
 > [`notes/partial-define-step-api.md`](./partial-define-step-api.md)
 > — same vary/render core, but moved from a call-site `<Partial>`
-> prop pair to a `ReactCms.partial(Render, …)` constructor at module
+> prop pair to a `parton(Render, …)` constructor at module
 > scope. The constructor subsumes `registerBlock`, auto-derives
 > `selector` and `cmsId`, and drops all ALS in one pass.
 

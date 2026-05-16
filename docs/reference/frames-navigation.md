@@ -7,7 +7,7 @@ frame-resolved request via their normal `vary` (the framework
 swaps the request URL via the ambient frame chain).
 
 ```tsx
-const CartContent = ReactCms.partial(CartContentRender, {
+const CartContent = parton(CartContentRender, {
   selector: "#cart",
   vary: ({ pathname }) => ({ state: parseCartState(pathname) }),
 })

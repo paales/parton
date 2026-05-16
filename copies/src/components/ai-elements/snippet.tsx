@@ -6,8 +6,8 @@ import {
   InputGroupButton,
   InputGroupInput,
   InputGroupText,
-} from "@react-cms/copies/components/ui/input-group"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/input-group"
+import { cn } from "@parton/copies/lib/utils"
 import { CheckIcon, CopyIcon } from "lucide-react"
 import type { ComponentProps } from "react"
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"

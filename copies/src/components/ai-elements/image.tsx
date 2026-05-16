@@ -1,4 +1,4 @@
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 import type { Experimental_GeneratedImage } from "ai"
 
 export type ImageProps = Experimental_GeneratedImage & {

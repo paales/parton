@@ -8,30 +8,30 @@ import {
   CommandItem,
   CommandList,
   CommandSeparator,
-} from "@react-cms/copies/components/ui/command"
+} from "@parton/copies/components/ui/command"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@react-cms/copies/components/ui/dropdown-menu"
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@react-cms/copies/components/ui/hover-card"
+} from "@parton/copies/components/ui/dropdown-menu"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@parton/copies/components/ui/hover-card"
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupTextarea,
-} from "@react-cms/copies/components/ui/input-group"
+} from "@parton/copies/components/ui/input-group"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@react-cms/copies/components/ui/select"
-import { Spinner } from "@react-cms/copies/components/ui/spinner"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@react-cms/copies/components/ui/tooltip"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/select"
+import { Spinner } from "@parton/copies/components/ui/spinner"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@parton/copies/components/ui/tooltip"
+import { cn } from "@parton/copies/lib/utils"
 import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai"
 import { CornerDownLeftIcon, ImageIcon, Monitor, PlusIcon, SquareIcon, XIcon } from "lucide-react"
 import { nanoid } from "nanoid"

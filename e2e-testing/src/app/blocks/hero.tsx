@@ -2,11 +2,11 @@
  * Demo hero block — small card used inside composed slots.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
-import { cn } from "@react-cms/copies/lib/utils"
+import { block, type RenderArgs } from "@parton/framework"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
+import { cn } from "@parton/copies/lib/utils"
 
-export const HeroBlock = ReactCms.block(
+export const HeroBlock = block(
   function HeroRender({
     headline,
     subhead,

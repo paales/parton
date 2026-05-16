@@ -5,9 +5,9 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@react-cms/copies/components/ui/accordion"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/accordion"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { cn } from "@parton/copies/lib/utils"
 import type { Tool } from "ai"
 import { BotIcon } from "lucide-react"
 import type { ComponentProps } from "react"

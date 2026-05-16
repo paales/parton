@@ -7,12 +7,12 @@
  * the catalog) compose the page.
  */
 
-import { ReactCms } from "@react-cms/framework"
+import { parton, block } from "@parton/framework"
 import type { ReactNode } from "react"
-import type { RenderArgs } from "@react-cms/framework"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
+import type { RenderArgs } from "@parton/framework"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
 
-export const CmsDemoRootBlock = ReactCms.block(
+export const CmsDemoRootBlock = block(
   function CmsDemoRootRender({ body }: { body: ReactNode } & RenderArgs) {
     return body
   },
@@ -23,7 +23,7 @@ export const CmsDemoRootBlock = ReactCms.block(
   },
 )
 
-export const CmsDemoPage = ReactCms.partial(
+export const CmsDemoPage = parton(
   function CmsDemoExplainerRender({ parent }) {
     return (
       <>

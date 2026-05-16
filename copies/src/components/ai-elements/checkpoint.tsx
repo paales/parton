@@ -1,9 +1,9 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Separator } from "@react-cms/copies/components/ui/separator"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@react-cms/copies/components/ui/tooltip"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { Separator } from "@parton/copies/components/ui/separator"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@parton/copies/components/ui/tooltip"
+import { cn } from "@parton/copies/lib/utils"
 import type { LucideProps } from "lucide-react"
 import { BookmarkIcon } from "lucide-react"
 import type { ComponentProps, HTMLAttributes } from "react"

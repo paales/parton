@@ -8,9 +8,9 @@ import {
   CommandList,
   CommandSeparator,
   CommandShortcut,
-} from "@react-cms/copies/components/ui/command"
-import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@react-cms/copies/components/ui/dialog"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/command"
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@parton/copies/components/ui/dialog"
+import { cn } from "@parton/copies/lib/utils"
 import type { ComponentProps, ReactNode } from "react"
 
 export type ModelSelectorProps = ComponentProps<typeof Dialog>

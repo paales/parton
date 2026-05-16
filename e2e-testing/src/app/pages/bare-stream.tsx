@@ -4,7 +4,7 @@
  * the current `?end=` value, so only the active range renders.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { parton, type RenderArgs } from "@parton/framework"
 import { NextObserver } from "../components/next-observer.tsx"
 import { ScrollRestore } from "../components/scroll-restore.tsx"
 
@@ -12,7 +12,7 @@ const ITEMS_PER_PAGE = 10
 const MAX_PAGES = 50
 
 function makeBarePage(page: number) {
-  return ReactCms.partial(
+  return parton(
     function BarePageRender() {
       const offset = (page - 1) * ITEMS_PER_PAGE
       return (
@@ -48,7 +48,7 @@ function makeBarePage(page: number) {
 
 const BarePagePartials = Array.from({ length: MAX_PAGES }, (_, i) => makeBarePage(i + 1))
 
-const BareNext = ReactCms.partial(
+const BareNext = parton(
   function BareNextRender({ end }: { end: number } & RenderArgs) {
     return <NextObserver currentEnd={end} />
   },
@@ -60,7 +60,7 @@ const BareNext = ReactCms.partial(
   },
 )
 
-export const BarePage = ReactCms.partial(
+export const BarePage = parton(
   function BareRender({ end, parent }: { end: number } & RenderArgs) {
     return (
       <>

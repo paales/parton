@@ -5,14 +5,14 @@ Status: Shipped 2026-05-11 (commit `8b7f579`)
 
 ## TL;DR
 
-Today's `ReactCms.partial(R, opts)` has accumulated options for three
+Today's `parton(R, opts)` has accumulated options for three
 unrelated concerns: addressable render units, slot-placed CMS blocks,
 and frame-scope openers. Split into:
 
-- `ReactCms.partial(R, {match?, vary?, selector?, cache?, defer?, fallback?})` —
+- `parton(R, {match?, vary?, selector?, cache?, defer?, fallback?})` —
   addressable, fingerprinted, refetchable subtree. Optionally URL-gated
   via `match`. The everything-else case. **No `cms` access in `vary`**.
-- `ReactCms.block(R, {tags?, schema?, vary?, name?, selector?, cache?, defer?, fallback?})` —
+- `block(R, {tags?, schema?, vary?, name?, selector?, cache?, defer?, fallback?})` —
   slot-placeable unit with a CMS schema. `schema({cms}) => ({...})`
   replaces the in-`vary` `cms.*` reads, and the editor's catalog
   manifest is derived from `schema` instead of from tracking-`vary`.
@@ -33,7 +33,7 @@ SpecComponent shape as `partial`; the framework runtime sees one
 The constructor today reads like this in user code:
 
 ```tsx
-ReactCms.partial(HeroRender, {
+parton(HeroRender, {
   type: "hero",
   tags: [".composed-hero"],
   vary: ({ cms }) => ({ headline: cms.text("headline") }),
@@ -43,7 +43,7 @@ ReactCms.partial(HeroRender, {
 vs.
 
 ```tsx
-ReactCms.partial(PokemonPageRender, {
+parton(PokemonPageRender, {
   match: "/pokemon/:id",
   cache: { maxAge: 60 },
 })
@@ -52,7 +52,7 @@ ReactCms.partial(PokemonPageRender, {
 vs.
 
 ```tsx
-ReactCms.partial(CartFrameRender, {
+parton(CartFrameRender, {
   selector: "#cart",
   frame: "cart",
   frameUrl: "/cart/closed",
@@ -91,8 +91,8 @@ Audited problems:
 ### Public surface (after refactor)
 
 ```ts
-ReactCms.partial<Opts>(Render, opts: Opts): SpecComponent<…, …>
-ReactCms.block<Opts>(Render, opts: Opts): SpecComponent<…, …>
+parton<Opts>(Render, opts: Opts): SpecComponent<…, …>
+block<Opts>(Render, opts: Opts): SpecComponent<…, …>
 
 interface PartialOptions<V> {
   match?: MatchPattern
@@ -206,7 +206,7 @@ Plus the partial-shared options (`selector`, `cache`, `defer`,
 
 ```tsx
 // Before
-ReactCms.partial(HeroRender, {
+parton(HeroRender, {
   type: "hero",
   tags: [".demo-block", ".composed-hero"],
   vary: ({ cms }) => ({
@@ -216,7 +216,7 @@ ReactCms.partial(HeroRender, {
 })
 
 // After
-ReactCms.block(HeroRender, {
+block(HeroRender, {
   tags: [".demo-block", ".composed-hero"],
   schema: ({ cms }) => ({
     headline: cms.text("headline"),
@@ -245,7 +245,7 @@ Affected files (~12):
 
 ```tsx
 // Before
-const CartFramePartial = ReactCms.partial(CartFrameRender, {
+const CartFramePartial = parton(CartFrameRender, {
   selector: "#cart",
   frame: "cart",
   frameUrl: "/cart/closed",
@@ -256,7 +256,7 @@ const CartFramePartial = ReactCms.partial(CartFrameRender, {
 <CartFramePartial parent={parent} />
 
 // After
-const CartFramePartial = ReactCms.partial(CartFrameRender, {
+const CartFramePartial = parton(CartFrameRender, {
   selector: "#cart",
   vary: ({ request }) => ({ state: parseCartState(request.url) }),
 })
@@ -280,13 +280,13 @@ Affected files (~5):
 
 ```tsx
 // Before
-ReactCms.partial(R, {
+parton(R, {
   match: "/x",
   vary: ({ cms }) => ({ tone: cms.enum("tone", ["info", "warn"]) }),
 })
 
 // After — if the spec is content-driven, it should be a block:
-ReactCms.block(R, {
+block(R, {
   tags: [".x"],
   schema: ({ cms }) => ({ tone: cms.enum("tone", ["info", "warn"]) }),
 })
@@ -381,7 +381,7 @@ interface SchemaScope {
   cms: CmsReadSurface
 }
 
-// Internally desugars to ReactCms.partial with merged vary+schema and
+// Internally desugars to parton with merged vary+schema and
 // `type: name ?? auto-derive`, `tags`. Schema runs after vary and is
 // merged into the framework-supplied prop bag.
 function buildBlockComponent<V, S>(Render, options: BlockOptions<V, S>) {
@@ -401,7 +401,7 @@ function buildBlockComponent<V, S>(Render, options: BlockOptions<V, S>) {
     // The auto-id derivation uses `name` override if present, else
     // Render.name auto-derive. `type` flows from `name`.
   }
-  return ReactCms.partial(Render, partialOptions)
+  return parton(Render, partialOptions)
 }
 ```
 
@@ -428,7 +428,7 @@ commit per CLAUDE.md "workflow after a task is done."
    wrapper, the `resolveFrameRequest` call, the ambient-frame-key
    fp contribution). The frame chain still flows through `parent` —
    only the "this spec opens a new frame" branch goes away.
-4. **Add `ReactCms.block` constructor** at `framework/src/lib/block.tsx`.
+4. **Add `block` constructor** at `framework/src/lib/block.tsx`.
    Internally desugars to `partial` via the engine described above.
    Same `SpecComponent` return type. Schema callback feeds a tracking
    CMS surface at prerender time and a real one at render time.

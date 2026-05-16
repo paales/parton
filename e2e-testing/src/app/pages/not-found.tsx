@@ -1,4 +1,4 @@
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
 
 /**
  * Default 404 page. Rendered by `Root` when a page component throws

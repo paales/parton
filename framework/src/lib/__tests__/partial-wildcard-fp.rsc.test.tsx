@@ -19,7 +19,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { ReactCms, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
+import { parton, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
 import { hash } from "../hash.ts"
@@ -48,13 +48,13 @@ describe("wildcard match — fingerprint stability", () => {
     // requires a tail. Authors who want both the bare path AND its
     // descendants spell that with `{/*}?` (see the tests below).
     clearRegistry("all")
-    const Exact = ReactCms.partial(
+    const Exact = parton(
       function ExactMatchTestRender(_: RenderArgs) {
         return <span data-testid="exact-body">exact</span>
       },
       { selector: "#exact-match-test", match: "/inspect" },
     )
-    const Strict = ReactCms.partial(
+    const Strict = parton(
       function StrictWildcardTestRender(_: RenderArgs) {
         return <span data-testid="strict-body">strict</span>
       },
@@ -79,7 +79,7 @@ describe("wildcard match — fingerprint stability", () => {
 
   it("a spec with `match: '/inspect{/*}?'` keeps the same fingerprint across /inspect and /inspect/p/3", async () => {
     clearRegistry("all")
-    const Base = ReactCms.partial(
+    const Base = parton(
       function InspectBaseFpTestRender(_: RenderArgs) {
         return <div data-testid="grid">grid</div>
       },
@@ -110,7 +110,7 @@ describe("wildcard match — fingerprint stability", () => {
     // anonymous-wildcard captures (numeric keys, including the
     // implicit `search: "*"`) from the default fingerprint surface.
     clearRegistry("all")
-    const Base = ReactCms.partial(
+    const Base = parton(
       function InspectBaseSearchFpTestRender(_: RenderArgs) {
         return <div data-testid="grid">grid</div>
       },
@@ -136,7 +136,7 @@ describe("wildcard match — fingerprint stability", () => {
 
   it("a spec with `match: '/p/:id'` keeps named params reactive (sanity)", async () => {
     clearRegistry("all")
-    const Detail = ReactCms.partial(
+    const Detail = parton(
       function NamedParamFpTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="detail">id={id}</span>
       },
@@ -162,7 +162,7 @@ describe("wildcard match — fingerprint stability", () => {
 
   it("server fp-skips the wildcard-matched spec when the client sends the matching ?cached= entry", async () => {
     clearRegistry("all")
-    const Base = ReactCms.partial(
+    const Base = parton(
       function InspectBaseSkipTestRender(_: RenderArgs) {
         return <div data-testid="skip-test-grid">grid-body</div>
       },

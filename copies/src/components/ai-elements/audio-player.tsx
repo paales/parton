@@ -1,8 +1,8 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { ButtonGroup, ButtonGroupText } from "@react-cms/copies/components/ui/button-group"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { ButtonGroup, ButtonGroupText } from "@parton/copies/components/ui/button-group"
+import { cn } from "@parton/copies/lib/utils"
 import type { Experimental_SpeechResult as SpeechResult } from "ai"
 import {
   MediaControlBar,

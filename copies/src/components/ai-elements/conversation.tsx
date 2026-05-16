@@ -1,7 +1,7 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { cn } from "@parton/copies/lib/utils"
 import type { UIMessage } from "ai"
 import { ArrowDownIcon, DownloadIcon } from "lucide-react"
 import type { ComponentProps } from "react"

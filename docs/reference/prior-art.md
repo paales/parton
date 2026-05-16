@@ -172,11 +172,11 @@ Not novel; the combination is uncommon.
 
 2. **Runtime discovery, not static analysis.** No build-time
    manifest of available blocks; no schema files; no codegen.
-   `ReactCms.partial(...)` self-registers in the catalog at
+   `parton(...)` self-registers in the catalog at
    module-init when it declares `tags: [".x"]`; the prerender
    introspects each spec by invoking its `vary` once with a stub
    request. Adding a new block type is one component file + one
-   `ReactCms.partial(...)` call — the editor's palette picks it up
+   `parton(...)` call — the editor's palette picks it up
    on the next HMR.
 
 3. **The cache key is what `vary` returns.** Every per-spec

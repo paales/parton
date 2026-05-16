@@ -1,14 +1,14 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 // Deep-import from `cms-constants.ts` (zero side-effect imports)
 // rather than `cms-runtime.ts` (which transitively loads
 // `context.ts` → `node:async_hooks`, externalised for browser, throws
 // at module-evaluation time). Importing through the barrel
 // mis-resolves the Flight reference; both paths must be avoided
 // from `"use client"` files.
-import { EDITOR_COOKIE } from "@react-cms/framework/runtime/cms-constants.ts"
+import { EDITOR_COOKIE } from "@parton/framework/runtime/cms-constants.ts"
 
 /**
  * Opens design mode by flipping `EDITOR_COOKIE` on via the

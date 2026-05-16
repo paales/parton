@@ -1,5 +1,5 @@
 {
-  "name": "@react-cms/cms",
+  "name": "@parton/cms",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,8 +9,8 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@react-cms/copies": "workspace:*",
-    "@react-cms/framework": "workspace:*",
+    "@parton/copies": "workspace:*",
+    "@parton/framework": "workspace:*",
     "react": "19.3.0-canary-00f063c3-20260415"
   },
   "devDependencies": {

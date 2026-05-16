@@ -5,20 +5,20 @@ import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
 import { cva, type VariantProps } from "class-variance-authority"
 
-import { useIsMobile } from "@react-cms/copies/hooks/use-mobile"
-import { cn } from "@react-cms/copies/lib/utils"
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Input } from "@react-cms/copies/components/ui/input"
-import { Separator } from "@react-cms/copies/components/ui/separator"
+import { useIsMobile } from "@parton/copies/hooks/use-mobile"
+import { cn } from "@parton/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { Input } from "@parton/copies/components/ui/input"
+import { Separator } from "@parton/copies/components/ui/separator"
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@react-cms/copies/components/ui/sheet"
-import { Skeleton } from "@react-cms/copies/components/ui/skeleton"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@react-cms/copies/components/ui/tooltip"
+} from "@parton/copies/components/ui/sheet"
+import { Skeleton } from "@parton/copies/components/ui/skeleton"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@parton/copies/components/ui/tooltip"
 import { PanelLeftIcon } from "lucide-react"
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"

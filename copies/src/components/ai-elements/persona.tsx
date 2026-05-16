@@ -1,6 +1,6 @@
 "use client"
 
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 import type { RiveParameters } from "@rive-app/react-webgl2"
 import {
   useRive,

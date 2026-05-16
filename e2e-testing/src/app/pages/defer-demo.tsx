@@ -7,12 +7,12 @@
  * inside it.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { parton, type RenderArgs } from "@parton/framework"
 import { WhenVisible } from "../components/when-visible.tsx"
 import { WhenStored } from "../components/when-stored.tsx"
 import { WhenMounted } from "../components/when-mounted.tsx"
 import { ActivateButton, StorageKeyEditor } from "../components/defer-demo-controls.tsx"
-import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 
 function InlineCode({ children }: { children: React.ReactNode }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">{children}</code>
@@ -36,7 +36,7 @@ function Timestamp({ prefix }: { prefix: string }) {
 
 // ─── Sub-specs ──────────────────────────────────────────────────────────
 
-export const ManualPartial = ReactCms.partial(
+export const ManualPartial = parton(
   function ManualRender({}: RenderArgs) {
     return (
       <div data-testid="manual-content">
@@ -55,7 +55,7 @@ export const ManualPartial = ReactCms.partial(
   },
 )
 
-export const StoredPartial = ReactCms.partial(
+export const StoredPartial = parton(
   function StoredRender({ stored }: { stored?: string } & RenderArgs) {
     return (
       <div data-testid="stored-content">
@@ -79,7 +79,7 @@ export const StoredPartial = ReactCms.partial(
 
 function makeBatch(label: string) {
   const key = `${label}-key`
-  return ReactCms.partial(
+  return parton(
     async function BatchRender({ stored }: { stored?: string } & RenderArgs) {
       return (
         <div data-testid={`${label}-content`}>
@@ -105,7 +105,7 @@ function makeBatch(label: string) {
 export const BatchAPartial = makeBatch("batch-a")
 export const BatchBPartial = makeBatch("batch-b")
 
-export const SlowStreamPartial = ReactCms.partial(
+export const SlowStreamPartial = parton(
   async function SlowStreamRender({}: RenderArgs) {
     await new Promise((r) => setTimeout(r, 1500))
     return (
@@ -122,7 +122,7 @@ export const SlowStreamPartial = ReactCms.partial(
   },
 )
 
-export const RaceDeferPartial = ReactCms.partial(
+export const RaceDeferPartial = parton(
   function RaceDeferRender({}: RenderArgs) {
     return (
       <div data-testid="race-defer-content">
@@ -142,7 +142,7 @@ export const RaceDeferPartial = ReactCms.partial(
 )
 
 function makeConcurrent(label: string, delayMs: number) {
-  return ReactCms.partial(
+  return parton(
     async function ConcurrentRender({}: RenderArgs) {
       await new Promise((r) => setTimeout(r, delayMs))
       return (
@@ -166,7 +166,7 @@ export const ConcurrentAPartial = makeConcurrent("a", 400)
 export const ConcurrentBPartial = makeConcurrent("b", 800)
 export const ConcurrentCPartial = makeConcurrent("c", 1200)
 
-export const VisibilityDeferPartial = ReactCms.partial(
+export const VisibilityDeferPartial = parton(
   function VisibilityDeferRender({}: RenderArgs) {
     return (
       <div data-testid="any-content">
@@ -187,7 +187,7 @@ export const VisibilityDeferPartial = ReactCms.partial(
 
 // ─── Static chrome ──────────────────────────────────────────────────────
 
-export const DeferDemoPage = ReactCms.partial(
+export const DeferDemoPage = parton(
   function DeferDemoRender({ parent }: RenderArgs) {
     return (
       <main className="py-4">

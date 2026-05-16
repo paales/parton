@@ -19,7 +19,7 @@ import {
   writeDraftNode,
   type CmsConfig,
   type CmsNode,
-} from "@react-cms/framework"
+} from "@parton/framework"
 
 function invalidateEditorAround(id: string): { invalidate: { selector: string } } {
   return {

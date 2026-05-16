@@ -8,14 +8,14 @@
  */
 
 import { Suspense } from "react"
-import { ReactCms, type PartialCtx, type RenderArgs } from "@react-cms/framework"
+import { parton, type PartialCtx, type RenderArgs } from "@parton/framework"
 import { client } from "../../magento-data.ts"
 import { graphql, type ResultOf } from "../../magento-graphql.ts"
 import { AddToCartButton } from "./add-to-cart-button.tsx"
 import { CartBadge } from "./cart-badge.tsx"
 import { LivePricePartial, LivePriceFallback } from "./live-price.tsx"
 import { RefreshAllPricesButton } from "./refresh-all-prices-button.tsx"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
 
 const CartQuery = graphql(`
   query Cart($cartId: String!) {
@@ -53,7 +53,7 @@ type ProductItem = NonNullable<
   NonNullable<NonNullable<ResultOf<typeof ProductsQuery>["products"]>["items"]>[number]
 >
 
-const MagentoCartBadge = ReactCms.partial(
+const MagentoCartBadge = parton(
   async function MagentoCartBadgeRender({ cartId }: { cartId: string | undefined } & RenderArgs) {
     await new Promise((r) => setTimeout(r, 100))
     if (!cartId) return <CartBadge quantity={0} />
@@ -67,7 +67,7 @@ const MagentoCartBadge = ReactCms.partial(
   },
 )
 
-const MagentoHeader = ReactCms.partial(function MagentoHeaderRender({ parent }: RenderArgs) {
+const MagentoHeader = parton(function MagentoHeaderRender({ parent }: RenderArgs) {
   return (
     <header className="mb-4 flex items-center justify-between gap-4">
       <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
@@ -76,7 +76,7 @@ const MagentoHeader = ReactCms.partial(function MagentoHeaderRender({ parent }: 
   )
 })
 
-const MagentoProducts = ReactCms.partial(
+const MagentoProducts = parton(
   async function MagentoProductsRender({ q, parent }: { q: string } & RenderArgs) {
     const data = await client.request(ProductsQuery, { pageSize: 12 })
     const items = (data.products?.items ?? []).filter((item): item is ProductItem => item != null)
@@ -150,7 +150,7 @@ function ProductCard({ product, parent }: { product: ProductItem; parent: Partia
   )
 }
 
-export const MagentoPage = ReactCms.partial(
+export const MagentoPage = parton(
   function MagentoRender({ parent }: RenderArgs) {
     return (
       <>

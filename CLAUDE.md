@@ -1,10 +1,11 @@
-# React CMS — project instructions
+# parton — project instructions
 
-A research project: a React CMS data layer for pages composed of
-independently re-renderable, addressable, cacheable subtrees built
-on RSC. The primitive is `ReactCms.partial(Render, options)` — a
-define-step constructor that returns a placeable React component;
-the contract and full surface live in [`docs/reference/`](./docs/reference/).
+A React Server Components based framework layer for pages composed
+of independently re-renderable, addressable, cacheable subtrees.
+Research project — does this primitive shape hold up as a CMS data
+layer? The primitive is `parton(Render, options)` — a define-step
+constructor that returns a placeable React component; the contract
+and full surface live in [`docs/reference/`](./docs/reference/).
 
 This file is for working in this repo — structure, tooling,
 workflow. For framework architecture and APIs, read the docs.
@@ -22,15 +23,15 @@ workflow. For framework architecture and APIs, read the docs.
 
 The repo is a yarn workspace monorepo. Each top-level folder is a
 package; cross-package imports go through workspace package names
-(`@react-cms/<pkg>`), not relative paths.
+(`@parton/<pkg>`), not relative paths.
 
 | Path | Role |
 |---|---|
-| `framework/` (`@react-cms/framework`) | The framework runtime. `framework/index.ts` is the public barrel; internals live under `framework/src/{lib,runtime,test}/`. `lib/` holds partials primitives (`partial.tsx` for `ReactCms.partial` + `ReactCms.block`, `frame.tsx` for `<Frame>`, `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `flight-runtime.ts`, `hash.ts`, `stable-stringify.ts`, `multipart.ts`). `runtime/` holds RSC plumbing (`context.ts` request ALS, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `session-actions.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`). `test/` is the in-process Flight test harness (`rsc-server.ts`, fixtures). The vitest configs for the rsc + browser tiers also live here, plus the node-tier setup file (jsdom navigation API shim). |
-| `cms/` (`@react-cms/cms`) | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/{address-bar,tree-link,add-block}.tsx`). The committed content store + per-author drafts live alongside as data: `cms/data/content.json` (committed) + `cms/data/draft.json` (gitignored). Public barrel `cms/index.ts` exports `EditorShell`. |
-| `copies/` (`@react-cms/copies`) | Local copies of shadcn UI primitives (`src/components/ui/`), the AI-elements library (`src/components/ai-elements/`), shared hooks (`src/hooks/`), and the `cn` helper (`src/lib/utils.ts`). `components.json` (shadcn config) lives here too — that's where new components are added. |
-| `e2e-testing/` (`@react-cms/e2e-testing`) | Example testing app (PokeAPI + GraphCommerce Magento backends) and Playwright specs. `src/entry.{rsc,ssr,browser}.tsx` are the framework entries (they import the local `Root`). `vite.config.ts` owns dev/build for this app. `e2e/` contains the Playwright specs + fixtures. |
-| `e2e-magento/` (`@react-cms/e2e-magento`) | Empty showcase scaffold for a future Magento integration. Stub `Root`, mirrored vite config (port 5181). |
+| `framework/` (`@parton/framework`) | The framework runtime. `framework/index.ts` is the public barrel; internals live under `framework/src/{lib,runtime,test}/`. `lib/` holds partials primitives (`partial.tsx` for `parton` + `block`, `frame.tsx` for `<Frame>`, `partial-client.tsx`, `partial-registry.ts`, `partial-context.ts`, `partial-error-boundary.tsx`, `partial-request-state.ts`, `partial-cache.ts`, `partial-debug.tsx`, `cache.tsx`, `cache-options.ts`, `flight-runtime.ts`, `hash.ts`, `stable-stringify.ts`, `multipart.ts`). `runtime/` holds RSC plumbing (`context.ts` request ALS, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`, `session-actions.ts`, `errors.ts`, `request.tsx`, `error-boundary.tsx`, `redirect-client.tsx`). `test/` is the in-process Flight test harness (`rsc-server.ts`, fixtures). The vitest configs for the rsc + browser tiers also live here, plus the node-tier setup file (jsdom navigation API shim). |
+| `cms/` (`@parton/cms`) | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/{address-bar,tree-link,add-block}.tsx`). The committed content store + per-author drafts live alongside as data: `cms/data/content.json` (committed) + `cms/data/draft.json` (gitignored). Public barrel `cms/index.ts` exports `EditorShell`. |
+| `copies/` (`@parton/copies`) | Local copies of shadcn UI primitives (`src/components/ui/`), the AI-elements library (`src/components/ai-elements/`), shared hooks (`src/hooks/`), and the `cn` helper (`src/lib/utils.ts`). `components.json` (shadcn config) lives here too — that's where new components are added. |
+| `e2e-testing/` (`@parton/e2e-testing`) | Example testing app (PokeAPI + GraphCommerce Magento backends) and Playwright specs. `src/entry.{rsc,ssr,browser}.tsx` are the framework entries (they import the local `Root`). `vite.config.ts` owns dev/build for this app. `e2e/` contains the Playwright specs + fixtures. |
+| `e2e-magento/` (`@parton/e2e-magento`) | Empty showcase scaffold for a future Magento integration. Stub `Root`, mirrored vite config (port 5181). |
 | `docs/` | All documentation (`reference/`, `internals/`, `archive/`, `notes/`). Not buildable code. |
 
 The load-bearing code is in `framework/src/`, `cms/src/`, `copies/src/`,
@@ -103,7 +104,7 @@ yarn test:e2e           # Playwright — full-stack specs in e2e-testing/e2e/
 ```
 
 The root `yarn dev` / `yarn build` scripts delegate via
-`yarn workspace @react-cms/<pkg> <cmd>`. Each app's vite config sets
+`yarn workspace @parton/<pkg> <cmd>`. Each app's vite config sets
 `CMS_DATA_DIR` to the repo-level `cms/data/` so the framework's storage
 points at the shared content store regardless of which workspace the
 dev server runs from.
@@ -119,8 +120,8 @@ restart is rarely needed during dev.
 ## Spec authoring rules
 
 - Three constructors, one engine. Pick by role:
-  - `ReactCms.partial(Render, '/path')` / `ReactCms.partial(Render, {match, vary, …})` — addressable subtree, request-dimensions only. The everything-else case.
-  - `ReactCms.block(Render, {selector, schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is where CMS reads live.
+  - `parton(Render, '/path')` / `parton(Render, {match, vary, …})` — addressable subtree, request-dimensions only. The everything-else case.
+  - `block(Render, {selector, schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is where CMS reads live.
   - `<Frame name initialUrl parent>{(p) => …}</Frame>` — plain component, opens a per-name URL scope for descendants.
 - `vary` is sync and must be pure. It sees `{url, pathname, search, cookies, headers, params, session}` — **no `cms`**. CMS reads (`cms.text(...)`, `cms.enum(...)`, `cms.reference(...)`, `cms.blocks(...)`, `cms.block(...)`) live inside a block's `schema` callback. Async loaders run in `render`.
 - **Wrapper specs need a `vary` that captures their descendants'
@@ -135,7 +136,7 @@ restart is rarely needed during dev.
 - **`match` is strict URLPattern** — no auto-suffixing. `match:
   "/inspect/*"` means `/inspect/<rest>` and does NOT match bare
   `/inspect`. To match both, use `match: "/inspect{/*}?"`.
-- **Slot blocks** are constructed via `ReactCms.block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` is a flat list of refetch labels (`"page-block"` or `["page-block", "composed-hero"]`); leading `#`/`.` is cosmetic and stripped. The first label is the spec's catalog id — and for singleton blocks, also the CMS storage key. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / per-instance content keys; the framework wires it internally.
+- **Slot blocks** are constructed via `block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` is a flat list of refetch labels (`"page-block"` or `["page-block", "composed-hero"]`); leading `#`/`.` is cosmetic and stripped. The first label is the spec's catalog id — and for singleton blocks, also the CMS storage key. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / per-instance content keys; the framework wires it internally.
 - `parent: PartialCtx` is required on every spec call site. `Render` receives `{...vary, ...schema, parent, children}` — pass `parent` to descendant spec calls. There is no `id` prop on the JSX call site and no `id` in the Render prop bag; CMS content flows via `schema` reads bound by the framework.
 
 ## Workflow — after a task is done
@@ -174,7 +175,7 @@ without the corresponding doc/test update is incomplete work.
 
 ### Issue tracker
 
-Issues live in GitHub Issues at `paales/react-cms` (the `gh` CLI). See `docs/reference/agents/issue-tracker.md`.
+Issues live in GitHub Issues at `partonjs/parton` (the `gh` CLI). See `docs/reference/agents/issue-tracker.md`.
 
 ### Triage labels
 

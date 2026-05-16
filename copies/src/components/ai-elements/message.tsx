@@ -1,9 +1,9 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { ButtonGroup, ButtonGroupText } from "@react-cms/copies/components/ui/button-group"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@react-cms/copies/components/ui/tooltip"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { ButtonGroup, ButtonGroupText } from "@parton/copies/components/ui/button-group"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@parton/copies/components/ui/tooltip"
+import { cn } from "@parton/copies/lib/utils"
 import { cjk } from "@streamdown/cjk"
 import { code } from "@streamdown/code"
 import { math } from "@streamdown/math"

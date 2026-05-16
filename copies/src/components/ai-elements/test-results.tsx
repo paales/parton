@@ -1,8 +1,8 @@
 "use client"
 
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@react-cms/copies/components/ui/collapsible"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@parton/copies/components/ui/collapsible"
+import { cn } from "@parton/copies/lib/utils"
 import {
   CheckCircle2Icon,
   ChevronRightIcon,

@@ -1,7 +1,7 @@
 /**
  * App-level block catalog.
  *
- * Each `ReactCms.partial(...)` call self-registers its spec at module
+ * Each `parton(...)` call self-registers its spec at module
  * load time. This file just imports each block module for its
  * side effect; no `registerBlock` call needed.
  */

@@ -3,8 +3,8 @@
  * registered as a block so the page can compose it via Children.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { buttonVariants } from "@react-cms/copies/components/ui/button"
+import { block, type RenderArgs } from "@parton/framework"
+import { buttonVariants } from "@parton/copies/components/ui/button"
 
 const SLUG_LINKS: ReadonlyArray<[href: string, label: string]> = [
   ["/cms-demo", "Default (no slug)"],
@@ -14,7 +14,7 @@ const SLUG_LINKS: ReadonlyArray<[href: string, label: string]> = [
   ["/cms-demo/zulu", "zulu (unmatched)"],
 ]
 
-export const PageSlugNavBlock = ReactCms.block(
+export const PageSlugNavBlock = block(
   function PageSlugNavRender({}: RenderArgs) {
     return (
       <nav

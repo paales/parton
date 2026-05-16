@@ -1,9 +1,9 @@
 "use client"
 
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Switch } from "@react-cms/copies/components/ui/switch"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { Button } from "@parton/copies/components/ui/button"
+import { Switch } from "@parton/copies/components/ui/switch"
+import { cn } from "@parton/copies/lib/utils"
 import { CheckIcon, CopyIcon, EyeIcon, EyeOffIcon } from "lucide-react"
 import type { ComponentProps, HTMLAttributes } from "react"
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"

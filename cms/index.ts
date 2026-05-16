@@ -1,7 +1,7 @@
-// Public API surface for @react-cms/cms.
+// Public API surface for @parton/cms.
 //
 // The package contains the CMS editor UI (a three-pane shell built on top
-// of @react-cms/framework's Partial constructor) and the committed content
+// of @parton/framework's Partial constructor) and the committed content
 // store at cms/data/. The framework's cms-runtime/cms-storage handle the
 // data layer; this package owns the editing experience.
 

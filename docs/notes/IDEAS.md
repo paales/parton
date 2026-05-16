@@ -367,7 +367,7 @@ The framework makes two layered claims:
 1. **Partials as addressable RSC subtrees** — solid, working, primitive is coherent.
 2. **Runtime discovery over static analysis** — no static walkers, no codegen, no build-time manifest. The spec catalog and the partial registry both populate at first render.
 
-The second claim is the one that distinguishes this from Next.js App Router in the long run. Everything that reinstates a static walker (typed partial registries via codegen, explicit route manifests, declarative input schemas resolved at build time) works against it. When evaluating future directions, the test is: *can this self-register at render time instead of requiring a pre-render walk?* The current `ReactCms.partial` / `block` constructors pass that test — every spec self-registers when its module loads. Typed-handle codegen fails it. Keep that principle sharp — it's the architectural load-bearing idea and it's easy to erode one convenient walker at a time.
+The second claim is the one that distinguishes this from Next.js App Router in the long run. Everything that reinstates a static walker (typed partial registries via codegen, explicit route manifests, declarative input schemas resolved at build time) works against it. When evaluating future directions, the test is: *can this self-register at render time instead of requiring a pre-render walk?* The current `parton` / `block` constructors pass that test — every spec self-registers when its module loads. Typed-handle codegen fails it. Keep that principle sharp — it's the architectural load-bearing idea and it's easy to erode one convenient walker at a time.
 
 ---
 

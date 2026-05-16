@@ -1,9 +1,9 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@react-cms/copies/components/ui/collapsible"
-import { ScrollArea } from "@react-cms/copies/components/ui/scroll-area"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@parton/copies/components/ui/collapsible"
+import { ScrollArea } from "@parton/copies/components/ui/scroll-area"
+import { cn } from "@parton/copies/lib/utils"
 import { ChevronDownIcon, PaperclipIcon } from "lucide-react"
 import type { ComponentProps } from "react"
 

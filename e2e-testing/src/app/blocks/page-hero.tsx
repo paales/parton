@@ -1,8 +1,8 @@
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
-import { cn } from "@react-cms/copies/lib/utils"
+import { block, type RenderArgs } from "@parton/framework"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
+import { cn } from "@parton/copies/lib/utils"
 
-export const PageHeroBlock = ReactCms.block(
+export const PageHeroBlock = block(
   function PageHeroRender({
     headline,
     subhead,

@@ -1,8 +1,8 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Spinner } from "@react-cms/copies/components/ui/spinner"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { Spinner } from "@parton/copies/components/ui/spinner"
+import { cn } from "@parton/copies/lib/utils"
 import { MicIcon, SquareIcon } from "lucide-react"
 import type { ComponentProps } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"

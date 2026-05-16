@@ -1,9 +1,9 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@react-cms/copies/components/ui/hover-card"
-import { Progress } from "@react-cms/copies/components/ui/progress"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@parton/copies/components/ui/hover-card"
+import { Progress } from "@parton/copies/components/ui/progress"
+import { cn } from "@parton/copies/lib/utils"
 import type { LanguageModelUsage } from "ai"
 import type { ComponentProps } from "react"
 import { createContext, useContext, useMemo } from "react"

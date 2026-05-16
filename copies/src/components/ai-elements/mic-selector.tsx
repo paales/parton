@@ -1,16 +1,16 @@
 "use client"
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state"
-import { Button } from "@react-cms/copies/components/ui/button"
+import { Button } from "@parton/copies/components/ui/button"
 import {
   Command,
   CommandEmpty,
   CommandInput,
   CommandItem,
   CommandList,
-} from "@react-cms/copies/components/ui/command"
-import { Popover, PopoverContent, PopoverTrigger } from "@react-cms/copies/components/ui/popover"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/command"
+import { Popover, PopoverContent, PopoverTrigger } from "@parton/copies/components/ui/popover"
+import { cn } from "@parton/copies/lib/utils"
 import { ChevronsUpDownIcon } from "lucide-react"
 import type { ComponentProps, ReactNode } from "react"
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"

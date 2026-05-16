@@ -9,12 +9,12 @@
  * pieces it shares (header, search areas, sprite helper).
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { Frame } from "@react-cms/framework/lib/frame.tsx"
+import { parton, type RenderArgs } from "@parton/framework"
+import { Frame } from "@parton/framework/lib/frame.tsx"
 import { client } from "../data.ts"
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { cn } from "@parton/copies/lib/utils"
 import { LoadMore as LoadMoreClient, PageSentinel } from "../components/load-more.tsx"
 import { PartialControls } from "../components/partial-controls.tsx"
 import { SearchToggle, SearchInput, SearchDialog } from "../components/search.tsx"
@@ -105,7 +105,7 @@ const POKEMON_GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4
 // folds it in automatically (call-site props are part of the
 // fingerprint).
 
-export const HeaderPartial = ReactCms.partial(
+export const HeaderPartial = parton(
   function HeaderRender({
     showControls,
     search,
@@ -128,12 +128,12 @@ export const HeaderPartial = ReactCms.partial(
 // ─── Search areas (page + frame scopes) ────────────────────────────────
 
 function makeSearchArea(scope: "page" | "frame") {
-  const Stage1 = ReactCms.partial(SearchStage1Render, {
+  const Stage1 = parton(SearchStage1Render, {
     selector: `#${scope}-stage-1`,
     cache: {},
     vary: ({ search: { q = "" } }) => ({ q }),
   })
-  const Stage2 = ReactCms.partial(SearchStage2Render, {
+  const Stage2 = parton(SearchStage2Render, {
     selector: `#${scope}-stage-2`,
     cache: {},
     vary: ({ search: { q = "" } }) => ({ q }),
@@ -143,7 +143,7 @@ function makeSearchArea(scope: "page" | "frame") {
       </div>
     ),
   })
-  const Stage3 = ReactCms.partial(SearchStage3Render, {
+  const Stage3 = parton(SearchStage3Render, {
     selector: `#${scope}-stage-3`,
     cache: {},
     vary: ({ search: { q = "" } }) => ({ q }),
@@ -154,7 +154,7 @@ function makeSearchArea(scope: "page" | "frame") {
     ),
   })
 
-  const Body = ReactCms.partial(SearchBodyRender, {
+  const Body = parton(SearchBodyRender, {
     selector: scope === "page" ? "#search-page .search-results" : "#search .search-results",
     vary: ({ search: { search, q = "" } }) => ({ search, q }),
   })
@@ -274,7 +274,7 @@ async function SearchStage3Render({ q }: { q: string } & RenderArgs) {
 // every page, so auto-deriving from the function name would collide.
 
 function makeListPagePartial(page: number) {
-  return ReactCms.partial(PokemonListPageRender, {
+  return parton(PokemonListPageRender, {
     selector: `#page-${page}` as const,
     vary: ({ search: { pages: pagesRaw } }) => {
       const pages = Math.max(1, Number(pagesRaw) || 1)
@@ -340,7 +340,7 @@ const ListPagePartials = Array.from({ length: MAX_LIST_PAGES }, (_, i) =>
   makeListPagePartial(i + 1),
 )
 
-const LoadMorePartial = ReactCms.partial(
+const LoadMorePartial = parton(
   function LoadMoreRender({ nextPage }: { nextPage: number } & RenderArgs) {
     return <LoadMoreClient nextPage={nextPage} />
   },
@@ -353,7 +353,7 @@ const LoadMorePartial = ReactCms.partial(
 
 // ─── Outer wrapper — matches /, composes the overview ─────────────────
 
-export const PokemonOverviewPage = ReactCms.partial(
+export const PokemonOverviewPage = parton(
   function PokemonOverviewRender({ parent }: RenderArgs) {
     return (
       <>

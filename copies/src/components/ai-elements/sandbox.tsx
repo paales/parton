@@ -1,8 +1,8 @@
 "use client"
 
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@react-cms/copies/components/ui/collapsible"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@react-cms/copies/components/ui/tabs"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@parton/copies/components/ui/collapsible"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@parton/copies/components/ui/tabs"
+import { cn } from "@parton/copies/lib/utils"
 import type { ToolUIPart } from "ai"
 import { ChevronDownIcon, Code } from "lucide-react"
 import type { ComponentProps } from "react"

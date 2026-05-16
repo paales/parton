@@ -1,5 +1,5 @@
 import "./styles.css"
-import { PartialRoot } from "@react-cms/framework"
+import { PartialRoot } from "@parton/framework"
 
 export function Root() {
   return (

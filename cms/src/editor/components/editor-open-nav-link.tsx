@@ -1,11 +1,11 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 // Deep-import from `cms-constants.ts` (zero side-effect imports) — see
 // the matching note on `editor-open-link.tsx` for why this avoids the
 // `node:async_hooks` evaluation that the runtime barrel forces.
-import { EDITOR_COOKIE } from "@react-cms/framework/runtime/cms-constants.ts"
+import { EDITOR_COOKIE } from "@parton/framework/runtime/cms-constants.ts"
 
 /**
  * Variant of {@link EditorOpenLink} that navigates to a different URL

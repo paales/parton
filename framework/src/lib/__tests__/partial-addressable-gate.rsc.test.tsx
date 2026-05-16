@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { ReactCms, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
+import { parton, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
 
@@ -52,13 +52,13 @@ describe("addressable gate — wire fp emission", () => {
 
     // Non-addressable child: no `selector`, no `vary`, no `match`.
     // Catalog id auto-derives to "gate-child" from Render.name.
-    const Child = ReactCms.partial(function GateChildRender(_: RenderArgs) {
+    const Child = parton(function GateChildRender(_: RenderArgs) {
       return <span data-testid="gate-child-body">child</span>
     })
 
     // Addressable parent: explicit `selector` AND `match`. The
     // parent IS reachable for refetch and SHOULD emit an fp.
-    const Parent = ReactCms.partial(
+    const Parent = parton(
       function GateParentRender({ parent }: RenderArgs) {
         return (
           <div data-testid="gate-parent-body">
@@ -98,14 +98,14 @@ describe("addressable gate — wire fp emission", () => {
 
     // Same Render, same lack of vary/match — but `selector` is
     // explicit. Author opted in to addressability; fp on the wire.
-    const Child = ReactCms.partial(
+    const Child = parton(
       function SelectorOptInChildRender(_: RenderArgs) {
         return <span data-testid="opt-in-body">child</span>
       },
       { selector: ".opt-in-child" },
     )
 
-    const Parent = ReactCms.partial(
+    const Parent = parton(
       function SelectorOptInParentRender({ parent }: RenderArgs) {
         return (
           <div>
@@ -130,14 +130,14 @@ describe("addressable gate — wire fp emission", () => {
     clearRegistry("all")
 
     // No selector, no match, but `vary` is declared. Author opted in.
-    const VaryChild = ReactCms.partial(
+    const VaryChild = parton(
       function VaryOptInChildRender(_: RenderArgs) {
         return <span data-testid="vary-opt-in-body">child</span>
       },
       { vary: ({ search: { v = "x" } }) => ({ v }) },
     )
 
-    const Parent = ReactCms.partial(
+    const Parent = parton(
       function VaryOptInParentRender({ parent }: RenderArgs) {
         return (
           <div>
@@ -167,7 +167,7 @@ describe("addressable gate — wire fp emission", () => {
     // child's vary contribution through the descendant fold.
     // Without the fold, fp-skipping the parent would serve a
     // stale child body when only the cookie changed.
-    const FoldChild = ReactCms.partial(
+    const FoldChild = parton(
       function FoldChildRender({ flag }: { flag: string } & RenderArgs) {
         return <span data-testid="fold-body">flag={flag}</span>
       },
@@ -176,7 +176,7 @@ describe("addressable gate — wire fp emission", () => {
       },
     )
 
-    const Parent = ReactCms.partial(
+    const Parent = parton(
       function FoldParentRender({ parent }: RenderArgs) {
         return (
           <div>

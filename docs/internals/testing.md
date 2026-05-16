@@ -37,9 +37,9 @@ state buckets (`<Cache>` store, registry, sessions, GraphQL cache).
 The basic shape of a partial-system test:
 
 ```ts
-import { ReactCms, ROOT } from "../../lib"
+import { parton, ROOT } from "../../lib"
 
-const TestPartial = ReactCms.partial(
+const TestPartial = parton(
   ({ value }) => <span>{value}</span>,
   { selector: "#test", vary: ({ request }) => ({ value: new URL(request.url).searchParams.get("v") ?? "" }) }
 )

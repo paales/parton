@@ -1,8 +1,8 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@react-cms/copies/components/ui/hover-card"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@parton/copies/components/ui/hover-card"
+import { cn } from "@parton/copies/lib/utils"
 import type { FileUIPart, SourceDocumentUIPart } from "ai"
 import {
   FileTextIcon,

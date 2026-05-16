@@ -18,12 +18,12 @@
     "jsx": "react-jsx",
     "strict": true,
     "paths": {
-      "@react-cms/framework": ["./framework/index.ts"],
-      "@react-cms/framework/*": ["./framework/src/*"],
-      "@react-cms/cms": ["./cms/index.ts"],
-      "@react-cms/cms/*": ["./cms/src/*"],
-      "@react-cms/copies": ["./copies/index.ts"],
-      "@react-cms/copies/*": ["./copies/src/*"]
+      "@parton/framework": ["./framework/index.ts"],
+      "@parton/framework/*": ["./framework/src/*"],
+      "@parton/cms": ["./cms/index.ts"],
+      "@parton/cms/*": ["./cms/src/*"],
+      "@parton/copies": ["./copies/index.ts"],
+      "@parton/copies/*": ["./copies/src/*"]
     }
   }
 }

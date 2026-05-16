@@ -1,7 +1,7 @@
 "use client"
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state"
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 import type { Experimental_TranscriptionResult as TranscriptionResult } from "ai"
 import type { ComponentProps, ReactNode } from "react"
 import { createContext, useCallback, useContext, useMemo } from "react"

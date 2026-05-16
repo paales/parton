@@ -1,8 +1,8 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@react-cms/copies/components/ui/tooltip"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@parton/copies/components/ui/tooltip"
+import { cn } from "@parton/copies/lib/utils"
 import type { LucideIcon } from "lucide-react"
 import { XIcon } from "lucide-react"
 import type { ComponentProps, HTMLAttributes } from "react"

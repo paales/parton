@@ -5,7 +5,7 @@ import { ArrowLeft, X } from "lucide-react"
 import {
   useNavigation,
   useScrollRestore,
-} from "@react-cms/framework/lib/partial-client.tsx"
+} from "@parton/framework/lib/partial-client.tsx"
 import {
   Drawer,
   DrawerContent,
@@ -13,9 +13,9 @@ import {
   DrawerTitle,
   DrawerDescription,
   DrawerClose,
-} from "@react-cms/copies/components/ui/drawer"
-import { Button } from "@react-cms/copies/components/ui/button"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/drawer"
+import { Button } from "@parton/copies/components/ui/button"
+import { cn } from "@parton/copies/lib/utils"
 
 type DrawerDirection = "left" | "right" | "top" | "bottom"
 

@@ -1,4 +1,4 @@
-# `ReactCms.partial(Render, …)` — define-step constructor
+# `parton(Render, …)` — define-step constructor
 
 > **Superseded 2026-05-12 by [`docs/adr/0001-partial-block-frame-split.md`](../adr/0001-partial-block-frame-split.md)
 > + [`docs/reference/partial.md`](../reference/partial.md) + [`docs/reference/block.md`](../reference/block.md).**
@@ -7,7 +7,7 @@
 > The proposal landed, then the 2026-05-11 split refactor reshaped the
 > surface again: `cmsId`, `errorWith`, `frame`, `frameUrl` are no
 > longer `PartialOptions`; `cms` is no longer on `VaryScope` (CMS reads
-> now live on `ReactCms.block`'s `schema` callback); `<Frame>` is a
+> now live on `block`'s `schema` callback); `<Frame>` is a
 > plain component, not a partial option. Keep this note for the
 > pre-split design rationale; consult the reference docs for current
 > API shape.
@@ -20,7 +20,7 @@ spec has on the request, route, or CMS lives in a single sync `vary`
 function whose result is also the cache-key surface.
 
 ```tsx
-const PokemonPage = ReactCms.partial(PokemonRender, '/pokemon/:id')
+const PokemonPage = parton(PokemonRender, '/pokemon/:id')
 
 function PokemonRender({ id, parent }: { id: string; parent: PartialCtx }) {
   return <article>...{id}...</article>
@@ -36,12 +36,10 @@ Three lines for a route-driven page. No tracked accessors. No
 ## Constructor signature
 
 ```ts
-namespace ReactCms {
-  function partial<V, P extends V & { parent: PartialCtx }>(
-    render: (props: P) => ReactNode,
-    matchOrOptions: string | PartialOptions<V>,
-  ): React.FC<{ parent: PartialCtx }>
-}
+function parton<V, P extends V & { parent: PartialCtx }>(
+  render: (props: P) => ReactNode,
+  matchOrOptions: string | PartialOptions<V>,
+): React.FC<{ parent: PartialCtx }>
 
 interface PartialOptions<V> {
   match?: string                                       // pathname pattern
@@ -78,8 +76,8 @@ interface CmsReadSurface {
 **Tier 1 — string shorthand.** Pure pattern-matched route:
 
 ```tsx
-const HomePage = ReactCms.partial(Home, '/')
-const PokemonPage = ReactCms.partial(PokemonRender, '/pokemon/:id')
+const HomePage = parton(Home, '/')
+const PokemonPage = parton(PokemonRender, '/pokemon/:id')
 ```
 
 Pattern fails to match → spec doesn't render. Match params (`id`)
@@ -89,7 +87,7 @@ flow straight into the render function as props.
 pattern entirely and use vary alone:
 
 ```tsx
-const ProductHero = ReactCms.partial(ProductHeroRender, {
+const ProductHero = parton(ProductHeroRender, {
   match: '/p/:slug',
   cmsId: 'product-hero',
   cache: { maxAge: 60 },
@@ -170,7 +168,7 @@ contains `{cookie: "user_id"}` with the matching value."
 
 ## Self-registration
 
-`ReactCms.partial(...)` called at module scope registers itself in the
+`parton(...)` called at module scope registers itself in the
 catalog as a side-effect — keyed by `cmsId` (or auto-derived
 selector). HMR replaces the prior spec by id. Catalog prerender
 becomes:

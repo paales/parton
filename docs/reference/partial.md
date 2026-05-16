@@ -1,4 +1,4 @@
-# `ReactCms.partial(Render, …)`
+# `parton(Render, …)`
 
 The framework's base addressable-render-unit constructor. A spec is
 constructed once at module scope from a `Render` function and an
@@ -8,16 +8,16 @@ session — lives in a single sync `vary` function whose result is the
 cache-key surface.
 
 > **Three constructors, one engine.** `partial` is the base case.
-> Slot-placeable CMS-driven units use [`ReactCms.block`](./block.md);
+> Slot-placeable CMS-driven units use [`block`](./block.md);
 > frame-scope openers use the `<Frame>` component
 > ([frames-navigation.md](./frames-navigation.md)). All three produce
 > partials at runtime — same registry, same fingerprint pipeline,
 > same refetch path.
 
 ```tsx
-import { ReactCms, ROOT, type RenderArgs } from "./lib"
+import { parton, ROOT, type RenderArgs } from "./lib"
 
-const PokemonPage = ReactCms.partial(PokemonRender, "/pokemon/:id")
+const PokemonPage = parton(PokemonRender, "/pokemon/:id")
 
 function PokemonRender({ id, parent }: { id: string } & RenderArgs) {
   return <article>...{id}...</article>
@@ -34,8 +34,8 @@ When a string is passed as the second argument, it's treated as the
 flow into `Render`'s props directly.
 
 ```tsx
-const HomePage = ReactCms.partial(Home, "/")
-const PokemonPage = ReactCms.partial(PokemonRender, "/pokemon/:id")
+const HomePage = parton(Home, "/")
+const PokemonPage = parton(PokemonRender, "/pokemon/:id")
 ```
 
 ### Match grammar — what flows into props
@@ -63,7 +63,7 @@ vary: ({ params }) => ({ id: Number(params.id) })
 ## Tier 2 — options object
 
 ```tsx
-const ProductHero = ReactCms.partial(ProductHeroRender, {
+const ProductHero = parton(ProductHeroRender, {
   match: "/p/:slug",
   cache: { maxAge: 60 },
   vary: ({ params, search: { variant = "default" } }) => ({
@@ -81,7 +81,7 @@ async function ProductHeroRender({
 ```
 
 For CMS-driven content (text, images, references), use
-[`ReactCms.block`](./block.md) with a `schema` callback.
+[`block`](./block.md) with a `schema` callback.
 
 `match` runs first; on miss, `vary` doesn't run. On match, the
 pattern's params land in `vary`'s `params` arg. When `vary` returns
@@ -104,7 +104,7 @@ interface PartialOptions<V> {
 | Option | Notes |
 |---|---|
 | `match` | URLPattern pathname (or full `URLPatternInit`). `/p/:slug`, `/p/:slug/reviews/:page`, `/inspect/*` (descendants only), `/inspect{/*}?` (bare + descendants). Pattern miss → spec emits nothing. Anonymous `*` captures don't flow into the default fingerprint — only named groups (`:foo`) do. |
-| `vary` | Sync function. Receives `{ url, pathname, search, cookies, headers, params, session }`. Returns the request-dimensions dependency surface or `null`. **No `cms` here** — CMS reads live on `ReactCms.block`'s `schema` callback. |
+| `vary` | Sync function. Receives `{ url, pathname, search, cookies, headers, params, session }`. Returns the request-dimensions dependency surface or `null`. **No `cms` here** — CMS reads live on `block`'s `schema` callback. |
 | `selector` | One or more refetch labels. Plain strings; leading `#` / `.` are cosmetic and stripped on parse (`"#hero"` and `"hero"` are equivalent). Defaults to `<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. The first label is the spec's catalog id; additional labels are extra fan-out targets. Multiple placements of the same spec share their labels; `nav.reload({selector: "label"})` hits every carrier. |
 | `cache` | See [`cache.md`](./cache.md). |
 | `defer` | `true` for app-driven, an activator element to wire automatically. |
@@ -127,7 +127,7 @@ interface VaryScope {
 
 `vary` is strictly request-dimensions: URL fields, cookies, headers,
 match params, session values. CMS content reads happen on
-[`ReactCms.block`](./block.md)'s `schema` callback (which receives a
+[`block`](./block.md)'s `schema` callback (which receives a
 `{ cms }` scope) — the framework folds the resolved CMS shape into
 the block's fingerprint via `cmsFingerprintContribution` independently
 of whether the block's render touched specific fields.
@@ -166,7 +166,7 @@ params + `RenderArgs`). Use it to skip retyping the same shape across
 sibling factories or hooks:
 
 ```tsx
-const Hero = ReactCms.partial(HeroRender, { match: "/pokemon/:id" })
+const Hero = parton(HeroRender, { match: "/pokemon/:id" })
 type HeroProps = typeof Hero.props          // { id: string } & RenderArgs
 function HeroRender({ id }: HeroProps) { … }
 
@@ -186,7 +186,7 @@ options. The result is a callable builder that exposes `.props` for
 forward-reference inference:
 
 ```tsx
-const HeroBuilder = ReactCms.partial({ match: "/pokemon/:id" })
+const HeroBuilder = parton({ match: "/pokemon/:id" })
 function HeroRender(p: typeof HeroBuilder.props) {
   return <article>#{p.id}</article>
 }
@@ -198,7 +198,7 @@ it just orders the type plumbing differently to dodge the cycle.
 
 ### Call-site prop pass-through
 
-`ReactCms.partial(Render, …)` feels like `React.memo(Render)`: the
+`parton(Render, …)` feels like `React.memo(Render)`: the
 returned component's prop signature is Render's prop signature minus
 the keys `vary` already provides minus the framework-injected keys.
 TypeScript subtracts both, so the call site is exactly the props the
@@ -206,7 +206,7 @@ parent has to supply.
 
 ```tsx
 // vary fills `pokemonId` → call site only takes `parent`
-const Hero = ReactCms.partial(HeroRender, {
+const Hero = parton(HeroRender, {
   match: "/pokemon/:id",
   vary: ({ params }) => ({ pokemonId: Number(params.id) }),
 })
@@ -216,7 +216,7 @@ function HeroRender({ pokemonId }: { pokemonId: number } & RenderArgs) { … }
 
 ```tsx
 // no vary → `pokemonId` is required at the call site
-const Hero = ReactCms.partial(function HeroRender({
+const Hero = parton(function HeroRender({
   pokemonId,
 }: { pokemonId: number } & RenderArgs) { … })
 <Hero parent={parent} pokemonId={9} />
@@ -227,7 +227,7 @@ the URL once, then threads typed props down to its children without
 forcing each child to re-parse the URL.
 
 ```tsx
-const PokemonDetailPage = ReactCms.partial(
+const PokemonDetailPage = parton(
   function PokemonDetailRender({ id, parent }: { id: string } & RenderArgs) {
     return (
       <>
@@ -242,7 +242,7 @@ const PokemonDetailPage = ReactCms.partial(
 
 // Inner specs have no `match`, no `vary` — the wrapper gates the
 // route once and passes `id` as a prop.
-const Hero = ReactCms.partial(async function HeroRender({
+const Hero = parton(async function HeroRender({
   id,
 }: { id: string } & RenderArgs) {
   const data = await client.request(PokemonHeroQuery, { id: Number(id) })
@@ -269,7 +269,7 @@ so refetches carry the props they were originally rendered with.
 
 Slot composition is a block-spec concern. Partials don't have a
 `schema` callback and can't read CMS slot entries — if you need a unit
-that hosts CMS-managed children, use [`ReactCms.block`](./block.md)
+that hosts CMS-managed children, use [`block`](./block.md)
 and declare the slot via `cms.blocks(slot, selector?)` /
 `cms.block(slot, selector?)` inside `schema`. A partial that happens
 to render a singleton block can still place it directly via JSX
@@ -388,7 +388,7 @@ primitive — an outer wrapper spec gates the URL once, its children
 are nested specs that take their data via JSX props or `vary`.
 
 ```tsx
-const PokemonDetailPage = ReactCms.partial(
+const PokemonDetailPage = parton(
   function PokemonDetailRender({ id, parent }: { id: string } & RenderArgs) {
     return (
       <>
@@ -420,11 +420,11 @@ against that set; if no pattern matches, it calls `notFound()`,
 which `Root` catches and turns into HTTP 404 + `<NotFoundPage>`.
 
 ```tsx
-import { ReactCms, getRegisteredMatchPatterns } from "./lib"
+import { parton, getRegisteredMatchPatterns } from "./lib"
 import { matchRoutePattern } from "./framework/context"
 import { notFound } from "./framework/errors"
 
-export const NotFoundFallback = ReactCms.partial(
+export const NotFoundFallback = parton(
   function NotFoundFallbackRender() {
     notFound()
     return null
@@ -444,19 +444,19 @@ export const NotFoundFallback = ReactCms.partial(
 <NotFoundFallback parent={ROOT} />
 ```
 
-The set is populated as a side-effect of every `ReactCms.partial(…,
+The set is populated as a side-effect of every `parton(…,
 { match: … })` call; no explicit registration needed.
 
 ## Sharp edges
 
-- **Slot-placeable units use `ReactCms.block`.** `ReactCms.partial`
+- **Slot-placeable units use `block`.** `parton`
   produces non-slot-placeable specs — they're placed by JSX, addressed
   by selector. Slots look up their entries through the type catalog,
   which only `block`-constructed specs register in. See
   [`block.md`](./block.md).
 - **CMS reads live on blocks, not partials.** `vary` is strictly
   request-dimensions (URL / cookies / headers / session). To bind a
-  partial's content to the CMS, use `ReactCms.block` with `schema`
+  partial's content to the CMS, use `block` with `schema`
   — that's where `cms.text(...)`, `cms.blocks(slot)`, etc. live.
 - **`closest` / ancestor `provides`.** Punted. Specs that need
   ancestor data should accept it as a render prop (manual threading

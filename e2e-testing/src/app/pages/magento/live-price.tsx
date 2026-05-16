@@ -1,4 +1,4 @@
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { parton, type RenderArgs } from "@parton/framework"
 import { RefreshPriceButton } from "./refresh-price-button.tsx"
 
 export function LivePriceFallback({
@@ -29,7 +29,7 @@ export function LivePriceFallback({
  * a goal here — a single price refresh is functionally the same as
  * refreshing all.
  */
-export const LivePricePartial = ReactCms.partial(
+export const LivePricePartial = parton(
   async function LivePriceRender({
     sku,
     basePrice,

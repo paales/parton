@@ -1,5 +1,5 @@
 {
-  "name": "@react-cms/e2e-magento",
+  "name": "@parton/e2e-magento",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@react-cms/framework": "workspace:*",
+    "@parton/framework": "workspace:*",
     "react": "19.3.0-canary-00f063c3-20260415",
     "react-dom": "19.3.0-canary-00f063c3-20260415"
   },

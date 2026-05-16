@@ -7,8 +7,8 @@
  * once per id.
  */
 
-import { ReactCms, type PartialCtx, type RenderArgs } from "@react-cms/framework"
-import { Frame } from "@react-cms/framework/lib/frame.tsx"
+import { parton, type PartialCtx, type RenderArgs } from "@parton/framework"
+import { Frame } from "@parton/framework/lib/frame.tsx"
 import { ChatMessage } from "./piece.tsx"
 import {
   AutoScrollToBottom,
@@ -60,7 +60,7 @@ function computeNextHref(msgIds: string[]): string | null {
 // Pre-built message specs — one per fileId. Each gates by checking
 // whether its fileId is in the `?msgs=` list.
 const MessagePartials = AVAILABLE_FILES.map((fileId) =>
-  ReactCms.partial(
+  parton(
     function MessageRender({ cursor }: { cursor: number } & RenderArgs) {
       return <ChatMessage fileId={fileId} cursor={cursor} />
     },
@@ -77,7 +77,7 @@ const MessagePartials = AVAILABLE_FILES.map((fileId) =>
   ),
 )
 
-export const ChatListPartial = ReactCms.partial(
+export const ChatListPartial = parton(
   function ChatListRender({ msgIds, parent }: { msgIds: string[] } & RenderArgs) {
     return (
       <div data-testid="chat-list" className="min-h-30 flex-1 overflow-y-auto px-3 py-2">
@@ -102,7 +102,7 @@ export const ChatListPartial = ReactCms.partial(
   },
 )
 
-export const ChatOverlayPartial = ReactCms.partial(
+export const ChatOverlayPartial = parton(
   function ChatOverlayRender({
     open,
     nextHref,

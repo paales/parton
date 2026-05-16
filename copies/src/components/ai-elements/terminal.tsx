@@ -1,7 +1,7 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { cn } from "@parton/copies/lib/utils"
 import Ansi from "ansi-to-react"
 import { CheckIcon, CopyIcon, TerminalIcon, Trash2Icon } from "lucide-react"
 import type { ComponentProps, HTMLAttributes } from "react"

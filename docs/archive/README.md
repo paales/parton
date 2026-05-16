@@ -63,7 +63,7 @@ For that, start at [`../reference/intro.md`](../reference/intro.md).
 | `PARTIAL_CACHE_DESIGN.md` | Proposal to fold `<Cache>` into `<Partial cache={…}>`. Implemented; cache shape further reshaped to a Cache-Control object. |
 | `STREAMING_DEBUG_NOTES.md` | 584 lines of pre-refactor debugging across the streaming / cache / substitute paths. Surviving insights are folded into the code and the lessons docs. |
 | `USE_PARTIAL_AND_INPUTS.md` | Reference for `usePartial` / `__inputs` / `usePartialParams` / `silentReplace` — all removed 2026-04-21. Replaced by one `useNavigation()` surface. |
-| `VARY_RENDER_API.md` | Original `<Partial vary={...} render={...}>` proposal (2026-04-27). Superseded by `PARTIAL_DEFINE_STEP_API.md` — same vary/render core, moved from a call-site prop pair to a `ReactCms.partial(Render, …)` module-scope constructor. |
+| `VARY_RENDER_API.md` | Original `<Partial vary={...} render={...}>` proposal (2026-04-27). Superseded by `PARTIAL_DEFINE_STEP_API.md` — same vary/render core, moved from a call-site prop pair to a `parton(Render, …)` module-scope constructor. |
 | `LESSONS.md` | Refetch-mechanics lessons 2026-04-16 → 2026-04-17 (bare-key Suspense reconciliation, fingerprint-skip, transition default). |
 | `LESSONS_FROM_REFACTOR.md` | The 2026-04-18 unified-path refactor. |
 | `LESSONS_2026-04-19.md` | `seedRegistry` and `buildTemplate` removal, Flight composite-key on placeholders, `cloneElement` drilling through wrappers. |

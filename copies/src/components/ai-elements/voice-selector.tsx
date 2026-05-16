@@ -1,7 +1,7 @@
 "use client"
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state"
-import { Button } from "@react-cms/copies/components/ui/button"
+import { Button } from "@parton/copies/components/ui/button"
 import {
   Command,
   CommandDialog,
@@ -12,10 +12,10 @@ import {
   CommandList,
   CommandSeparator,
   CommandShortcut,
-} from "@react-cms/copies/components/ui/command"
-import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@react-cms/copies/components/ui/dialog"
-import { Spinner } from "@react-cms/copies/components/ui/spinner"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/command"
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@parton/copies/components/ui/dialog"
+import { Spinner } from "@parton/copies/components/ui/spinner"
+import { cn } from "@parton/copies/lib/utils"
 import {
   CircleSmallIcon,
   MarsIcon,

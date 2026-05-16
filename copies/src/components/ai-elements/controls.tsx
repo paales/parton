@@ -1,6 +1,6 @@
 "use client"
 
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 import { Controls as ControlsPrimitive } from "@xyflow/react"
 import type { ComponentProps } from "react"
 

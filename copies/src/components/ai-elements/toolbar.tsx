@@ -1,4 +1,4 @@
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 import { NodeToolbar, Position } from "@xyflow/react"
 import type { ComponentProps } from "react"
 

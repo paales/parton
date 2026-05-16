@@ -3,9 +3,9 @@
  * padding/wrap. Children plug in via the `items` slot (any block).
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { block, type RenderArgs } from "@parton/framework"
 import type { ReactNode } from "react"
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 
 const DIRECTIONS = ["column", "row"] as const
 const ALIGN_VALUES = ["start", "center", "end", "stretch"] as const
@@ -29,7 +29,7 @@ const JUSTIFY_CONTENT: Record<(typeof JUSTIFY_VALUES)[number], string> = {
   around: "justify-around",
 }
 
-export const GroupBlock = ReactCms.block(
+export const GroupBlock = block(
   function GroupRender({
     direction,
     align,

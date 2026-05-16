@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react"
-import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Input } from "@react-cms/copies/components/ui/input"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { Button } from "@parton/copies/components/ui/button"
+import { Input } from "@parton/copies/components/ui/input"
 
 /**
  * Search toggle buttons for the header.

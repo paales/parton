@@ -1,9 +1,9 @@
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { cn } from "@react-cms/copies/lib/utils"
+import { block, type RenderArgs } from "@parton/framework"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { cn } from "@parton/copies/lib/utils"
 
-export const PageGreetingBlock = ReactCms.block(
+export const PageGreetingBlock = block(
   function PageGreetingRender({
     headline,
     body,

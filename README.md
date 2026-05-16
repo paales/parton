@@ -1,11 +1,11 @@
-# React CMS
+# parton
 
 A React Server Components based framework layer for pages composed
 of independently re-renderable, addressable, cacheable subtrees.
 Research project — does this primitive shape hold up as a CMS data
 layer?
 
-The primitive is `ReactCms.partial(Render, options)` — a define-step
+The primitive is `parton(Render, options)` — a define-step
 constructor that returns a placeable React component. Pages are JSX
 trees of those components; each one self-registers at render time,
 computes a structural fingerprint, and is independently refetchable.
@@ -14,7 +14,7 @@ re-executing any ancestor — by replaying registry snapshots. State
 that varies between refetches flows through URLs (page or frame) and
 is read server-side via a sync `vary` callback whose return value is
 also the cache-key surface. Slot-placeable, CMS-driven units use
-`ReactCms.block`; per-name URL scopes are opened with `<Frame>`.
+`block`; per-name URL scopes are opened with `<Frame>`.
 
 For the full mental model, start with [`docs/reference/intro.md`](./docs/reference/intro.md).
 

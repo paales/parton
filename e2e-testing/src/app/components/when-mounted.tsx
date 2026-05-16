@@ -1,8 +1,8 @@
 "use client"
 
 import { useMemo } from "react"
-import { useActivate, type ActivatorFire } from "@react-cms/framework/lib/partial-client.tsx"
-import type { ActivatorProps } from "@react-cms/framework"
+import { useActivate, type ActivatorFire } from "@parton/framework/lib/partial-client.tsx"
+import type { ActivatorProps } from "@parton/framework"
 
 /**
  * Activator: fires immediately when the enclosing Partial mounts.

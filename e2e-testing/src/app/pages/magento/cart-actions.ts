@@ -2,7 +2,7 @@
 
 import { client } from "../../magento-data.ts"
 import { graphql } from "../../magento-graphql.ts"
-import { readCookie, setCookie } from "@react-cms/framework"
+import { readCookie, setCookie } from "@parton/framework"
 
 const CreateEmptyCart = graphql(`
   mutation CreateEmptyCart {

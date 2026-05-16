@@ -1,8 +1,8 @@
 "use client"
 
 import { useTransition } from "react"
-import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
-import { Button } from "@react-cms/copies/components/ui/button"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { Button } from "@parton/copies/components/ui/button"
 
 /**
  * Client-side buttons to trigger refetches against the cache-demo

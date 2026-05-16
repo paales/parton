@@ -1,7 +1,7 @@
 "use client"
 
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { cn } from "@parton/copies/lib/utils"
 import { ArrowRightIcon, MinusIcon, PackageIcon, PlusIcon } from "lucide-react"
 import type { HTMLAttributes } from "react"
 import { createContext, useContext, useMemo } from "react"

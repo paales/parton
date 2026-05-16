@@ -1,11 +1,11 @@
-# `ReactCms.block(Render, …)`
+# `block(Render, …)`
 
 Slot-placeable, type-catalog-registered partial. A block is what slots
 look up by `type` to render their entries; its `schema` callback
 declares both CMS content reads and child slot composition.
 
 ```tsx
-const HeroBlock = ReactCms.block(
+const HeroBlock = block(
   function HeroRender({ headline, subhead, tone, parent }) {
     return (
       <article data-tone={tone}>
@@ -53,7 +53,7 @@ interface BlockOptions<V, S> {
    *  Render's prop bag alongside `vary`'s. */
   schema?: (scope: { cms: CmsReadSurface }) => S
   /** Request-dimensions vary (URL / cookies / headers / session).
-   *  Same shape as on `ReactCms.partial`. Rare on blocks — content
+   *  Same shape as on `parton`. Rare on blocks — content
    *  side lives on `schema`. */
   vary?: (scope: VaryScope) => V | null
   cache?: CacheOptions
@@ -67,7 +67,7 @@ interface BlockOptions<V, S> {
 | `selector` | One or more refetch labels. The first label is the spec's catalog id (also the CMS storage row for singletons). Slot-allow filters and `nav.reload({selector: "…"})` match any label. Cosmetic `#`/`.` prefixes are stripped. |
 | `schema` | Sync. Returns content reads (`cms.text(...)`, `cms.enum(...)`) and child slot compositions (`cms.blocks(...)`, `cms.block(...)`). Both flow into Render as props. |
 | `vary` | Request-dim deps. Most blocks don't have request deps; their content comes from `schema`. |
-| `cache`, `defer`, `fallback` | Same as `ReactCms.partial`. |
+| `cache`, `defer`, `fallback` | Same as `parton`. |
 
 ## `cms` surface on schema
 
@@ -108,7 +108,7 @@ internally, via a private channel — so the block's schema reads
 content from the right CMS row. Author code never touches the id.
 
 ```tsx
-const PageRoot = ReactCms.block(
+const PageRoot = block(
   function PageRootRender({ body }) {
     return <main>{body}</main>
   },
@@ -130,7 +130,7 @@ content row matches its spec id (the first selector label, or
 `Render.name`-derived):
 
 ```tsx
-const AppNav = ReactCms.block(NavRootRender, {
+const AppNav = block(NavRootRender, {
   selector: "#app-nav",                                   // id "app-nav"
   schema: ({ cms }) => ({ links: cms.blocks("links", "nav-item") }),
 })
@@ -143,12 +143,12 @@ The spec reads from CMS row `"app-nav"`. External code refetches via
 
 ### 3. By direct JSX (non-CMS, fan-out only)
 
-A spec without CMS binding doesn't need `ReactCms.block` at all — use
-`ReactCms.partial`. The spec gets a refetch label via `selector`;
+A spec without CMS binding doesn't need `block` at all — use
+`parton`. The spec gets a refetch label via `selector`;
 multiple placements share the label and refetch together:
 
 ```tsx
-const LivePrice = ReactCms.partial(LivePriceRender, { selector: "price" })
+const LivePrice = parton(LivePriceRender, { selector: "price" })
 
 {products.map(p => (
   <LivePrice key={p.sku} parent={parent} sku={p.sku} basePrice={p.price} />
@@ -167,7 +167,7 @@ JSX placements sharing an id) it refreshes the spec's whole fan-out.
 
 ```tsx
 "use client"
-import { useEnclosingPartialId, useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
+import { useEnclosingPartialId, useNavigation } from "@parton/framework/lib/partial-client.tsx"
 
 export function RefreshSelfButton() {
   const myId = useEnclosingPartialId()

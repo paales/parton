@@ -4,8 +4,8 @@ import { useState } from "react"
 import {
   useEnclosingPartialId,
   useNavigation,
-} from "@react-cms/framework/lib/partial-client.tsx"
-import { Button } from "@react-cms/copies/components/ui/button"
+} from "@parton/framework/lib/partial-client.tsx"
+import { Button } from "@parton/copies/components/ui/button"
 
 /**
  * Per-card refresh button. Reads the enclosing partial instance's id

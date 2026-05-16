@@ -5,7 +5,7 @@ import type { ReactNode } from "react"
 // this file is `"use client"` — going through the cross-package barrel
 // mis-resolves the Flight reference. See the caveat in
 // `framework/index.ts`.
-import { setSessionValue } from "@react-cms/framework/runtime/session-actions.ts"
+import { setSessionValue } from "@parton/framework/runtime/session-actions.ts"
 
 /**
  * Editor tweak toggle backed by the framework's session-value

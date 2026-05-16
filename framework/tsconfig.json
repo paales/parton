@@ -3,12 +3,12 @@
   "compilerOptions": {
     "paths": {
       "@/*": ["./src/*"],
-      "@react-cms/framework": ["./index.ts"],
-      "@react-cms/framework/*": ["./src/*"],
-      "@react-cms/cms": ["../cms/index.ts"],
-      "@react-cms/cms/*": ["../cms/src/*"],
-      "@react-cms/copies": ["../copies/index.ts"],
-      "@react-cms/copies/*": ["../copies/src/*"]
+      "@parton/framework": ["./index.ts"],
+      "@parton/framework/*": ["./src/*"],
+      "@parton/cms": ["../cms/index.ts"],
+      "@parton/cms/*": ["../cms/src/*"],
+      "@parton/copies": ["../copies/index.ts"],
+      "@parton/copies/*": ["../copies/src/*"]
     }
   },
   "include": ["src", "index.ts"]

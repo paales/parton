@@ -12,7 +12,7 @@ miss).
 
 1. `PartialRoot` opens a request-scoped registry context (`mode:
    "streaming"`).
-2. The page body runs; every `ReactCms.partial(...)`-returned
+2. The page body runs; every `parton(...)`-returned
    component encountered renders fresh.
 3. Each spec computes its fingerprint and either:
    - Skips (emits a placeholder) when its fingerprint matches the
@@ -134,7 +134,7 @@ The fp folds in:
 - vary result (stable-stringified)
 - call-site JSX props (`extraProps`)
 - frame URL (own and ambient)
-- CMS resolved fields contribution (for `ReactCms.block` specs;
+- CMS resolved fields contribution (for `block` specs;
   folded in via the wrapper's `vary` augmentation, keyed by the
   instance's `__instanceId`)
 - every previously-registered descendant spec's `varyKey` snapshot,

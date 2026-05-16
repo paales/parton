@@ -1,9 +1,9 @@
 "use client"
 
-import { Avatar, AvatarFallback } from "@react-cms/copies/components/ui/avatar"
-import { Button } from "@react-cms/copies/components/ui/button"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@react-cms/copies/components/ui/collapsible"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Avatar, AvatarFallback } from "@parton/copies/components/ui/avatar"
+import { Button } from "@parton/copies/components/ui/button"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@parton/copies/components/ui/collapsible"
+import { cn } from "@parton/copies/lib/utils"
 import { CheckIcon, CopyIcon, FileIcon, GitCommitIcon, MinusIcon, PlusIcon } from "lucide-react"
 import type { ComponentProps, HTMLAttributes } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"

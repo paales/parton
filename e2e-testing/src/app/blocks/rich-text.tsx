@@ -1,6 +1,6 @@
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { block, type RenderArgs } from "@parton/framework"
 
-export const RichTextBlock = ReactCms.block(
+export const RichTextBlock = block(
   function RichTextRender({ body }: { body: string } & RenderArgs) {
     return (
       <div

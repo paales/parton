@@ -1,7 +1,7 @@
 "use client"
 
-import { useActivate } from "@react-cms/framework/lib/partial-client.tsx"
-import type { ActivatorProps } from "@react-cms/framework"
+import { useActivate } from "@parton/framework/lib/partial-client.tsx"
+import type { ActivatorProps } from "@parton/framework"
 
 export interface WhenStoredProps extends ActivatorProps {
   /** The storage key to watch. */
@@ -25,7 +25,7 @@ export interface WhenStoredProps extends ActivatorProps {
  * and re-renders the spec with the value as a JSX call-site prop —
  * no URL writes, no `getSearchParam` reads.
  *
- *   const Draft = ReactCms.partial(
+ *   const Draft = parton(
  *     function DraftRender({ draftId }: { draftId: string } & RenderArgs) { ... },
  *     {
  *       defer: <WhenStored storageKey="draft-id" as="draftId" />,

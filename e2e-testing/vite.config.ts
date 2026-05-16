@@ -33,27 +33,27 @@ process.env.DOCS_DIR ??= REPO_DOCS_DIR
 const REPO_ROOT = path.resolve(import.meta.dirname, "..")
 const workspaceAliases = [
   {
-    find: /^@react-cms\/framework\/(.*)/,
+    find: /^@parton\/framework\/(.*)/,
     replacement: path.resolve(REPO_ROOT, "framework/src/$1"),
   },
   {
-    find: /^@react-cms\/framework$/,
+    find: /^@parton\/framework$/,
     replacement: path.resolve(REPO_ROOT, "framework/index.ts"),
   },
   {
-    find: /^@react-cms\/cms\/(.*)/,
+    find: /^@parton\/cms\/(.*)/,
     replacement: path.resolve(REPO_ROOT, "cms/src/$1"),
   },
   {
-    find: /^@react-cms\/cms$/,
+    find: /^@parton\/cms$/,
     replacement: path.resolve(REPO_ROOT, "cms/index.ts"),
   },
   {
-    find: /^@react-cms\/copies\/(.*)/,
+    find: /^@parton\/copies\/(.*)/,
     replacement: path.resolve(REPO_ROOT, "copies/src/$1"),
   },
   {
-    find: /^@react-cms\/copies$/,
+    find: /^@parton\/copies$/,
     replacement: path.resolve(REPO_ROOT, "copies/index.ts"),
   },
   { find: "@", replacement: path.resolve(import.meta.dirname, "src") },

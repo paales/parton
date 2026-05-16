@@ -2,10 +2,10 @@
  * Multi-slot container — `body` + `sidebar`.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { block, type RenderArgs } from "@parton/framework"
 import type { ReactNode } from "react"
 
-export const PageMultiSlotBlock = ReactCms.block(
+export const PageMultiSlotBlock = block(
   function PageMultiSlotRender({
     body,
     sidebar,

@@ -6,13 +6,13 @@
  * the navigation; the URL param alone is server-side no-op.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { EditorOpenNavLink } from "@react-cms/cms"
-import { buttonVariants } from "@react-cms/copies/components/ui/button"
+import { block, type RenderArgs } from "@parton/framework"
+import { EditorOpenNavLink } from "@parton/cms"
+import { buttonVariants } from "@parton/copies/components/ui/button"
 
 const OPEN_EDITOR_HREF = /[?&]editor=1(?:&|$)/
 
-export const NavLinkBlock = ReactCms.block(
+export const NavLinkBlock = block(
   function NavLinkRender({ href, label }: { href: string; label: string } & RenderArgs) {
     const className = buttonVariants({ variant: "ghost", size: "sm" })
     if (OPEN_EDITOR_HREF.test(href)) {

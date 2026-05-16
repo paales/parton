@@ -7,7 +7,7 @@
  * invalidates every spec whose `vary` recorded a `session.*` read on
  * that name. Client code calls it directly:
  *
- *   import { setSessionValue } from "@react-cms/framework"
+ *   import { setSessionValue } from "@parton/framework"
  *   <button onClick={() => setSessionValue('palette', 'dark')}>…</button>
  *
  * The implicit dep tracking is symmetric with how the CMS surface

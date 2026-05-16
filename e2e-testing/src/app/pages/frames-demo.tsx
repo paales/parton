@@ -4,14 +4,14 @@
  * a nested frame (`cart.tab`, `menu.tab`).
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
-import { Frame } from "@react-cms/framework/lib/frame.tsx"
+import { parton, type RenderArgs } from "@parton/framework"
+import { Frame } from "@parton/framework/lib/frame.tsx"
 import { FrameNavigateButton, UpdateEntryStateButton } from "../components/frames-demo-controls.tsx"
-import { Card, CardContent, CardHeader, CardTitle } from "@react-cms/copies/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 
 // ─── Main listing (page-scoped) ─────────────────────────────────────────
 
-export const FramesMainListPartial = ReactCms.partial(
+export const FramesMainListPartial = parton(
   function FramesMainListRender({
     sku,
   }: {
@@ -57,7 +57,7 @@ export const FramesMainListPartial = ReactCms.partial(
 
 // ─── Cart tab content (nested frame) ────────────────────────────────────
 
-export const CartTabPartial = ReactCms.partial(
+export const CartTabPartial = parton(
   function CartTabRender({
     pathname,
   }: {
@@ -107,7 +107,7 @@ function NestedFrameShell({ label, children }: { label: string; children: React.
   )
 }
 
-export const CartFramePartial = ReactCms.partial(
+export const CartFramePartial = parton(
   function CartFrameRender({
     state,
     parent,
@@ -189,7 +189,7 @@ export const CartFramePartial = ReactCms.partial(
 
 // ─── Menu tab + slow ────────────────────────────────────────────────────
 
-export const MenuTabPartial = ReactCms.partial(
+export const MenuTabPartial = parton(
   function MenuTabRender({
     pathname,
   }: {
@@ -220,7 +220,7 @@ export const MenuTabPartial = ReactCms.partial(
   },
 )
 
-export const MenuSlowInnerPartial = ReactCms.partial(
+export const MenuSlowInnerPartial = parton(
   async function MenuSlowInnerRender({}: RenderArgs) {
     await new Promise((r) => setTimeout(r, 400))
     return (
@@ -239,7 +239,7 @@ export const MenuSlowInnerPartial = ReactCms.partial(
   },
 )
 
-export const MenuFramePartial = ReactCms.partial(
+export const MenuFramePartial = parton(
   function MenuFrameRender({
     state,
     parent,
@@ -326,7 +326,7 @@ export const MenuFramePartial = ReactCms.partial(
 
 // ─── Chrome ─────────────────────────────────────────────────────────────
 
-export const FramesDemoPage = ReactCms.partial(
+export const FramesDemoPage = parton(
   function FramesDemoRender({ parent }: RenderArgs) {
     return (
       <main className="py-4">

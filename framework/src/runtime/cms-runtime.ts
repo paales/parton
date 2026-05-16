@@ -41,7 +41,7 @@ export interface Reference<T extends string = string> {
   readonly value: string | null
 }
 
-/** Read surface passed into `schema` callbacks on `ReactCms.block`.
+/** Read surface passed into `schema` callbacks on `block`.
  *  Field reads return values; `block`/`blocks` return ReactNodes for
  *  the host's slot children, rendered via the spec catalog's
  *  type→Component lookup. */
@@ -659,7 +659,7 @@ function renderSlotEntry(
     if (import.meta.env?.DEV) {
       console.warn(
         `[cms] slot entry "${entry.id}" has type "${type}" which is not registered. ` +
-          `Register with ReactCms.block(...).`,
+          `Register with block(...).`,
       )
     }
     return null
@@ -691,7 +691,7 @@ function renderSlotEntry(
 //   - other CMS layer code that needs to know whether a given spec
 //     is block-shaped.
 //
-// Specs that don't go through `ReactCms.block` aren't here; they
+// Specs that don't go through `block` aren't here; they
 // have no schema and aren't slot-placeable.
 
 export interface SlotBlockMeta {

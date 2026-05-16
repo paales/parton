@@ -1,9 +1,9 @@
 /**
- * `ReactCms.partial` constructor — core flow tests.
+ * `parton` constructor — core flow tests.
  */
 
 import { describe, expect, it } from "vitest"
-import { ReactCms, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
+import { parton, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { Frame } from "../frame.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { setCookie } from "../../runtime/context.ts"
@@ -15,12 +15,12 @@ async function flightAt(url: string, node: React.ReactNode): Promise<string> {
   return await new Response(stream).text()
 }
 
-describe("ReactCms.partial — match + skip", () => {
+describe("parton — match + skip", () => {
   it("renders pattern-matched specs with extracted params", async () => {
     // No vary — match params auto-flow into Render. `InferV<{match:
     // "/pokemon/:id"}>` resolves to `{id: string}`, so the call site
     // doesn't need to supply id.
-    const Page = ReactCms.partial(
+    const Page = parton(
       function ParamPageRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="param-out">id={id}</span>
       },
@@ -33,7 +33,7 @@ describe("ReactCms.partial — match + skip", () => {
   })
 
   it("emits nothing on a pattern miss", async () => {
-    const Page = ReactCms.partial(
+    const Page = parton(
       function MissTargetRender({}: RenderArgs) {
         return <span data-testid="should-not-appear">x</span>
       },
@@ -44,7 +44,7 @@ describe("ReactCms.partial — match + skip", () => {
   })
 
   it("emits nothing when vary returns null", async () => {
-    const Page = ReactCms.partial(
+    const Page = parton(
       function VaryNullTargetRender({}: RenderArgs) {
         return <span data-testid="vary-null-target">x</span>
       },
@@ -61,9 +61,9 @@ describe("ReactCms.partial — match + skip", () => {
   })
 })
 
-describe("ReactCms.partial — vary + render", () => {
+describe("parton — vary + render", () => {
   it("threads vary result into render props", async () => {
-    const Page = ReactCms.partial(
+    const Page = parton(
       function FlavorPageRender({ flavor }: { flavor: string } & RenderArgs) {
         return <span data-testid="flavor">{flavor}</span>
       },
@@ -80,7 +80,7 @@ describe("ReactCms.partial — vary + render", () => {
   })
 
   it("auto-flows match params to Render with no vary", async () => {
-    const Page = ReactCms.partial(
+    const Page = parton(
       function MatchParamRender({ slug }: { slug: string } & RenderArgs) {
         return <span data-testid="slug-out">{slug}</span>
       },
@@ -91,7 +91,7 @@ describe("ReactCms.partial — vary + render", () => {
   })
 
   it("merges match params + vary additional fields", async () => {
-    const Page = ReactCms.partial(
+    const Page = parton(
       function MergedRender({
         slug,
         page,
@@ -121,12 +121,12 @@ describe("ReactCms.partial — vary + render", () => {
   })
 })
 
-describe("ReactCms.partial — selector & id derivation", () => {
+describe("parton — selector & id derivation", () => {
   it("auto-derives selector from Render.name", async () => {
     function MyAutoSelectedRender({}: RenderArgs) {
       return <i data-testid="auto-selector-output">ok</i>
     }
-    const Page = ReactCms.partial(MyAutoSelectedRender, { match: "/auto-selector-test" })
+    const Page = parton(MyAutoSelectedRender, { match: "/auto-selector-test" })
     const out = await flightAt("http://t/auto-selector-test", <Page parent={ROOT} />)
     expect(out).toContain("auto-selector-output")
   })
@@ -139,15 +139,15 @@ describe("ReactCms.partial — selector & id derivation", () => {
     // strip it. We can't easily inspect the selector from outside,
     // but we can verify the rendered partial wrapper carries the
     // expected id by reaching into the Flight payload.
-    const Page = ReactCms.partial(MyHeaderPage, { match: "/strip-suffix-test" })
+    const Page = parton(MyHeaderPage, { match: "/strip-suffix-test" })
     const out = await flightAt("http://t/strip-suffix-test", <Page parent={ROOT} />)
     expect(out).toContain("auto-header-id")
   })
 })
 
-describe("ReactCms.partial — children passthrough", () => {
+describe("parton — children passthrough", () => {
   it("forwards `children` from the spec component to Render", async () => {
-    const Wrapper = ReactCms.partial(
+    const Wrapper = parton(
       function WrapperRender({ children }: RenderArgs) {
         return (
           <div data-testid="wrapper">
@@ -169,9 +169,9 @@ describe("ReactCms.partial — children passthrough", () => {
   })
 })
 
-describe("ReactCms.partial — call-site prop pass-through", () => {
+describe("parton — call-site prop pass-through", () => {
   it("forwards JSX call-site props to Render alongside vary", async () => {
-    const Inner = ReactCms.partial(
+    const Inner = parton(
       function PassthroughInnerRender({
         pokemonId,
         flavor,
@@ -193,7 +193,7 @@ describe("ReactCms.partial — call-site prop pass-through", () => {
     // Outer wrapper: parses :id from URL, passes pokemonId as a JSX
     // prop to Inner. Inner gets `flavor` from its own vary and
     // `pokemonId` from the call-site prop.
-    const Outer = ReactCms.partial(
+    const Outer = parton(
       function PassthroughOuterRender({ pokemonId, parent }: { pokemonId: number } & RenderArgs) {
         return <Inner parent={parent} pokemonId={pokemonId} />
       },
@@ -212,13 +212,13 @@ describe("ReactCms.partial — call-site prop pass-through", () => {
   it("inner spec without vary receives props directly from the call site", async () => {
     // The whole point: zero `vary` ceremony. Outer parses the URL,
     // Inner just takes pokemonId as a prop.
-    const Inner = ReactCms.partial(
+    const Inner = parton(
       function NoVaryInnerRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
         return <span data-testid="no-vary-inner">id-{pokemonId}</span>
       },
       { selector: "#no-vary-inner" },
     )
-    const Outer = ReactCms.partial(
+    const Outer = parton(
       function NoVaryOuterRender({ pokemonId, parent }: { pokemonId: number } & RenderArgs) {
         return <Inner parent={parent} pokemonId={pokemonId} />
       },
@@ -234,13 +234,13 @@ describe("ReactCms.partial — call-site prop pass-through", () => {
   })
 })
 
-describe("ReactCms.partial — two-step builder", () => {
+describe("parton — two-step builder", () => {
   it("partial(opts) returns a callable builder that produces a spec", async () => {
     // The builder form lets authors derive `typeof Builder.props`
     // before the Render exists — the single-step form can't do that
     // because `const S = partial(R, opts)` + `function R(p: typeof
     // S.props)` hits a circular initializer.
-    const Builder = ReactCms.partial({ match: "/builder/:slug", selector: "#two-step" })
+    const Builder = parton({ match: "/builder/:slug", selector: "#two-step" })
     function BuilderRender(p: typeof Builder.props) {
       return <span data-testid="two-step-out">{p.slug}</span>
     }
@@ -251,7 +251,7 @@ describe("ReactCms.partial — two-step builder", () => {
   })
 
   it("builder threads vary's return through the same way single-step does", async () => {
-    const Builder = ReactCms.partial({
+    const Builder = parton({
       match: "/builder/:slug",
       selector: "#two-step-vary",
       vary: ({ params, search: { variant = "default" } }) => ({
@@ -275,9 +275,9 @@ describe("ReactCms.partial — two-step builder", () => {
   })
 })
 
-describe("ReactCms.partial — match grammar inference", () => {
+describe("parton — match grammar inference", () => {
   it("optional `:foo?` flows through as optional prop", async () => {
-    const Page = ReactCms.partial(
+    const Page = parton(
       function OptionalParamRender({
         slug,
         page,
@@ -302,7 +302,7 @@ describe("<Frame> — scope opener", () => {
     // <Frame> writes its initialUrl to session if absent; the inner
     // partial's resolveFrameRequest then reads that URL via session,
     // and `vary` sees it as `pathname` instead of the page URL.
-    const Inner = ReactCms.partial(
+    const Inner = parton(
       function FramedInnerRender({ framePath }: { framePath: string } & RenderArgs) {
         return <span data-testid="frame-pathname">{framePath}</span>
       },
@@ -322,7 +322,7 @@ describe("<Frame> — scope opener", () => {
   })
 })
 
-describe("ReactCms.partial — vary sees mid-request setCookie writes", () => {
+describe("parton — vary sees mid-request setCookie writes", () => {
   // The cart pattern (e2e-testing/src/app/pages/magento/cart-actions.ts):
   // an action calls `setCookie("cart_id", X)` to persist a freshly-
   // created cart, then returns `{invalidate: {selector: ".cart"}}`. The
@@ -336,7 +336,7 @@ describe("ReactCms.partial — vary sees mid-request setCookie writes", () => {
       setCookie("cart_id", "fresh-cart-123")
       return children
     }
-    const CartBadge = ReactCms.partial(
+    const CartBadge = parton(
       function CartBadgeRender({ cartId }: { cartId: string | undefined } & RenderArgs) {
         return <span data-testid="cart-id-out">cart={cartId ?? "none"}</span>
       },
@@ -361,7 +361,7 @@ describe("ReactCms.partial — vary sees mid-request setCookie writes", () => {
       setCookie("theme", "dark")
       return children
     }
-    const Themed = ReactCms.partial(
+    const Themed = parton(
       function ThemedRender({ theme }: { theme: string } & RenderArgs) {
         return <span data-testid="theme-out">theme={theme}</span>
       },
@@ -391,7 +391,7 @@ describe("multi-variant pool", () => {
     // /pokemon/2 (matchKey₂); server must emit a hidden Activity
     // sibling for matchKey₁ so React keeps the prior fiber alive
     // when /pokemon/1's body re-mounts on back-nav.
-    const Page = ReactCms.partial(
+    const Page = parton(
       function MultiVariantTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="variant-body">id={id}</span>
       },
@@ -426,7 +426,7 @@ describe("multi-variant pool", () => {
   })
 
   it("does not emit hidden siblings when the client has only the current variant cached", async () => {
-    const Page = ReactCms.partial(
+    const Page = parton(
       function NoSiblingTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="no-sibling">id={id}</span>
       },
@@ -466,13 +466,13 @@ describe("multi-variant pool", () => {
     // matchKey. So a child of `/pokemon/:id` gets a distinct matchKey
     // per `:id` value — different cache slots, no cross-variant
     // clobbering.
-    const Inner = ReactCms.partial(
+    const Inner = parton(
       function InheritedMatchKeyInnerRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="inner-body">inner-id={id}</span>
       },
       { selector: "#inherited-match-key-inner" },
     )
-    const Outer = ReactCms.partial(
+    const Outer = parton(
       function InheritedMatchKeyOuterRender({
         id,
         parent,
@@ -516,7 +516,7 @@ describe("multi-variant pool", () => {
     // cached for the id. Server should emit a hidden Activity for
     // each cached matchKey so React doesn't unmount the parked
     // fibers as the user navigates between unrelated routes.
-    const Page = ReactCms.partial(
+    const Page = parton(
       function ParkedMultiTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="parked-multi">id={id}</span>
       },

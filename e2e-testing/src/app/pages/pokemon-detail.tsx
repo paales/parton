@@ -7,13 +7,13 @@
  * for id-validation.
  */
 
-import { ReactCms, notFound, type RenderArgs } from "@react-cms/framework"
-import { Frame } from "@react-cms/framework/lib/frame.tsx"
+import { parton, notFound, type RenderArgs } from "@parton/framework"
+import { Frame } from "@parton/framework/lib/frame.tsx"
 import { client } from "../data.ts"
 import { graphql } from "../pokeapi-graphql.ts"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { cn } from "@parton/copies/lib/utils"
 import { WhenVisible } from "../components/when-visible.tsx"
 import { HeaderPartial, SearchAreaPage, SearchAreaFrame, extractSprite } from "./pokemon.tsx"
 
@@ -98,7 +98,7 @@ function TypeBadge({ type, className }: { type: string; className?: string }) {
 // All take `id: string` from the wrapper and cast to a number themselves.
 // No `match` (wrapper gates), no `vary` (id is supplied by the call site).
 
-const Hero = ReactCms.partial(async function PokemonHeroRender({ id }: { id: string } & RenderArgs) {
+const Hero = parton(async function PokemonHeroRender({ id }: { id: string } & RenderArgs) {
   const pokemonId = Number(id)
   const data = await client.request(PokemonHeroQuery, { id: pokemonId })
   const pokemon = data.pokemon_v2_pokemon[0]
@@ -131,7 +131,7 @@ const Hero = ReactCms.partial(async function PokemonHeroRender({ id }: { id: str
   )
 })
 
-const Stats = ReactCms.partial(async function StatsRender({ id }: { id: string } & RenderArgs) {
+const Stats = parton(async function StatsRender({ id }: { id: string } & RenderArgs) {
   const pokemonId = Number(id)
   const data = await client.request(PokemonStatsQuery, { id: pokemonId })
   const pokemon = data.pokemon_v2_pokemon[0]
@@ -168,7 +168,7 @@ const Stats = ReactCms.partial(async function StatsRender({ id }: { id: string }
   )
 })
 
-const Species = ReactCms.partial(async function SpeciesRender({
+const Species = parton(async function SpeciesRender({
   id,
 }: { id: string } & RenderArgs) {
   const pokemonId = Number(id)
@@ -204,11 +204,11 @@ const Species = ReactCms.partial(async function SpeciesRender({
   )
 })
 
-const LazySpacer = ReactCms.partial(function LazySpacerRender() {
+const LazySpacer = parton(function LazySpacerRender() {
   return <div className="h-[80vh]" data-testid="lazy-spacer" />
 })
 
-const Trivia = ReactCms.partial(
+const Trivia = parton(
   async function TriviaRender({ id }: { id: string } & RenderArgs) {
     await new Promise((r) => setTimeout(r, 500))
     return (
@@ -239,7 +239,7 @@ const Trivia = ReactCms.partial(
 
 // ─── Outer wrapper — matches /pokemon/:id, threads id to children ─────
 
-export const PokemonDetailPage = ReactCms.partial(
+export const PokemonDetailPage = parton(
   function PokemonDetailRender({ id, parent }: { id: string } & RenderArgs) {
     return (
       <>

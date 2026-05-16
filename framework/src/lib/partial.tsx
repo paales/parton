@@ -1,5 +1,5 @@
 /**
- * `ReactCms.partial(Render, ...)` — define-step constructor.
+ * `parton(Render, ...)` — define-step constructor.
  *
  * Replaces the old `<Partial>` JSX wrapper, the tracked-accessor
  * manifest, the per-Partial frame/CMS/manifest ALS cells, and
@@ -8,7 +8,7 @@
  * route, or CMS lives in a single sync `vary` function whose result is
  * also the cache-key surface.
  *
- *   const PokemonPage = ReactCms.partial(PokemonRender, '/pokemon/:id')
+ *   const PokemonPage = parton(PokemonRender, '/pokemon/:id')
  *   <PokemonPage parent={ROOT} />
  *
  * Per-instance render-id overrides flow in through the framework-
@@ -160,7 +160,7 @@ export type PartialOptions<V> = Pick<
 
 /**
  * Internal merged options consumed by `buildSpecComponent`.
- * `ReactCms.partial` marshals to this shape; the CMS layer's
+ * `parton()` marshals to this shape; the CMS layer's
  * `block()` wrapper composes a CMS-aware Render and feeds it through
  * the same builder via `_buildPartial`.
  */
@@ -319,7 +319,7 @@ export type InferRenderProps<Opts> = Prettify<InferV<Opts> & RenderArgs>
  * a TypeScript-only static. Use it to derive the function signature
  * without retyping vary's return:
  *
- *     const Hero = ReactCms.partial(HeroRender, { match: "/p/:id" })
+ *     const Hero = parton(HeroRender, { match: "/p/:id" })
  *     type HeroProps = typeof Hero.props        // { id: string } & RenderArgs
  *
  * `typeof Hero.props` resolves AFTER the spec is constructed. The
@@ -339,7 +339,7 @@ export type SpecComponent<Extra = unknown, Props = unknown> = FC<PartialComponen
  * `const Spec = partial(R, opts); function R(p: typeof Spec.props)`
  * triggers.
  *
- *     const HeroBuilder = ReactCms.partial({ match: "/p/:id" })
+ *     const HeroBuilder = parton({ match: "/p/:id" })
  *     function HeroRender(p: typeof HeroBuilder.props) { … }
  *     const Hero = HeroBuilder(HeroRender)
  *
@@ -378,7 +378,7 @@ function parseSelector(input: SelectorTokens): ParsedSelector {
         .map((t) => t.trim())
         .filter(Boolean)
   if (raw.length === 0) {
-    throw new Error("ReactCms.partial: selector is empty")
+    throw new Error("parton: selector is empty")
   }
   const labels: string[] = []
   for (const tok of raw) {
@@ -641,7 +641,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
 
 /**
  * Every URLPattern any spec was constructed with. Populated as a
- * side effect of `ReactCms.partial(..., { match: ... })`. Consumed
+ * side effect of `parton(..., { match: ... })`. Consumed
  * by `getRegisteredMatchPatterns()` so authors can wire a 404
  * fallback that fires only when no registered pattern matches the
  * request URL.
@@ -1378,57 +1378,6 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   return baseComponent as unknown as SpecComponent<Extra, Prettify<V & RenderArgs>>
 }
 
-export interface ReactCmsApi {
-  /**
-   * Construct a placeable spec component from a Render function plus
-   * an options object (or a `match` shorthand).
-   *
-   * Type inference splits the Render function's props into three:
-   *   1. framework-managed (`parent`, `children`) — always injected
-   *      by the framework.
-   *   2. vary-derived (`V`) — auto-inferred via `InferV<Opts>`. With
-   *      `match` set, V defaults to the URL params (`Record<string,
-   *      string>`); with `vary` declared, V is its return type.
-   *   3. call-site pass-through (`Extra`) — anything left over.
-   *      Inferred from `Render`'s prop type minus the previous two.
-   *
-   * `Extra` is what the JSX call site has to supply (e.g.
-   * `<HeroSpec parent={...} id={pokemonId} />`). When `vary` (or the
-   * URL pattern) already covers the entire surface, `Extra` is empty
-   * and the call site is just `<HeroSpec parent={...} />`.
-   *
-   * The returned spec carries a phantom `.props` type — `typeof
-   * Spec.props` resolves to the prop bag the framework supplies to
-   * Render (vary-derived + RenderArgs), without re-typing.
-   */
-  partial<
-    const Opts extends string | PartialOptions<object> = PartialOptions<object>,
-    V extends object = InferV<Opts>,
-    R extends V & RenderArgs = V & RenderArgs,
-  >(
-    Render: (props: R) => ReactNode,
-    matchOrOpts?: Opts,
-  ): SpecComponent<SpecExtraProps<R, V>, Prettify<V & RenderArgs>>
-
-  /**
-   * Two-step form: `partial(opts)` returns a builder. The builder is
-   * callable — pass the Render to finish — and exposes `.props` as a
-   * phantom for forward-reference inference:
-   *
-   *     const HeroBuilder = ReactCms.partial({ match: "/p/:id" })
-   *     function HeroRender(p: typeof HeroBuilder.props) { … }
-   *     const Hero = HeroBuilder(HeroRender)
-   *
-   * Use this when you want to derive Render's props type before the
-   * Render function exists (which the single-step form can't do —
-   * `const S = partial(R, opts); function R(p: typeof S.props)` hits
-   * a circular initializer).
-   */
-  partial<const Opts extends PartialOptions<object> = PartialOptions<object>>(
-    opts: Opts,
-  ): PartialBuilder<Opts>
-}
-
 function buildPartialFromOptions<V extends object>(
   Render: (props: V & RenderArgs) => ReactNode,
   opts: PartialOptions<V>,
@@ -1437,7 +1386,7 @@ function buildPartialFromOptions<V extends object>(
 }
 
 /**
- * Internal export used by the CMS layer (`runtime/cms-runtime.ts`)
+ * Internal export used by the CMS layer (`runtime/cms-block.ts`)
  * to construct a partial from a pre-composed Render function. The CMS
  * `block()` wrapper builds a CMS-aware Render around the user's
  * callback and feeds it through here.
@@ -1449,31 +1398,72 @@ export function _buildPartial<V extends object>(
   return buildPartialFromOptions(Render, opts)
 }
 
-// `block` is attached by `runtime/cms-block.ts` via module
-// augmentation — declared on `ReactCmsApi`, assigned to `ReactCms` at
-// CMS-layer import. The literal here only defines `partial`; the cast
-// satisfies the augmented interface.
-export const ReactCms = {
-  partial: function partialImpl(arg1: unknown, arg2?: unknown) {
-    // Two-step: a single non-function argument is the options object.
-    // Returns a callable builder that builds the spec when invoked
-    // with a Render.
-    if (typeof arg1 !== "function") {
-      const options = (arg1 ?? {}) as PartialOptions<object>
-      const builder = (Render: (props: object & RenderArgs) => ReactNode) =>
-        buildPartialFromOptions(Render, options)
-      // `.props` is type-only; the runtime value is undefined.
-      return builder
-    }
-    // Single-step: arg1 is Render, arg2 is options-or-match-shorthand.
-    const Render = arg1 as (props: object & RenderArgs) => ReactNode
-    const options =
-      typeof arg2 === "string"
-        ? ({ match: arg2 } as PartialOptions<object>)
-        : ((arg2 ?? {}) as PartialOptions<object>)
-    return buildPartialFromOptions(Render, options)
-  } as ReactCmsApi["partial"],
-} as ReactCmsApi
+/**
+ * Construct a placeable spec component from a Render function plus
+ * an options object (or a `match` shorthand).
+ *
+ * Type inference splits the Render function's props into three:
+ *   1. framework-managed (`parent`, `children`) — always injected
+ *      by the framework.
+ *   2. vary-derived (`V`) — auto-inferred via `InferV<Opts>`. With
+ *      `match` set, V defaults to the URL params (`Record<string,
+ *      string>`); with `vary` declared, V is its return type.
+ *   3. call-site pass-through (`Extra`) — anything left over.
+ *      Inferred from `Render`'s prop type minus the previous two.
+ *
+ * `Extra` is what the JSX call site has to supply (e.g.
+ * `<HeroSpec parent={...} id={pokemonId} />`). When `vary` (or the
+ * URL pattern) already covers the entire surface, `Extra` is empty
+ * and the call site is just `<HeroSpec parent={...} />`.
+ *
+ * The returned spec carries a phantom `.props` type — `typeof
+ * Spec.props` resolves to the prop bag the framework supplies to
+ * Render (vary-derived + RenderArgs), without re-typing.
+ */
+export function parton<
+  const Opts extends string | PartialOptions<object> = PartialOptions<object>,
+  V extends object = InferV<Opts>,
+  R extends V & RenderArgs = V & RenderArgs,
+>(
+  Render: (props: R) => ReactNode,
+  matchOrOpts?: Opts,
+): SpecComponent<SpecExtraProps<R, V>, Prettify<V & RenderArgs>>
+/**
+ * Two-step form: `parton(opts)` returns a builder. The builder is
+ * callable — pass the Render to finish — and exposes `.props` as a
+ * phantom for forward-reference inference:
+ *
+ *     const HeroBuilder = parton({ match: "/p/:id" })
+ *     function HeroRender(p: typeof HeroBuilder.props) { … }
+ *     const Hero = HeroBuilder(HeroRender)
+ *
+ * Use this when you want to derive Render's props type before the
+ * Render function exists (which the single-step form can't do —
+ * `const S = parton(R, opts); function R(p: typeof S.props)` hits
+ * a circular initializer).
+ */
+export function parton<const Opts extends PartialOptions<object> = PartialOptions<object>>(
+  opts: Opts,
+): PartialBuilder<Opts>
+export function parton(arg1: unknown, arg2?: unknown): unknown {
+  // Two-step: a single non-function argument is the options object.
+  // Returns a callable builder that builds the spec when invoked
+  // with a Render.
+  if (typeof arg1 !== "function") {
+    const options = (arg1 ?? {}) as PartialOptions<object>
+    const builder = (Render: (props: object & RenderArgs) => ReactNode) =>
+      buildPartialFromOptions(Render, options)
+    // `.props` is type-only; the runtime value is undefined.
+    return builder
+  }
+  // Single-step: arg1 is Render, arg2 is options-or-match-shorthand.
+  const Render = arg1 as (props: object & RenderArgs) => ReactNode
+  const options =
+    typeof arg2 === "string"
+      ? ({ match: arg2 } as PartialOptions<object>)
+      : ((arg2 ?? {}) as PartialOptions<object>)
+  return buildPartialFromOptions(Render, options)
+}
 
 // ─── PartialRoot ──────────────────────────────────────────────────────
 

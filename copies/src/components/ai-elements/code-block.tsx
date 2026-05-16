@@ -1,14 +1,14 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
+import { Button } from "@parton/copies/components/ui/button"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@react-cms/copies/components/ui/select"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/select"
+import { cn } from "@parton/copies/lib/utils"
 import { CheckIcon, CopyIcon } from "lucide-react"
 import type { ComponentProps, CSSProperties, HTMLAttributes } from "react"
 import {

@@ -1,13 +1,13 @@
 # CMS
 
-CMS-driven content lives on [`ReactCms.block`](./block.md) specs via
+CMS-driven content lives on [`block`](./block.md) specs via
 a `schema` callback. The callback receives a sync `cms` read surface
 bound to the block's effective CMS content row (the storage key of
 the rendered instance); its return is merged into the Render
 function's prop bag.
 
 ```tsx
-const PromoBlock = ReactCms.block(
+const PromoBlock = block(
   function PromoRender({ headline, body, tone, dismissAfter }) {
     return <div data-tone={tone}>...</div>
   },
@@ -92,9 +92,9 @@ break by config-array order (earlier wins).
 
 ```tsx
 // e2e-testing/src/app/blocks/promo.tsx
-import { ReactCms, type RenderArgs } from "../../lib"
+import { block, type RenderArgs } from "../../lib"
 
-export const PromoBlock = ReactCms.block(
+export const PromoBlock = block(
   function PromoRender({ headline, body, tone }: { ... } & RenderArgs) {
     return <div data-tone={tone}>...</div>
   },
@@ -125,7 +125,7 @@ is the singular variant (at most one entry).
 ```tsx
 import type { ReactNode } from "react"
 
-export const PageRootBlock = ReactCms.block(
+export const PageRootBlock = block(
   function PageRootRender({ body, sidebar }: {
     body: ReactNode
     sidebar: ReactNode
@@ -155,7 +155,7 @@ wiring.
 ## References + entity loaders
 
 ```tsx
-const ProductHero = ReactCms.block(
+const ProductHero = block(
   async function ProductHeroRender({ productRef }: { productRef: string | null } & RenderArgs) {
     const product = productRef ? await getProduct(productRef) : null
     if (!product) return null

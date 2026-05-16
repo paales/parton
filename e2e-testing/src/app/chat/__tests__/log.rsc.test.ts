@@ -44,13 +44,13 @@ describe("chat log — markdown path resolution", () => {
   })
 
   it("finds AA_CHAT_STREAMING.md from source-tree fallback when DOCS_DIR is unset", async () => {
-    // Mirror `yarn workspace @react-cms/e2e-testing dev` without the
+    // Mirror `yarn workspace @parton/e2e-testing dev` without the
     // vite.config-set env var — the source-tree fallback walks four
     // levels up from `log.ts` and lands on the repo `docs/`.
     process.chdir(WORKSPACE_ROOT)
     const { readLog, _clearLogs } = await import("../log.ts")
     const { runWithRequestAsync } = await import(
-      "@react-cms/framework/runtime/context.ts"
+      "@parton/framework/runtime/context.ts"
     )
     try {
       await runWithRequestAsync(new Request("http://t/"), async () => {
@@ -72,7 +72,7 @@ describe("chat log — markdown path resolution", () => {
     process.env.DOCS_DIR = path.resolve(REPO_ROOT, "docs")
     const { readLog, _clearLogs } = await import("../log.ts")
     const { runWithRequestAsync } = await import(
-      "@react-cms/framework/runtime/context.ts"
+      "@parton/framework/runtime/context.ts"
     )
     try {
       await runWithRequestAsync(new Request("http://t/"), async () => {

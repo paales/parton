@@ -7,10 +7,10 @@
  * the schema reads from.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { block, type RenderArgs } from "@parton/framework"
 import type { ReactNode } from "react"
 
-export const AppNavBlock = ReactCms.block(
+export const AppNavBlock = block(
   function AppNavRender({ links }: { links: ReactNode } & RenderArgs) {
     return <nav className="mb-6 flex flex-wrap gap-1 border-b pb-3">{links}</nav>
   },

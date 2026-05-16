@@ -1,6 +1,6 @@
 "use client"
 
-import { cn } from "@react-cms/copies/lib/utils"
+import { cn } from "@parton/copies/lib/utils"
 import { AlertCircle } from "lucide-react"
 import type { ComponentProps, ReactNode } from "react"
 import {

@@ -1,6 +1,6 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
+import { Button } from "@parton/copies/components/ui/button"
 import {
   Card,
   CardAction,
@@ -9,9 +9,9 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@react-cms/copies/components/ui/card"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@react-cms/copies/components/ui/collapsible"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@parton/copies/components/ui/collapsible"
+import { cn } from "@parton/copies/lib/utils"
 import { ChevronsUpDownIcon } from "lucide-react"
 import type { ComponentProps } from "react"
 import { createContext, useContext, useMemo } from "react"

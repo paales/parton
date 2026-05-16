@@ -6,27 +6,27 @@ import { defineConfig } from "vitest/config"
 // Order matters: longest prefixes first; `@` is the catch-all.
 const workspaceAliases = [
   {
-    find: /^@react-cms\/framework\/(.*)/,
+    find: /^@parton\/framework\/(.*)/,
     replacement: path.resolve(import.meta.dirname, "framework/src/$1"),
   },
   {
-    find: /^@react-cms\/framework$/,
+    find: /^@parton\/framework$/,
     replacement: path.resolve(import.meta.dirname, "framework/index.ts"),
   },
   {
-    find: /^@react-cms\/cms\/(.*)/,
+    find: /^@parton\/cms\/(.*)/,
     replacement: path.resolve(import.meta.dirname, "cms/src/$1"),
   },
   {
-    find: /^@react-cms\/cms$/,
+    find: /^@parton\/cms$/,
     replacement: path.resolve(import.meta.dirname, "cms/index.ts"),
   },
   {
-    find: /^@react-cms\/copies\/(.*)/,
+    find: /^@parton\/copies\/(.*)/,
     replacement: path.resolve(import.meta.dirname, "copies/src/$1"),
   },
   {
-    find: /^@react-cms\/copies$/,
+    find: /^@parton\/copies$/,
     replacement: path.resolve(import.meta.dirname, "copies/index.ts"),
   },
   // `@/` resolves per-workspace via each package's tsconfig. For tests we

@@ -1,5 +1,5 @@
 /**
- * Spec catalog — framework-internal index of every `ReactCms.partial`
+ * Spec catalog — framework-internal index of every `parton`
  * spec by its catalog id.
  *
  * Lookups feed three internal consumers:
@@ -54,7 +54,7 @@ export interface SpecCatalogEntry {
   /** Refetch labels declared by `selector` (with `id` as the first
    *  label). `nav.reload({selector: "label"})` matches any of these. */
   labels: string[]
-  /** The component returned by `ReactCms.partial(...)`. */
+  /** The component returned by `parton(...)`. */
   Component: FC<SpecComponentProps>
   /** Request-dimensions vary callback, if any. Used by
    *  `descendantContribution` to re-resolve a descendant's vary

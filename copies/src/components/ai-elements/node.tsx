@@ -6,8 +6,8 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@react-cms/copies/components/ui/card"
-import { cn } from "@react-cms/copies/lib/utils"
+} from "@parton/copies/components/ui/card"
+import { cn } from "@parton/copies/lib/utils"
 import { Handle, Position } from "@xyflow/react"
 import type { ComponentProps } from "react"
 

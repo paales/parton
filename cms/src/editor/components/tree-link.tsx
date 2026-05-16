@@ -1,7 +1,7 @@
 "use client"
 
 import type { ReactNode } from "react"
-import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 
 /**
  * Selector-targeted nav link for the CMS editor's tree sidebar.

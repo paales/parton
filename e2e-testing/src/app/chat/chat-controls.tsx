@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect, useRef, type MouseEvent } from "react"
-import { useNavigation } from "@react-cms/framework/lib/partial-client.tsx"
-import { Button, buttonVariants } from "@react-cms/copies/components/ui/button"
-import { cn } from "@react-cms/copies/lib/utils"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { Button, buttonVariants } from "@parton/copies/components/ui/button"
+import { cn } from "@parton/copies/lib/utils"
 
 /**
  * "New message" link. Rendered as an anchor so a click before the client JS

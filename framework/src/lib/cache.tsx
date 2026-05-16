@@ -5,7 +5,7 @@
  * cache-key surface. On miss it renders to Flight bytes and stores
  * them; on hit it decodes the stored bytes back into a tree.
  *
- * Cache is an internal detail of `ReactCms.partial(...)` when the
+ * Cache is an internal detail of `parton(...)` when the
  * spec sets `cache={…}`. Authors don't render `<Cache>` directly.
  *
  * ── Composition with partials ─────────────────────────────────────

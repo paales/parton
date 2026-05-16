@@ -5,10 +5,10 @@
  * {maxAge: 60}`) and varies by `flavor`; `Clock` stays uncached.
  */
 
-import { ReactCms, getScope, type RenderArgs } from "@react-cms/framework"
+import { parton, getScope, type RenderArgs } from "@parton/framework"
 // `_cacheStats` is a framework-internal diagnostic surface — kept on
 // the deep path because the demo intentionally peeks at internals.
-import { _cacheStats } from "@react-cms/framework/lib/cache.tsx"
+import { _cacheStats } from "@parton/framework/lib/cache.tsx"
 import { CacheControls } from "../components/cache-controls.tsx"
 import { ClickCounter } from "../components/click-counter.tsx"
 
@@ -32,7 +32,7 @@ function Code({ children, ...rest }: React.ComponentProps<"code">) {
 
 // ─── Inner specs ───────────────────────────────────────────────────────
 
-const Intro = ReactCms.partial(
+const Intro = parton(
   async function CacheDemoIntroRender({ flavor }: { flavor: string } & RenderArgs) {
     const stats = await _cacheStats()
     return (
@@ -54,7 +54,7 @@ const Intro = ReactCms.partial(
 // `<CacheControls>`'s Toggle button explicitly forwards the new
 // flavor via `nav.navigate(..., { props: { slow: { flavor } } })`,
 // which the server splices in on top of the snapshot-replayed props.
-const Slow = ReactCms.partial(
+const Slow = parton(
   async function CacheDemoSlowRender({ flavor }: { flavor: string } & RenderArgs) {
     const slowRenderCount = bumpSlowRender()
     await delay(500)
@@ -82,7 +82,7 @@ const Slow = ReactCms.partial(
   },
 )
 
-const Clock = ReactCms.partial(
+const Clock = parton(
   function CacheDemoClockRender() {
     return (
       <div data-testid="clock-content" className="mb-2 rounded-lg bg-muted p-4">
@@ -96,7 +96,7 @@ const Clock = ReactCms.partial(
   { selector: "#clock", fallback: <div>Loading clock…</div> },
 )
 
-const Footer = ReactCms.partial(
+const Footer = parton(
   function CacheDemoFooterRender({ tick: _tick }: { tick: number } & RenderArgs) {
     return (
       <div className="mt-8 text-xs text-muted-foreground">
@@ -114,7 +114,7 @@ const Footer = ReactCms.partial(
 
 // ─── Outer wrapper — matches /cache-demo, threads flavor down ─────────
 
-export const CacheDemoPage = ReactCms.partial(
+export const CacheDemoPage = parton(
   function CacheDemoRender({ flavor, parent }: { flavor: string } & RenderArgs) {
     return (
       <>

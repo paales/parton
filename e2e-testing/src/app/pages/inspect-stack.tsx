@@ -18,13 +18,13 @@
  */
 
 import { ViewTransition } from "react"
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { parton, type RenderArgs } from "@parton/framework"
 import { client } from "../data.ts"
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts"
-import { Card, CardContent } from "@react-cms/copies/components/ui/card"
-import { Badge } from "@react-cms/copies/components/ui/badge"
-import { buttonVariants } from "@react-cms/copies/components/ui/button"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Card, CardContent } from "@parton/copies/components/ui/card"
+import { Badge } from "@parton/copies/components/ui/badge"
+import { buttonVariants } from "@parton/copies/components/ui/button"
+import { cn } from "@parton/copies/lib/utils"
 import {
   DrawerBackLink,
   DrawerScrollArea,
@@ -188,7 +188,7 @@ function parseMoveId(pathname: string): { id: string; moveId: string } | null {
 
 // ─── Base page (always under the drawers) ───────────────────────────────
 
-export const InspectBasePage = ReactCms.partial(
+export const InspectBasePage = parton(
   async function InspectBasePageRender(_: RenderArgs) {
     const data = await client.request(InspectListQuery, { limit: GRID_LIMIT })
     return (
@@ -252,7 +252,7 @@ function PokemonGridCard({ raw }: { raw: FragmentOf<typeof InspectListFields> })
 
 // ─── Drawer 1 — pokemon overview ────────────────────────────────────────
 
-const PokemonOverviewContent = ReactCms.partial(
+const PokemonOverviewContent = parton(
   async function PokemonOverviewContentRender({ id }: { id: string } & RenderArgs) {
     const pokemonId = Number(id)
     if (!Number.isFinite(pokemonId)) return <p>Invalid pokemon id.</p>
@@ -310,7 +310,7 @@ const PokemonOverviewContent = ReactCms.partial(
   },
 )
 
-export const InspectDrawer1 = ReactCms.partial(
+export const InspectDrawer1 = parton(
   function InspectDrawer1Render({
     id,
     parent,
@@ -351,7 +351,7 @@ export const InspectDrawer1 = ReactCms.partial(
 // the same drawer; the back link returns to the list. Each step
 // pushes a real URL so browser back/forward + refresh still work.
 
-const PokemonMovesContent = ReactCms.partial(
+const PokemonMovesContent = parton(
   async function PokemonMovesContentRender({ id }: { id: string } & RenderArgs) {
     const pokemonId = Number(id)
     if (!Number.isFinite(pokemonId)) return <p>Invalid pokemon id.</p>
@@ -394,7 +394,7 @@ const PokemonMovesContent = ReactCms.partial(
   },
 )
 
-const MoveDetailContent = ReactCms.partial(
+const MoveDetailContent = parton(
   async function MoveDetailContentRender({
     id,
     moveId,
@@ -451,7 +451,7 @@ const MoveDetailContent = ReactCms.partial(
   },
 )
 
-export const InspectDrawer2 = ReactCms.partial(
+export const InspectDrawer2 = parton(
   function InspectDrawer2Render({
     id,
     moveId,

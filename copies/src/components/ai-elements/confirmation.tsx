@@ -1,8 +1,8 @@
 "use client"
 
-import { Alert, AlertDescription } from "@react-cms/copies/components/ui/alert"
-import { Button } from "@react-cms/copies/components/ui/button"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Alert, AlertDescription } from "@parton/copies/components/ui/alert"
+import { Button } from "@parton/copies/components/ui/button"
+import { cn } from "@parton/copies/lib/utils"
 import type { ToolUIPart } from "ai"
 import type { ComponentProps, ReactNode } from "react"
 import { createContext, useContext, useMemo } from "react"

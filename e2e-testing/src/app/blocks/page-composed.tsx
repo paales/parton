@@ -2,10 +2,10 @@
  * Composed container — has its own `body` slot of demo blocks.
  */
 
-import { ReactCms, type RenderArgs } from "@react-cms/framework"
+import { block, type RenderArgs } from "@parton/framework"
 import type { ReactNode } from "react"
 
-export const PageComposedBlock = ReactCms.block(
+export const PageComposedBlock = block(
   function PageComposedRender({ body }: { body: ReactNode } & RenderArgs) {
     return (
       <section data-testid="cms-demo-composed-section">

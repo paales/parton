@@ -1,10 +1,10 @@
 # Cache
 
 `<Partial cache={…}>` doesn't exist anymore — caching is a per-spec
-option in the `ReactCms.partial` constructor.
+option in the `parton` constructor.
 
 ```tsx
-const ProductHero = ReactCms.partial(ProductHeroRender, {
+const ProductHero = parton(ProductHeroRender, {
   match: "/p/:slug",
   cache: { maxAge: 60, staleWhileRevalidate: 30 },
   vary: ({ params, request }) => ({

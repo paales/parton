@@ -1,7 +1,7 @@
-// Public API surface for the React-CMS partials library.
+// Public API surface for the parton partials library.
 
 export {
-  ReactCms,
+  parton,
   PartialRoot,
   PartialBoundary,
   ROOT,
@@ -24,7 +24,7 @@ export {
   getRegisteredMatchPatterns,
 } from "./partial.tsx"
 
-// CMS block constructor — composes around `ReactCms.partial`.
+// CMS block constructor — composes around `parton`.
 export {
   block,
   type BlockOptions,

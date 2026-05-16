@@ -8,11 +8,11 @@ import {
   Redirect,
   RedirectError,
   setFrameworkControl,
-} from "@react-cms/framework"
+} from "@parton/framework"
 import { AppNav } from "./components/app-nav.tsx"
 import { ChatOverlay } from "./chat/chat-overlay.tsx"
 import { NotFoundPage } from "./pages/not-found.tsx"
-import { EditorShell } from "@react-cms/cms"
+import { EditorShell } from "@parton/cms"
 
 import { PokemonOverviewPage } from "./pages/pokemon.tsx"
 import { PokemonDetailPage } from "./pages/pokemon-detail.tsx"

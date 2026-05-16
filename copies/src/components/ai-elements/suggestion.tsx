@@ -1,8 +1,8 @@
 "use client"
 
-import { Button } from "@react-cms/copies/components/ui/button"
-import { ScrollArea, ScrollBar } from "@react-cms/copies/components/ui/scroll-area"
-import { cn } from "@react-cms/copies/lib/utils"
+import { Button } from "@parton/copies/components/ui/button"
+import { ScrollArea, ScrollBar } from "@parton/copies/components/ui/scroll-area"
+import { cn } from "@parton/copies/lib/utils"
 import type { ComponentProps } from "react"
 import { useCallback } from "react"
 

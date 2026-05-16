@@ -18,7 +18,7 @@
 
 import {
   EDITOR_COOKIE,
-  ReactCms,
+  parton,
   getCatalogManifest,
   getRouteSnapshots,
   getSlotBlockMeta,
@@ -34,7 +34,7 @@ import {
   type ContentFieldKind,
   type MatchClause,
   type RenderArgs,
-} from "@react-cms/framework"
+} from "@parton/framework"
 import { CmsEditTreeLink } from "./components/tree-link.tsx"
 import { CmsEditAddBlock } from "./components/add-block.tsx"
 import { EditorCloseLink } from "./components/editor-close-link.tsx"
@@ -198,7 +198,7 @@ function readMultiTabs(currentUrl: URL): string[] {
 
 // ─── Tree pane ─────────────────────────────────────────────────────────
 
-export const EditorTreePartial = ReactCms.partial(
+export const EditorTreePartial = parton(
   async function EditorTreeRender({
     selected,
     treeStyle,
@@ -459,7 +459,7 @@ export const EditorTreePartial = ReactCms.partial(
 
 // ─── Settings pane (left panel — Settings tab) ─────────────────────────
 
-export const EditorSettingsPartial = ReactCms.partial(
+export const EditorSettingsPartial = parton(
   function EditorSettingsRender({ pathname }: { pathname: string } & RenderArgs) {
     return (
       <div className="cms-panel-body">
@@ -505,7 +505,7 @@ export const EditorSettingsPartial = ReactCms.partial(
 
 // ─── Field panel ───────────────────────────────────────────────────────
 
-export const EditorFieldPanelPartial = ReactCms.partial(
+export const EditorFieldPanelPartial = parton(
   async function EditorFieldPanelRender({
     selected,
     effectiveIndex: vEffectiveIndex,
@@ -1152,7 +1152,7 @@ function CanvasChrome({
 
 // ─── Editor shell ──────────────────────────────────────────────────────
 
-export const EditorShell = ReactCms.partial(
+export const EditorShell = parton(
   function EditorShellRender({
     editor,
     parent,
