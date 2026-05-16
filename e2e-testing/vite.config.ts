@@ -80,6 +80,10 @@ const HOOK_CALLING_DEPS = [/^@base-ui\//, /^@radix-ui\//, /^@phosphor-icons\//, 
 export default defineConfig(({ mode }) => ({
   plugins: isTest ? [react(), tailwindcss()] : [rsc(), react(), tailwindcss()],
   server: mode === "clean" ? { port: 5174, strictPort: true, hmr: false, ws: false } : undefined,
+  // Preview pinned to 5173 to match dev — same hard-coded URLs
+  // work in both modes. Run `yarn preview:all` only when no dev
+  // server is on 5173.
+  preview: { port: 5173, strictPort: true },
   environments: {
     rsc: {
       build: {

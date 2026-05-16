@@ -143,6 +143,45 @@
             ]
           },
           {
+            "id": "app-nav-link-cache-streaming",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/cache-streaming-demo",
+                  "label": "Cache Streaming"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-remote-frame",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/remote-frame-demo",
+                  "label": "Remote Frame"
+                }
+              }
+            ]
+          },
+          {
+            "id": "app-nav-link-remote-frame-xo",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/remote-frame-crossorigin-demo",
+                  "label": "Remote (Cross-Origin)"
+                }
+              }
+            ]
+          },
+          {
             "id": "app-nav-link-open-editor",
             "type": "nav-link",
             "configs": [

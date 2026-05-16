@@ -51,6 +51,11 @@ const workspaceAliases = [
 export default defineConfig({
   plugins: isTest ? [react(), tailwindcss()] : [rsc(), react(), tailwindcss()],
   server: { port: 5181, strictPort: true },
+  // Preview shares the dev port so the host's hard-coded
+  // cross-origin URL (http://localhost:5181) works in both modes
+  // without env switching. Run `yarn preview:all` only when no
+  // dev server is on 5181.
+  preview: { port: 5181, strictPort: true },
   environments: {
     rsc: {
       build: {

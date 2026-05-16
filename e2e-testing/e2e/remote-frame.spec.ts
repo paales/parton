@@ -116,6 +116,40 @@ test("refresh button updates a remote frame's timestamp", async ({ page }) => {
     .toBe(true)
 })
 
+test("usePartialReconcile fires on selector refetch (RepNotify channel)", async ({
+  page,
+}) => {
+  await page.goto("/remote-frame-demo")
+  await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })
+
+  // Scope the flash query to the remote-fast card.
+  const flash = page.getByTestId("remote-fast").getByTestId("reconcile-flash")
+
+  // Initial render: handler is set up post-mount, so the hydration-
+  // time fp registration does NOT reach the subscriber. Counter
+  // stays at 0.
+  await expect(flash).toHaveAttribute("data-reconcile-count", "0")
+
+  // Refresh — the server emits one or more fresh fingerprints (the
+  // refetch flow may also surface the descendant-fold's warm fps via
+  // the trailer), so each refetch can trigger 1+ reconcile events.
+  // The assertion: count strictly increased.
+  const before = Number(await flash.getAttribute("data-reconcile-count"))
+  await page.getByTestId("rfd-refresh-remote-fast").click()
+  await expect
+    .poll(
+      async () => Number(await flash.getAttribute("data-reconcile-count")) > before,
+      { timeout: 5000 },
+    )
+    .toBe(true)
+
+  // The flash visual state cycles back to "0" after 800ms so e2e
+  // confirms the bookkeeping, not animation timing.
+  await expect
+    .poll(() => flash.getAttribute("data-reconcile-flash"), { timeout: 2000 })
+    .toBe("0")
+})
+
 test("page navigation re-fetches all remote frames with fresh content", async ({ page }) => {
   await page.goto("/remote-frame-demo")
   await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })

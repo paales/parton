@@ -34,12 +34,15 @@ test.beforeEach(async ({ baseURL }) => {
 })
 
 test("host renders cross-origin magento-greeting", async ({ page }) => {
-  await page.goto("/remote-frame-crossorigin-demo")
-  await expect(page.getByTestId("rfxd-header")).toBeVisible({ timeout: 2000 })
+  // Longer goto timeout — the first hit to /__remote/<id> on the
+  // magento dev server forces vite to compile the parton (cold
+  // optimizeDeps); subsequent hits are fast.
+  await page.goto("/remote-frame-crossorigin-demo", { timeout: 30000 })
+  await expect(page.getByTestId("rfxd-header")).toBeVisible({ timeout: 10000 })
 
   // Both cross-origin frames arrive after their respective delays.
-  await expect(page.getByTestId("magento-greeting")).toBeVisible({ timeout: 5000 })
-  await expect(page.getByTestId("magento-stocks")).toBeVisible({ timeout: 5000 })
+  await expect(page.getByTestId("magento-greeting")).toBeVisible({ timeout: 15000 })
+  await expect(page.getByTestId("magento-stocks")).toBeVisible({ timeout: 15000 })
 
   // The greeting card carries text identifying its origin.
   await expect(page.getByTestId("magento-greeting")).toContainText("e2e-magento")
@@ -79,13 +82,13 @@ test("cross-origin remote endpoint returns Flight + snapshot trailer", async ({
 })
 
 test("capability-scoped remote reads host-declared values", async ({ page }) => {
-  await page.goto("/remote-frame-crossorigin-demo")
+  await page.goto("/remote-frame-crossorigin-demo", { timeout: 30000 })
 
   // The host passes { cart_id, currency, total } via the
   // `capability` prop on RemoteFrame. The remote spec reads them
   // via `getCapability()` and renders them into its body.
   const summary = page.getByTestId("magento-payment-summary")
-  await expect(summary).toBeVisible({ timeout: 5000 })
+  await expect(summary).toBeVisible({ timeout: 15000 })
   await expect(summary).toContainText("demo-cart-7f3a9")
   await expect(summary).toContainText("EUR")
   await expect(page.getByTestId("magento-payment-total")).toContainText("127.45")

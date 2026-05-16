@@ -28,4 +28,14 @@ export default defineConfig({
     reuseExistingServer: true,
     timeout: 60000,
   },
+  // NOTE: cross-origin tests in `remote-frame-crossorigin.spec.ts`
+  // require `e2e-magento` running on port 5181. The spec's
+  // `beforeAll` skips cleanly when magento isn't reachable. We
+  // don't auto-start magento here because vite-rsc emits unstable
+  // client-reference IDs across cold dev starts (sometimes
+  // `/@fs/...` paths the host can resolve, sometimes hash IDs that
+  // only exist in the remote's vite session and that the host's
+  // vite-rsc rejects as invalid cross-origin client references).
+  // Manual workflow: run `yarn dev:magento` in a separate terminal
+  // and the cross-origin specs run.
 })

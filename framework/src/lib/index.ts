@@ -37,8 +37,10 @@ export {
   useActivate,
   useEnclosingPartialId,
   useNavigation,
+  usePartialReconcile,
   useScrollRestore,
   type ActivatorFire,
+  type PartialReconcileEvent,
 } from "./partial-client.tsx"
 
 export type {

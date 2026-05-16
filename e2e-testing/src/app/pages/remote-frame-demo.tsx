@@ -29,6 +29,7 @@ import { Suspense } from "react"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
 import { Button } from "@parton/copies/components/ui/button"
 import { ClickCounter } from "../components/click-counter.tsx"
+import { ReconcileFlash } from "../components/reconcile-flash.tsx"
 import { RemoteRefreshButton } from "../components/remote-refresh-button.tsx"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -41,10 +42,18 @@ const RemoteFastGreeting = parton(
     return (
       <RemoteCard tone="emerald" testid="remote-fast">
         <strong>Fast remote</strong> · 200ms · {new Date().toISOString()}
+        <ReconcileFlash />
       </RemoteCard>
     )
   },
-  { selector: "remote-fast" },
+  {
+    selector: "remote-fast",
+    // Varying tick → fp differs on every render → the reconcile
+    // event fires for each refetch. Without this, the fp is stable
+    // and `usePartialReconcile` correctly observes "nothing
+    // changed" (firing the event would be semantically wrong).
+    vary: () => ({ tick: Date.now() }),
+  },
 )
 
 const RemoteMidGreeting = parton(
