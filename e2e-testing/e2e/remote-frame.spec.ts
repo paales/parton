@@ -91,27 +91,18 @@ test("cached remote spec: second direct fetch is faster than the first", async (
   expect(warmMs).toBeLessThan(coldMs / 3)
 })
 
-test.skip("refresh button updates a remote frame's timestamp [v2 — needs host-side re-registration]", async ({
-  page,
-}) => {
-  // Known limitation of same-origin v1: PartialBoundary's
-  // `registerPartial` side effect runs during the remote endpoint's
-  // render, which has no host-side request registry (PartialRoot
-  // isn't wrapping the remote render). So the host's snapshot map
-  // never sees "remote-fast", and `nav.reload({selector: "remote-
-  // fast"})` resolves to a registry miss → streaming-mode fallback
-  // → full page re-render. The full re-render does produce fresh
-  // content, but the client doesn't substitute it back into the
-  // page because the wire response shape is different from what
-  // the targeted refetch path expects.
-  //
-  // Fix for v2: either (a) wrap the decoded remote tree in a host-
-  // side PartialBoundary that re-registers using the snapshot info
-  // carried in the wire bytes, or (b) lift the registration to the
-  // wire level via `flight-rewrite` so the host's `rewriteFlightStream`
-  // call picks up PartialBoundary markers and re-emits them as host-
-  // owned snapshots. Tracked alongside the broader unified-address-
-  // space work in the RemoteFrame design.
+test("refresh button updates a remote frame's timestamp", async ({ page }) => {
+  // Validates the unified-addressing loop closed by the snapshot
+  // trailer (`snapshot-trailer.ts`): the remote endpoint ships
+  // PartialBoundary snapshots as a trailing JSON segment after
+  // its Flight bytes. The host's <RemoteFrame> parses the trailer
+  // and re-registers each snapshot in the host's request registry.
+  // `nav.reload({selector: "remote-fast"})` then finds the id and
+  // routes through the normal cache-mode refetch path — in same-
+  // origin v1 the refetch hits the host's local copy of the spec
+  // (the catalog has it). v2 cross-origin will need a
+  // `source: "remote:<origin>"` annotation to route refetches
+  // back to the remote endpoint.
   await page.goto("/remote-frame-demo")
   await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })
 

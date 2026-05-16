@@ -35,6 +35,8 @@ import {
   type RowRewriter,
 } from "./flight-rewrite.ts"
 import type { PartialCtx } from "./partial-context.ts"
+import { registerPartial } from "./partial-registry.ts"
+import { parseSnapshotTrailer } from "./snapshot-trailer.ts"
 import { getRequest } from "../runtime/context.ts"
 
 export interface RemoteFrameProps {
@@ -106,6 +108,26 @@ export async function RemoteFrame({
     )
   }
 
+  // Buffer-then-split: read the full response, separate Flight
+  // bytes from the snapshot trailer. Losing within-remote
+  // streaming is the cost; gaining unified addressing across the
+  // host/remote boundary is the prize. See `snapshot-trailer.ts`
+  // for the trade-off discussion.
+  const fullBuffer = new Uint8Array(await response.arrayBuffer())
+  const { flightBytes, snapshots } = parseSnapshotTrailer(fullBuffer)
+
+  // Register the remote's snapshots in the HOST's request
+  // registry — selector-based refetch can now find these ids and
+  // route through the normal cache-mode path. Same-origin v1: the
+  // refetch hits the host's local spec (catalog has it). Cross-
+  // origin v2 will need a `source: "remote:<origin>"` annotation
+  // on the snapshot so refetch routes back to the remote.
+  if (snapshots) {
+    for (const [id, snap] of Object.entries(snapshots)) {
+      registerPartial(id, snap)
+    }
+  }
+
   // Auto-derive module rewrite policy from `src`:
   // - Relative `src` (same-origin): no rewrite needed; host's bundle
   //   already knows the modules.
@@ -127,6 +149,12 @@ export async function RemoteFrame({
   const pipeline: RowRewriter =
     rewriter != null ? composeRewriters(moduleRw, rewriter) : moduleRw
 
-  const rewrittenStream = rewriteFlightStream(response.body, pipeline)
+  const flightStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(flightBytes)
+      controller.close()
+    },
+  })
+  const rewrittenStream = rewriteFlightStream(flightStream, pipeline)
   return await createFromReadableStream<ReactNode>(rewrittenStream)
 }

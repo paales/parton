@@ -11,6 +11,11 @@ import { Root } from "./app/root.tsx"
 import { NotFoundPage } from "./app/pages/not-found.tsx"
 import { ROOT } from "@parton/framework"
 import { getSpecById } from "@parton/framework/lib/spec-catalog.ts"
+import {
+  enterRequestRegistry,
+  getActiveRegistry,
+} from "@parton/framework/lib/partial-registry.ts"
+import { wrapStreamWithSnapshotTrailer } from "@parton/framework/lib/snapshot-trailer.ts"
 import { parseRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
   _captureCommitHandle,
@@ -48,20 +53,32 @@ async function handler(request: Request): Promise<Response> {
       return new Response(`Unknown spec: ${id}`, { status: 404 })
     }
     const Component = spec.Component
-    // Wire shape: the remote response is the bare ReactNode the
-    // spec produces — no Root, no wrapper object. The host's
-    // `<RemoteFrame>` decodes it and uses the result directly as
-    // JSX. Keeping it bare makes the host code symmetrical with
-    // any other server-component await.
+    // Wire shape: bare ReactNode Flight bytes + a trailing
+    // snapshot map (see `snapshot-trailer.ts`). The host's
+    // `<RemoteFrame>` parses the trailer and re-registers the
+    // snapshots in the host's request registry, so any partial
+    // wrapper the remote emitted (e.g. PartialBoundary inside the
+    // spec) is addressable by selector from the host.
     //
-    // The render runs inside `runWithRequestAsync` so server
-    // components can call `getRequest` / `getCookie` / etc. —
-    // same as the main page render path. `deriveMatchKey` in
-    // partial.tsx in particular pulls the URL out of the request
-    // context, so this isn't optional.
+    // Two contexts entered before render:
+    // - `runWithRequestAsync`: gives the spec a request context
+    //   so `getRequest` / `getCookie` etc. work.
+    // - `enterRequestRegistry`: gives PartialBoundary's
+    //   `registerPartial` somewhere to write. The remote's
+    //   registry is throwaway — only the `pendingWrites` map
+    //   matters, captured by the trailer wrapper at flush time.
     const { result: stream } = await runWithRequestAsync(request, async () => {
-      return renderToReadableStream(<Component parent={ROOT} />, {
+      enterRequestRegistry("__remote", "streaming")
+      const flightStream = renderToReadableStream(<Component parent={ROOT} />, {
         onError: silenceClientDisconnect,
+      })
+      // Snapshot the registry's pendingWrites at flush time —
+      // the trailer wrapper invokes this callback after the
+      // Flight stream has emitted its last chunk, by which point
+      // every PartialBoundary in the rendered tree has registered.
+      return wrapStreamWithSnapshotTrailer(flightStream, () => {
+        const reg = getActiveRegistry()
+        return reg ? reg.pendingWrites : new Map()
       })
     })
     return new Response(stream, {
