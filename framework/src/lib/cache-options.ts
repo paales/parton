@@ -24,4 +24,16 @@ export interface CacheOptions {
   staleWhileRevalidate?: number
   vary?: Readonly<Record<string, VaryScalar>>
   bypass?: boolean
+  /**
+   * DEV / DEBUG ONLY. When set on a hit-path read, the stored bytes
+   * are emitted through the decoder in chunks separated by `perChunkMs`
+   * (default chunk size `chunkBytes`, 64 if omitted).
+   *
+   * Used to validate end-to-end that the cache's stream-replay path
+   * preserves Suspense streaming — the same primitive a future
+   * `<RemoteFrame>` uses to stitch a slow cross-origin Flight payload
+   * into the host's outer render. Not for production: every hit pays
+   * the artificial latency.
+   */
+  slowSource?: { perChunkMs: number; chunkBytes?: number }
 }

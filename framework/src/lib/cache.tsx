@@ -29,6 +29,7 @@ import {
   type ReactNode,
 } from "react"
 import { createFromReadableStream, renderToReadableStream } from "./flight-runtime.ts"
+import { passthroughRewriter, rewriteFlightStream } from "./flight-rewrite.ts"
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { PartialBoundary, getSpecComponentById } from "./partial.tsx"
@@ -435,6 +436,33 @@ function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
   })
 }
 
+/**
+ * Dev-only. Emits stored bytes in fixed-size chunks separated by
+ * `perChunkMs`. Lets the cache hit path act as a streaming source so
+ * the outer render observes incremental arrival — the same shape a
+ * `<RemoteFrame>` will see from a slow cross-origin Flight payload.
+ */
+function slowBytesToStream(
+  bytes: Uint8Array,
+  perChunkMs: number,
+  chunkBytes: number,
+): ReadableStream<Uint8Array> {
+  let offset = 0
+  const total = bytes.byteLength
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (offset >= total) {
+        controller.close()
+        return
+      }
+      const end = Math.min(offset + chunkBytes, total)
+      controller.enqueue(bytes.subarray(offset, end))
+      offset = end
+      await new Promise((r) => setTimeout(r, perChunkMs))
+    },
+  })
+}
+
 async function renderAndBuffer(children: ReactNode): Promise<Uint8Array> {
   const stream = renderToReadableStream(children)
   return await readAll(stream)
@@ -477,10 +505,34 @@ async function cacheImpl(
           .catch((err) => console.error(`[cache] SWR refresh failed for ${key}:`, err))
           .finally(() => refreshing.delete(key))
       }
-      const decoded = await createFromReadableStream<ReactNode>(bytesToStream(existing.bytes))
-      const resolved = await resolveLazies(decoded)
-      const withStatic = reinject(resolved, partials)
-      return reinjectDynamic(withStatic, existingSnapshots)
+      const rawStream = options.slowSource
+        ? slowBytesToStream(
+            existing.bytes,
+            options.slowSource.perChunkMs,
+            options.slowSource.chunkBytes ?? 64,
+          )
+        : bytesToStream(existing.bytes)
+      // Pipe stored bytes through the row-level rewriter before
+      // decoding. Today: a passthrough. Future: module-ref rewrite
+      // for `<RemoteFrame>` plus wire-level wrapper substitution.
+      const sourceStream = rewriteFlightStream(rawStream, passthroughRewriter)
+      const decoded = await createFromReadableStream<ReactNode>(sourceStream)
+      if (existingSnapshots.size > 0) {
+        // Dynamic-wrapper path: bytes were stored post-strip + re-encode,
+        // so they have no internal Suspense streaming anyway. Resolve
+        // every lazy then substitute placeholders with fresh
+        // `<Component>` JSX so dynamic partons re-render per request.
+        const resolved = await resolveLazies(decoded)
+        const withStatic = reinject(resolved, partials)
+        return reinjectDynamic(withStatic, existingSnapshots)
+      }
+      // Streaming-preservation path: bytes are raw (no dynamic
+      // partons inside). Skip `resolveLazies` so inner Suspense
+      // boundaries stay lazy. `reinject` walks only resolved
+      // elements; lazies pass through unharmed and the outer encoder
+      // emits them as suspended subtrees that resolve as the inner
+      // stream's bytes arrive.
+      return reinject(decoded, partials)
     }
   }
 
@@ -509,12 +561,37 @@ async function renderMissAndStore(
 
   const storagePromise = (async () => {
     const rawBytes = await readAll(storageBranch)
+
+    // Auto-detect path: decode the just-rendered tree and walk it
+    // for dynamic-wrapper elements (PartialBoundary children that
+    // the framework emitted around inner partons).
     const rawDecoded = await createFromReadableStream<ReactNode>(bytesToStream(rawBytes))
     const rawResolved = await resolveLazies(rawDecoded)
-
     const { stripped: holeTree, snapshots } = stripDynamicWrappers(rawResolved, staticIds)
-    const cleanBytes = await renderAndBuffer(holeTree)
 
+    if (snapshots.size === 0) {
+      // Streaming-preservation path: no inner partons to keep live.
+      // Store the raw user-branch bytes verbatim — they retain Flight's
+      // natural Suspense pacing. On hit, slow-replay or fast-replay
+      // both let each inner Suspense reveal incrementally as bytes
+      // arrive at the decoder. (cache-streaming-demo.tsx exercise.)
+      await store.set(
+        key,
+        freshEntry(rawBytes, options.maxAge, options.staleWhileRevalidate, Date.now()),
+      )
+      setSnapshots(key, new Map())
+      return new Map<string, PartialSnapshot>()
+    }
+
+    // Dynamic-wrapper path: inner partons were stripped to placeholders.
+    // Store the re-encoded `holeTree` so on hit we can substitute live
+    // `<Component>` JSX at each placeholder and re-render fresh. The
+    // re-encode flattens Suspense structure inside the cached region —
+    // tolerable here because regions with dynamic partons typically
+    // have no internal streaming worth preserving (e.g. a product grid
+    // resolved from one async query; pricing inside is the dynamic
+    // bit we're keeping live).
+    const cleanBytes = await renderAndBuffer(holeTree)
     await store.set(
       key,
       freshEntry(cleanBytes, options.maxAge, options.staleWhileRevalidate, Date.now()),
@@ -541,10 +618,18 @@ async function refreshEntry(
 ): Promise<void> {
   const { store } = state()
   const stream = renderToReadableStream(stripped)
-  const bytes = await readAll(stream)
-  const decoded = await createFromReadableStream<ReactNode>(bytesToStream(bytes))
-  const resolved = await resolveLazies(decoded)
-  const { stripped: holeTree, snapshots } = stripDynamicWrappers(resolved, new Set(ids))
+  const rawBytes = await readAll(stream)
+  const rawDecoded = await createFromReadableStream<ReactNode>(bytesToStream(rawBytes))
+  const rawResolved = await resolveLazies(rawDecoded)
+  const { stripped: holeTree, snapshots } = stripDynamicWrappers(rawResolved, new Set(ids))
+  if (snapshots.size === 0) {
+    await store.set(
+      key,
+      freshEntry(rawBytes, options.maxAge, options.staleWhileRevalidate, Date.now()),
+    )
+    setSnapshots(key, new Map())
+    return
+  }
   const cleanBytes = await renderAndBuffer(holeTree)
   await store.set(
     key,
