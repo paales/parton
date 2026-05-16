@@ -16,6 +16,11 @@ import {
   getActiveRegistry,
 } from "@parton/framework/lib/partial-registry.ts"
 import { wrapStreamWithSnapshotTrailer } from "@parton/framework/lib/snapshot-trailer.ts"
+import {
+  CAPABILITY_HEADER,
+  decodeCapability,
+  runWithCapability,
+} from "@parton/framework/runtime/capability.ts"
 import { parseRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
   _captureCommitHandle,
@@ -67,18 +72,25 @@ async function handler(request: Request): Promise<Response> {
     //   `registerPartial` somewhere to write. The remote's
     //   registry is throwaway — only the `pendingWrites` map
     //   matters, captured by the trailer wrapper at flush time.
+    const capability = decodeCapability(request.headers.get(CAPABILITY_HEADER))
     const { result: stream } = await runWithRequestAsync(request, async () => {
       enterRequestRegistry("__remote", "streaming")
-      const flightStream = renderToReadableStream(<Component parent={ROOT} />, {
-        onError: silenceClientDisconnect,
-      })
-      // Snapshot the registry's pendingWrites at flush time —
-      // the trailer wrapper invokes this callback after the
-      // Flight stream has emitted its last chunk, by which point
-      // every PartialBoundary in the rendered tree has registered.
-      return wrapStreamWithSnapshotTrailer(flightStream, () => {
-        const reg = getActiveRegistry()
-        return reg ? reg.pendingWrites : new Map()
+      // Capability scope wraps the render so specs can call
+      // `getCapability()` to read host-declared values. Empty
+      // capability when no header was sent (or it failed to
+      // decode) — the remote sees nothing from the host.
+      return runWithCapability(capability, () => {
+        const flightStream = renderToReadableStream(<Component parent={ROOT} />, {
+          onError: silenceClientDisconnect,
+        })
+        // Snapshot the registry's pendingWrites at flush time —
+        // the trailer wrapper invokes this callback after the
+        // Flight stream has emitted its last chunk, by which point
+        // every PartialBoundary in the rendered tree has registered.
+        return wrapStreamWithSnapshotTrailer(flightStream, () => {
+          const reg = getActiveRegistry()
+          return reg ? reg.pendingWrites : new Map()
+        })
       })
     })
     return new Response(stream, {

@@ -16,6 +16,11 @@ import {
   getActiveRegistry,
 } from "@parton/framework/lib/partial-registry.ts"
 import { wrapStreamWithSnapshotTrailer } from "@parton/framework/lib/snapshot-trailer.ts"
+import {
+  CAPABILITY_HEADER,
+  decodeCapability,
+  runWithCapability,
+} from "@parton/framework/runtime/capability.ts"
 import { parseRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
   _captureCommitHandle,
@@ -69,14 +74,17 @@ async function handler(request: Request): Promise<Response> {
       })
     }
     const Component = spec.Component
+    const capability = decodeCapability(request.headers.get(CAPABILITY_HEADER))
     const { result: stream } = await runWithRequestAsync(request, async () => {
       enterRequestRegistry("__remote", "streaming")
-      const flightStream = renderToReadableStream(<Component parent={ROOT} />, {
-        onError: silenceClientDisconnect,
-      })
-      return wrapStreamWithSnapshotTrailer(flightStream, () => {
-        const reg = getActiveRegistry()
-        return reg ? reg.pendingWrites : new Map()
+      return runWithCapability(capability, () => {
+        const flightStream = renderToReadableStream(<Component parent={ROOT} />, {
+          onError: silenceClientDisconnect,
+        })
+        return wrapStreamWithSnapshotTrailer(flightStream, () => {
+          const reg = getActiveRegistry()
+          return reg ? reg.pendingWrites : new Map()
+        })
       })
     })
     return new Response(stream, {

@@ -77,3 +77,30 @@ test("cross-origin remote endpoint returns Flight + snapshot trailer", async ({
   }
   expect(foundAt, "snapshot trailer marker must be present").toBeGreaterThanOrEqual(0)
 })
+
+test("capability-scoped remote reads host-declared values", async ({ page }) => {
+  await page.goto("/remote-frame-crossorigin-demo")
+
+  // The host passes { cart_id, currency, total } via the
+  // `capability` prop on RemoteFrame. The remote spec reads them
+  // via `getCapability()` and renders them into its body.
+  const summary = page.getByTestId("magento-payment-summary")
+  await expect(summary).toBeVisible({ timeout: 5000 })
+  await expect(summary).toContainText("demo-cart-7f3a9")
+  await expect(summary).toContainText("EUR")
+  await expect(page.getByTestId("magento-payment-total")).toContainText("127.45")
+})
+
+test("remote without capability sees no host values", async ({ request }) => {
+  // Direct fetch with no x-parton-capability header — getCapability
+  // returns {} on the remote side, so the body falls back to defaults
+  // (cart_id=<missing>, USD, 0). Response is Flight bytes (JSON-ish),
+  // not HTML — angle brackets are raw, not entity-escaped.
+  const response = await request.get(
+    `${REMOTE_ORIGIN}/__remote/magento-payment-summary`,
+  )
+  expect(response.status()).toBe(200)
+  const text = await response.text()
+  expect(text).toContain("<missing>")
+  expect(text).toContain("USD")
+})

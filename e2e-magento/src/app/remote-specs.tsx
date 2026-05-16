@@ -7,7 +7,7 @@
  * remote endpoint returns 404. `root.tsx` triggers the import.
  */
 
-import { parton, type RenderArgs } from "@parton/framework"
+import { parton, getCapability, type RenderArgs } from "@parton/framework"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -42,6 +42,50 @@ export const MagentoGreeting = parton(
     )
   },
   { selector: "magento-greeting" },
+)
+
+/** A capability-aware parton — reads host-declared values via
+ *  `getCapability()`. The host passes them as the `capability`
+ *  prop on `<RemoteFrame>`; the framework forwards them as a
+ *  signed header and the remote's render scope sees only those
+ *  declared values (no host cookies, no host session, no
+ *  ambient host context). */
+export const MagentoPaymentSummary = parton(
+  async function MagentoPaymentSummaryRender(_: RenderArgs) {
+    await delay(150)
+    const cap = getCapability()
+    const cartId = String(cap.cart_id ?? "<missing>")
+    const currency = String(cap.currency ?? "USD")
+    const total =
+      typeof cap.total === "number" ? cap.total : Number(cap.total ?? 0)
+    return (
+      <div
+        data-testid="magento-payment-summary"
+        style={{
+          padding: "1rem",
+          border: "1px solid rgba(56, 189, 248, 0.4)",
+          background: "rgba(56, 189, 248, 0.08)",
+          borderRadius: "0.5rem",
+          color: "#bae6fd",
+        }}
+      >
+        <strong>Payment summary (capability-scoped)</strong>
+        <div style={{ marginTop: "0.5rem", fontSize: "0.85em" }}>
+          Cart <code>{cartId}</code> · Total{" "}
+          <code data-testid="magento-payment-total">
+            {currency} {total.toFixed(2)}
+          </code>
+        </div>
+        <div style={{ marginTop: "0.5rem", fontSize: "0.75em", opacity: 0.7 }}>
+          These values came from the host via the{" "}
+          <code>x-parton-capability</code> header. The remote has no other
+          access to the host's request context — its own cookies/session/
+          headers belong to the fetch, not the host page.
+        </div>
+      </div>
+    )
+  },
+  { selector: "magento-payment-summary" },
 )
 
 /** A second parton — exercise multiple cross-origin frames in

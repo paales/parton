@@ -100,6 +100,13 @@ export {
   type SessionReadSurface,
 } from "./src/runtime/session.ts"
 
+// ── Capability scoping (RemoteFrame) ───────────────────────────────────
+export {
+  getCapability,
+  type Capability,
+  type CapabilityValue,
+} from "./src/runtime/capability.ts"
+
 // `setSessionValue` (a server action) is deliberately NOT re-exported
 // here. `"use client"` files calling it must deep-import from
 // `@parton/framework/runtime/session-actions.ts` — see the

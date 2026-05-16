@@ -85,6 +85,26 @@ export const RemoteFrameCrossOriginDemoPage = parton(
           />
         </Suspense>
 
+        <Suspense
+          fallback={
+            <Card className="mb-2 p-4" data-testid="rfxd-payment-fallback">
+              <CardContent className="px-0 italic text-muted-foreground">
+                Fetching capability-scoped payment summary…
+              </CardContent>
+            </Card>
+          }
+        >
+          <RemoteFrame
+            src={`${REMOTE_ORIGIN}/__remote/magento-payment-summary`}
+            parent={parent}
+            capability={{
+              cart_id: "demo-cart-7f3a9",
+              currency: "EUR",
+              total: 127.45,
+            }}
+          />
+        </Suspense>
+
         <footer className="mt-4 text-xs text-muted-foreground" data-testid="rfxd-footer">
           Footer rendered at <code>{new Date().toISOString()}</code>. The host
           paints chrome immediately; each cross-origin fetch resolves

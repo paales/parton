@@ -38,6 +38,11 @@ import type { PartialCtx } from "./partial-context.ts"
 import { registerPartial } from "./partial-registry.ts"
 import { parseSnapshotTrailer } from "./snapshot-trailer.ts"
 import { getRequest } from "../runtime/context.ts"
+import {
+  CAPABILITY_HEADER,
+  encodeCapability,
+  type Capability,
+} from "../runtime/capability.ts"
 
 export interface RemoteFrameProps {
   /** Absolute URL or same-origin path of the remote Flight endpoint. */
@@ -60,9 +65,17 @@ export interface RemoteFrameProps {
    *    emits absolute URLs in its module refs.
    *  - `(path) => path`: custom rewrite. */
   rewriteModuleRefs?: boolean | ((path: string) => string)
-  /** Optional headers to send on the remote fetch. The capability
-   *  surface will be carried here once it lands. */
+  /** Optional headers to send on the remote fetch. Composed
+   *  with the capability header (the capability wins on collision). */
   headers?: Record<string, string>
+  /** Host-declared scope the remote can read. Flat record of
+   *  JSON-serializable values; serialized as the
+   *  `x-parton-capability` header. The remote endpoint reads it
+   *  into an ALS context and exposes via `getCapability()` to
+   *  rendering specs. The remote sees ONLY what's declared
+   *  here — the host's cookies don't leak (the fetch is
+   *  `credentials: "omit"`). */
+  capability?: Capability
 }
 
 function defaultModuleRewrite(srcOrigin: string): (path: string) => string {
@@ -108,6 +121,7 @@ export async function RemoteFrame({
   rewriter,
   rewriteModuleRefs,
   headers,
+  capability,
 }: RemoteFrameProps): Promise<ReactNode> {
   // Resolve `src` to an absolute URL. `fetch` in the server runtime
   // doesn't accept bare-path inputs — and we need the origin
@@ -117,7 +131,19 @@ export async function RemoteFrame({
     ? new URL(src, getRequest().url).href
     : src
 
-  const response = await fetch(absoluteSrc, { headers })
+  const requestHeaders: Record<string, string> = { ...(headers ?? {}) }
+  if (capability !== undefined) {
+    requestHeaders[CAPABILITY_HEADER] = encodeCapability(capability)
+  }
+
+  // `credentials: "omit"` is the trust-boundary teeth: even on
+  // same-origin fetches the host's cookies do NOT leak to the
+  // remote. The only host context the remote sees is what was
+  // explicitly forwarded via `capability`.
+  const response = await fetch(absoluteSrc, {
+    headers: requestHeaders,
+    credentials: "omit",
+  })
   if (!response.ok || !response.body) {
     throw new Error(
       `RemoteFrame: fetch failed for ${absoluteSrc} (status ${response.status})`,
