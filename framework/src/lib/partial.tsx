@@ -1096,11 +1096,19 @@ function createSpecComponent<V>(
     // Render receives: extra JSX-prop pass-through, vary result,
     // framework-managed (parent / children). vary wins on key
     // collision — vary's return is the canonical surface.
+    //
+    // `__instanceId` is also forwarded — partial.tsx already used it
+    // to derive the effective id, but a Render that wraps another
+    // Render (e.g. the CMS block wrapper in `runtime/cms-block.ts`)
+    // needs to see it too so it can route its own per-instance work
+    // (CMS content key resolution, etc.). Plain Renders just ignore
+    // the prop.
     const renderProps = {
       ...extraProps,
       ...(varyResult as object),
       parent: childCtx,
       children: outerChildren,
+      ...(instanceIdOverride !== undefined ? { __instanceId: instanceIdOverride } : {}),
     } as V & RenderArgs
     const fallback = opts.fallback ?? null
     const sessionDeps = sessionDepsSet.size > 0 ? Array.from(sessionDepsSet).sort() : undefined
