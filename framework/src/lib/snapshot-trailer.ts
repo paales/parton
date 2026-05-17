@@ -170,16 +170,10 @@ export interface SplitBuffer {
 /**
  * Splits a buffered response into Flight bytes + snapshot map.
  *
- * Buffer-then-split (vs streaming): the host has to wait for the
- * full remote response before any Flight content can be decoded.
- * Trade-off accepted in v1 — each remote frame returns
- * atomically when its endpoint completes. Multiple remote frames
- * still arrive independently to the host (each in its own Suspense
- * boundary), and the host's outer encoder still streams around
- * them. What's lost is streaming WITHIN a single remote payload
- * (a remote with nested Suspense boundaries can't stream those
- * incrementally to the host). Acceptable for the demo, fixable
- * with a holdback-streaming splitter once a real case demands it.
+ * Buffer-then-split: the caller has to wait for the full remote
+ * response before any Flight content can be decoded. Use when the
+ * remote's payload is small or when within-remote streaming isn't
+ * needed. For streaming, use `splitStreamAtSnapshotTrailer`.
  */
 export function parseSnapshotTrailer(bytes: Uint8Array): SplitBuffer {
   const idx = indexOfMarker(bytes, SNAPSHOT_TRAILER_MARKER)
@@ -201,6 +195,113 @@ export function parseSnapshotTrailer(bytes: Uint8Array): SplitBuffer {
     return { flightBytes, snapshots: out }
   } catch {
     return { flightBytes, snapshots: null }
+  }
+}
+
+// ─── Host-side streaming split ─────────────────────────────────────────
+
+export interface SnapshotStreamSplit {
+  /** Pass-through main stream — Flight bytes flow through immediately
+   *  so the decoder can resolve lazies as they arrive (within-remote
+   *  Suspense streams to the host). */
+  mainStream: ReadableStream<Uint8Array>
+  /** Resolves on source-end with the decoded snapshot map (or `null`
+   *  if no trailer was present). Subscribe to register snapshots in
+   *  the host's request registry once the remote has finished. */
+  trailer: Promise<Record<string, PartialSnapshot> | null>
+}
+
+/**
+ * Streaming version of `parseSnapshotTrailer`. Pass-through main
+ * stream lets the host decode the remote's Flight bytes
+ * incrementally (preserves Suspense pacing within the remote
+ * payload). The trailer promise resolves on source-end with the
+ * snapshot map for host-side registration.
+ *
+ * Mirrors the shape of `splitAtFpTrailer` in `fp-trailer-split.ts`.
+ * The marker + trailer bytes leak through to the consumer; Flight
+ * ignores trailing non-Flight noise after the root row resolves.
+ */
+export function splitStreamAtSnapshotTrailer(
+  source: ReadableStream<Uint8Array>,
+): SnapshotStreamSplit {
+  let resolveTrailer!: (v: Record<string, PartialSnapshot> | null) => void
+  let settled = false
+  const trailerPromise = new Promise<Record<string, PartialSnapshot> | null>((r) => {
+    resolveTrailer = (v) => {
+      if (settled) return
+      settled = true
+      r(v)
+    }
+  })
+
+  const marker = SNAPSHOT_TRAILER_MARKER
+  let tail = new Uint8Array(0)
+  const TAIL_CAP = marker.length + 4 + 256 * 1024
+
+  const transformer = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk)
+      if (chunk.length >= TAIL_CAP) {
+        const trimmed = new Uint8Array(TAIL_CAP)
+        trimmed.set(chunk.subarray(chunk.length - TAIL_CAP), 0)
+        tail = trimmed
+      } else {
+        const combined = new Uint8Array(tail.length + chunk.length)
+        combined.set(tail, 0)
+        combined.set(chunk, tail.length)
+        if (combined.length > TAIL_CAP) {
+          const trimmed = new Uint8Array(TAIL_CAP)
+          trimmed.set(combined.subarray(combined.length - TAIL_CAP), 0)
+          tail = trimmed
+        } else {
+          tail = combined
+        }
+      }
+    },
+    flush() {
+      const idx = indexOfMarker(tail, marker)
+      if (idx < 0) {
+        resolveTrailer(null)
+        return
+      }
+      const trailerBytes = tail.subarray(idx + marker.length)
+      if (trailerBytes.length < 4) {
+        resolveTrailer(null)
+        return
+      }
+      const len = new DataView(
+        trailerBytes.buffer,
+        trailerBytes.byteOffset,
+        4,
+      ).getUint32(0, false)
+      if (trailerBytes.length < 4 + len) {
+        resolveTrailer(null)
+        return
+      }
+      const jsonBytes = trailerBytes.subarray(4, 4 + len)
+      try {
+        const raw = JSON.parse(
+          new TextDecoder().decode(jsonBytes),
+        ) as Record<string, SerializedSnapshot>
+        const out: Record<string, PartialSnapshot> = {}
+        for (const [id, ser] of Object.entries(raw)) {
+          out[id] = deserializeSnapshot(ser)
+        }
+        resolveTrailer(out)
+      } catch {
+        resolveTrailer(null)
+      }
+    },
+  })
+
+  source.pipeTo(transformer.writable).catch(() => {
+    resolveTrailer(null)
+  })
+
+  return {
+    mainStream: transformer.readable,
+    trailer: trailerPromise,
   }
 }
 

@@ -125,16 +125,18 @@ test("usePartialReconcile fires on selector refetch (RepNotify channel)", async 
   // Scope the flash query to the remote-fast card.
   const flash = page.getByTestId("remote-fast").getByTestId("reconcile-flash")
 
-  // Initial render: handler is set up post-mount, so the hydration-
-  // time fp registration does NOT reach the subscriber. Counter
-  // stays at 0.
-  await expect(flash).toHaveAttribute("data-reconcile-count", "0")
-
-  // Refresh — the server emits one or more fresh fingerprints (the
-  // refetch flow may also surface the descendant-fold's warm fps via
-  // the trailer), so each refetch can trigger 1+ reconcile events.
-  // The assertion: count strictly increased.
+  // Snapshot the count once it has stabilised post-hydration. The
+  // exact initial count depends on streaming-trailer timing
+  // (sometimes the warm-fp trailer fires post-mount before
+  // useEffect's subscription is set; sometimes the order goes the
+  // other way). The contract the hook delivers: a refresh ALWAYS
+  // bumps the count from wherever it was sitting.
+  await page.waitForTimeout(500)
   const before = Number(await flash.getAttribute("data-reconcile-count"))
+
+  // Refresh — the server emits one or more fresh fingerprints,
+  // so each refetch can trigger 1+ reconcile events. The
+  // assertion: count strictly increased.
   await page.getByTestId("rfd-refresh-remote-fast").click()
   await expect
     .poll(

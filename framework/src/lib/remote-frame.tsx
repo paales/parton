@@ -35,8 +35,11 @@ import {
   type RowRewriter,
 } from "./flight-rewrite.ts"
 import type { PartialCtx } from "./partial-context.ts"
-import { registerPartial } from "./partial-registry.ts"
-import { parseSnapshotTrailer } from "./snapshot-trailer.ts"
+import { registerPartial, type PartialSnapshot } from "./partial-registry.ts"
+import {
+  parseSnapshotTrailer,
+  splitStreamAtSnapshotTrailer,
+} from "./snapshot-trailer.ts"
 import { getRequest } from "../runtime/context.ts"
 import {
   CAPABILITY_HEADER,
@@ -76,6 +79,26 @@ export interface RemoteFrameProps {
    *  here — the host's cookies don't leak (the fetch is
    *  `credentials: "omit"`). */
   capability?: Capability
+  /** Stream the remote's payload through to the host's outer
+   *  encoder instead of buffering first. Default `false`.
+   *
+   *  `true`: the host's decoder starts as the first chunk arrives;
+   *  Suspense boundaries inside the remote payload stream their
+   *  reveals to the host incrementally. Trade-off: snapshot
+   *  registration happens asynchronously (on remote stream-end)
+   *  and the timing can race the host's commit, causing the
+   *  `usePartialReconcile` hook to see initial-render events for
+   *  the remote's PartialBoundary that with the buffered path
+   *  would happen before the subscription was set up. Use when
+   *  the within-remote streaming win outweighs that wrinkle.
+   *
+   *  `false` (default): buffer the full remote response, parse
+   *  the trailer, register snapshots, then decode. Each remote
+   *  arrives atomically; multiple remote frames on the same page
+   *  still parallelise via their own Suspense boundaries. The
+   *  reconcile-hook timing is clean.
+   */
+  streaming?: boolean
 }
 
 function defaultModuleRewrite(srcOrigin: string): (path: string) => string {
@@ -122,6 +145,7 @@ export async function RemoteFrame({
   rewriteModuleRefs,
   headers,
   capability,
+  streaming = false,
 }: RemoteFrameProps): Promise<ReactNode> {
   // Resolve `src` to an absolute URL. `fetch` in the server runtime
   // doesn't accept bare-path inputs — and we need the origin
@@ -150,32 +174,80 @@ export async function RemoteFrame({
     )
   }
 
-  // Buffer-then-split: read the full response, separate Flight
-  // bytes from the snapshot trailer. Losing within-remote
-  // streaming is the cost; gaining unified addressing across the
-  // host/remote boundary is the prize. See `snapshot-trailer.ts`
-  // for the trade-off discussion.
-  const fullBuffer = new Uint8Array(await response.arrayBuffer())
-  const { flightBytes, snapshots } = parseSnapshotTrailer(fullBuffer)
-
-  // Register the remote's snapshots in the host's request
-  // registry — selector-based refetch can now find these ids.
-  // Stamp `source` so `partialFromSnapshot` routes the refetch
-  // back to the remote origin via a fresh `<RemoteFrame>` rather
-  // than trying to look up the spec in the local catalog (which
-  // may not have it in true cross-origin deployments).
-  if (snapshots) {
-    const sourceOrigin = new URL(absoluteSrc).origin
-    for (const [id, snap] of Object.entries(snapshots)) {
-      registerPartial(id, {
-        ...snap,
-        source: {
-          kind: "remote",
-          origin: sourceOrigin,
-          capability: capability as Record<string, unknown> | undefined,
-        },
-      })
+  const sourceOrigin = new URL(absoluteSrc).origin
+  // Only stamp `source` when the remote is genuinely on a
+  // different origin from the host. For same-origin remotes
+  // (`src` was relative or shares the host's origin), the host
+  // already has the spec module in its catalog — the existing
+  // local Component path in `partialFromSnapshot` handles
+  // refetch correctly and is strictly faster than round-tripping
+  // through a fresh `<RemoteFrame>` fetch. Stamping source for
+  // same-origin would force every refetch onto the remote fetch
+  // path, regressing speed and re-introducing the snapshot-
+  // trailer timing concerns for hooks that observe registration
+  // events (`usePartialReconcile`).
+  const hostOrigin = (() => {
+    try {
+      return new URL(getRequest().url).origin
+    } catch {
+      return ""
     }
+  })()
+  const isCrossOrigin = sourceOrigin !== hostOrigin && hostOrigin !== ""
+  const stampSource = (snap: PartialSnapshot): PartialSnapshot =>
+    isCrossOrigin
+      ? {
+          ...snap,
+          source: {
+            kind: "remote",
+            origin: sourceOrigin,
+            capability: capability as Record<string, unknown> | undefined,
+          },
+        }
+      : snap
+
+  let flightStreamForDecode: ReadableStream<Uint8Array>
+
+  if (streaming) {
+    // Streaming split: main stream flows through immediately so
+    // the decoder can resolve lazies as bytes arrive. Snapshot
+    // registration happens asynchronously on remote stream-end.
+    // Ordering: the host's outer encoder can't finish serializing
+    // this remote subtree until all inner lazies resolve, which
+    // can't happen before the inner stream ends. The
+    // `trailer.then` microtask fires on source-end — before the
+    // outer encoder's stream-flush commit — so the snapshots
+    // are in the registry's `pendingWrites` by the time
+    // `commitRequestRegistry` runs.
+    const split = splitStreamAtSnapshotTrailer(response.body)
+    flightStreamForDecode = split.mainStream
+    void split.trailer.then((snapshots) => {
+      if (!snapshots) return
+      for (const [id, snap] of Object.entries(snapshots)) {
+        registerPartial(id, stampSource(snap))
+      }
+    })
+  } else {
+    // Buffer-then-split (default): read the full response,
+    // separate Flight bytes from the snapshot trailer, register
+    // synchronously. Snapshot registration ordering is clean —
+    // no race with the outer commit, no surprise re-fires of
+    // hooks like `usePartialReconcile`. Cost: no within-remote
+    // streaming (a remote with nested Suspense reveals them all
+    // at once when the response finishes).
+    const fullBuffer = new Uint8Array(await response.arrayBuffer())
+    const { flightBytes, snapshots } = parseSnapshotTrailer(fullBuffer)
+    if (snapshots) {
+      for (const [id, snap] of Object.entries(snapshots)) {
+        registerPartial(id, stampSource(snap))
+      }
+    }
+    flightStreamForDecode = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(flightBytes)
+        controller.close()
+      },
+    })
   }
 
   // Auto-derive module rewrite policy from `src`:
@@ -199,12 +271,6 @@ export async function RemoteFrame({
   const pipeline: RowRewriter =
     rewriter != null ? composeRewriters(moduleRw, rewriter) : moduleRw
 
-  const flightStream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(flightBytes)
-      controller.close()
-    },
-  })
-  const rewrittenStream = rewriteFlightStream(flightStream, pipeline)
+  const rewrittenStream = rewriteFlightStream(flightStreamForDecode, pipeline)
   return await createFromReadableStream<ReactNode>(rewrittenStream)
 }
