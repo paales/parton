@@ -35,6 +35,8 @@ import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 import { PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
 import type { CacheOptions } from "./cache-options.ts"
+import { RemoteFrame } from "./remote-frame.tsx"
+import type { Capability } from "../runtime/capability.ts"
 import {
   enterRequestRegistry,
   getRouteSnapshots,
@@ -1560,6 +1562,28 @@ function partialFromSnapshot(
   snap: PartialSnapshot,
   overrideProps: Record<string, unknown> | undefined,
 ): ReactNode {
+  const parent: PartialCtx = {
+    path: snap.parentPath,
+    frameChain: snap.parentFrameChain,
+  }
+
+  // Remote-sourced snapshot: route the refetch back to the
+  // remote endpoint via a fresh `<RemoteFrame>`. The remote
+  // re-renders, ships a new trailer with updated snapshots, and
+  // the host re-registers with the same `source` stamp — keeping
+  // future refetches routed correctly. The capability from the
+  // original placement is carried through so the remote sees the
+  // same scoped values it saw on the cold render.
+  if (snap.source?.kind === "remote") {
+    return (
+      <RemoteFrame
+        src={`${snap.source.origin}/__remote/${encodeURIComponent(id)}`}
+        parent={parent}
+        capability={snap.source.capability as Capability | undefined}
+      />
+    )
+  }
+
   // Try direct id lookup first — singleton specs register their
   // Component under spec.id, which is also the snapshot id.
   let Component = componentById.get(id)
@@ -1573,10 +1597,6 @@ function partialFromSnapshot(
     }
   }
   if (!Component) return null
-  const parent: PartialCtx = {
-    path: snap.parentPath,
-    frameChain: snap.parentFrameChain,
-  }
   // Replay any call-site props captured during the streaming render
   // (e.g. `<Slow flavor={…}>`). On top of those, overlay per-request
   // props the client sent via `?partialProps=` — that's how the

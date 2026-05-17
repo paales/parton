@@ -89,18 +89,26 @@ export const MagentoPaymentSummary = parton(
 )
 
 /** A second parton — exercise multiple cross-origin frames in
- *  parallel. Longer delay than the first to make ordering visible. */
+ *  parallel. Longer delay than the first to make ordering visible.
+ *  Varies on `tick` so each render produces a fresh fingerprint
+ *  (so the host's selector-targeted refetch produces visibly
+ *  different content). The render embeds the tick as
+ *  `data-tick=` so e2e tests can assert it strictly changes. */
 export const MagentoStockTicker = parton(
-  async function MagentoStockTickerRender(_: RenderArgs) {
+  async function MagentoStockTickerRender(
+    { tick }: { tick: number } & RenderArgs,
+  ) {
     await delay(700)
     const tickers = [
       { sym: "PTON", price: 42.17 + Math.random() * 4 },
       { sym: "RCMS", price: 187.5 + Math.random() * 10 },
       { sym: "FLGT", price: 91.04 + Math.random() * 5 },
     ]
+    void tick
     return (
       <div
         data-testid="magento-stocks"
+        data-tick={String(tick)}
         style={{
           padding: "1rem",
           border: "1px solid rgba(244, 114, 182, 0.4)",
@@ -125,5 +133,8 @@ export const MagentoStockTicker = parton(
       </div>
     )
   },
-  { selector: "magento-stocks" },
+  {
+    selector: "magento-stocks",
+    vary: () => ({ tick: Date.now() }),
+  },
 )

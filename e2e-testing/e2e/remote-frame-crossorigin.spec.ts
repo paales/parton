@@ -14,10 +14,13 @@ const REMOTE_ORIGIN = "http://localhost:5181"
 test.beforeAll(async () => {
   // Skip the suite if e2e-magento isn't running. The user can
   // start it with `yarn dev:magento` in a separate terminal.
+  // 15s timeout — vite's first hit on `/__remote/<id>` forces a
+  // cold compile of the parton module, which on a clean dep cache
+  // can take several seconds.
   const ctx = await request.newContext()
   try {
     const probe = await ctx.get(`${REMOTE_ORIGIN}/__remote/magento-greeting`, {
-      timeout: 2000,
+      timeout: 15000,
     })
     if (!probe.ok()) test.skip(true, "e2e-magento returned non-2xx")
   } catch {
@@ -92,6 +95,53 @@ test("capability-scoped remote reads host-declared values", async ({ page }) => 
   await expect(summary).toContainText("demo-cart-7f3a9")
   await expect(summary).toContainText("EUR")
   await expect(page.getByTestId("magento-payment-total")).toContainText("127.45")
+})
+
+test("selector refetch routes back to the cross-origin remote (server wire)", async ({
+  request,
+}) => {
+  // Wire-level validation that doesn't depend on the host page
+  // rendering successfully (cross-origin dev rendering depends on
+  // vite-rsc module IDs happening to be `/@fs/` paths, which
+  // varies session-to-session). We:
+  //  1. Hit `/remote-frame-crossorigin-demo` once to register
+  //     magento-stocks in the host's registry with source stamped.
+  //  2. Issue the cache-mode refetch URL.
+  //  3. Assert the response is cache-mode (not streaming-mode
+  //     fallback) and carries a fresh data-tick (proving the
+  //     remote was re-fetched and re-rendered).
+  await request.get("/remote-frame-crossorigin-demo")
+  // Capture the initial tick.
+  const initial = await request.get(
+    "/remote-frame-crossorigin-demo_.rsc?partials=magento-stocks",
+  )
+  const initialBody = await initial.text()
+  const initialTickMatch = initialBody.match(/"data-tick":"(\d+)"/)
+  expect(initialTickMatch).not.toBeNull()
+  const initialTick = initialTickMatch?.[1] ?? ""
+
+  // Wait long enough that Date.now() differs.
+  await new Promise((r) => setTimeout(r, 30))
+
+  // Second refetch — fresh remote render → fresh tick.
+  const refetch = await request.get(
+    "/remote-frame-crossorigin-demo_.rsc?partials=magento-stocks",
+  )
+  expect(refetch.status()).toBe(200)
+  const body = await refetch.text()
+
+  // The response must be cache-mode (not the streaming-mode
+  // fallback / full Root render).
+  expect(body, "expected cache-mode response (PartialsClient mode=cache)").toContain(
+    '"mode":"cache"',
+  )
+  // The data-tick must have advanced — proves the remote was
+  // re-fetched and the spec's `vary: () => ({ tick: Date.now() })`
+  // produced a new value.
+  const tickMatch = body.match(/"data-tick":"(\d+)"/)
+  expect(tickMatch, "response must contain data-tick from a fresh remote render").not.toBeNull()
+  const refetchTick = tickMatch?.[1] ?? ""
+  expect(Number(refetchTick)).toBeGreaterThan(Number(initialTick))
 })
 
 test("remote without capability sees no host values", async ({ request }) => {

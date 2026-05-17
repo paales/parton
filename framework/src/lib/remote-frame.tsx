@@ -158,15 +158,23 @@ export async function RemoteFrame({
   const fullBuffer = new Uint8Array(await response.arrayBuffer())
   const { flightBytes, snapshots } = parseSnapshotTrailer(fullBuffer)
 
-  // Register the remote's snapshots in the HOST's request
-  // registry — selector-based refetch can now find these ids and
-  // route through the normal cache-mode path. Same-origin v1: the
-  // refetch hits the host's local spec (catalog has it). Cross-
-  // origin v2 will need a `source: "remote:<origin>"` annotation
-  // on the snapshot so refetch routes back to the remote.
+  // Register the remote's snapshots in the host's request
+  // registry — selector-based refetch can now find these ids.
+  // Stamp `source` so `partialFromSnapshot` routes the refetch
+  // back to the remote origin via a fresh `<RemoteFrame>` rather
+  // than trying to look up the spec in the local catalog (which
+  // may not have it in true cross-origin deployments).
   if (snapshots) {
+    const sourceOrigin = new URL(absoluteSrc).origin
     for (const [id, snap] of Object.entries(snapshots)) {
-      registerPartial(id, snap)
+      registerPartial(id, {
+        ...snap,
+        source: {
+          kind: "remote",
+          origin: sourceOrigin,
+          capability: capability as Record<string, unknown> | undefined,
+        },
+      })
     }
   }
 

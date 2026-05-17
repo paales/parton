@@ -95,7 +95,25 @@ export interface PartialSnapshot {
    *  on each route and unions the specs whose deps include the
    *  mutated key into a single `{invalidate: {selector}}` directive. */
   sessionDeps?: readonly string[]
+  /** Origin annotation for selector-targeted refetch routing.
+   *
+   *  Default (`undefined`) — the snapshot was registered by a
+   *  local render; `partialFromSnapshot` looks up the spec
+   *  Component in the local catalog and re-renders.
+   *
+   *  `{ kind: "remote", origin, capability? }` — the snapshot was
+   *  registered by `<RemoteFrame>` from a remote endpoint's
+   *  trailer. `partialFromSnapshot` returns a fresh `<RemoteFrame>`
+   *  pointed at `<origin>/__remote/<id>` (carrying the original
+   *  capability), so refetch routes back to the remote rather
+   *  than rendering locally. Server-only field; not serialized
+   *  over the wire (the host stamps it when consuming a remote's
+   *  trailer). */
+  source?: SnapshotSource
 }
+
+/** Per-snapshot origin annotation. See `PartialSnapshot.source`. */
+export type SnapshotSource = { kind: "remote"; origin: string; capability?: Record<string, unknown> }
 
 const HINT_LRU_MAX = 10_000
 

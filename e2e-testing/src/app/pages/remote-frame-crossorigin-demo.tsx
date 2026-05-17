@@ -32,6 +32,7 @@
 import { parton, RemoteFrame, type RenderArgs } from "@parton/framework"
 import { Suspense } from "react"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
+import { RemoteRefreshButton } from "../components/remote-refresh-button.tsx"
 
 const REMOTE_ORIGIN = "http://localhost:5181"
 
@@ -40,6 +41,10 @@ export const RemoteFrameCrossOriginDemoPage = parton(
     return (
       <>
         <header className="mb-4" data-testid="rfxd-header">
+          <div className="mb-2 flex flex-wrap gap-2">
+            <RemoteRefreshButton selector="magento-stocks" label="Refresh stocks (cross-origin)" />
+            <RemoteRefreshButton selector="magento-payment-summary" label="Refresh payment" />
+          </div>
           <h1 className="text-2xl font-semibold">Cross-Origin Remote Frame Demo</h1>
           <p className="text-sm text-muted-foreground">
             Host rendered at <code>{new Date().toISOString()}</code>.
