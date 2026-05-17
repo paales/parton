@@ -398,6 +398,35 @@ either the host's public key (asymmetric) or a shared secret
 non-optional; for "Adobe-vetted module in a trusted deployment"
 it's overkill.
 
+### RemoteFrame — same-origin batching
+
+Today `<RemoteFrame>` dedups identical `(src, capability)`
+placements (single fetch shared across copies). But multiple
+RemoteFrames pointing at DIFFERENT ids on the same origin still
+fire N separate requests. Common case in commerce: a checkout
+page with three Stripe remotes (payment-method picker, summary,
+upsells) — three round-trips to Stripe instead of one.
+
+Batching design: the host collects same-origin RemoteFrame
+placements within a microtask window, issues one
+`GET <origin>/__remote/?ids=a,b,c`, the remote returns a
+length-prefixed multi-payload response. Each placement's Flight
+payload + snapshot trailer is split out and decoded
+independently.
+
+Capability complication: each placement can carry its own
+capability. The batched request must transport per-id
+capabilities — probably an envelope like
+`X-Parton-Capabilities: { id: cap, ... }` on the request and
+matching per-id sections in the response. Without per-id caps,
+batching would have to fall back to one-fetch-per-distinct-cap,
+which still helps when caps are uniform.
+
+Open: how the remote endpoint structures the batched response.
+Length-prefixed sections (like the existing snapshot trailer)
+keep parsing simple; a multipart shape compresses better with
+HTTP/2 frame coalescing but adds a content-type parser.
+
 ### RemoteFrame v2 — within-remote streaming
 
 `<RemoteFrame>` buffers the full remote response today to keep
