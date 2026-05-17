@@ -31,6 +31,7 @@ interface RemoteFrameProps {
   rewriter?: RowRewriter
   rewriteModuleRefs?: boolean | ((path: string) => string)
   headers?: Record<string, string>
+  streaming?: boolean
 }
 ```
 
@@ -42,6 +43,91 @@ interface RemoteFrameProps {
 | `rewriter` | Author-supplied per-row Flight rewriter. Composes with the auto-derived module-ref rewriter (module rewrite runs first; author runs second). |
 | `rewriteModuleRefs` | `true` (default for absolute `src`) — rewrite relative module paths to the remote origin. `false` — pass through. A function — custom transform. `/@fs/` and `/@id/` paths are left alone (dev-mode filesystem-absolute, both processes can resolve them). |
 | `headers` | Extra headers on the remote fetch. Composed with `capability` (capability wins on collision). |
+| `streaming` | `false` by default — buffer the full remote response before decoding (clean snapshot ordering, no within-remote streaming). `true` — pass-through main stream, register snapshots asynchronously on remote stream-end. Trade-off: within-remote Suspense reveals stream to the host, but the `usePartialReconcile` hook can fire on initial mount due to the timing race. Opt in when within-remote streaming is worth the wrinkle. |
+
+## Per-request fetch dedup
+
+Identical `<RemoteFrame src capability>` placements on the same
+request share one fetch. Stored in a `WeakMap<Request, Map<key,
+Promise>>` so the cache dies with the request. Dedup key:
+`src + "\0" + base64(capability JSON)`. Streaming-mode RemoteFrames
+opt out of dedup (their streams are single-use; tee-ing would
+defeat the streaming purpose).
+
+## Selector-targeted refetch routing
+
+`nav.reload({selector: "<id>"})` from a client component refetches
+the partial. Routing depends on whether the snapshot was registered
+by a local render or by `<RemoteFrame>`:
+
+- **Local**: `partialFromSnapshot` looks up the spec Component in
+  the local catalog and re-renders. Fast.
+- **Remote (cross-origin)**: `partialFromSnapshot` returns a fresh
+  `<RemoteFrame src={origin}/__remote/{id} capability={...} />`.
+  The host fetches the remote endpoint again, re-stitches.
+
+The distinction lives on the snapshot via `source: { kind:
+"remote", origin, capability? }`. RemoteFrame stamps this only
+for genuinely-cross-origin remotes — same-origin remotes use the
+local catalog path (faster, no round-trip to the same machine).
+
+## Frame navigation (navigating within a RemoteFrame)
+
+Falls out of composing `<Frame>` + a parton wrapper + the
+RemoteFrame — no dedicated primitive needed:
+
+```tsx
+<Frame name="checkout" initialUrl="/?step=shipping" parent={parent}>
+  {(p) => (
+    <>
+      <CheckoutStepNav />          {/* client buttons: nav.navigate(?step=…) */}
+      <RemoteCheckoutFrame parent={p} />
+    </>
+  )}
+</Frame>
+
+const RemoteCheckoutFrame = parton(
+  function Render({ step, parent }) {
+    return (
+      <Suspense fallback={…}>
+        <RemoteFrame
+          src={`${REMOTE_ORIGIN}/__remote/checkout-step?step=${step}`}
+          parent={parent}
+        />
+      </Suspense>
+    )
+  },
+  {
+    selector: "remote-checkout-frame",
+    vary: ({ search: { step = "shipping" } }) => ({ step }),
+  },
+)
+```
+
+How it composes:
+
+1. `<Frame>` opens a per-name URL scope (session-backed; survives
+   reloads; per-tab shared).
+2. The wrapper parton's `vary` reads `?step=` from the frame URL
+   (the framework's `getRequest()` returns the frame-resolved
+   URL via `parent.frameChain`).
+3. The parton threads `step` into `<RemoteFrame>`'s `src` as a
+   query param.
+4. Client buttons inside the frame call
+   `useNavigation("checkout").navigate("/?step=…")`. The frame
+   URL updates; the wrapper parton re-runs vary; src changes;
+   RemoteFrame re-fetches.
+5. The page URL is unaffected; other frames are unaffected.
+
+What this DOESN'T need:
+- A "navigateRemote" API on RemoteFrame.
+- Special wiring between Frame and RemoteFrame.
+- A new server-side primitive.
+
+The vary chain is the bridge — same pattern as navigating any
+local parton.
+
+## Security note: credentials omit
 
 The fetch is always `credentials: "omit"`. The host's cookies do
 NOT leak to the remote, even on same-origin embeddings. The only
@@ -211,6 +297,38 @@ remote frames still arrive in parallel (each in its own Suspense
 boundary) — what doesn't work is a single remote with nested
 Suspense streaming each reveal to the host. Holdback-streaming
 is filed in `snapshot-trailer.ts` as a follow-up.
+
+## Production deployment
+
+`<RemoteFrame>` is designed for independently-deployed remote
+processes. The dev-mode demos run host + remote on the same
+machine for convenience, but each app builds independently
+(`yarn build` for the host, `yarn build:magento` for the remote)
+and serves independently (`yarn preview` and `yarn
+preview:magento`, or `yarn preview:all` to run both with
+clean port assignments).
+
+In dev, both apps' vite-rsc plugins happen to resolve `/@fs/...`
+filesystem-absolute module paths against the same files (so
+shared `@parton/framework` modules like `PartialErrorBoundary`
+load correctly cross-origin without rewriting). The
+auto-derived `defaultModuleRewrite` skips `/@fs/` and `/@id/`
+paths for this reason. In production, the bundled asset URLs
+are stable per-deployment (hashed paths under `/assets/...`),
+the rewriter prepends the remote origin, and CORS on the JS
+assets allows the host browser to load them.
+
+Cross-origin demo, production-mode validation:
+
+```sh
+yarn build:all       # builds host + magento
+yarn preview:all     # serves both: host:5173, magento:5181
+# Open http://localhost:5173/remote-frame-crossorigin-demo
+```
+
+The cross-origin tests pass against the production preview;
+known-flaky in dev due to vite-rsc emitting unstable hash IDs
+across cold dev starts.
 
 ## Demos
 
