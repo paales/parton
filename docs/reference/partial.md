@@ -293,8 +293,9 @@ Leading `#` and `.` are stripped on parse — cosmetic only, kept for
 back-compat. `"#hero"`, `".hero"`, and `"hero"` are equivalent.
 
 The **first label** is also the spec's catalog id (the wire `id`,
-the snapshot key, the value `useEnclosingPartialId()` returns). For
-singleton blocks, it's also the CMS storage row the spec reads from.
+the snapshot key, the id that `selector: "@self"` resolves to from
+inside the partial). For singleton blocks, it's also the CMS storage
+row the spec reads from.
 
 Auto-derived from `Render.name` when omitted: `PokemonHeroRender` →
 `"pokemon-hero"`.

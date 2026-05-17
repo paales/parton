@@ -52,7 +52,7 @@ test("dynamic live-price Partial is discoverable and individually refetchable by
 
   // The refetch should hit the RSC endpoint with a single id. The id
   // is the framework-derived per-instance instance id — opaque on the
-  // wire but stable for self-refetch via `useEnclosingPartialId()`.
+  // wire but stable for self-refetch via the `@self` selector token.
   await expect.poll(() => rscRefetches.length, { timeout: 5000 }).toBeGreaterThan(0)
   const partials = rscRefetches[0].partials
   expect(partials).toBeTruthy()

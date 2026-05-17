@@ -1076,24 +1076,17 @@ export const FrameNameContext = createContext<readonly string[]>(
 
 /**
  * Enclosing partial instance id. Set by every spec's render via the
- * `<PartialIdContext.Provider>` wrapper around its body. Client
- * descendants read it via `useEnclosingPartialId()` to self-target
- * for refetch (`nav.reload({ selector: \`#\${id}\` })`) when external
- * code can only address them by class.
+ * `<PartialIdContext.Provider>` wrapper around its body. Self-target
+ * reload from a client descendant by writing the `@self` token —
+ * `useNavigation().reload()` reads this context and substitutes:
+ *
+ *     const [reload] = useNavigation().reload()
+ *     <Button onClick={() => reload({ selector: "@self" })} />
+ *
+ * `usePartialReconcile` also reads it to scope its subscription to
+ * the enclosing partial's reconcile events.
  */
 export const PartialIdContext = createContext<string | null>(null)
-
-/**
- * Read the enclosing partial's effective instance id. Returns `null`
- * when called outside any spec render (shouldn't happen in practice).
- *
- *     const id = useEnclosingPartialId()
- *     const nav = useNavigation()
- *     onClick={() => nav.reload({ selector: \`#\${id}\` })}
- */
-export function useEnclosingPartialId(): string | null {
-  return useContext(PartialIdContext)
-}
 
 /**
  * Fires `handler` whenever the enclosing parton's server fingerprint
@@ -1114,7 +1107,7 @@ export function useEnclosingPartialId(): string | null {
  * a no-op when called outside a parton (id is `null`).
  */
 export function usePartialReconcile(handler: (event: PartialReconcileEvent) => void): void {
-  const id = useEnclosingPartialId()
+  const id = useContext(PartialIdContext)
   const handlerRef = useRef(handler)
   useEffect(() => {
     handlerRef.current = handler
@@ -1422,6 +1415,104 @@ function parseOptionsSelector(
 ): { labels: string[] } {
   if (!options?.selector) return { labels: [] }
   return parseSelectorClient(options.selector)
+}
+
+// ─── @self token resolution ───────────────────────────────────────
+
+/**
+ * Special selector token resolved at fire time to the enclosing
+ * partial's id. The framework provides the id via `PartialIdContext`
+ * (set by `PartialErrorBoundary`); the hook captures it at render
+ * and substitutes here.
+ *
+ *   <Button onClick={() => reload({ selector: "@self" })} />
+ *
+ * Works in:
+ *   - `selector: "@self"`             — single token
+ *   - `selector: ["@self", ".price"]` — array form, mixed freely
+ *   - `selector: "@self .price"`      — space-separated string
+ *   - `props: { "@self": {...} }`     — same resolution on the key
+ *
+ * If `@self` appears but the call site is outside any partial
+ * (ambient id is null), throws a clear error rather than silently
+ * dropping the token — almost always a wiring mistake worth
+ * surfacing loudly.
+ */
+const SELF_TOKEN = "@self"
+
+function containsSelfInSelector(s: string | string[] | undefined): boolean {
+  if (s == null) return false
+  if (Array.isArray(s)) return s.some((t) => typeof t === "string" && t.trim() === SELF_TOKEN)
+  return s.split(/\s+/).some((t) => t === SELF_TOKEN)
+}
+
+function containsSelfInProps(p: Record<string, unknown> | undefined): boolean {
+  if (p == null) return false
+  return Object.prototype.hasOwnProperty.call(p, SELF_TOKEN)
+}
+
+function replaceSelfInSelector(
+  s: string | string[],
+  id: string,
+): string | string[] {
+  if (Array.isArray(s)) return s.map((t) => (t === SELF_TOKEN ? id : t))
+  return s
+    .split(/\s+/)
+    .map((t) => (t === SELF_TOKEN ? id : t))
+    .join(" ")
+}
+
+function replaceSelfInProps<V>(p: Record<string, V>, id: string): Record<string, V> {
+  if (!containsSelfInProps(p)) return p
+  const out: Record<string, V> = {}
+  for (const [k, v] of Object.entries(p)) out[k === SELF_TOKEN ? id : k] = v
+  return out
+}
+
+function resolveSelfInReloadOptions(
+  options: FrameworkReloadOptions | undefined,
+  ambientId: string | null,
+): FrameworkReloadOptions | undefined {
+  if (!options) return options
+  const inSelector = containsSelfInSelector(options.selector)
+  const inProps = containsSelfInProps(options.props)
+  if (!inSelector && !inProps) return options
+  if (!ambientId) {
+    throw new Error(
+      `"${SELF_TOKEN}" used outside a partial — no enclosing partial id is available`,
+    )
+  }
+  const next: FrameworkReloadOptions = { ...options }
+  if (inSelector && options.selector !== undefined) {
+    next.selector = replaceSelfInSelector(options.selector, ambientId)
+  }
+  if (inProps && options.props !== undefined) {
+    next.props = replaceSelfInProps(options.props, ambientId)
+  }
+  return next
+}
+
+function resolveSelfInNavigateOptions(
+  options: FrameworkNavigateOptions | undefined,
+  ambientId: string | null,
+): FrameworkNavigateOptions | undefined {
+  if (!options) return options
+  const inSelector = containsSelfInSelector(options.selector)
+  const inProps = containsSelfInProps(options.props)
+  if (!inSelector && !inProps) return options
+  if (!ambientId) {
+    throw new Error(
+      `"${SELF_TOKEN}" used outside a partial — no enclosing partial id is available`,
+    )
+  }
+  const next: FrameworkNavigateOptions = { ...options }
+  if (inSelector && options.selector !== undefined) {
+    next.selector = replaceSelfInSelector(options.selector, ambientId)
+  }
+  if (inProps && options.props !== undefined) {
+    next.props = replaceSelfInProps(options.props, ambientId)
+  }
+  return next
 }
 
 // ─── Frame entry projection ───────────────────────────────────────
@@ -1884,11 +1975,16 @@ function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
     pending: boolean
     error: NavigationError | null
   }>({ pending: false, error: null })
+  // Capture the enclosing partial id at render so the fire fn can
+  // resolve `@self` tokens. The id may be null outside a partial;
+  // resolveSelfInReloadOptions throws on use in that case.
+  const ambientPartialId = useContext(PartialIdContext)
   const fire = useMemo<Reload>(
     () => async (options) => {
       setState({ pending: true, error: null })
       try {
-        const entry = await imperative.reload(options)
+        const resolved = resolveSelfInReloadOptions(options, ambientPartialId)
+        const entry = await imperative.reload(resolved)
         setState({ pending: false, error: null })
         return entry
       } catch (err) {
@@ -1908,7 +2004,7 @@ function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
         throw navErr
       }
     },
-    [imperative],
+    [imperative, ambientPartialId],
   )
   return [fire, state.pending, state.error] as const
 }
@@ -1922,11 +2018,13 @@ function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
     pending: boolean
     error: NavigationError | null
   }>({ pending: false, error: null })
+  const ambientPartialId = useContext(PartialIdContext)
   const fire = useMemo<Navigate>(
     () => async (target, options) => {
       setState({ pending: true, error: null })
       try {
-        const entry = await imperative.navigate(target, options)
+        const resolved = resolveSelfInNavigateOptions(options, ambientPartialId)
+        const entry = await imperative.navigate(target, resolved)
         setState({ pending: false, error: null })
         return entry
       } catch (err) {
@@ -1946,7 +2044,7 @@ function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
         throw navErr
       }
     },
-    [imperative],
+    [imperative, ambientPartialId],
   )
   return [fire, state.pending, state.error] as const
 }

@@ -1,31 +1,28 @@
 "use client"
 
-import {
-  useEnclosingPartialId,
-  useNavigation,
-} from "@parton/framework/lib/partial-client.tsx"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 
 /**
- * Per-card refresh button. Reads the enclosing partial instance's id
- * via `useEnclosingPartialId()` and refetches just that one. The id
- * for a `<LivePrice sku=…/>` placement auto-derives in the framework
- * from `spec.id + hash(props)` — each card gets a distinct one, so
- * the refetch targets exactly the clicked card. The "refresh all"
+ * Per-card refresh button. The `@self` selector token resolves to
+ * the enclosing partial's effective id at fire time — the framework
+ * reads it off `PartialIdContext` which `PartialErrorBoundary`
+ * populates per instance. Each `<LivePrice sku=…/>` placement gets
+ * a distinct id (auto-derived from `spec.id + hash(props)`), so the
+ * refetch targets exactly the clicked card. The "refresh all"
  * companion button uses the class-level `.price` selector to fan
  * out across every instance.
  */
 export function RefreshPriceButton({ sku }: { sku: string }) {
   const [reload, isPending] = useNavigation().reload()
-  const myId = useEnclosingPartialId()
   return (
     <Button
       type="button"
       size="icon-xs"
       variant="ghost"
       data-testid={`refresh-price-${sku}`}
-      onClick={() => myId && reload({ selector: myId })}
-      disabled={isPending || !myId}
+      onClick={() => reload({ selector: "@self" })}
+      disabled={isPending}
       className="text-primary"
     >
       {isPending ? "…" : "↻"}

@@ -35,7 +35,6 @@ export {
   PartialsClient,
   getCachedPartialIds,
   useActivate,
-  useEnclosingPartialId,
   useNavigation,
   usePartialReconcile,
   useScrollRestore,

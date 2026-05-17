@@ -124,11 +124,11 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
         </div>
       )
     }
-    // Provide the enclosing-partial id to client descendants. Hooks
-    // like `useEnclosingPartialId()` read this for self-targeting
-    // refetch — e.g. an in-block `<RefreshButton>` that resolves to
-    // `nav.reload({ selector: "#" + id })` regardless of how the
-    // instance is externally addressable.
+    // Provide the enclosing-partial id to client descendants.
+    // `useNavigation().reload()` reads this context to resolve the
+    // `@self` token — e.g. an in-block `<RefreshButton>` that fires
+    // `reload({ selector: "@self" })` regardless of how the instance
+    // is externally addressable.
     return (
       <PartialIdContext.Provider value={this.props.partialId}>
         {this.props.children}

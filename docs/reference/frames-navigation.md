@@ -135,6 +135,34 @@ function RefreshButton({ id }: { id: string }) {
 }
 ```
 
+### `@self` — refetch the enclosing partial
+
+`"@self"` is a special selector token the hook resolves to the
+enclosing partial's effective id (read from the React context that
+`PartialErrorBoundary` populates). Lets a client component inside a
+partial body fire `reload({ selector: "@self" })` without threading
+the id through props.
+
+```tsx
+const [reload, isPending] = useNavigation().reload()
+return (
+  <Button onClick={() => reload({ selector: "@self" })} disabled={isPending}>
+    Refresh this card
+  </Button>
+)
+```
+
+Works in `selector` (string or array, mixed with other labels) and
+as a `props` key:
+
+```tsx
+reload({ selector: ["@self", ".price"], props: { "@self": { warm: true } } })
+```
+
+Used outside any partial, `@self` rejects the fire fn's promise with
+a `NavigationError` (kind `decode`, message explains the wiring) —
+loud failure beats silent drop.
+
 ### Error handling
 
 Failures (network down, HTTP 5xx, Flight decode error) reject the

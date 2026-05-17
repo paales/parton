@@ -3,7 +3,7 @@ import { act, useRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useNavigation } from "../partial-client.tsx"
+import { PartialIdContext, useNavigation } from "../partial-client.tsx"
 import { NavigationError } from "../../runtime/navigation-error.ts"
 
 /**
@@ -154,5 +154,96 @@ describe("useNavigation().reload() tuple hook", () => {
     const last = cap.states[cap.states.length - 1]
     expect(last.pending).toBe(false)
     expect(last.error).toBeNull()
+  })
+})
+
+describe('"@self" token resolution', () => {
+  /**
+   * Render Probe under a PartialIdContext.Provider so the ambient
+   * id is set — same wiring `<PartialErrorBoundary>` does in the
+   * real tree.
+   */
+  async function renderInPartial(cap: Capture, partialId: string | null) {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(
+        <PartialIdContext.Provider value={partialId}>
+          <Probe capture={cap} />
+        </PartialIdContext.Provider>,
+      )
+    })
+  }
+
+  it('substitutes "@self" with the ambient partial id in selector', async () => {
+    const cap = newCapture()
+    await renderInPartial(cap, "hero:abc")
+
+    await act(async () => {
+      await cap.fire!({ selector: "@self" })
+    })
+
+    const url = new URL(refetchSpy.mock.calls[0]?.[0] as string)
+    expect(url.searchParams.get("partials")).toBe("hero:abc")
+  })
+
+  it('substitutes "@self" inside an array selector alongside other labels', async () => {
+    const cap = newCapture()
+    await renderInPartial(cap, "card:xyz")
+
+    await act(async () => {
+      await cap.fire!({ selector: ["@self", ".price"] })
+    })
+
+    const labels = (new URL(refetchSpy.mock.calls[0]?.[0] as string).searchParams.get("partials") ?? "").split(
+      ",",
+    )
+    expect(labels).toContain("card:xyz")
+    expect(labels).toContain("price")
+  })
+
+  it('rekeys props["@self"] to the ambient partial id', async () => {
+    const cap = newCapture()
+    await renderInPartial(cap, "slow:1")
+
+    await act(async () => {
+      await cap.fire!({
+        selector: "@self",
+        props: { "@self": { flavor: "vanilla" } },
+      })
+    })
+
+    const url = new URL(refetchSpy.mock.calls[0]?.[0] as string)
+    const props = JSON.parse(url.searchParams.get("partialProps") ?? "{}")
+    expect(props).toEqual({ "slow:1": { flavor: "vanilla" } })
+  })
+
+  it("rejects with a NavigationError when @self is used outside a partial", async () => {
+    const cap = newCapture()
+    await renderInPartial(cap, null)
+    cap.states = []
+
+    let caught: unknown
+    await act(async () => {
+      caught = await cap.fire!({ selector: "@self" }).catch((e) => e)
+    })
+    expect(caught).toBeInstanceOf(NavigationError)
+    expect((caught as NavigationError).message).toContain("@self")
+    expect(refetchSpy).not.toHaveBeenCalled()
+
+    const last = cap.states[cap.states.length - 1]
+    expect(last.pending).toBe(false)
+    expect(last.error).toBeInstanceOf(NavigationError)
+  })
+
+  it("leaves selectors without @self untouched even when ambient id is set", async () => {
+    const cap = newCapture()
+    await renderInPartial(cap, "hero:abc")
+
+    await act(async () => {
+      await cap.fire!({ selector: "#cart" })
+    })
+
+    const url = new URL(refetchSpy.mock.calls[0]?.[0] as string)
+    expect(url.searchParams.get("partials")).toBe("cart")
   })
 })

@@ -160,30 +160,30 @@ const LivePrice = parton(LivePriceRender, { selector: "price" })
 ## Self-refresh from inside an instance
 
 Client components inside a block's render can refetch their enclosing
-instance via the `useEnclosingPartialId()` hook. For singleton blocks
-and slot-placed instances (each entry has a unique id), this gives
+instance via the `@self` selector token. For singleton blocks and
+slot-placed instances (each entry has a unique id), this gives
 per-instance addressing. For keyless multi-instance specs (multiple
 JSX placements sharing an id) it refreshes the spec's whole fan-out.
 
 ```tsx
 "use client"
-import { useEnclosingPartialId, useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 
 export function RefreshSelfButton() {
-  const myId = useEnclosingPartialId()
   const [reload, isPending] = useNavigation().reload()
   return (
-    <button onClick={() => myId && reload({ selector: myId })} disabled={isPending}>
+    <button onClick={() => reload({ selector: "@self" })} disabled={isPending}>
       Refresh
     </button>
   )
 }
 ```
 
-The hook reads a React Context populated by the framework's
-`PartialErrorBoundary` — every block instance has it set to its
-runtime effective id (the slot entry id for slot-placed, the spec id
-for singletons).
+`@self` resolves to a React Context the framework populates in
+`PartialErrorBoundary` — every block instance has the context set to
+its runtime effective id (the slot entry id for slot-placed, the spec
+id for singletons). Used outside any partial, `@self` throws a
+typed `NavigationError` at fire time so the wiring mistake is loud.
 
 ## Editor catalog manifest
 

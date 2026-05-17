@@ -134,10 +134,10 @@ usePartialReconcile(({ oldFp, newFp, reason }) => {
 `"invalidate"`. Lets the handler distinguish first-mount from
 subsequent updates.
 
-Reads enclosing parton id from the same React context
-`useEnclosingPartialId()` uses. No-arg form is the common case; an
-explicit-id form is open for cross-parton coordination (toast
-parton reacting to cart parton's update).
+Reads enclosing parton id from the same React context the
+navigation hook's `@self` token resolves through. No-arg form is the
+common case; an explicit-id form is open for cross-parton
+coordination (toast parton reacting to cart parton's update).
 
 ## Spec options (server)
 
