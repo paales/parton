@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 
@@ -16,25 +15,14 @@ export function SelectorRefetchButton({
   label: string
   testId: string
 }) {
-  const nav = useNavigation()
-  const [isPending, setIsPending] = useState(false)
-
-  async function fire() {
-    setIsPending(true)
-    try {
-      await nav.reload({ selector }).finished
-    } finally {
-      setIsPending(false)
-    }
-  }
-
+  const [reload, isPending] = useNavigation().reload()
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
       data-testid={testId}
-      onClick={fire}
+      onClick={() => reload({ selector })}
       disabled={isPending}
     >
       {isPending ? "…" : label}

@@ -46,10 +46,19 @@ import {
   type FrameNavigationHistoryEntry,
   type FrameworkNavigateOptions,
   type FrameworkNavigation,
-  type FrameworkNavigationResult,
   type FrameworkReloadOptions,
+  type ImperativeNavigation,
+  type Navigate,
+  type NavigateStatus,
   type NavigateTarget,
+  type Reload,
+  type ReloadStatus,
 } from "../runtime/navigation-api.ts"
+import {
+  NavigationError,
+  _publishNavigationError,
+  toNavigationError,
+} from "../runtime/navigation-error.ts"
 
 /**
  * Return true if the node looks like the outermost wrapper a
@@ -962,7 +971,11 @@ interface RefetchBatchEntry {
 }
 
 let _batchRef: RefetchBatchEntry[] = []
-let _batchPromise: { promise: Promise<void>; resolve: () => void } | null = null
+let _batchPromise: {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (err: unknown) => void
+} | null = null
 
 async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
   const handler = (
@@ -1010,22 +1023,27 @@ async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
 /**
  * Enqueue a targeted refetch. Multiple calls in the same microtask
  * coalesce into one request. Returns a Promise that resolves when
- * the flush completes.
+ * the flush completes or rejects with whatever
+ * `__rsc_partial_refetch` threw — typically a `NavigationError`
+ * (network / http / decode) from the host's `fetchRscPayload`. Every
+ * caller batched into the same flush sees the same settled value.
  */
 function enqueueRefetch(entry: RefetchBatchEntry): Promise<void> {
   _batchRef.push(entry)
   if (!_batchPromise) {
     let resolve!: () => void
-    const promise = new Promise<void>((r) => {
-      resolve = r
+    let reject!: (err: unknown) => void
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res
+      reject = rej
     })
-    _batchPromise = { promise, resolve }
+    _batchPromise = { promise, resolve, reject }
     queueMicrotask(() => {
       const batch = _batchRef
-      const done = _batchPromise!.resolve
+      const cur = _batchPromise!
       _batchRef = []
       _batchPromise = null
-      flushRefetchBatch(batch).then(done)
+      flushRefetchBatch(batch).then(cur.resolve, cur.reject)
     })
   }
   return _batchPromise.promise
@@ -1376,86 +1394,27 @@ function resolveFrameTarget(target: NavigateTarget, frameName: string): string {
   return next.pathname + next.search + next.hash
 }
 
-// ─── FrameworkNavigationResult plumbing ───────────────────────────
+// ─── Browser NavigationResult helpers ─────────────────────────────
 
 /**
- * Tighten TS 6's optional `committed` / `finished` by supplying a
- * fallback resolution. Our handle always fills both — so the
- * `NavigationHistoryEntry | null` union collapses to a non-null entry
- * by the time the caller awaits.
- *
- * Fire-and-forget callers (`void nav.navigate(url)`) discard the result
- * without awaiting. If a newer navigation supersedes this one, the
- * browser's `committed` / `finished` promises reject with AbortError —
- * unobserved, that surfaces as an unhandled rejection. Attach a silent
- * sink so awaiters still see the rejection but the fire-and-forget path
- * doesn't pollute the console.
+ * Await the browser's `NavigationResult.committed` (or resolve
+ * immediately if absent — TS 6's `lib.dom.d.ts` marks it optional).
+ * The imperative API doesn't expose `committed` separately, but
+ * internal call sites still need to wait for the browser entry to be
+ * created before dispatching framework work that reads `currentEntry`.
  */
-function tightenResult(
-  result: NavigationResult,
-  fallbackEntry: () => NavigationHistoryEntry,
-): FrameworkNavigationResult {
-  const committed = result.committed ?? Promise.resolve(fallbackEntry())
-  const finished = result.finished ?? Promise.resolve(fallbackEntry())
-  sinkAbort(committed)
-  sinkAbort(finished)
-  return { committed, finished }
-}
-
-function sinkAbort(p: Promise<unknown>): void {
-  // Silently swallow AbortError so fire-and-forget `void nav.navigate(...)`
-  // doesn't surface as an unhandled rejection when a newer navigation
-  // supersedes it. Callers who .then/await the same promise still see
-  // the rejection — Promise allows multiple subscribers, each receives
-  // the settled value independently.
-  p.catch((err) => {
-    if (err instanceof Error && err.name === "AbortError") return
-    // Re-raise anything else so it shows up in the console (matches the
-    // default unhandled-rejection behavior for non-AbortErrors).
-    console.error(err)
-  })
+async function awaitCommitted(result: NavigationResult): Promise<void> {
+  if (result.committed) await result.committed
 }
 
 /**
- * Synthesize a `FrameworkNavigationResult` when the framework is
- * doing work that the browser `Navigation` object doesn't cover
- * (targeted refetch without a URL change, frame reload). `commit`
- * resolves immediately with the current entry; `finished` resolves
- * after the supplied work completes.
+ * Await the browser's `NavigationResult.finished` (full commit +
+ * any intercepted handler). The page-level navigate-event handler
+ * does the framework's full-page refetch — `finished` resolves only
+ * after that handler's promise settles.
  */
-function syntheticResult(nav: Navigation, work: Promise<unknown>): FrameworkNavigationResult {
-  const entry = () => {
-    const e = nav.currentEntry
-    if (!e) throw new Error("navigation has no current entry")
-    return e
-  }
-  const committed = Promise.resolve().then(entry)
-  const finished = work.then(entry)
-  sinkAbort(committed)
-  sinkAbort(finished)
-  return { committed, finished }
-}
-
-/**
- * Compose a browser `NavigationResult` with extra framework work
- * (refetch dispatch). `committed` passes through; `finished` waits
- * for both the browser commit and the framework work.
- */
-function composeResult(
-  result: NavigationResult,
-  fallbackEntry: () => NavigationHistoryEntry,
-  extraWork: () => Promise<unknown>,
-): FrameworkNavigationResult {
-  const committed = result.committed ?? Promise.resolve(fallbackEntry())
-  const baseFinished = result.finished ?? Promise.resolve(fallbackEntry())
-  const finished = (async () => {
-    const entry = await baseFinished
-    await extraWork()
-    return entry
-  })()
-  sinkAbort(committed)
-  sinkAbort(finished)
-  return { committed, finished }
+async function awaitFinished(result: NavigationResult): Promise<void> {
+  if (result.finished) await result.finished
 }
 
 function parseOptionsSelector(
@@ -1507,17 +1466,16 @@ function projectEntryForFrame(
 //
 // `useNavigation()` is a hook that must run in React's render phase,
 // but RSC renders happen server-side where `globalThis.navigation` is
-// undefined. Return a stub that type-checks as `FrameworkNavigation`
-// with no-op behavior — any actual invocation only happens on the
-// client after hydration.
+// undefined. Return a stub that type-checks with no-op behavior — any
+// actual invocation only happens on the client after hydration.
 
-function nullNavigation(name: string | null): FrameworkNavigation {
+function nullImperativeNavigation(name: string | null): ImperativeNavigation {
   const stubEntry = null as unknown as NavigationHistoryEntry
-  const stubResult: FrameworkNavigationResult = {
+  const stubResolve = (): Promise<NavigationHistoryEntry> => Promise.resolve(stubEntry)
+  const stubNavResult = {
     committed: Promise.resolve(stubEntry),
     finished: Promise.resolve(stubEntry),
-  }
-  const stubNavResult = stubResult as unknown as NavigationResult
+  } as unknown as NavigationResult
   return {
     name,
     currentEntry: null,
@@ -1526,8 +1484,8 @@ function nullNavigation(name: string | null): FrameworkNavigation {
     transition: null,
     activation: null,
     entries: () => [],
-    navigate: () => stubResult,
-    reload: () => stubResult,
+    navigate: stubResolve,
+    reload: stubResolve,
     back: () => stubNavResult,
     forward: () => stubNavResult,
     traverseTo: () => stubNavResult,
@@ -1539,7 +1497,7 @@ function nullNavigation(name: string | null): FrameworkNavigation {
     onnavigate: null,
     onnavigateerror: null,
     onnavigatesuccess: null,
-  } as unknown as FrameworkNavigation
+  } as unknown as ImperativeNavigation
 }
 
 // ─── Handle builders ──────────────────────────────────────────────
@@ -1587,14 +1545,14 @@ function applyClientCookies(cookies: Record<string, string> | undefined): void {
   }
 }
 
-function buildWindowNavigationHandle(): FrameworkNavigation {
+function buildWindowNavigationHandle(): ImperativeNavigation {
   const nav = getNavigation()
-  if (!nav) return nullNavigation(null)
+  if (!nav) return nullImperativeNavigation(null)
 
-  const windowNavigate = (
+  const windowNavigate = async (
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
-  ): FrameworkNavigationResult => {
+  ): Promise<NavigationHistoryEntry> => {
     applyClientCookies(options?.cookies)
     const url = resolveWindowTarget(target)
     const parsed = parseOptionsSelector(options)
@@ -1610,44 +1568,42 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
         state: options?.state ?? null,
         info: makeSilentInfo("window"),
       })
-      if (silent) return tightenResult(result, () => nav.currentEntry!)
-      return composeResult(
-        result,
-        () => nav.currentEntry!,
-        () =>
-          enqueueRefetch({
-            labels: parsed.labels,
-            disableTransition: options?.disableTransition ?? false,
-            props: options?.props,
-          }),
-      )
-    }
-    return tightenResult(
-      nav.navigate(url, {
-        history: options?.history,
-        state: options?.state,
-        info: options?.info,
-      }),
-      () => nav.currentEntry!,
-    )
-  }
-
-  const windowReload = (options?: FrameworkReloadOptions): FrameworkNavigationResult => {
-    const parsed = parseOptionsSelector(options)
-    if (parsed.labels.length > 0) {
-      return syntheticResult(
-        nav,
-        enqueueRefetch({
+      await awaitCommitted(result)
+      if (!silent) {
+        await enqueueRefetch({
           labels: parsed.labels,
           disableTransition: options?.disableTransition ?? false,
           props: options?.props,
-        }),
-      )
+        })
+      }
+      return nav.currentEntry!
     }
-    return tightenResult(
-      nav.reload({ state: options?.state, info: options?.info }),
-      () => nav.currentEntry!,
-    )
+    const result = nav.navigate(url, {
+      history: options?.history,
+      state: options?.state,
+      info: options?.info,
+    })
+    // Full-page nav: `finished` waits for the navigate-event handler
+    // (which does the framework's main refetch via `__rsc_partial_refetch`).
+    await awaitFinished(result)
+    return nav.currentEntry!
+  }
+
+  const windowReload = async (
+    options?: FrameworkReloadOptions,
+  ): Promise<NavigationHistoryEntry> => {
+    const parsed = parseOptionsSelector(options)
+    if (parsed.labels.length > 0) {
+      await enqueueRefetch({
+        labels: parsed.labels,
+        disableTransition: options?.disableTransition ?? false,
+        props: options?.props,
+      })
+      return nav.currentEntry!
+    }
+    const result = nav.reload({ state: options?.state, info: options?.info })
+    await awaitFinished(result)
+    return nav.currentEntry!
   }
 
   return new Proxy(nav, {
@@ -1663,7 +1619,7 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
       const value = (nav as unknown as Record<string | symbol, unknown>)[prop]
       return typeof value === "function" ? value.bind(nav) : value
     },
-  }) as unknown as FrameworkNavigation
+  }) as unknown as ImperativeNavigation
 }
 
 /**
@@ -1685,18 +1641,18 @@ function buildWindowNavigationHandle(): FrameworkNavigation {
  * project the frame URL and state; `updateCurrentEntry` merges user
  * state under `__frameState[name]`.
  */
-function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
+function buildFrameHandle(path: readonly string[]): ImperativeNavigation {
   const nav = getNavigation()
   const key = joinFramePath(path)
-  if (!nav) return nullNavigation(key)
+  if (!nav) return nullImperativeNavigation(key)
   if (path.length === 0) {
     throw new Error("buildFrameHandle: path must be non-empty")
   }
 
-  const frameNavigate = (
+  const frameNavigate = async (
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
-  ): FrameworkNavigationResult => {
+  ): Promise<NavigationHistoryEntry> => {
     applyClientCookies(options?.cookies)
     const url = resolveFrameTarget(target, key)
     const historyMode: NavigationHistoryBehavior = options?.history ?? "auto"
@@ -1742,7 +1698,8 @@ function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
       // place, fires currententrychange (consumers update) but NOT
       // navigate — no silent-info bypass needed.
       nav.updateCurrentEntry({ state: nextState })
-      return syntheticResult(nav, _dispatchFrameRefetch(path, url, options))
+      await _dispatchFrameRefetch(path, url, options)
+      return nav.currentEntry!
     }
 
     // Explicit push/replace — browser entry grows/replaces. Use the
@@ -1753,17 +1710,18 @@ function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
       state: nextState,
       info: makeSilentInfo("frame", key),
     })
-    return composeResult(
-      result,
-      () => nav.currentEntry!,
-      () => _dispatchFrameRefetch(path, url, options),
-    )
+    await awaitCommitted(result)
+    await _dispatchFrameRefetch(path, url, options)
+    return nav.currentEntry!
   }
 
-  const frameReload = (options?: FrameworkReloadOptions): FrameworkNavigationResult => {
+  const frameReload = async (
+    options?: FrameworkReloadOptions,
+  ): Promise<NavigationHistoryEntry> => {
     const url = _frameUrls.get(key)
-    if (!url) return syntheticResult(nav, Promise.resolve())
-    return syntheticResult(nav, _dispatchFrameRefetch(path, url, options))
+    if (!url) return nav.currentEntry!
+    await _dispatchFrameRefetch(path, url, options)
+    return nav.currentEntry!
   }
 
   /**
@@ -1860,7 +1818,7 @@ function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
       const value = (target as unknown as Record<string | symbol, unknown>)[prop]
       return typeof value === "function" ? value.bind(target) : value
     },
-  }) as unknown as FrameworkNavigation
+  }) as unknown as ImperativeNavigation
 }
 
 /**
@@ -1875,7 +1833,7 @@ function buildFrameHandle(path: readonly string[]): FrameworkNavigation {
  * component methods, module scope, callbacks invoked from
  * `useActivate` subscriptions — where the hook can't reach).
  */
-export function _frame(pathOrName: string | readonly string[]): FrameworkNavigation {
+export function _frame(pathOrName: string | readonly string[]): ImperativeNavigation {
   const path = Array.isArray(pathOrName) ? pathOrName : splitFramePath(pathOrName as string)
   return buildFrameHandle(path)
 }
@@ -1902,8 +1860,124 @@ function splitFramePath(dotted: string): readonly string[] {
  * it respects the framework's silent-info convention so internal URL
  * syncs don't trigger a full page refetch.
  */
-export function _windowNav(): FrameworkNavigation {
+export function _windowNav(): ImperativeNavigation {
   return buildWindowNavigationHandle()
+}
+
+// ─── Hook wrappers around the imperative handle ───────────────────
+
+/**
+ * Inner hook backing `nav.reload()`. Owns the `pending` / `error`
+ * state for one call site, wraps the imperative `imperative.reload`
+ * with classification + publish, and exposes the fire fn through
+ * `useCallback` so consumers can pass it into effect deps without
+ * thrash. The fire returns a Promise so chains like
+ * `await reload({selector})` still work for callers who want to
+ * sequence after the refetch.
+ *
+ * `AbortError` (newer navigation supersedes) clears pending and
+ * re-throws without setting `error` or publishing — it's a normal
+ * lifecycle event, not a failure.
+ */
+function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
+  const [state, setState] = useState<{
+    pending: boolean
+    error: NavigationError | null
+  }>({ pending: false, error: null })
+  const fire = useMemo<Reload>(
+    () => async (options) => {
+      setState({ pending: true, error: null })
+      try {
+        const entry = await imperative.reload(options)
+        setState({ pending: false, error: null })
+        return entry
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          setState({ pending: false, error: null })
+          throw err
+        }
+        const navErr =
+          err instanceof NavigationError
+            ? err
+            : toNavigationError(
+                err,
+                typeof window !== "undefined" ? window.location.href : "?",
+              )
+        setState({ pending: false, error: navErr })
+        _publishNavigationError(navErr)
+        throw navErr
+      }
+    },
+    [imperative],
+  )
+  return [fire, state.pending, state.error] as const
+}
+
+/**
+ * Inner hook backing `nav.navigate()`. Same shape as
+ * {@link useReloadHook} — see its comment for the rationale.
+ */
+function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
+  const [state, setState] = useState<{
+    pending: boolean
+    error: NavigationError | null
+  }>({ pending: false, error: null })
+  const fire = useMemo<Navigate>(
+    () => async (target, options) => {
+      setState({ pending: true, error: null })
+      try {
+        const entry = await imperative.navigate(target, options)
+        setState({ pending: false, error: null })
+        return entry
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          setState({ pending: false, error: null })
+          throw err
+        }
+        const navErr =
+          err instanceof NavigationError
+            ? err
+            : toNavigationError(
+                err,
+                typeof window !== "undefined" ? window.location.href : "?",
+              )
+        setState({ pending: false, error: navErr })
+        _publishNavigationError(navErr)
+        throw navErr
+      }
+    },
+    [imperative],
+  )
+  return [fire, state.pending, state.error] as const
+}
+
+/**
+ * Wrap an imperative handle so its `reload` / `navigate` properties
+ * are hooks returning the `[fire, isPending, error]` tuple. Every
+ * other property passes straight through to the imperative handle
+ * (which itself is a Proxy over `window.navigation` — see
+ * `buildWindowNavigationHandle`).
+ *
+ * The returned wrapper is itself a Proxy; `useNavigation()` memoizes
+ * one of these per resolved frame path so effects with the handle in
+ * their deps don't re-run on every navigation commit.
+ */
+function wrapWithHooks(imperative: ImperativeNavigation): FrameworkNavigation {
+  return new Proxy(imperative, {
+    get(target, prop, receiver) {
+      if (prop === "reload") {
+        return function reload(): ReloadStatus {
+          return useReloadHook(target as ImperativeNavigation)
+        }
+      }
+      if (prop === "navigate") {
+        return function navigate(): NavigateStatus {
+          return useNavigateHook(target as ImperativeNavigation)
+        }
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  }) as unknown as FrameworkNavigation
 }
 
 /**
@@ -1922,10 +1996,14 @@ export function _windowNav(): FrameworkNavigation {
  * `canGoForward`) subscribe to `navigation` events, so they stay
  * reactive across any navigation on the page.
  *
- * Always returns a handle — never throws. Outside a frame it's a
- * small Proxy over `window.navigation`; inside a frame it's a Proxy
- * with frame-scoped overrides. The same code (a "back" button, a
- * "reload" icon) works at the page level and per-frame.
+ * `handle.reload()` and `handle.navigate()` are **hooks** — call
+ * them during render to get back `[fire, isPending, error]`. Calling
+ * the fire fn from an event handler triggers the navigation:
+ *
+ *   const [reload, isPending] = useNavigation().reload()
+ *   <Button onClick={() => reload({ selector: "#cart" })} disabled={isPending} />
+ *
+ * Always returns a handle — never throws.
  */
 export function useNavigation(name?: string): FrameworkNavigation {
   const ambient = useContext(FrameNameContext)
@@ -1951,17 +2029,12 @@ export function useNavigation(name?: string): FrameworkNavigation {
       nav.removeEventListener("navigate", bump)
     }
   }, [])
-  // Memoize the handle so a consumer effect that depends on it
-  // doesn't re-run on every render. The handle's getters read live
-  // state, so memoizing doesn't stale the values — and keeping the
-  // reference stable means effects whose dep array includes the
-  // handle only re-run when the bound name changes, not on every
-  // navigation commit. (Pre-memoization, a targeted-refetch activator
-  // could fire twice: the first nav's commit would bump React, the
-  // handle would become a new object, the effect would re-run and
-  // re-register its trigger before the server response had propagated
-  // fresh props.)
-  return useMemo(
+  // Memoize both the imperative handle AND its hook wrapper so a
+  // consumer effect that depends on the handle doesn't re-run on
+  // every render. The wrapper's reload/navigate proxies still create
+  // fresh hooks per render (that's the point), but the wrapper's
+  // identity stays stable until the bound name changes.
+  const imperative = useMemo(
     () =>
       resolvedPath.length > 0 ? buildFrameHandle(resolvedPath) : buildWindowNavigationHandle(),
     // resolvedKey captures any change to the path — resolvedPath is a
@@ -1969,6 +2042,7 @@ export function useNavigation(name?: string): FrameworkNavigation {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [resolvedKey],
   )
+  return useMemo(() => wrapWithHooks(imperative), [imperative])
 }
 
 /**
@@ -2020,17 +2094,28 @@ export function useActivate(
   const firedRef = useRef(false)
   const subscribeRef = useRef(subscribe)
   subscribeRef.current = subscribe
-  const nav = useNavigation()
+  // Activator fires happen in event-callback land — outside render —
+  // so the imperative handle is the right shape. The ambient frame
+  // path comes from context; the handle is resolved per-fire to
+  // pick up any frame changes between mount and trigger.
+  const framePath = useContext(FrameNameContext)
+  const framePathKey = joinFramePath(framePath)
+  const framePathRef = useRef(framePath)
+  framePathRef.current = framePath
 
   useEffect(() => {
     const cleanup = subscribeRef.current((payload) => {
       if (once && firedRef.current) return
       firedRef.current = true
-      // Funnel activator-driven refetches through the same public
-      // `nav.reload` surface that `<CacheControls>` etc. use — one
-      // path for "refetch this partial with these props", batched
-      // by the same microtask coalescer.
-      void nav.reload({
+      // Funnel activator-driven refetches through the same imperative
+      // `reload` surface that `<CacheControls>` etc. use — one path
+      // for "refetch this partial with these props", batched by the
+      // same microtask coalescer. AbortError / NavigationError
+      // surface via the public hook layer; an activator-internal
+      // fire is fire-and-forget so we don't await.
+      const handle =
+        framePathRef.current.length > 0 ? _frame(framePathRef.current) : _windowNav()
+      void handle.reload({
         selector: [`#${partialId}`],
         props: payload?.props ? { [partialId]: payload.props } : undefined,
       })
@@ -2038,7 +2123,8 @@ export function useActivate(
     return () => {
       if (typeof cleanup === "function") cleanup()
     }
-  }, [partialId, once, nav])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partialId, once, framePathKey])
 }
 
 // ─── Scroll restoration for non-window scroll containers ───────────────

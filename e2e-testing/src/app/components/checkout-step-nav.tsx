@@ -15,7 +15,7 @@ import { Button } from "@parton/copies/components/ui/button"
  * That re-fetches the cross-origin remote with the new state.
  */
 export function CheckoutStepNav() {
-  const nav = useNavigation("checkout")
+  const [navigate] = useNavigation("checkout").navigate()
   const steps = [
     { id: "shipping", label: "1 · Shipping" },
     { id: "payment", label: "2 · Payment" },
@@ -32,7 +32,7 @@ export function CheckoutStepNav() {
           variant="outline"
           data-testid={`checkout-step-${s.id}`}
           onClick={() => {
-            void nav.navigate(`/?step=${s.id}`)
+            void navigate(`/?step=${s.id}`)
           }}
         >
           {s.label}

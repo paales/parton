@@ -27,25 +27,17 @@
 
 - [ ] Enable React.StrictMode always? Or why not?
 
-- [ ] Have better sugar for this so we have a flat hook, and should we be able to resolve the loading state of in the actual component itsself?
-
-Also each partial should have the equivalent of
-
-- https://developer.mozilla.org/en-US/docs/Web/API/Navigation/navigate_event
-- https://developer.mozilla.org/en-US/docs/Web/API/Navigation/navigatesuccess_event <- This is directly related to finished, right.
+- [x] Have better sugar for this so we have a flat hook, and should we be able to resolve the loading state of in the actual component itsself? **Done** — `useNavigation().reload()` / `.navigate()` now return `[fire, isPending, error]` tuples; see `docs/reference/frames-navigation.md` §Navigation.
 
 ```tsx
-const nav = useNavigation()
-const [isPending, setIsPending] = useState(false)
+// New: tuple shape — no setState boilerplate
+const [reload, isPending, error] = useNavigation().reload()
 
-async function refreshAll() {
-  setIsPending(true)
-  try {
-    await nav.reload({ selector: ".price" }).finished
-  } finally {
-    setIsPending(false)
-  }
-}
+return (
+  <Button onClick={() => reload({ selector: ".price" })} disabled={isPending}>
+    Refresh all prices
+  </Button>
+)
 ```
 
 - [ ] Wrap fetch and then hoist all queries that are pure based on vary into a preload step so we can start of N+1 queries. Sooo, how can we make this pure? How can we survive 3 layers of indirection and still detect it correctly? Should the preload be explicit?
@@ -53,3 +45,5 @@ async function refreshAll() {
 - [ ] Create a prefetch primitive that allows us to prefetch partials with <Activity mode="hidden"> and place them in the DOM without any effects being run.
 
 - [ ] "Can you investigate the codebase deeply and after that I'd like to talk about tensions of multi frameworks that a shopify uses (liquid+react checkout/account), hyva alpine catalogs + checkout. Magento Luma server rendered + client side layered + layout checkout variable. admin html xml componetns, etc. All projects seem to abandon their base frameworks to go with a more advanced frameworks."
+
+- [ ] Lets create a fake chat stream like in a live stream situation that has bursts of 20 messages in a few seconds, generate a library that is completely random.

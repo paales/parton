@@ -27,13 +27,13 @@ export function EditorCloseLink({
   testId?: string
   children: ReactNode
 }) {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
   function onClick(e: React.MouseEvent<HTMLAnchorElement>) {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
       return
     }
     e.preventDefault()
-    void nav.navigate(window.location.pathname + window.location.search, {
+    void navigate(window.location.pathname + window.location.search, {
       history: "replace",
       cookies: { [EDITOR_COOKIE]: "" },
       selector: "#editor-shell",

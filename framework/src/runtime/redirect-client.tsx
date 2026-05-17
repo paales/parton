@@ -18,9 +18,9 @@ import { useNavigation } from "../lib/partial-client.tsx"
  * wrong payload.
  */
 export function Redirect({ url }: { url: string }) {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
   useEffect(() => {
-    void nav.navigate(url)
-  }, [url, nav])
+    void navigate(url)
+  }, [url, navigate])
   return null
 }

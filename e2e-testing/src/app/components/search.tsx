@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, useTransition, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 import { Input } from "@parton/copies/components/ui/input"
@@ -16,43 +16,39 @@ import { Input } from "@parton/copies/components/ui/input"
  * decides where `?search=` is read from.
  */
 export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
-  const [isPending, startTransition] = useTransition()
-  const pageNav = useNavigation()
+  const [pageNavigate, pagePending] = useNavigation().navigate()
   const frameNav = useNavigation("search")
+  const [frameNavigate] = frameNav.navigate()
   const frameEntryUrl = frameNav.currentEntry?.url
   const frameOpen = frameEntryUrl ? new URL(frameEntryUrl).searchParams.has("search") : false
 
   function openUrl() {
-    startTransition(() => {
-      void pageNav.navigate(
-        (url) => {
-          url.searchParams.set("search", "1")
-          return url
-        },
-        { history: "push", selector: "#search-page" },
-      )
-    })
+    void pageNavigate(
+      (url) => {
+        url.searchParams.set("search", "1")
+        return url
+      },
+      { history: "push", selector: "#search-page" },
+    )
   }
 
   function closeUrl() {
-    startTransition(() => {
-      void pageNav.navigate(
-        (url) => {
-          url.searchParams.delete("search")
-          url.searchParams.delete("q")
-          return url
-        },
-        { history: "push", selector: "#search-page" },
-      )
-    })
+    void pageNavigate(
+      (url) => {
+        url.searchParams.delete("search")
+        url.searchParams.delete("q")
+        return url
+      },
+      { history: "push", selector: "#search-page" },
+    )
   }
 
   function openFrame() {
-    void frameNav.navigate("/?search=1")
+    void frameNavigate("/?search=1")
   }
 
   function closeFrame() {
-    void frameNav.navigate("/")
+    void frameNavigate("/")
   }
 
   const Spinner = () => (
@@ -62,7 +58,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   if (urlOpen) {
     return (
       <Button type="button" size="sm" variant="secondary" onClick={closeUrl}>
-        {isPending ? <Spinner /> : <span>✕</span>}
+        {pagePending ? <Spinner /> : <span>✕</span>}
         Close
       </Button>
     )
@@ -86,7 +82,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   return (
     <div className="flex gap-2">
       <Button type="button" size="sm" variant="outline" onClick={openUrl}>
-        {isPending ? <Spinner /> : <span>🔍</span>}
+        {pagePending ? <Spinner /> : <span>🔍</span>}
         Search (URL)
       </Button>
       <Button
@@ -110,6 +106,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
 export function SearchDialog({ open, children }: { open: boolean; children: ReactNode }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const nav = useNavigation()
+  const [navigate] = nav.navigate()
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -122,7 +119,7 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
   }, [open])
 
   function handleClose() {
-    void nav.navigate(
+    void navigate(
       (url) => {
         url.searchParams.delete("search")
         url.searchParams.delete("q")
@@ -151,9 +148,15 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
 
 /**
  * Search input with live partial refetch — scope-agnostic.
+ *
+ * Sequencing: only one navigation in flight at a time. Newer
+ * keystrokes update `latestRef`; the active navigation's settle
+ * handler re-checks and fires the next one if needed. `isPending`
+ * from the tuple drives the spinner directly — no parallel state.
  */
 export function SearchInput({ query }: { query: string }) {
   const nav = useNavigation()
+  const [navigate, isPending] = nav.navigate()
   const [value, setValue] = useState(query)
   const [disableTransition, setDisableTransition] = useState(false)
   const disableTransitionRef = useRef(disableTransition)
@@ -171,21 +174,23 @@ export function SearchInput({ query }: { query: string }) {
     inFlightRef.current = true
     dispatchedRef.current = q
 
-    await nav.navigate(
-      (url) => {
-        if (q) url.searchParams.set("q", q)
-        else url.searchParams.delete("q")
-        return url
-      },
-      {
-        history: "replace",
-        disableTransition: disableTransitionRef.current,
-        selector: ".search-results",
-      },
-    ).finished
-
-    inFlightRef.current = false
-    sendLatest()
+    try {
+      await navigate(
+        (url) => {
+          if (q) url.searchParams.set("q", q)
+          else url.searchParams.delete("q")
+          return url
+        },
+        {
+          history: "replace",
+          disableTransition: disableTransitionRef.current,
+          selector: ".search-results",
+        },
+      )
+    } finally {
+      inFlightRef.current = false
+      sendLatest()
+    }
   }
 
   function handleChange(next: string) {
@@ -194,7 +199,7 @@ export function SearchInput({ query }: { query: string }) {
     sendLatest()
   }
 
-  const isStale = value !== dispatchedRef.current || inFlightRef.current
+  const isStale = value !== dispatchedRef.current || isPending
 
   return (
     <div>

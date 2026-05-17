@@ -6,11 +6,23 @@
  * `NavigationHistoryEntry`, `NavigationType`, `NavigateEvent`, etc.
  * This module adds the framework-specific layer: the targeted-refetch
  * options, the URL-updater callback form, the per-frame state shape,
- * and a typed view of the global (`FrameworkNavigation`) that
- * `useNavigation()` returns.
+ * and two views of the navigation handle:
+ *
+ *   - `FrameworkNavigation` — the public, React-hook-shaped handle
+ *     `useNavigation()` returns. Its `navigate()` / `reload()` are
+ *     **hooks** (call during render) that return a `[fire, isPending,
+ *     error]` tuple. The companion `<NavigationErrorBubbler>` lifts
+ *     the error to the nearest React error boundary.
+ *   - `ImperativeNavigation` — the internal handle returned by
+ *     `_windowNav()` / `_frame()` for non-render call sites (class
+ *     components, module-scope code, `useActivate` subscribers). Its
+ *     `navigate(target, options)` / `reload(options)` are plain async
+ *     methods returning `Promise<NavigationHistoryEntry>`.
  *
  * Access the browser's `navigation` global via `getNavigation()`.
  */
+
+import type { NavigationError } from "./navigation-error.ts"
 
 // ─── Framework state shapes ───────────────────────────────────────
 
@@ -29,7 +41,7 @@
  *   __frameState    — per-frame user-provided state bag (namespaced so
  *                     multiple frames on one entry can't collide)
  *
- * User state from `useNavigation().navigate(url, { state })` merges
+ * User state from `useNavigation().navigate()[0](url, { state })` merges
  * onto the top level alongside these framework fields.
  */
 export interface FrameEntryState {
@@ -51,11 +63,11 @@ export interface FrameNavigationHistoryEntry extends Omit<NavigationHistoryEntry
 // ─── Framework navigate/reload extensions ─────────────────────────
 
 /**
- * Input accepted by `FrameworkNavigation.navigate()`.
+ * Input accepted by the navigate fire function.
  *
- *   nav.navigate("/products")                       // string
- *   nav.navigate(new URL(...))                      // URL instance
- *   nav.navigate(url => { url.searchParams.set("q", q); return url })  // updater
+ *   navigate("/products")                       // string
+ *   navigate(new URL(...))                      // URL instance
+ *   navigate(url => { url.searchParams.set("q", q); return url })  // updater
  *
  * The updater receives an absolute `URL` — `new URL(window.location.href)`
  * for the window handle, or the frame URL synthesized against
@@ -136,7 +148,7 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    * `partialFromSnapshot` so a deep partial-refetch can carry fresh
    * call-site values without re-running the parent wrapper.
    *
-   *   nav.navigate(url, {
+   *   navigate(url, {
    *     selector: "#slow",
    *     props: { slow: { flavor: "chocolate" } },
    *   })
@@ -187,40 +199,66 @@ export interface FrameworkReloadOptions extends NavigationReloadOptions {
   props?: Record<string, Record<string, unknown>>
 }
 
-/**
- * Handle-boundary `NavigationResult` with non-optional `committed` /
- * `finished`. TS 6's `lib.dom.d.ts` declares these optional (weaker
- * than the WHATWG spec), which would force every caller to null-check.
- * Our handle always fills both — composed from the underlying
- * browser result plus any framework-side work (targeted refetch,
- * frame dispatch) so callers can `await result.finished` unconditionally.
- */
-export interface FrameworkNavigationResult {
-  readonly committed: Promise<NavigationHistoryEntry>
-  readonly finished: Promise<NavigationHistoryEntry>
-}
+// ─── Fire functions + status tuple ────────────────────────────────
 
-// ─── FrameworkNavigation ──────────────────────────────────────────
+/** Reload fire function — returned in the first slot of the tuple. */
+export type Reload = (
+  options?: FrameworkReloadOptions,
+) => Promise<NavigationHistoryEntry>
+
+/** Navigate fire function — returned in the first slot of the tuple. */
+export type Navigate = (
+  target: NavigateTarget,
+  options?: FrameworkNavigateOptions,
+) => Promise<NavigationHistoryEntry>
+
+/**
+ * Tuple returned by `useNavigation().reload()` (and the equivalent
+ * `.navigate()` shape with `Navigate` in the first slot).
+ *
+ *   const [reload, isPending, error] = useNavigation().reload()
+ *
+ *   - `reload`    — call with no args for a whole-page reload, or
+ *     with `{ selector }` for a targeted refetch. Returns a Promise
+ *     that resolves to the resulting entry or rejects with
+ *     `NavigationError` (network / http / decode) or `AbortError`
+ *     (newer navigation superseded — silent in pending/error).
+ *   - `isPending` — `true` from the call site until the promise
+ *     settles. AbortError still clears pending.
+ *   - `error`     — the last `NavigationError`, or `null`. Cleared
+ *     on the next fire. The bundled `<NavigationErrorBubbler>` also
+ *     publishes this error to the nearest React error boundary, so
+ *     hosts can either bubble or render their own UI from the third
+ *     slot (third slot wins if both are present — the calling
+ *     component renders before the Bubbler re-renders).
+ */
+export type ReloadStatus = readonly [Reload, boolean, NavigationError | null]
+export type NavigateStatus = readonly [Navigate, boolean, NavigationError | null]
+
+// ─── FrameworkNavigation (public, React-hook-shaped) ──────────────
 
 /**
  * Typed view of the `Navigation` global with the framework's
- * extensions:
+ * extensions — what `useNavigation()` returns.
  *
  *   - `currentEntry` / `entries()` return `FrameNavigationHistoryEntry`
  *     so callers can read `__frames` / user state without casts.
  *   - `name` identifies the handle's scope (`null` for the window
  *     handle, the frame name for a frame handle). Framework-only —
  *     not on the browser `Navigation` interface.
- *   - `navigate(target, options)` accepts a URL-updater callback as
- *     well as the usual `string | URL`, and the options include
- *     `selector`/`silent`/`disableTransition` for targeted refetch.
- *   - `reload(options)` accepts `selector` for targeted refetch
- *     without a URL change.
+ *   - `navigate()` is a **React hook** (call during render). Returns
+ *     `[navigate, isPending, error]`. The `navigate` fn accepts a
+ *     string / URL / URL-updater and the same options bag as the
+ *     imperative form (selector, silent, disableTransition, …).
+ *   - `reload()` is the same shape: `[reload, isPending, error]`.
+ *     `reload()` with no args reloads the whole page; with
+ *     `{ selector }` it's a targeted refetch.
  *
- * `useNavigation()` returns a `FrameworkNavigation`. The window handle
- * is a small proxy over `window.navigation`; a frame handle is a
- * proxy with frame-scoped overrides (per-frame URL, per-frame
- * `canGoBack`, refetch on `navigate`).
+ * The handle returned by `useNavigation()` is memoized — calling
+ * `.reload()` / `.navigate()` repeatedly across renders runs the
+ * inner hooks consistently. Each call site is one hook invocation;
+ * multiple buttons in the same component each need their own
+ * `.reload()` call.
  */
 export interface FrameworkNavigation extends Omit<
   Navigation,
@@ -233,8 +271,40 @@ export interface FrameworkNavigation extends Omit<
    * window-scoped handle. Framework-only — not on `Navigation`.
    */
   readonly name: string | null
-  navigate(target: NavigateTarget, options?: FrameworkNavigateOptions): FrameworkNavigationResult
-  reload(options?: FrameworkReloadOptions): FrameworkNavigationResult
+  navigate(): NavigateStatus
+  reload(): ReloadStatus
+}
+
+// ─── ImperativeNavigation (internal, non-React call sites) ────────
+
+/**
+ * Plain-function navigation handle for framework-internal code that
+ * runs outside React render — class component methods, module
+ * initialization, callbacks subscribed via `useActivate`. Returned
+ * by `_windowNav()` and `_frame()`.
+ *
+ * `navigate(target, options)` / `reload(options)` return a single
+ * `Promise<NavigationHistoryEntry>` — there is no `committed` /
+ * `finished` split (the imperative path waits for both internally).
+ * The promise rejects with `NavigationError` on failure or
+ * `AbortError` on supersede.
+ *
+ * App code should always reach navigation through `useNavigation()`.
+ * This shape is `@internal` and not re-exported through the public
+ * barrel.
+ */
+export interface ImperativeNavigation extends Omit<
+  Navigation,
+  "currentEntry" | "entries" | "navigate" | "reload"
+> {
+  readonly currentEntry: FrameNavigationHistoryEntry | null
+  entries(): FrameNavigationHistoryEntry[]
+  readonly name: string | null
+  navigate(
+    target: NavigateTarget,
+    options?: FrameworkNavigateOptions,
+  ): Promise<NavigationHistoryEntry>
+  reload(options?: FrameworkReloadOptions): Promise<NavigationHistoryEntry>
 }
 
 /**

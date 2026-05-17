@@ -20,13 +20,14 @@ export function FrameNavigateButton({
   testId?: string
 }) {
   const nav = useNavigation(frameName)
+  const [navigate] = nav.navigate()
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
       data-testid={testId ?? `frame-nav-${nav.name ?? "window"}`}
-      onClick={() => void nav.navigate(url)}
+      onClick={() => void navigate(url)}
     >
       {label}
     </Button>

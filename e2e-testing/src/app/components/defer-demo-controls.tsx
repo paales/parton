@@ -6,10 +6,9 @@ import { Button } from "@parton/copies/components/ui/button"
 import { Input } from "@parton/copies/components/ui/input"
 
 /**
- * Manual activator: a plain button that calls
- * `useNavigation().reload({selector: "#" + id})`. Demonstrates
- * `defer={true}` — the framework isn't wired to any trigger; the
- * app decides when to activate.
+ * Manual activator: a plain button that calls a targeted reload.
+ * Demonstrates `defer={true}` — the framework isn't wired to any
+ * trigger; the app decides when to activate.
  */
 export function ActivateButton({
   partialId,
@@ -27,23 +26,14 @@ export function ActivateButton({
    */
   disableTransition?: boolean
 }) {
-  const nav = useNavigation()
-  const [isPending, setIsPending] = useState(false)
-  const activate = async () => {
-    setIsPending(true)
-    try {
-      await nav.reload({ selector: `#${partialId}`, disableTransition }).finished
-    } finally {
-      setIsPending(false)
-    }
-  }
+  const [reload, isPending] = useNavigation().reload()
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
       data-testid={testId ?? `activate-${partialId}`}
-      onClick={activate}
+      onClick={() => reload({ selector: `#${partialId}`, disableTransition })}
       disabled={isPending}
     >
       {isPending ? "…" : (label ?? "Activate")}

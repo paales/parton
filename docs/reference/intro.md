@@ -29,10 +29,11 @@ function PokemonRender({ id, parent }: { id: string } & RenderArgs) {
 A spec is:
 
 - **Addressable** — `selector="cart"` (auto-derived from
-  `Render.name` when omitted) makes it the target of
-  `useNavigation().reload({ selector: "cart" })` and of server-action
-  `return { invalidate: { selector: "cart" } }`. Cosmetic `#`/`.`
-  prefixes on labels are stripped and don't change behaviour.
+  `Render.name` when omitted) makes it the target of the client-side
+  `[reload] = useNavigation().reload(); reload({ selector: "cart" })`
+  and of server-action `return { invalidate: { selector: "cart" } }`.
+  Cosmetic `#`/`.` prefixes on labels are stripped and don't change
+  behaviour.
 - **Independently re-renderable** — a targeted refetch re-runs only
   the requested spec's body without re-executing any ancestor.
 - **Fingerprinted** — every render computes a hash from the spec

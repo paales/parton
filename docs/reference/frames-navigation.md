@@ -71,23 +71,39 @@ independent state.
 
 ## Navigation
 
-Client-side: `useNavigation(frameName?)` returns a handle.
+Client-side: `useNavigation(frameName?)` returns a handle. The
+handle's `reload()` and `navigate()` methods are **React hooks** —
+call them once during render to bind a tuple of
+`[fire, isPending, error]` for one call site.
 
 ```tsx
-const nav = useNavigation()              // window scope
-const cartNav = useNavigation("cart")    // cart frame scope
+const nav = useNavigation()                       // window scope
+const [reload, isPending] = nav.reload()
+const [navigate] = useNavigation("cart").navigate()
 
-cartNav.navigate("/cart/open")
-nav.navigate("/products?page=2")
-nav.reload({ selector: "cart" })
+<Button onClick={() => reload({ selector: "#cart" })} disabled={isPending}>
+  Refresh cart
+</Button>
+<Button onClick={() => navigate("/cart/open")}>Open cart drawer</Button>
 ```
 
-`navigate` accepts a string, a `URL`, or an updater function
-`(url: URL) => URL | void`. `reload` accepts an options bag with
-`selector` (one or more labels — whitespace-joined string or array;
-leading `#`/`.` is cosmetic and stripped) and various lifecycle
-flags. Refetch fans out across every spec whose labels include any
-of the wanted tokens (or whose id equals one of them).
+Fire functions:
+
+- `reload()` — whole-page reload.
+- `reload({ selector })` — targeted refetch of the matching Partials.
+- `navigate(target)` — push a new URL.
+- `navigate(target, options)` — targeted refetch + URL update.
+
+`target` is a string, a `URL`, or an updater function
+`(url: URL) => URL | string`. `selector` is one or more labels —
+whitespace-joined string or array, leading `#`/`.` is cosmetic and
+stripped. Refetch fans out across every spec whose labels include
+any of the wanted tokens (or whose id equals one of them).
+
+The fire function returns `Promise<NavigationHistoryEntry>` — chain
+`await` if you need to sequence work after the navigation, otherwise
+fire-and-forget (`void reload({...})`). Two reload calls in the same
+microtask coalesce into one request.
 
 When called with no name, `useNavigation()` looks up the closest
 ambient frame from the React context (set by the spec's frame
@@ -95,13 +111,70 @@ wrapper) and falls back to the window. Buttons inside a framed
 spec naturally navigate that frame; buttons outside drive the
 window.
 
+### Multiple buttons in one component
+
+Each `nav.reload()` / `nav.navigate()` call site owns its own
+`isPending` — sibling buttons stay clickable while one is loading.
+For multiple buttons, prefer one tuple-bound child per button over
+shared state:
+
+```tsx
+function PartialControls() {
+  return (["hero", "stats"] as const).map((id) => (
+    <RefreshButton key={id} id={id} />
+  ))
+}
+
+function RefreshButton({ id }: { id: string }) {
+  const [reload, isPending] = useNavigation().reload()
+  return (
+    <Button onClick={() => reload({ selector: `#${id}` })} disabled={isPending}>
+      Refresh {id}
+    </Button>
+  )
+}
+```
+
+### Error handling
+
+Failures (network down, HTTP 5xx, Flight decode error) reject the
+fire fn's promise with a typed `NavigationError`. The error also
+surfaces in the tuple's third slot:
+
+```tsx
+const [reload, isPending, error] = useNavigation().reload()
+```
+
+The bundled `<NavigationErrorBubbler>` component (wrapped near the
+app root, inside `<GlobalErrorBoundary>`) subscribes to the global
+error stream and re-throws during its next render — so the nearest
+enclosing React error boundary catches by default. Hosts that want
+finer scoping can wrap their own error boundaries closer to the
+affected subtree; hosts that want to display the error inline (a
+toast, a banner) can read `error` from the tuple and render against
+it before the bubbler fires.
+
+```tsx
+import { NavigationError } from "@parton/framework"
+
+const [reload, isPending, error] = useNavigation().reload()
+// error.kind: "network" | "http" | "decode"
+// error.status — HTTP status when kind === "http"
+// error.url    — what was being fetched
+```
+
+`AbortError` (a newer navigation supersedes one in flight) is a
+normal lifecycle signal, not a failure — pending clears, `error`
+stays `null`, the bubbler doesn't fire.
+
 ### Targeted refetch with explicit props
 
 Both `navigate` and `reload` accept an optional `props` bag that
 threads JSX-style call-site props into the targeted refetch:
 
 ```tsx
-nav.navigate(url, {
+const [navigate] = useNavigation().navigate()
+navigate(url, {
   selector: "slow",
   props: { slow: { flavor: "chocolate" } },
 })
@@ -119,9 +192,9 @@ the threaded prop.
 
 The wire format is `?partialProps={"<id>":{<propName>:<value>}}`.
 `<WhenStored>` and the other activators all funnel through this
-same surface — `useActivate(...).fire({ props })` calls
-`nav.reload({ selector, props })` internally, so there's exactly
-one public refetch path.
+same surface — `useActivate(...).fire({ props })` calls the
+imperative reload path internally with `{ selector, props }`, so
+there's exactly one refetch path.
 
 ### Other commit knobs
 
@@ -139,7 +212,8 @@ synchronously before the refetch fetch is issued, so the new values
 travel in the upcoming request's `Cookie` header:
 
 ```tsx
-nav.navigate(window.location.pathname + window.location.search, {
+const [navigate] = useNavigation().navigate()
+navigate(window.location.pathname + window.location.search, {
   cookies: { theme: "dark" },
   selector: "theme-aware",
 })
@@ -151,7 +225,7 @@ refetch with the new cookie. To navigate AND set a cookie, pass a
 different URL:
 
 ```tsx
-nav.navigate("/checkout", { cookies: { currency: "EUR" } })
+navigate("/checkout", { cookies: { currency: "EUR" } })
 ```
 
 Here `auto` resolves to **push** and the cookie rides along into

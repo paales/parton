@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import {
   useEnclosingPartialId,
   useNavigation,
@@ -17,26 +16,16 @@ import { Button } from "@parton/copies/components/ui/button"
  * out across every instance.
  */
 export function RefreshPriceButton({ sku }: { sku: string }) {
-  const nav = useNavigation()
+  const [reload, isPending] = useNavigation().reload()
   const myId = useEnclosingPartialId()
-  const [isPending, setIsPending] = useState(false)
-  async function refresh() {
-    if (!myId) return
-    setIsPending(true)
-    try {
-      await nav.reload({ selector: myId }).finished
-    } finally {
-      setIsPending(false)
-    }
-  }
   return (
     <Button
       type="button"
       size="icon-xs"
       variant="ghost"
       data-testid={`refresh-price-${sku}`}
-      onClick={refresh}
-      disabled={isPending}
+      onClick={() => myId && reload({ selector: myId })}
+      disabled={isPending || !myId}
       className="text-primary"
     >
       {isPending ? "…" : "↻"}

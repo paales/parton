@@ -12,7 +12,7 @@ import { cn } from "@parton/copies/lib/utils"
  * `nav.navigate` for a client-side transition.
  */
 export function NewMessageLink({ nextHref }: { nextHref: string | null }) {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
 
   if (nextHref == null) {
     return (
@@ -29,7 +29,7 @@ export function NewMessageLink({ nextHref }: { nextHref: string | null }) {
     // Let cmd/ctrl/shift-click open in a new tab / window.
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return
     ev.preventDefault()
-    void nav.navigate(nextHref, { history: "push" })
+    void navigate(nextHref, { history: "push" })
   }
 
   return (
@@ -96,12 +96,12 @@ export function AutoScrollToBottom({ containerTestId }: { containerTestId: strin
  * place without re-rendering the host page.
  */
 export function ChatOpenPill() {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
 
   const onClick = (ev: MouseEvent<HTMLAnchorElement>) => {
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return
     ev.preventDefault()
-    void nav.navigate(
+    void navigate(
       (url) => {
         url.searchParams.set("chat", "open")
         return url
@@ -131,10 +131,10 @@ export function ChatOpenPill() {
  * `#chat-overlay` with `?chat=closed` so the host page is untouched.
  */
 export function ChatClosePill() {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
 
   const onClick = () => {
-    void nav.navigate(
+    void navigate(
       (url) => {
         url.searchParams.set("chat", "closed")
         return url

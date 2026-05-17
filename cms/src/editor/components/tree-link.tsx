@@ -34,7 +34,7 @@ export function CmsEditTreeLink({
   selected: boolean
   style?: React.CSSProperties
 }) {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
   function onClick(e: React.MouseEvent<HTMLAnchorElement>) {
     // Modifier-clicks (open in new tab, etc.) and middle-button
     // navigate as the browser would — don't intercept them.
@@ -42,7 +42,7 @@ export function CmsEditTreeLink({
       return
     }
     e.preventDefault()
-    void nav.navigate(href, {
+    void navigate(href, {
       history: "push",
       selector: "#cms-edit-tree #cms-edit-fields",
     })

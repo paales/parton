@@ -18,7 +18,7 @@ import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
  */
 export function NextObserver({ currentEnd }: { currentEnd: number }) {
   const ref = useRef<HTMLDivElement>(null)
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
 
   useEffect(() => {
     const el = ref.current
@@ -37,14 +37,14 @@ export function NextObserver({ currentEnd }: { currentEnd: number }) {
       const nextEnd = currentEnd + 1
       const url = new URL(window.location.href)
       url.searchParams.set("end", String(nextEnd))
-      void nav.navigate(url.toString(), {
+      void navigate(url.toString(), {
         history: "replace",
         selector: `#page-${nextEnd} #next`,
       })
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [currentEnd, nav])
+  }, [currentEnd, navigate])
 
   return (
     <div

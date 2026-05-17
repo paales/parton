@@ -50,7 +50,7 @@ export function PageNavigator({
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState("")
   const ref = useRef<HTMLDivElement>(null)
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
 
   useEffect(() => {
     if (!open) return
@@ -63,7 +63,7 @@ export function PageNavigator({
 
   function go(href: string) {
     setOpen(false)
-    void nav.navigate(href, { history: "push" })
+    void navigate(href, { history: "push" })
   }
 
   const filtered = ITEMS.filter(

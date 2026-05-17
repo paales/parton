@@ -32,7 +32,7 @@ export function EditorOpenNavLink({
   testId?: string
   children: ReactNode
 }) {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
   function onClick(e: React.MouseEvent<HTMLAnchorElement>) {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
       return
@@ -41,7 +41,7 @@ export function EditorOpenNavLink({
     const target = new URL(href, window.location.origin)
     target.searchParams.delete("editor")
     const dest = target.pathname + target.search + target.hash
-    void nav.navigate(dest, {
+    void navigate(dest, {
       cookies: { [EDITOR_COOKIE]: "1" },
     })
   }

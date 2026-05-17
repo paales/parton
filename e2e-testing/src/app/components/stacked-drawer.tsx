@@ -5,6 +5,8 @@ import { ArrowLeft, X } from "lucide-react"
 import {
   useNavigation,
   useScrollRestore,
+  type FrameworkNavigation,
+  type Navigate,
 } from "@parton/framework/lib/partial-client.tsx"
 import {
   Drawer,
@@ -43,9 +45,15 @@ interface StackedDrawerProps {
  *   - otherwise (deep-link), navigate with `replace` so we don't
  *     pollute history with a forward stub. Replace carries no
  *     direction; CSS falls back to the default rule.
+ *
+ * Accepts the navigate fire fn (from `useNavigation().navigate()`)
+ * separately from the handle, since the handle's `navigate` is a
+ * hook now and can only be used during render — the helper here
+ * runs from event-handler land.
  */
 export function closeToParent(
-  nav: ReturnType<typeof useNavigation>,
+  nav: FrameworkNavigation,
+  navigate: Navigate,
   closeUrl: string,
 ): void {
   const current = nav.currentEntry
@@ -62,7 +70,7 @@ export function closeToParent(
       // fall through to replace
     }
   }
-  void nav.navigate(closeUrl, { history: "replace" })
+  void navigate(closeUrl, { history: "replace" })
 }
 
 /**
@@ -96,10 +104,11 @@ export function StackedDrawer({
   children,
 }: StackedDrawerProps) {
   const nav = useNavigation()
+  const [navigate] = nav.navigate()
 
   function handleOpenChange(next: boolean) {
     if (next || !open) return
-    closeToParent(nav, closeUrl)
+    closeToParent(nav, navigate, closeUrl)
   }
 
   // z-index lifts both the overlay and the content per level so deeper
@@ -172,13 +181,14 @@ export function DrawerBackLink({
   testId?: string
 }) {
   const nav = useNavigation()
+  const [navigate] = nav.navigate()
   return (
     <button
       type="button"
       data-testid={testId}
       onClick={(e) => {
         e.preventDefault()
-        closeToParent(nav, href)
+        closeToParent(nav, navigate, href)
       }}
       className={cn(
         "-ml-1 mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground",

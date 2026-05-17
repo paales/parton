@@ -1,46 +1,41 @@
 "use client"
 
-import { useState } from "react"
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 
 /**
  * Client component demonstrating partial-level re-fetching.
  *
- * Each button calls `useNavigation().reload({selector: "#…"})` — a
- * targeted refetch of one Partial. Multiple reloads in the same tick
- * are batched into one RSC request by the navigation dispatcher.
+ * One button per partial id. Each button uses its own
+ * `useNavigation().reload()` hook so its `isPending` reflects only
+ * that button's in-flight refetch — sibling buttons stay clickable
+ * while one is loading. Multiple reloads in the same tick are still
+ * batched into one RSC request by the navigation dispatcher.
  */
 export function PartialControls() {
-  const nav = useNavigation()
-  const [pending, setPending] = useState<string | null>(null)
-
-  async function refresh(id: string) {
-    setPending(id)
-    try {
-      await nav.reload({ selector: `#${id}` }).finished
-    } finally {
-      setPending(null)
-    }
-  }
-
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
       <span className="text-xs text-muted-foreground">
         reload({"{"}selector{"}"}):
       </span>
       {(["hero", "stats", "species"] as const).map((id) => (
-        <Button
-          key={id}
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => refresh(id)}
-          disabled={pending === id}
-        >
-          {pending === id ? "Refreshing..." : `Refresh ${id[0].toUpperCase()}${id.slice(1)}`}
-        </Button>
+        <RefreshPartialButton key={id} id={id} />
       ))}
     </div>
+  )
+}
+
+function RefreshPartialButton({ id }: { id: "hero" | "stats" | "species" }) {
+  const [reload, isPending] = useNavigation().reload()
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      onClick={() => reload({ selector: `#${id}` })}
+      disabled={isPending}
+    >
+      {isPending ? "Refreshing..." : `Refresh ${id[0].toUpperCase()}${id.slice(1)}`}
+    </Button>
   )
 }

@@ -1,16 +1,18 @@
 "use client"
 
-import { useTransition } from "react"
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 
 /**
  * Client-side buttons to trigger refetches against the cache-demo
- * partials.
+ * partials. Each button gets its own tuple hook so `isPending`
+ * reflects only that button's in-flight refetch.
  */
 export function CacheControls() {
   const nav = useNavigation()
-  const [isPending, startTransition] = useTransition()
+  const [reload, reloadPending] = nav.reload()
+  const [navigate, navigatePending] = nav.navigate()
+  const isPending = reloadPending || navigatePending
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -18,11 +20,7 @@ export function CacheControls() {
         type="button"
         size="sm"
         variant="outline"
-        onClick={() =>
-          startTransition(() => {
-            void nav.reload({ selector: "#slow" })
-          })
-        }
+        onClick={() => reload({ selector: "#slow" })}
         data-testid="refetch-slow"
       >
         Refetch slow
@@ -31,11 +29,7 @@ export function CacheControls() {
         type="button"
         size="sm"
         variant="outline"
-        onClick={() =>
-          startTransition(() => {
-            void nav.reload({ selector: "#clock" })
-          })
-        }
+        onClick={() => reload({ selector: "#clock" })}
         data-testid="refetch-clock"
       >
         Refetch clock
@@ -49,17 +43,15 @@ export function CacheControls() {
           const current = url.searchParams.get("flavor") ?? "vanilla"
           const next = current === "vanilla" ? "chocolate" : "vanilla"
           url.searchParams.set("flavor", next)
-          startTransition(() => {
-            // Targeted refetch of `#slow` with the new flavor sent
-            // alongside as a JSX-style prop. The wrapper isn't
-            // re-evaluated in cache mode, so partial-refetch needs
-            // the prop wired explicitly — same mechanism
-            // `<WhenStored>` uses.
-            void nav.navigate(url.toString(), {
-              history: "push",
-              selector: "#slow",
-              props: { slow: { flavor: next } },
-            })
+          // Targeted refetch of `#slow` with the new flavor sent
+          // alongside as a JSX-style prop. The wrapper isn't
+          // re-evaluated in cache mode, so partial-refetch needs
+          // the prop wired explicitly — same mechanism
+          // `<WhenStored>` uses.
+          void navigate(url.toString(), {
+            history: "push",
+            selector: "#slow",
+            props: { slow: { flavor: next } },
           })
         }}
         data-testid="toggle-flavor"

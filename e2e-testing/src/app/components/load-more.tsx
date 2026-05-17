@@ -1,7 +1,10 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { useEffect, useRef } from "react"
+import {
+  useNavigation,
+  type Navigate,
+} from "@parton/framework/lib/partial-client.tsx"
 
 /**
  * Tracks which page partials are currently visible.
@@ -14,7 +17,7 @@ import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
  */
 const visiblePages = new Set<number>()
 
-function silentlyUpdatePages(nav: ReturnType<typeof useNavigation>) {
+function silentlyUpdatePages(navigate: Navigate) {
   if (visiblePages.size === 0) return
   const maxVisible = Math.max(...visiblePages)
   const url = new URL(window.location.href)
@@ -24,7 +27,7 @@ function silentlyUpdatePages(nav: ReturnType<typeof useNavigation>) {
     // Scrolling up — update URL for bookmarking/refresh without
     // triggering a refetch.
     url.searchParams.set("pages", String(maxVisible))
-    void nav.navigate(url.toString(), { history: "replace", silent: true })
+    void navigate(url.toString(), { history: "replace", silent: true })
   }
 }
 
@@ -34,7 +37,7 @@ function silentlyUpdatePages(nav: ReturnType<typeof useNavigation>) {
  */
 export function PageSentinel({ page }: { page: number }) {
   const ref = useRef<HTMLDivElement>(null)
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
 
   useEffect(() => {
     const el = ref.current
@@ -53,7 +56,7 @@ export function PageSentinel({ page }: { page: number }) {
       // on pageload.
       if (!visiblePages.has(page)) return
       visiblePages.delete(page)
-      silentlyUpdatePages(nav)
+      silentlyUpdatePages(navigate)
     })
 
     observer.observe(el)
@@ -61,7 +64,7 @@ export function PageSentinel({ page }: { page: number }) {
       observer.disconnect()
       visiblePages.delete(page)
     }
-  }, [page, nav])
+  }, [page, navigate])
 
   return <div ref={ref} className="h-0" />
 }
@@ -71,16 +74,13 @@ export function PageSentinel({ page }: { page: number }) {
  * when it enters the viewport via IntersectionObserver.
  *
  * Updates the URL and dispatches a targeted refetch for the new
- * page partial and the load-more sentinel itself in one call:
- * `navigate(url, { history: "replace", selector: "#page-N #load-more" })`.
- * Already-rendered page partials stay in the client cache — and so
- * does any other unrelated partial (e.g. an open search overlay).
+ * page partial and the load-more sentinel itself in one call.
+ * `isPending` from the tuple drives the spinner; no separate state.
  */
 export function LoadMore({ nextPage }: { nextPage: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const triggered = useRef(false)
-  const nav = useNavigation()
-  const [isPending, setIsPending] = useState(false)
+  const [navigate, isPending] = useNavigation().navigate()
 
   useEffect(() => {
     triggered.current = false
@@ -103,13 +103,10 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
           triggered.current = true
           const url = new URL(window.location.href)
           url.searchParams.set("pages", String(nextPage))
-          setIsPending(true)
-          nav
-            .navigate(url.toString(), {
-              history: "replace",
-              selector: `#page-${nextPage} #load-more`,
-            })
-            .finished.finally(() => setIsPending(false))
+          void navigate(url.toString(), {
+            history: "replace",
+            selector: `#page-${nextPage} #load-more`,
+          })
         }
       },
       { rootMargin: "200px" },
@@ -117,7 +114,7 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [nextPage, nav])
+  }, [nextPage, navigate])
 
   return (
     <div ref={ref} className="p-8 text-center">

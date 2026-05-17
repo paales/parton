@@ -19,7 +19,7 @@ import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
  * its Flight payload arrives.
  */
 export function ResumeTail({ fileId, cursor }: { fileId: string; cursor: number }) {
-  const nav = useNavigation()
+  const [navigate] = useNavigation().navigate()
   // After the first compaction the refetch payload reuses the same
   // ResumeTail fiber (same type, different cursor prop) — React updates
   // rather than remounts. An "already fired" ref would block the second
@@ -32,7 +32,7 @@ export function ResumeTail({ fileId, cursor }: { fileId: string; cursor: number 
   useEffect(() => {
     if (lastFiredCursor.current === cursor) return
     lastFiredCursor.current = cursor
-    void nav.navigate(
+    void navigate(
       (url) => {
         url.searchParams.set(`cursor-${fileId}`, String(cursor))
         return url
@@ -43,7 +43,7 @@ export function ResumeTail({ fileId, cursor }: { fileId: string; cursor: number 
         disableTransition: true,
       },
     )
-  }, [fileId, cursor, nav])
+  }, [fileId, cursor, navigate])
 
   // Render an empty marker so the DOM can observe "a compact boundary lived
   // here" — useful for tests and for ruling out the case where depth-bound

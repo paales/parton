@@ -9,7 +9,11 @@ import React from "react"
 import { createRoot, hydrateRoot } from "react-dom/client"
 import { rscStream } from "rsc-html-stream/client"
 import type { RscPayload } from "./entry.rsc"
-import { GlobalErrorBoundary } from "@parton/framework/runtime/error-boundary.tsx"
+import {
+  GlobalErrorBoundary,
+  NavigationErrorBubbler,
+} from "@parton/framework/runtime/error-boundary.tsx"
+import { NavigationError } from "@parton/framework/runtime/navigation-error.ts"
 import { createRscRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
   _applyFpTrailerFromDocument,
@@ -109,19 +113,51 @@ async function main() {
     //     improves perceived latency.
     const disableTransition = url.searchParams.has("disableTransition")
     const renderRequest = createRscRenderRequest(url.toString())
-    const response = await fetch(renderRequest)
-    // RSC GET navs carry a length-prefixed binary fp-trailer after
-    // the Flight bytes. Split it off before handing the main stream
-    // to Flight: the splitter forwards source chunks immediately
-    // (Flight sees its bytes with original timing) and parses the
-    // trailer on source-end. The trailer's warm-fp updates are
-    // applied to `_currentPageFingerprints` so the next nav's
-    // `?cached=` carries both cold and warm.
-    const { mainStream, trailer } = splitAtFpTrailer(response.body!)
-    const payload = await createFromReadableStream<RscPayload>(mainStream)
-    trailer.then((updates) => {
-      if (updates) _applyFpUpdates(updates)
-    })
+    // Network → HTTP → decode. Each failure mode maps to a typed
+    // NavigationError kind so consumers (per-call hook tuple's
+    // third slot, the global Bubbler) can branch on it without
+    // string matching. AbortError stays untouched — it's a normal
+    // lifecycle signal, not a failure.
+    let response: Response
+    try {
+      response = await fetch(renderRequest)
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err
+      throw new NavigationError({
+        kind: "network",
+        url: renderRequest.url,
+        cause: err,
+      })
+    }
+    if (!response.ok || !response.body) {
+      throw new NavigationError({
+        kind: "http",
+        url: renderRequest.url,
+        status: response.status,
+      })
+    }
+    let payload: RscPayload
+    try {
+      // RSC GET navs carry a length-prefixed binary fp-trailer after
+      // the Flight bytes. Split it off before handing the main stream
+      // to Flight: the splitter forwards source chunks immediately
+      // (Flight sees its bytes with original timing) and parses the
+      // trailer on source-end. The trailer's warm-fp updates are
+      // applied to `_currentPageFingerprints` so the next nav's
+      // `?cached=` carries both cold and warm.
+      const { mainStream, trailer } = splitAtFpTrailer(response.body)
+      payload = await createFromReadableStream<RscPayload>(mainStream)
+      trailer.then((updates) => {
+        if (updates) _applyFpUpdates(updates)
+      })
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err
+      throw new NavigationError({
+        kind: "decode",
+        url: renderRequest.url,
+        cause: err,
+      })
+    }
     if (disableTransition) {
       setPayloadRaw(payload)
     } else {
@@ -161,7 +197,9 @@ async function main() {
   const browserRoot = (
     <React.StrictMode>
       <GlobalErrorBoundary>
-        <BrowserRoot />
+        <NavigationErrorBubbler>
+          <BrowserRoot />
+        </NavigationErrorBubbler>
       </GlobalErrorBoundary>
     </React.StrictMode>
   )

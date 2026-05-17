@@ -1,9 +1,42 @@
 "use client"
 
 import React from "react"
+import {
+  _clearLatestNavigationError,
+  _getLatestNavigationError,
+  _subscribeNavigationError,
+} from "./navigation-error.ts"
 
 export function GlobalErrorBoundary(props: { children?: React.ReactNode }) {
   return <ErrorBoundary errorComponent={DefaultGlobalErrorPage}>{props.children}</ErrorBoundary>
+}
+
+/**
+ * Subscribes to the global navigation-error stream and re-throws
+ * during render so the nearest enclosing error boundary catches.
+ *
+ * This is how typed `NavigationError`s from `useNavigation().reload()`
+ * / `.navigate()` surface in the UI: the per-call hook publishes via
+ * `_publishNavigationError`, this component's `useSyncExternalStore`
+ * fires, and the next render throws — caught by whatever boundary
+ * the host has wrapped it in. Place it inside `<GlobalErrorBoundary>`
+ * for app-wide capture, or at a tighter scope for localized recovery.
+ *
+ * The latest error is cleared synchronously before the throw, so a
+ * boundary `reset()` that re-mounts this subtree starts fresh — no
+ * stale-error loop.
+ */
+export function NavigationErrorBubbler(props: { children?: React.ReactNode }) {
+  const error = React.useSyncExternalStore(
+    _subscribeNavigationError,
+    _getLatestNavigationError,
+    () => null,
+  )
+  if (error) {
+    _clearLatestNavigationError()
+    throw error
+  }
+  return <>{props.children}</>
 }
 
 class ErrorBoundary extends React.Component<{

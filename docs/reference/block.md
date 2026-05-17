@@ -171,9 +171,9 @@ import { useEnclosingPartialId, useNavigation } from "@parton/framework/lib/part
 
 export function RefreshSelfButton() {
   const myId = useEnclosingPartialId()
-  const nav = useNavigation()
+  const [reload, isPending] = useNavigation().reload()
   return (
-    <button onClick={() => nav.reload({ selector: myId })}>
+    <button onClick={() => myId && reload({ selector: myId })} disabled={isPending}>
       Refresh
     </button>
   )

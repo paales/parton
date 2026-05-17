@@ -9,7 +9,11 @@ import React from "react"
 import { createRoot, hydrateRoot } from "react-dom/client"
 import { rscStream } from "rsc-html-stream/client"
 import type { RscPayload } from "./entry.rsc"
-import { GlobalErrorBoundary } from "@parton/framework/runtime/error-boundary.tsx"
+import {
+  GlobalErrorBoundary,
+  NavigationErrorBubbler,
+} from "@parton/framework/runtime/error-boundary.tsx"
+import { NavigationError } from "@parton/framework/runtime/navigation-error.ts"
 import { createRscRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
   _collectFramePaths,
@@ -71,8 +75,37 @@ async function main() {
     //     improves perceived latency.
     const disableTransition = url.searchParams.has("disableTransition")
     const renderRequest = createRscRenderRequest(url.toString())
-    const response = await fetch(renderRequest)
-    const payload = await createFromReadableStream<RscPayload>(response.body!)
+    // Classify fetch failures so they reach the NavigationError
+    // surface — see e2e-testing/src/entry.browser.tsx for rationale.
+    let response: Response
+    try {
+      response = await fetch(renderRequest)
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err
+      throw new NavigationError({
+        kind: "network",
+        url: renderRequest.url,
+        cause: err,
+      })
+    }
+    if (!response.ok || !response.body) {
+      throw new NavigationError({
+        kind: "http",
+        url: renderRequest.url,
+        status: response.status,
+      })
+    }
+    let payload: RscPayload
+    try {
+      payload = await createFromReadableStream<RscPayload>(response.body)
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err
+      throw new NavigationError({
+        kind: "decode",
+        url: renderRequest.url,
+        cause: err,
+      })
+    }
     if (disableTransition) {
       setPayloadRaw(payload)
     } else {
@@ -113,7 +146,9 @@ async function main() {
   const browserRoot = (
     <React.StrictMode>
       <GlobalErrorBoundary>
-        <BrowserRoot />
+        <NavigationErrorBubbler>
+          <BrowserRoot />
+        </NavigationErrorBubbler>
       </GlobalErrorBoundary>
     </React.StrictMode>
   )

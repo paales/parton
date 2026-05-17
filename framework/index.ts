@@ -39,6 +39,12 @@ export {
 
 export { Redirect } from "./src/runtime/redirect-client.tsx"
 
+// ── Navigation error surface ────────────────────────────────────────────
+export {
+  NavigationError,
+  type NavigationErrorKind,
+} from "./src/runtime/navigation-error.ts"
+
 // ── Framework runtime — request context (server) ────────────────────────
 //
 // `getRequest` / `setRequest` / `runWithRequestAsync` are deliberately NOT
