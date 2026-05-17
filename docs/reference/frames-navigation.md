@@ -166,21 +166,7 @@ loud failure beats silent drop.
 ### Error handling
 
 Failures (network down, HTTP 5xx, Flight decode error) reject the
-fire fn's promise with a typed `NavigationError`. The error also
-surfaces in the tuple's third slot:
-
-```tsx
-const [reload, isPending, error] = useNavigation().reload()
-```
-
-The bundled `<NavigationErrorBubbler>` component (wrapped near the
-app root, inside `<GlobalErrorBoundary>`) subscribes to the global
-error stream and re-throws during its next render — so the nearest
-enclosing React error boundary catches by default. Hosts that want
-finer scoping can wrap their own error boundaries closer to the
-affected subtree; hosts that want to display the error inline (a
-toast, a banner) can read `error` from the tuple and render against
-it before the bubbler fires.
+fire fn's promise with a typed `NavigationError`:
 
 ```tsx
 import { NavigationError } from "@parton/framework"
@@ -191,9 +177,18 @@ const [reload, isPending, error] = useNavigation().reload()
 // error.url    — what was being fetched
 ```
 
+After a failure, the hook re-throws the error on the calling
+component's next render — bubbling to the nearest enclosing React
+error boundary. The framework's `<GlobalErrorBoundary>` catches by
+default and renders the "Something went wrong" page; hosts that
+want scoped recovery can wrap their own boundary closer to the
+affected subtree, and hosts that want inline display can render
+against `error` (and clear via a remount key) instead of letting
+it bubble.
+
 `AbortError` (a newer navigation supersedes one in flight) is a
 normal lifecycle signal, not a failure — pending clears, `error`
-stays `null`, the bubbler doesn't fire.
+stays `null`, nothing bubbles.
 
 ### Targeted refetch with explicit props
 

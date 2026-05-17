@@ -9,10 +9,7 @@ import React from "react"
 import { createRoot, hydrateRoot } from "react-dom/client"
 import { rscStream } from "rsc-html-stream/client"
 import type { RscPayload } from "./entry.rsc"
-import {
-  GlobalErrorBoundary,
-  NavigationErrorBubbler,
-} from "@parton/framework/runtime/error-boundary.tsx"
+import { GlobalErrorBoundary } from "@parton/framework/runtime/error-boundary.tsx"
 import { NavigationError } from "@parton/framework/runtime/navigation-error.ts"
 import { createRscRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
@@ -197,9 +194,7 @@ async function main() {
   const browserRoot = (
     <React.StrictMode>
       <GlobalErrorBoundary>
-        <NavigationErrorBubbler>
-          <BrowserRoot />
-        </NavigationErrorBubbler>
+        <BrowserRoot />
       </GlobalErrorBoundary>
     </React.StrictMode>
   )

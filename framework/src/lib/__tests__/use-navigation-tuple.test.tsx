@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, useRef } from "react"
+import React, { act, useRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -14,12 +14,15 @@ import { NavigationError } from "../../runtime/navigation-error.ts"
  *   - `reload(options?)` returns a Promise<entry> that rejects with a
  *     NavigationError on failure or AbortError on supersede.
  *   - `isPending` is `true` from fire until the promise settles.
- *   - `error` holds the last NavigationError (or null). AbortError
- *     never sets error, just clears pending.
+ *   - The hook ALSO throws on the calling component's next render
+ *     after a failure — so the nearest enclosing React error boundary
+ *     catches by default. AbortError never throws (lifecycle signal,
+ *     not a failure).
  *
- * Tests rely on the same stubbing of `__rsc_partial_refetch` that
- * `when-stored.test.tsx` uses — the targeted-refetch path that
- * `reload({selector})` dispatches through.
+ * Tests wrap Probe in a TestBoundary to capture both the per-render
+ * tuple values (via `cap.states`) AND the thrown error (via
+ * `cap.caughtByBoundary`). Tests rely on the same stubbing of
+ * `__rsc_partial_refetch` that `when-stored.test.tsx` uses.
  */
 
 let container: HTMLElement
@@ -42,9 +45,15 @@ afterEach(() => {
   delete (window as Window & { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch
 })
 
+interface FireOpts {
+  selector?: string | string[]
+  props?: Record<string, Record<string, unknown>>
+}
+
 interface Capture {
-  fire: ((opts?: { selector: string }) => Promise<unknown>) | null
+  fire: ((opts?: FireOpts) => Promise<unknown>) | null
   states: Array<{ pending: boolean; error: NavigationError | null }>
+  caughtByBoundary: Error | null
 }
 
 function Probe({ capture }: { capture: Capture }) {
@@ -56,15 +65,38 @@ function Probe({ capture }: { capture: Capture }) {
   return null
 }
 
-async function render(capture: Capture) {
+class TestBoundary extends React.Component<
+  { capture: Capture; children: React.ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  componentDidCatch(error: Error) {
+    this.props.capture.caughtByBoundary = error
+  }
+  render() {
+    if (this.state.error) return null
+    return this.props.children
+  }
+}
+
+async function render(capture: Capture, partialId: string | null = null) {
   await act(async () => {
     root = createRoot(container)
-    root.render(<Probe capture={capture} />)
+    root.render(
+      <TestBoundary capture={capture}>
+        <PartialIdContext.Provider value={partialId}>
+          <Probe capture={capture} />
+        </PartialIdContext.Provider>
+      </TestBoundary>,
+    )
   })
 }
 
 function newCapture(): Capture {
-  return { fire: null, states: [] }
+  return { fire: null, states: [], caughtByBoundary: null }
 }
 
 describe("useNavigation().reload() tuple hook", () => {
@@ -102,7 +134,7 @@ describe("useNavigation().reload() tuple hook", () => {
     expect(cap.states[cap.states.length - 1]).toEqual({ pending: false, error: null })
   })
 
-  it("publishes a NavigationError when the refetch rejects", async () => {
+  it("throws a NavigationError to the boundary when the refetch rejects", async () => {
     const cap = newCapture()
     const failure = new NavigationError({
       kind: "network",
@@ -111,32 +143,26 @@ describe("useNavigation().reload() tuple hook", () => {
     })
     refetchSpy.mockImplementation(() => Promise.reject(failure))
     await render(cap)
-    cap.states = []
 
     await act(async () => {
       // The fire promise rejects — swallow so the test doesn't error.
       await cap.fire!({ selector: "#hero" }).catch(() => {})
     })
 
-    const last = cap.states[cap.states.length - 1]
-    expect(last.pending).toBe(false)
-    expect(last.error).toBe(failure)
+    expect(cap.caughtByBoundary).toBe(failure)
   })
 
-  it("classifies a plain TypeError as a network error", async () => {
+  it("classifies a plain TypeError as a network error and throws it", async () => {
     const cap = newCapture()
     refetchSpy.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")))
     await render(cap)
-    cap.states = []
 
     await act(async () => {
       await cap.fire!({ selector: "#hero" }).catch(() => {})
     })
 
-    const last = cap.states[cap.states.length - 1]
-    expect(last.pending).toBe(false)
-    expect(last.error).toBeInstanceOf(NavigationError)
-    expect(last.error?.kind).toBe("network")
+    expect(cap.caughtByBoundary).toBeInstanceOf(NavigationError)
+    expect((cap.caughtByBoundary as NavigationError).kind).toBe("network")
   })
 
   it("silently clears pending on AbortError (no error stored)", async () => {
@@ -158,25 +184,9 @@ describe("useNavigation().reload() tuple hook", () => {
 })
 
 describe('"@self" token resolution', () => {
-  /**
-   * Render Probe under a PartialIdContext.Provider so the ambient
-   * id is set — same wiring `<PartialErrorBoundary>` does in the
-   * real tree.
-   */
-  async function renderInPartial(cap: Capture, partialId: string | null) {
-    await act(async () => {
-      root = createRoot(container)
-      root.render(
-        <PartialIdContext.Provider value={partialId}>
-          <Probe capture={cap} />
-        </PartialIdContext.Provider>,
-      )
-    })
-  }
-
   it('substitutes "@self" with the ambient partial id in selector', async () => {
     const cap = newCapture()
-    await renderInPartial(cap, "hero:abc")
+    await render(cap, "hero:abc")
 
     await act(async () => {
       await cap.fire!({ selector: "@self" })
@@ -188,7 +198,7 @@ describe('"@self" token resolution', () => {
 
   it('substitutes "@self" inside an array selector alongside other labels', async () => {
     const cap = newCapture()
-    await renderInPartial(cap, "card:xyz")
+    await render(cap, "card:xyz")
 
     await act(async () => {
       await cap.fire!({ selector: ["@self", ".price"] })
@@ -203,7 +213,7 @@ describe('"@self" token resolution', () => {
 
   it('rekeys props["@self"] to the ambient partial id', async () => {
     const cap = newCapture()
-    await renderInPartial(cap, "slow:1")
+    await render(cap, "slow:1")
 
     await act(async () => {
       await cap.fire!({
@@ -217,10 +227,9 @@ describe('"@self" token resolution', () => {
     expect(props).toEqual({ "slow:1": { flavor: "vanilla" } })
   })
 
-  it("rejects with a NavigationError when @self is used outside a partial", async () => {
+  it("throws a NavigationError to the boundary when @self is used outside a partial", async () => {
     const cap = newCapture()
-    await renderInPartial(cap, null)
-    cap.states = []
+    await render(cap, null)
 
     let caught: unknown
     await act(async () => {
@@ -229,15 +238,12 @@ describe('"@self" token resolution', () => {
     expect(caught).toBeInstanceOf(NavigationError)
     expect((caught as NavigationError).message).toContain("@self")
     expect(refetchSpy).not.toHaveBeenCalled()
-
-    const last = cap.states[cap.states.length - 1]
-    expect(last.pending).toBe(false)
-    expect(last.error).toBeInstanceOf(NavigationError)
+    expect(cap.caughtByBoundary).toBeInstanceOf(NavigationError)
   })
 
   it("leaves selectors without @self untouched even when ambient id is set", async () => {
     const cap = newCapture()
-    await renderInPartial(cap, "hero:abc")
+    await render(cap, "hero:abc")
 
     await act(async () => {
       await cap.fire!({ selector: "#cart" })

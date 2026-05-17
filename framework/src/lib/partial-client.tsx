@@ -54,11 +54,7 @@ import {
   type Reload,
   type ReloadStatus,
 } from "../runtime/navigation-api.ts"
-import {
-  NavigationError,
-  _publishNavigationError,
-  toNavigationError,
-} from "../runtime/navigation-error.ts"
+import { NavigationError, toNavigationError } from "../runtime/navigation-error.ts"
 
 /**
  * Return true if the node looks like the outermost wrapper a
@@ -705,53 +701,7 @@ export function registerClientPartial(
     set = new Set()
     inner.set(matchKey, set)
   }
-  const alreadyKnown = set.has(fingerprint)
   set.add(fingerprint)
-  if (!alreadyKnown) {
-    // RepNotify channel — fire subscribers registered via
-    // `usePartialReconcile`. Subscriptions get set up at useEffect
-    // time (post-mount), so the initial hydration-time registration
-    // happens BEFORE any handler can be listening — `usePartialReconcile`
-    // only fires on UPDATES, never on the initial paint. Same shape as
-    // React's reconciliation events.
-    fireReconcile({ partialId: id, matchKey, fingerprint })
-  }
-}
-
-/** Event delivered to `usePartialReconcile` handlers. */
-export interface PartialReconcileEvent {
-  /** The enclosing parton's effective id. */
-  partialId: string
-  /** Variant key (per-match-params hash). */
-  matchKey: string
-  /** Newly-arrived server fingerprint. */
-  fingerprint: string
-}
-
-type ReconcileHandler = (event: PartialReconcileEvent) => void
-const reconcileSubscribers = new Map<string, Set<ReconcileHandler>>()
-
-function fireReconcile(event: PartialReconcileEvent): void {
-  const subs = reconcileSubscribers.get(event.partialId)
-  if (!subs || subs.size === 0) return
-  // Defer to a microtask: `registerClientPartial` is called from
-  // PEB's render(), which is mid-React-render. Calling subscribers
-  // synchronously would let `setState` in a handler fire during
-  // another component's render — React's "Cannot update a component
-  // while rendering a different component" warning. Microtask
-  // defer lands the work after the current render commits, which
-  // is when `useEffect`-style subscribers expect to react anyway.
-  queueMicrotask(() => {
-    const live = reconcileSubscribers.get(event.partialId)
-    if (!live) return
-    for (const sub of live) {
-      try {
-        sub(event)
-      } catch (err) {
-        console.error("[usePartialReconcile] handler threw:", err)
-      }
-    }
-  })
 }
 
 /**
@@ -1082,53 +1032,8 @@ export const FrameNameContext = createContext<readonly string[]>(
  *
  *     const [reload] = useNavigation().reload()
  *     <Button onClick={() => reload({ selector: "@self" })} />
- *
- * `usePartialReconcile` also reads it to scope its subscription to
- * the enclosing partial's reconcile events.
  */
 export const PartialIdContext = createContext<string | null>(null)
-
-/**
- * Fires `handler` whenever the enclosing parton's server fingerprint
- * changes — the RepNotify channel for partial reconciliation.
- * Useful for animations, sound effects, focus restoration, log
- * spans, etc. on every refetch / invalidate / vary-result change.
- *
- *     usePartialReconcile(() => {
- *       document.startViewTransition(() => {})
- *     })
- *
- * Subscriptions are set up at `useEffect` time (post-mount), so
- * the handler never fires for the initial paint — only for
- * UPDATES that arrive after the component mounted. This matches
- * the natural semantics of "tell me when something changed."
- *
- * Reads the enclosing parton id from `PartialIdContext`. Returns
- * a no-op when called outside a parton (id is `null`).
- */
-export function usePartialReconcile(handler: (event: PartialReconcileEvent) => void): void {
-  const id = useContext(PartialIdContext)
-  const handlerRef = useRef(handler)
-  useEffect(() => {
-    handlerRef.current = handler
-  })
-  useEffect(() => {
-    if (!id) return
-    const wrapped: ReconcileHandler = (event) => handlerRef.current(event)
-    let subs = reconcileSubscribers.get(id)
-    if (!subs) {
-      subs = new Set()
-      reconcileSubscribers.set(id, subs)
-    }
-    subs.add(wrapped)
-    return () => {
-      const s = reconcileSubscribers.get(id)
-      if (!s) return
-      s.delete(wrapped)
-      if (s.size === 0) reconcileSubscribers.delete(id)
-    }
-  }, [id])
-}
 
 /** Dotted canonical name for a frame path. */
 function joinFramePath(path: readonly string[]): string {
@@ -1979,6 +1884,11 @@ function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
   // resolve `@self` tokens. The id may be null outside a partial;
   // resolveSelfInReloadOptions throws on use in that case.
   const ambientPartialId = useContext(PartialIdContext)
+  // Lift the error to render so the nearest enclosing React error
+  // boundary catches. The throw bubbles from THIS component; a
+  // boundary reset re-mounts with a fresh useState (no error) so
+  // there's no stale-error loop.
+  if (state.error) throw state.error
   const fire = useMemo<Reload>(
     () => async (options) => {
       setState({ pending: true, error: null })
@@ -2000,7 +1910,6 @@ function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
                 typeof window !== "undefined" ? window.location.href : "?",
               )
         setState({ pending: false, error: navErr })
-        _publishNavigationError(navErr)
         throw navErr
       }
     },
@@ -2019,6 +1928,8 @@ function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
     error: NavigationError | null
   }>({ pending: false, error: null })
   const ambientPartialId = useContext(PartialIdContext)
+  // See `useReloadHook` for the lift-to-render rationale.
+  if (state.error) throw state.error
   const fire = useMemo<Navigate>(
     () => async (target, options) => {
       setState({ pending: true, error: null })
@@ -2040,7 +1951,6 @@ function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
                 typeof window !== "undefined" ? window.location.href : "?",
               )
         setState({ pending: false, error: navErr })
-        _publishNavigationError(navErr)
         throw navErr
       }
     },

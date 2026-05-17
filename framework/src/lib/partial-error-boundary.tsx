@@ -45,9 +45,14 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
   state: State = { error: null }
 
   static getDerivedStateFromError(error: Error): State {
-    // Framework control-flow sentinels (notFound, redirect) must
-    // bubble past user-level error boundaries so the RSC entry can
-    // translate them into HTTP status / Location / payload markers.
+    // Framework-branded errors must bubble past this per-partial
+    // boundary so the right consumer catches:
+    //   - notFound / redirect    — surface to the RSC entry so it
+    //     can translate into HTTP status / Location / payload markers.
+    //   - NavigationError        — surface to the host's enclosing
+    //     React error boundary (default `<GlobalErrorBoundary>`)
+    //     rather than turning a click-driven refetch failure into
+    //     an inline red card on the affected partial.
     // Detect by the `__framework` brand on the class — avoids an
     // `instanceof` that would force a cross-bundle import.
     if ((error as { __framework?: string }).__framework) {
