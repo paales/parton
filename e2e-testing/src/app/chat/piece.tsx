@@ -18,7 +18,7 @@
  */
 
 import { Suspense } from "react"
-import { markConnectionLive } from "@parton/framework"
+import { getServerNavigation, markConnectionLive } from "@parton/framework"
 import { readLogState, waitForNextChunk } from "./log.ts"
 
 function ChunkText({ text }: { text: string }) {
@@ -54,6 +54,14 @@ async function ChunkSlot({ fileId, cursor }: { fileId: string; cursor: number })
 
 export function ChatMessage({ fileId }: { fileId: string }) {
   const snapshot = readLogState(fileId)
+  // Server-push the cursor into the window URL so bookmarking the
+  // page mid-stream resumes at the latest cursor. Replace mode so
+  // the back-stack stays clean across many cursor advances.
+  if (snapshot.cursor > 0) {
+    getServerNavigation().navigate(`?cursor-${fileId}=${snapshot.cursor}`, {
+      history: "replace",
+    })
+  }
   return (
     <article
       data-testid={`chat-msg-${fileId}`}

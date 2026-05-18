@@ -159,7 +159,11 @@ async function runProducer(
  * Append one chunk to the log: wakes any pending `waitForNextChunk`
  * waiters AND fires `refreshSelector` on the message's label so the
  * server-side segment driver re-renders this message on the next
- * tick.
+ * tick. URL pushes (the cursor moving into `?cursor-{fileId}=`) are
+ * driven by the chat partial's render via `getServerNavigation` —
+ * the producer runs in a background ALS that no longer matches any
+ * connection's request, so navigate from here would land in the
+ * wrong scope.
  */
 function appendChunk(fileId: string, log: MessageLog, chunk: string): void {
   log.chunks.push(chunk)

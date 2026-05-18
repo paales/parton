@@ -32,7 +32,7 @@ import {
   type PartialSnapshot,
 } from "./partial-registry.ts"
 import { computeRouteKey } from "./partial.tsx"
-import { getRequest, getScope } from "../runtime/context.ts"
+import { _consumePendingUrlUpdate, getRequest, getScope } from "../runtime/context.ts"
 import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
 import { getSessionFrameUrl } from "../runtime/session.ts"
 import {
@@ -315,6 +315,13 @@ export function wrapStreamWithFpTrailer(
       async flush(controller) {
         await Promise.allSettled(_drainPendingDefers())
         if (commit) commit()
+        // Emit `url` trailer first (cheap, no snapshot scan needed).
+        // Client applies the URL update on segment commit so the
+        // browser URL bar is in sync with what the server rendered.
+        const urlUpdate = _consumePendingUrlUpdate()
+        if (urlUpdate) {
+          emitUrlUpdate(controller, urlUpdate)
+        }
         if (!request) return
         const routeKey = computeRouteKey(request.url)
         const snapshots = _readSnapshotsForRoute(scope, routeKey)

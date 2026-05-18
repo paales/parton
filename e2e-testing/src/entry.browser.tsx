@@ -155,6 +155,25 @@ async function main() {
               _applyFpUpdates(updates)
             } catch {}
           }
+          // Server-pushed URL update. Applied silently via
+          // history.{push,replace}State so the browser URL bar
+          // reflects the new state without re-entering the
+          // framework's own navigation handler (which would fire
+          // a fresh fetchRscPayload, redundant since we already
+          // have the rendered content).
+          const urlBytes = trailers.get("url")
+          if (urlBytes) {
+            try {
+              const update = JSON.parse(new TextDecoder().decode(urlBytes)) as {
+                window?: string
+                history?: "push" | "replace"
+              }
+              if (update.window) {
+                const mode = update.history === "push" ? "pushState" : "replaceState"
+                window.history[mode]({}, "", update.window)
+              }
+            } catch {}
+          }
         })
         if (disableTransition) {
           setPayloadRaw(payload)

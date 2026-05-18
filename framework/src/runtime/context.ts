@@ -36,6 +36,21 @@ interface RequestStore {
    *  driver closes the connection after the first segment — same as
    *  today's single-segment behavior. */
   connectionLive?: boolean
+  /** Queued URL push from `getServerNavigation(scope).navigate(...)`.
+   *  Consumed (and cleared) at trailer-flush time, emitted as a
+   *  `url`-tagged trailer entry so the client can apply it to the
+   *  browser URL / frame URL store. Multiple navigate calls within a
+   *  segment merge into one update; the LAST `history` wins. */
+  pendingUrlUpdate?: UrlUpdateEntry
+}
+
+/** Wire shape for the `url`-tagged trailer entry. Client applies
+ *  window-scoped URL via the Navigation API; frame URLs land in the
+ *  frame URL store. */
+export interface UrlUpdateEntry {
+  window?: string
+  frames?: Record<string, string>
+  history?: "push" | "replace"
 }
 
 const requestContext = new AsyncLocalStorage<RequestStore>()
@@ -118,6 +133,35 @@ export function _isConnectionLive(): boolean {
 export function _clearConnectionLive(): void {
   const store = requestContext.getStore()
   if (store) store.connectionLive = false
+}
+
+/** Merge a URL update fragment into the request's pending URL update.
+ *  Called from `getServerNavigation(scope).navigate(...)`. Multiple
+ *  calls within one segment compose: `window` is overwritten,
+ *  `frames` keys merge, `history` is last-write-wins. */
+export function _mergeUrlUpdate(partial: UrlUpdateEntry): void {
+  const store = requestContext.getStore()
+  if (!store) return
+  const cur = store.pendingUrlUpdate ?? {}
+  const next: UrlUpdateEntry = { ...cur }
+  if (partial.window !== undefined) next.window = partial.window
+  if (partial.frames) {
+    next.frames = { ...(cur.frames ?? {}), ...partial.frames }
+  }
+  if (partial.history !== undefined) next.history = partial.history
+  store.pendingUrlUpdate = next
+}
+
+/** Consume and clear the pending URL update. Called at trailer-flush
+ *  time; the returned entry (if any) is JSON-encoded into a `url`
+ *  trailer for the client to apply. */
+export function _consumePendingUrlUpdate(): UrlUpdateEntry | null {
+  const store = requestContext.getStore()
+  if (!store) return null
+  const update = store.pendingUrlUpdate
+  if (!update) return null
+  store.pendingUrlUpdate = undefined
+  return update
 }
 
 function getStore(): RequestStore {
