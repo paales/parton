@@ -24,7 +24,15 @@
 
 import type { PartialRequestState } from "./partial-request-state.ts"
 import type { PartialSnapshot } from "./partial-registry.ts"
-import { _isConnectionLive, _clearConnectionLive } from "../runtime/context.ts"
+import { _readSnapshotsForRoute } from "./partial-registry.ts"
+import { computeRouteKey } from "./partial.tsx"
+import {
+  _isConnectionLive,
+  _clearConnectionLive,
+  getRequest,
+  getScope,
+  setRequest,
+} from "../runtime/context.ts"
 import { _currentTs, _waitForNextBump } from "../runtime/invalidation-registry.ts"
 import { buildMarker, TAG_NEXT_SEGMENT } from "./fp-trailer-marker.ts"
 
@@ -75,6 +83,36 @@ export async function driveSegmentedResponse(
       reader.releaseLock()
     }
 
+    // `rewriteCachedFromSnapshots()` is the natural place to promote
+    // just-emitted fps into the request's `?cached=` set so the next
+    // segment's render fp-skips unchanged partials. Disabled for now:
+    // it breaks live partials whose ANCESTORS fp-skip them.
+    //
+    // Concretely: the chat's `chat-msg-${id}` partial folds the
+    // invalidation registry's ts into its own fp. The ancestor
+    // `chat-list`'s descendant-fold reads each descendant's `varyKey`
+    // — NOT its fp — so when only chat-msg's invalidation ts shifts
+    // and `varyKey` is unchanged, chat-list's fp stays stable. After
+    // segment 1 promotes chat-list's fp to cached, segment 2's
+    // chat-list fp matches → fp-skip → the body doesn't run → chat-msg
+    // never gets instantiated → no `markConnectionLive` → driver
+    // closes the connection. The chat stream dies after 2 segments.
+    //
+    // Two fixes possible:
+    //   1. Extend `descendantContributionFromSnapshot` to fold the
+    //      descendant's invalidation ts in, so ancestor fps move
+    //      whenever a descendant's invalidation does. Correct but
+    //      changes the fp formula across the framework.
+    //   2. Give live partials an opt-out from cached-fp promotion
+    //      (or a "this partial subscribes to a frequently-bumping
+    //      selector — don't bank on its fp lasting" annotation).
+    //
+    // Until one of those lands, segments re-emit all partials on
+    // cold connections. Acceptable cost for the demo cases; the
+    // chat case is the load-bearing one and it works without the
+    // optimization.
+    void rewriteCachedFromSnapshots
+
     if (onSegmentEnd) onSegmentEnd()
 
     if (!_isConnectionLive()) break
@@ -83,6 +121,52 @@ export async function driveSegmentedResponse(
     lastTs = _currentTs()
     segmentIndex++
   }
+}
+
+/**
+ * Read the just-committed snapshots for the current route and append
+ * any emitted `(id, matchKey, fp)` tokens to the request URL's
+ * `?cached=` param. Updates the request via `setRequest` so the next
+ * segment's render reads the expanded cached set.
+ *
+ * Token shape mirrors `parseCachedTokens` in partial.tsx —
+ * `id:matchKey:fp`, comma-separated. Snapshots without an
+ * `emittedFp` (non-addressable specs, e.g. layout wrappers with no
+ * selector) or without a `matchKey` are skipped: they have no
+ * client-visible wire identity to track.
+ */
+function rewriteCachedFromSnapshots(): void {
+  let request: Request
+  let scope: string
+  try {
+    request = getRequest()
+    scope = getScope()
+  } catch {
+    return
+  }
+  const routeKey = computeRouteKey(request.url)
+  const snapshots = _readSnapshotsForRoute(scope, routeKey)
+  if (snapshots.size === 0) return
+
+  const url = new URL(request.url)
+  const existing = url.searchParams.get("cached") ?? ""
+  const have = new Set<string>(
+    existing
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
+  let changed = false
+  for (const [id, snap] of snapshots) {
+    if (!snap.emittedFp || !snap.matchKey) continue
+    const token = `${id}:${snap.matchKey}:${snap.emittedFp}`
+    if (have.has(token)) continue
+    have.add(token)
+    changed = true
+  }
+  if (!changed) return
+  url.searchParams.set("cached", [...have].join(","))
+  setRequest(new Request(url.toString(), { headers: request.headers }))
 }
 
 /**
