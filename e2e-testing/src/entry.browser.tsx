@@ -70,9 +70,9 @@ async function main() {
 
     React.useEffect(() => {
       return listenNavigation(
-        (url, types) => {
+        (url, types, signal) => {
           setPendingTransitionTypes(types ?? [])
-          return fetchRscPayload(url)
+          return fetchRscPayload(url, signal)
         },
       )
     }, [])
@@ -80,7 +80,7 @@ async function main() {
     return payload.root
   }
 
-  async function fetchRscPayload(overrideUrl?: string) {
+  async function fetchRscPayload(overrideUrl?: string, signal?: AbortSignal) {
     // Tell the server which partials are already cached so it can skip them.
     // If the caller already set ?cached= (e.g. a targeted refetch built by
     // `useNavigation().reload({selector})`), respect that instead of overwriting
@@ -115,9 +115,15 @@ async function main() {
     // third slot, the global Bubbler) can branch on it without
     // string matching. AbortError stays untouched — it's a normal
     // lifecycle signal, not a failure.
+    //
+    // `signal` (from `NavigateEvent.signal`) aborts the in-flight
+    // fetch + segment-loop consumption when a newer navigation
+    // supersedes — without this, a long-lived RSC GET (e.g. the
+    // chat's segment-loop connection) keeps emitting segments and
+    // racing with the new navigation's response.
     let response: Response
     try {
-      response = await fetch(renderRequest)
+      response = await fetch(renderRequest, { signal })
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") throw err
       throw new NavigationError({
@@ -248,7 +254,11 @@ async function main() {
 }
 
 function listenNavigation(
-  onNavigation: (url: string, transitionTypes?: string[]) => Promise<void>,
+  onNavigation: (
+    url: string,
+    transitionTypes?: string[],
+    signal?: AbortSignal,
+  ) => Promise<void>,
 ) {
   const nav = getNavigation()
   if (!nav) return () => {}
@@ -353,7 +363,7 @@ function listenNavigation(
                 url.searchParams.append("__frame", d.key)
                 url.searchParams.append("__frameUrl", d.url)
               }
-              await onNavigation(url.toString(), types)
+              await onNavigation(url.toString(), types, event.signal)
             }),
         })
         return
@@ -374,7 +384,7 @@ function listenNavigation(
     event.intercept({
       handler: () =>
         swallowNavigationAbort(() =>
-          onNavigation(event.destination.url, directionFor(event)),
+          onNavigation(event.destination.url, directionFor(event), event.signal),
         ),
     })
   }

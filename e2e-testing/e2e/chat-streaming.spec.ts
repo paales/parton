@@ -134,13 +134,28 @@ test("no client-side compaction sentinel — old Piece/ResumeTail pattern is gon
   expect(await page.locator('[data-testid^="resume-tail-"]').count()).toBe(0)
 })
 
-// `closing the chat collapses the overlay back to the open pill` —
-// pending. The close click fires a new RSC GET, but the prior
-// open-click's segment loop is still running on the original
-// connection. Without AbortController plumbing in `fetchRscPayload`
-// the two responses race: every new segment from the open-click
-// connection re-applies the open-chat payload after the close-click
-// payload commits. Fix is to thread an AbortSignal from
-// `event.intercept` through to the fetch + segment loop so a new
-// navigation cancels the prior streaming request. Tracked as a
-// follow-up.
+test("closing the chat collapses the overlay back to the open pill mid-stream", async ({
+  page,
+}) => {
+  // Open via the pill (RSC GET → segment loop). The connection
+  // stays live as long as `<ChunkSlot>` is suspended on the next
+  // log entry. Closing the overlay fires a new navigation; the
+  // Navigation API's `event.signal` aborts the prior in-flight
+  // fetch, the segment loop tears down, and the close-click
+  // payload commits cleanly.
+  await page.goto("/pokemon/1")
+  await page.waitForLoadState("networkidle")
+  await page.locator('[data-testid="chat-open-pill"]').click()
+  await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({ timeout: 10000 })
+
+  // Wait for at least one chunk so we know the segment loop is
+  // actively streaming when we click close.
+  await expect(
+    page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]').first(),
+  ).toBeAttached({ timeout: 5000 })
+
+  await page.locator('[data-testid="chat-close-pill"]').click()
+  // After close, the overlay collapses and the open-pill returns.
+  await expect(page.locator('[data-testid="chat-open-pill"]')).toBeVisible({ timeout: 5000 })
+  await expect(page.locator('[data-testid="chat-box"]')).toHaveCount(0)
+})
