@@ -46,6 +46,16 @@ test("live tick advances over time on one rolling response", async ({ page }) =>
 test.skip("bump button calls getServerNavigation().reload + partial re-renders", async ({
   page,
 }) => {
+  // Pending: against `yarn dev` (manual server) this passes — the
+  // server action fires, increments scope state, and the response
+  // render emits fresh bump-counter content with bumps=1. Against
+  // Playwright's auto-spawned dev server it consistently fails with
+  // the DOM stuck at "Bumps: 0" even though server-side logs confirm
+  // the action body ran. Suspected: Vite's first-cold-start dep
+  // optimization round, or a streaming-mode merge race when
+  // LiveTickAutostart's segment-loop connection is also in flight.
+  // Reactivate once the action-POST response flow is hardened on
+  // cold-spawn Vite.
   // Pending: the action fires (server-side state increments and
   // `refreshSelector` queues a bump) but the client's setPayload from
   // the action's response doesn't reach the bump-counter DOM. The
@@ -73,15 +83,12 @@ test.skip("bump button calls getServerNavigation().reload + partial re-renders",
 })
 
 test.skip("push-URL button advances ?seq= via server-side navigate", async ({ page }) => {
-  // Pending: the action POST path consumes the response via
-  // `createFromFetch` which doesn't extract trailer entries. The
-  // url-trailer from `getServerNavigation().navigate()` is emitted
-  // by `wrapStreamWithCommitOnly` but Flight ignores trailing bytes
-  // after the root row resolves. Splitter-based extraction on the
-  // action path needs more work (Flight backpressure interaction).
-  // For now, server-side navigate during RSC GETs (e.g. inside a
-  // segment-loop render via the chat's URL push) works correctly —
-  // only the action-POST→navigate path is unwired.
+  // Pending alongside the bump-counter test: the action-POST path
+  // doesn't deliver server-side `getServerNavigation().navigate(...)`
+  // updates to the client via `createFromFetch`. A splitter-based
+  // setServerCallback rewrite extracted the url-trailer correctly
+  // on cold servers but regressed the bump test, so both stay
+  // skipped together until the action-POST flow is unified.
   await page.goto("/streaming-demo")
   await expect(page.locator('[data-testid="streaming-demo-push-btn"]')).toBeVisible({
     timeout: 10000,
