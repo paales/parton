@@ -51,15 +51,73 @@ import {
  * Pure function of (snapshots, request): no ALS reads, no module-level
  * mutation. The caller provides everything via the captured handle so
  * this stays safe to invoke from a TransformStream flush callback.
+ *
+ * Precomputes both the descendant folds (one pass over snapshots,
+ * O(N) instead of the naïve O(N²) where every recomputeFp walked the
+ * full map) and each snapshot's descendant contribution + parsed
+ * varyKey (each used by both the contribution and by recomputeFp
+ * itself). Without these the trailer dominated CPU under load: 25
+ * snapshots × 625 ancestor-walks × per-walk JSON.parse + stableStringify.
  */
 function computeFpUpdates(
   snapshots: Map<string, PartialSnapshot>,
   request: Request,
 ): Record<string, string> | null {
+  // Per-snapshot side-data we compute once and reuse across folds +
+  // own-fp recompute. parsedVaryInputs goes into queryMatchingTs;
+  // contribution is the descendant's contribution string the fold
+  // hashes; selfRequest resolves frame redirection once for both the
+  // contribution and the recompute.
+  interface SideData {
+    parsedVaryInputs: Record<string, unknown> | null
+    contribution: string
+    selfRequest: Request
+  }
+  const sideById = new Map<string, SideData>()
+  for (const [id, snap] of snapshots) {
+    const parsedVaryInputs = parseVaryKey(snap.varyKey)
+    const selfRequest =
+      snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath, request) : request
+    const ts = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
+    const invKey = ts > 0 ? `|inv=${ts}` : ""
+    const contribution = `${id}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}${invKey}`
+    sideById.set(id, { parsedVaryInputs, contribution, selfRequest })
+  }
+
+  // Build the fold map in one pass. Each descendant contributes its
+  // string to every ancestor on its parentPath. O(N × D) where D is
+  // average parent-path depth; previously O(N²) because each ancestor
+  // re-walked the whole snapshot map.
+  const foldParts = new Map<string, string[]>()
+  for (const [descId, snap] of snapshots) {
+    const side = sideById.get(descId)!
+    for (const ancestorId of snap.parentPath) {
+      if (ancestorId === descId) continue
+      let arr = foldParts.get(ancestorId)
+      if (!arr) {
+        arr = []
+        foldParts.set(ancestorId, arr)
+      }
+      arr.push(side.contribution)
+    }
+  }
+  const folds = new Map<string, string>()
+  for (const [ancestorId, parts] of foldParts) {
+    parts.sort()
+    folds.set(ancestorId, `|desc=${hash(parts.join(","))}`)
+  }
+
   const updates: Record<string, string> = {}
   for (const [id, snap] of snapshots) {
     if (!snap.emittedFp) continue
-    const recomputed = recomputeFp(id, snap, snapshots, request)
+    const side = sideById.get(id)!
+    const recomputed = recomputeFpWithFold(
+      id,
+      snap,
+      side.parsedVaryInputs,
+      folds.get(id) ?? "",
+      side.selfRequest.url,
+    )
     if (recomputed !== snap.emittedFp) {
       updates[id] = recomputed
     }
@@ -68,27 +126,62 @@ function computeFpUpdates(
   return updates
 }
 
+/** Cache for `JSON.parse(varyKey)` — varyKey strings are stable across
+ *  segments of the same request (the snapshot's vary inputs don't move
+ *  between segments for fp-skipped partials), so the same JSON.parse
+ *  is called repeatedly. Keyed by the raw varyKey string.
+ *
+ *  Bound the cache so a long-running process with high varyKey churn
+ *  doesn't grow unbounded. 4096 entries × ~200 bytes ≈ 1 MB worst case. */
+const varyKeyParseCache = new Map<string, Record<string, unknown> | null>()
+const VARY_KEY_CACHE_MAX = 4096
+
+function parseVaryKey(varyKey: string | undefined): Record<string, unknown> | null {
+  if (!varyKey) return null
+  const cached = varyKeyParseCache.get(varyKey)
+  if (cached !== undefined) return cached
+  let parsed: Record<string, unknown> | null
+  try {
+    parsed = JSON.parse(varyKey) as Record<string, unknown>
+  } catch {
+    parsed = null
+  }
+  if (varyKeyParseCache.size >= VARY_KEY_CACHE_MAX) {
+    const oldest = varyKeyParseCache.keys().next().value
+    if (oldest !== undefined) varyKeyParseCache.delete(oldest)
+  }
+  varyKeyParseCache.set(varyKey, parsed)
+  return parsed
+}
+
 /**
- * Recompute a spec's fp from its committed snapshot + the captured
- * request. Mirrors the formula in `createSpecComponent` (partial.tsx)
- * but operates against an explicit snapshot map so it can run after
- * the ALS context has unwound.
+ * Recompute a spec's fp from its committed snapshot + a precomputed
+ * fold for that ancestor + the snapshot's already-parsed vary inputs.
+ * Mirrors the formula in `createSpecComponent` (partial.tsx) but
+ * operates against an explicit snapshot map so it can run after the
+ * ALS context has unwound.
  *
  * Stays in sync with `partial.tsx`'s fp formula by construction —
  * any divergence here would mean the trailer ships fp values the
  * server's own fp-check wouldn't accept on the next visit, breaking
  * the round-trip. If the formula in `partial.tsx` changes, mirror
  * the change here.
+ *
+ * `parsedVaryInputs` and `fold` come from the precompute pass in
+ * `computeFpUpdates`; the helper itself does no JSON parsing or
+ * snapshot-map walks.
  */
-function recomputeFp(
+function recomputeFpWithFold(
   id: string,
   snap: PartialSnapshot,
-  snapshots: Map<string, PartialSnapshot>,
-  request: Request,
+  parsedVaryInputs: Record<string, unknown> | null,
+  fold: string,
+  frameRequestUrl: string,
 ): string {
-  const frameRequest = snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath, request) : request
   const ambientFrameKey =
-    snap.framePath.length > 0 ? `|inFrame=${snap.framePath.join(".")}:${frameRequest.url}` : ""
+    snap.framePath.length > 0
+      ? `|inFrame=${snap.framePath.join(".")}:${frameRequestUrl}`
+      : ""
   const propsKey =
     snap.props && Object.keys(snap.props).length > 0
       ? `|props=${stableStringify(snap.props)}`
@@ -96,93 +189,14 @@ function recomputeFp(
   const varyKey = snap.varyKey ?? ""
   // Mirror `partial.tsx`'s formula — fold matchKey in so content-
   // independent specs still produce distinct fps across variants of
-  // their match-bearing ancestor. The snapshot carries the matchKey
-  // computed at render time so we don't re-derive from the catalog.
-  // CMS contribution lives inside `varyKey` now (the CMS block
-  // wrapper folds it into `vary`'s result via a `__cmsFp` field).
+  // their match-bearing ancestor.
   const matchKey = snap.matchKey ?? ""
-  // Mirror partial.tsx — fold in the latest matching `refreshSelector`
-  // ts so the trailer's recomputed fp stays in lockstep with what the
-  // server would compute on the next request. varyKey is parsed back
-  // for constraint matching; sentinel-laden stableStringify outputs
-  // (Date, Set, etc.) fall back to label-only matching (constraints
-  // never satisfied → unconstrained entries still apply).
-  let parsedVaryInputs: Record<string, unknown> | null = null
-  if (snap.varyKey) {
-    try {
-      parsedVaryInputs = JSON.parse(snap.varyKey) as Record<string, unknown>
-    } catch {
-      parsedVaryInputs = null
-    }
-  }
   const invalidationTs = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
   const invalidationKey = invalidationTs > 0 ? `|inv=${invalidationTs}` : ""
   const ownStructuralFp = hash(
     `${id}|matchKey=${matchKey}|vary=${varyKey}${propsKey}${invalidationKey}`,
   )
-  const fold = computeFoldFromSnapshots(id, snapshots, frameRequest)
   return hash(`${ownStructuralFp}${ambientFrameKey}${fold}`)
-}
-
-/**
- * Descendant-fold computation that operates on an explicit snapshot
- * map. Mirrors `computeDescendantFold` in partial.tsx — same logic,
- * different source of snapshots (parameter vs. ALS).
- */
-function computeFoldFromSnapshots(
-  ancestorId: string,
-  snapshots: Map<string, PartialSnapshot>,
-  request: Request,
-): string {
-  const parts: string[] = []
-  for (const [descId, snap] of snapshots) {
-    if (descId === ancestorId) continue
-    if (!snap.parentPath.includes(ancestorId)) continue
-    parts.push(descendantContributionFromSnapshot(descId, snap, request))
-  }
-  if (parts.length === 0) return ""
-  parts.sort()
-  return `|desc=${hash(parts.join(","))}`
-}
-
-/**
- * Single descendant's contribution to its ancestor's fold. Falls back
- * to the stored `varyKey` when the live vary call would require state
- * we don't have at flush time (e.g. the descendant's spec catalog is
- * not loaded). The snapshot-stored varyKey is what the descendant
- * itself just emitted, so it's already accurate for this request.
- *
- * The `|inv=N` suffix mirrors the live fold in
- * `descendantContribution` (partial.tsx) — folds the descendant's
- * latest matching `refreshSelector` ts so an ancestor's fp moves
- * whenever any descendant's invalidation does. Required for cached-fp
- * promotion to be safe under live partials: without it, a hot-bumping
- * descendant could shift its own fp via `|inv=N` while its ancestor's
- * fp stayed stable, and promoting the ancestor's fp to `?cached=`
- * would then fp-skip the ancestor on the next segment and starve the
- * descendant of a re-render.
- */
-function descendantContributionFromSnapshot(
-  descId: string,
-  snap: PartialSnapshot,
-  request: Request,
-): string {
-  // Parse the snapshot's varyKey back into a record so
-  // `queryMatchingTs` can apply constraint matching the same way it
-  // does in `recomputeFp`. Sentinel-laden vary results (Date, Set,
-  // etc.) won't round-trip — null parsed inputs fall back to
-  // label-only matching (unconstrained entries still apply).
-  let parsedVaryInputs: Record<string, unknown> | null = null
-  if (snap.varyKey) {
-    try {
-      parsedVaryInputs = JSON.parse(snap.varyKey) as Record<string, unknown>
-    } catch {
-      parsedVaryInputs = null
-    }
-  }
-  const ts = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
-  const invKey = ts > 0 ? `|inv=${ts}` : ""
-  return `${descId}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}${invKey}`
 }
 
 /**

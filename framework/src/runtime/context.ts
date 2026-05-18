@@ -42,6 +42,26 @@ interface RequestStore {
    *  browser URL / frame URL store. Multiple navigate calls within a
    *  segment merge into one update; the LAST `history` wins. */
   pendingUrlUpdate?: UrlUpdateEntry
+  /** Carry the `?cached=…` parsed maps in-memory across segments of a
+   *  single request so the driver doesn't have to rebuild the request
+   *  URL between segments. Cold first segment: PartialRoot parses
+   *  ?cached= and stores the parsed Maps here. Subsequent segments:
+   *  the driver appends newly-emitted (id, matchKey, fp) tuples to the
+   *  same Maps; PartialRoot's next render reads from these Maps
+   *  directly instead of re-parsing the URL. Without this carrier, the
+   *  driver was doing `new URL(...)` + `searchParams.set` +
+   *  `url.toString()` + `new Request(...)` per segment — ~7% of CPU in
+   *  the streaming case. */
+  cachedOverride?: CachedOverride
+}
+
+/** In-memory mirror of `?cached=…`. Same identity Maps shared across
+ *  the cold-render parse and every subsequent segment's mutate-and-read
+ *  cycle. The driver mutates these directly between segments; PartialRoot
+ *  reads via identity so its `state.cachedFingerprints` IS the carrier. */
+export interface CachedOverride {
+  fingerprints: Map<string, Set<string>>
+  matchKeys: Map<string, Set<string>>
 }
 
 /** Wire shape for the `url`-tagged trailer entry. Client applies
@@ -150,6 +170,23 @@ export function _mergeUrlUpdate(partial: UrlUpdateEntry): void {
   }
   if (partial.history !== undefined) next.history = partial.history
   store.pendingUrlUpdate = next
+}
+
+/** Install a cached-override carrier into the current request store.
+ *  Called by PartialRoot on the cold render after parsing `?cached=`,
+ *  so the segment driver can mutate it between segments without
+ *  rewriting the request URL. */
+export function _setCachedOverride(override: CachedOverride): void {
+  const store = requestContext.getStore()
+  if (store) store.cachedOverride = override
+}
+
+/** Read the cached-override carrier — used by segmented-response to
+ *  promote newly-emitted fps into the carrier so the next segment's
+ *  PartialRoot sees them. Returns null when there's no request context
+ *  or PartialRoot hasn't installed one yet (single-segment cold path). */
+export function _getCachedOverride(): CachedOverride | null {
+  return requestContext.getStore()?.cachedOverride ?? null
 }
 
 /** Consume and clear the pending URL update. Called at trailer-flush

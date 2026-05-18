@@ -27,11 +27,11 @@ import type { PartialSnapshot } from "./partial-registry.ts"
 import { _readSnapshotsForRoute } from "./partial-registry.ts"
 import { computeRouteKey } from "./partial.tsx"
 import {
+  _getCachedOverride,
   _isConnectionLive,
   _clearConnectionLive,
   getRequest,
   getScope,
-  setRequest,
 } from "../runtime/context.ts"
 import { _currentTs, _waitForNextBump } from "../runtime/invalidation-registry.ts"
 import { buildMarker, TAG_NEXT_SEGMENT } from "./fp-trailer-marker.ts"
@@ -88,18 +88,20 @@ export async function driveSegmentedResponse(
     if (!_isConnectionLive()) break
 
     // Promote just-emitted (id, matchKey, fp) tokens into the
-    // request's `?cached=` so the NEXT segment's render fp-skips the
-    // unchanged partials. Gated on `_isConnectionLive()` so single-
-    // segment responses stay byte-identical to the pre-promotion
-    // path. Safe under live partials because the descendant-fold
-    // (both live in `descendantContribution` and snapshot-based in
+    // request-scoped cached override so the NEXT segment's render
+    // fp-skips the unchanged partials. We append to the in-memory
+    // Maps shared with PartialRoot's state — no URL rewrite, no
+    // re-parse. Gated on `_isConnectionLive()` so single-segment
+    // responses don't even allocate the override. Safe under live
+    // partials because the descendant-fold (both live in
+    // `descendantContribution` and snapshot-based in
     // `descendantContributionFromSnapshot`) folds each descendant's
     // invalidation ts in — when a hot-bumping descendant's `|inv=N`
     // shifts, the ancestor's fold moves with it, the ancestor's fp
     // moves, the promoted fp from the prior segment no longer
     // matches, the ancestor body re-runs, and the descendant is
     // re-instantiated.
-    rewriteCachedFromSnapshots()
+    promoteSnapshotsToCachedOverride()
 
     await _waitForNextBump(lastTs)
     lastTs = _currentTs()
@@ -109,17 +111,26 @@ export async function driveSegmentedResponse(
 
 /**
  * Read the just-committed snapshots for the current route and append
- * any emitted `(id, matchKey, fp)` tokens to the request URL's
- * `?cached=` param. Updates the request via `setRequest` so the next
- * segment's render reads the expanded cached set.
+ * each `(id, matchKey, fp)` tuple into the request-scoped cached
+ * override Maps. PartialRoot's next render reads from those Maps
+ * directly (same identity), so the override IS the next render's
+ * `state.cachedFingerprints` / `state.cachedMatchKeys` — no URL
+ * rewrite, no parse round-trip.
  *
- * Token shape mirrors `parseCachedTokens` in partial.tsx —
- * `id:matchKey:fp`, comma-separated. Snapshots without an
- * `emittedFp` (non-addressable specs, e.g. layout wrappers with no
- * selector) or without a `matchKey` are skipped: they have no
- * client-visible wire identity to track.
+ * Snapshots without an `emittedFp` (non-addressable specs, e.g.
+ * layout wrappers with no selector) or without a `matchKey` are
+ * skipped: they have no client-visible wire identity to track.
+ *
+ * Why the override carrier even exists: the previous shape
+ * `rewriteCachedFromSnapshots` did `new URL(req.url)` +
+ * `url.searchParams.set("cached", […].join(","))` + `url.toString()` +
+ * `new Request(...)` + `setRequest(...)` per segment, and the next
+ * segment's PartialRoot re-parsed `?cached=` back into Maps. Per-tick
+ * profiling showed that round-trip dominating the streaming CPU
+ * profile (~7% total + URL parse cost). The carrier collapses it to
+ * one map mutation per snapshot.
  */
-function rewriteCachedFromSnapshots(): void {
+function promoteSnapshotsToCachedOverride(): void {
   let request: Request
   let scope: string
   try {
@@ -128,29 +139,27 @@ function rewriteCachedFromSnapshots(): void {
   } catch {
     return
   }
+  const override = _getCachedOverride()
+  if (!override) return
   const routeKey = computeRouteKey(request.url)
   const snapshots = _readSnapshotsForRoute(scope, routeKey)
   if (snapshots.size === 0) return
 
-  const url = new URL(request.url)
-  const existing = url.searchParams.get("cached") ?? ""
-  const have = new Set<string>(
-    existing
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
-  )
-  let changed = false
   for (const [id, snap] of snapshots) {
     if (!snap.emittedFp || !snap.matchKey) continue
-    const token = `${id}:${snap.matchKey}:${snap.emittedFp}`
-    if (have.has(token)) continue
-    have.add(token)
-    changed = true
+    let fpSet = override.fingerprints.get(id)
+    if (!fpSet) {
+      fpSet = new Set()
+      override.fingerprints.set(id, fpSet)
+    }
+    fpSet.add(snap.emittedFp)
+    let mkSet = override.matchKeys.get(id)
+    if (!mkSet) {
+      mkSet = new Set()
+      override.matchKeys.set(id, mkSet)
+    }
+    mkSet.add(snap.matchKey)
   }
-  if (!changed) return
-  url.searchParams.set("cached", [...have].join(","))
-  setRequest(new Request(url.toString(), { headers: request.headers }))
 }
 
 /**

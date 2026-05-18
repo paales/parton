@@ -55,7 +55,12 @@ import {
   type SpecCatalogVary,
   type SpecComponentProps,
 } from "./spec-catalog.ts"
-import { getRequest, parseCookies } from "../runtime/context.ts"
+import {
+  _getCachedOverride,
+  _setCachedOverride,
+  getRequest,
+  parseCookies,
+} from "../runtime/context.ts"
 import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
 import {
   createSessionReadSurface,
@@ -753,16 +758,63 @@ function patternSignature(pattern: URLPattern): string {
  * commit to the registry anyway (`notFound()` throws past the commit),
  * so the sentinel just keeps lookups deterministic on the read side.
  */
+/** Pathname → routeKey cache. Per-segment streaming responses change
+ *  only the `?cached=` query each tick; the matched-pattern set is
+ *  invariant under query/fragment changes because every registered
+ *  pattern in this framework is pathname-only (`compileMatchPattern`
+ *  emits `new URLPattern({pathname})` for the string form). Keying
+ *  the cache by pathname (instead of full URL) is what lets one
+ *  streaming request's N segments share one routeKey computation
+ *  instead of N. Invalidated by pattern registration so a new pattern
+ *  can shift the matched-set for previously-seen pathnames. */
+const routeKeyCache = new Map<string, string>()
+const ROUTE_KEY_CACHE_MAX = 2048
+
+function extractPathname(url: string): string {
+  // Hand-rolled path extraction — `new URL(url).pathname` is the
+  // hot path here; this memoization exists to avoid URL parsing.
+  const schemeIdx = url.indexOf("//")
+  const pathStart = schemeIdx >= 0 ? url.indexOf("/", schemeIdx + 2) : 0
+  if (pathStart < 0) return "/"
+  let end = url.length
+  const qIdx = url.indexOf("?", pathStart)
+  if (qIdx >= 0 && qIdx < end) end = qIdx
+  const hashIdx = url.indexOf("#", pathStart)
+  if (hashIdx >= 0 && hashIdx < end) end = hashIdx
+  return url.slice(pathStart, end) || "/"
+}
+
 export function computeRouteKey(url: string): string {
+  const pathname = extractPathname(url)
+  const cached = routeKeyCache.get(pathname)
+  if (cached !== undefined) return cached
   const matched: string[] = []
   for (const pattern of registeredMatchPatterns) {
     if (pattern.exec(url) !== null) {
       matched.push(patternSignature(pattern))
     }
   }
-  if (matched.length === 0) return "__no-pattern"
-  matched.sort()
-  return hash(matched.join(""))
+  let result: string
+  if (matched.length === 0) {
+    result = "__no-pattern"
+  } else {
+    matched.sort()
+    result = hash(matched.join(""))
+  }
+  // Simple FIFO bound. The streaming case repeats one pathname so the
+  // cap is mostly defensive against pathological pathname diversity.
+  if (routeKeyCache.size >= ROUTE_KEY_CACHE_MAX) {
+    const oldest = routeKeyCache.keys().next().value
+    if (oldest !== undefined) routeKeyCache.delete(oldest)
+  }
+  routeKeyCache.set(pathname, result)
+  return result
+}
+
+/** Clear the routeKey cache. Used by HMR / test helpers; the framework
+ *  itself only clears on pattern registration. */
+export function _clearRouteKeyCache(): void {
+  routeKeyCache.clear()
 }
 
 // ─── The constructor ──────────────────────────────────────────────────
@@ -1390,7 +1442,12 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   options: InternalSpecConfig<V>,
 ): SpecComponent<Extra, Prettify<V & RenderArgs>> {
   const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
-  if (matchPattern) registeredMatchPatterns.push(matchPattern)
+  if (matchPattern) {
+    registeredMatchPatterns.push(matchPattern)
+    // Adding a pattern invalidates the routeKey cache — a URL whose
+    // matched-set previously excluded this pattern may now include it.
+    routeKeyCache.clear()
+  }
 
   // Selector parsing: flat labels, no unique/shared distinction. The
   // spec catalog id (`spec.id`) is the FIRST label. Auto-derives from
@@ -1731,13 +1788,32 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
   if (combinedRequestedIds) for (const id of combinedRequestedIds) explicitIds.add(id)
   if (partialsParam) for (const name of parseCsvTokens(partialsParam)) explicitIds.add(name)
 
-  const parsedCache = parseCachedTokens(cachedParam)
+  // Cached-fp / matchKey maps are carried in-memory across segments of a
+  // single request — see `_setCachedOverride` in runtime/context.ts.
+  // First render parses `?cached=` and installs the carrier; subsequent
+  // segments find the carrier already populated (the driver appends
+  // newly-emitted tuples directly to those Maps between segments).
+  // Without this, every segment paid `new URL(...) + URLSearchParams +
+  // url.toString() + new Request(...)` to round-trip the cached state
+  // through the URL, which dominated CPU under load.
+  let cachedFps: Map<string, Set<string>>
+  let cachedMks: Map<string, Set<string>>
+  const existingOverride = _getCachedOverride()
+  if (existingOverride) {
+    cachedFps = existingOverride.fingerprints
+    cachedMks = existingOverride.matchKeys
+  } else {
+    const parsed = parseCachedTokens(cachedParam)
+    cachedFps = parsed.fingerprints
+    cachedMks = parsed.matchKeys
+    _setCachedOverride({ fingerprints: cachedFps, matchKeys: cachedMks })
+  }
   const state: PartialRequestState = {
     requestedIds: populateCache ? null : combinedRequestedIds,
     isPartialRefetch: isPartialRefetch && !populateCache,
     populateCache,
-    cachedFingerprints: parsedCache.fingerprints,
-    cachedMatchKeys: parsedCache.matchKeys,
+    cachedFingerprints: cachedFps,
+    cachedMatchKeys: cachedMks,
     explicitIds,
     seenIds: new Set(),
   }
