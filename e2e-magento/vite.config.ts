@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react"
 import rsc from "@vitejs/plugin-rsc"
 import tailwindcss from "@tailwindcss/vite"
 import { defineConfig } from "vite"
+import { rscCompression } from "@parton/framework/vite/compression.ts"
 
 // Mirror of e2e-testing/vite.config.ts. The two showcases share the
 // framework runtime; this one defaults its dev port to 5181 so both
@@ -49,7 +50,9 @@ const workspaceAliases = [
 ]
 
 export default defineConfig({
-  plugins: isTest ? [react(), tailwindcss()] : [rsc(), react(), tailwindcss()],
+  plugins: isTest
+    ? [react(), tailwindcss()]
+    : [rscCompression(), rsc(), react(), tailwindcss()],
   server: { port: 5181, strictPort: true },
   // Preview shares the dev port so the host's hard-coded
   // cross-origin URL (http://localhost:5181) works in both modes

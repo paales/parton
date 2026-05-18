@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react"
 import rsc from "@vitejs/plugin-rsc"
 import tailwindcss from "@tailwindcss/vite"
 import { defineConfig } from "vite"
+import { rscCompression } from "@parton/framework/vite/compression.ts"
 
 // Skip `@vitejs/plugin-rsc` when vitest is running: its `"use client"`
 // transform wraps modules in client-reference proxies, which breaks
@@ -78,7 +79,9 @@ const workspaceAliases = [
 const HOOK_CALLING_DEPS = [/^@base-ui\//, /^@radix-ui\//, /^@phosphor-icons\//, /^vaul$/]
 
 export default defineConfig(({ mode }) => ({
-  plugins: isTest ? [react(), tailwindcss()] : [rsc(), react(), tailwindcss()],
+  plugins: isTest
+    ? [react(), tailwindcss()]
+    : [rscCompression(), rsc(), react(), tailwindcss()],
   server: mode === "clean" ? { port: 5174, strictPort: true, hmr: false, ws: false } : undefined,
   // Preview pinned to 5173 to match dev — same hard-coded URLs
   // work in both modes. Run `yarn preview:all` only when no dev
