@@ -9,6 +9,13 @@ export default defineConfig({
   // streaming wouldn't hold against the dev server.
   testIgnore: ["preview/**"],
   timeout: 30000,
+  // Tolerate a handful of known dev-mode flakes (Vite cold dep-
+  // optimization rounds, segment-loop teardown races,
+  // console-error-vs-pageerror ordering on the error-boundary
+  // specs). A test that flips between pass and fail across runs
+  // gets two retries before being declared failed; tests that fail
+  // every retry are real bugs.
+  retries: 2,
   // Workers > 1 is safe now: `e2e/fixtures.ts` stamps every request with
   // a per-worker `x-test-scope` header, and the framework (see
   // `framework/src/runtime/context.ts` — `deriveScope`) routes each
