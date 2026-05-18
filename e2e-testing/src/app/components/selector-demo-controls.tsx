@@ -15,7 +15,8 @@ export function SelectorRefetchButton({
   label: string
   testId: string
 }) {
-  const [reload, isPending] = useNavigation().reload()
+  const [reload, { committed, finished }] = useNavigation().reload()
+  const pending = committed && !finished
   return (
     <Button
       type="button"
@@ -23,9 +24,9 @@ export function SelectorRefetchButton({
       variant="outline"
       data-testid={testId}
       onClick={() => reload({ selector })}
-      disabled={isPending}
+      disabled={pending}
     >
-      {isPending ? "…" : label}
+      {pending ? "…" : label}
     </Button>
   )
 }

@@ -5,14 +5,16 @@ import { Button } from "@parton/copies/components/ui/button"
 
 /**
  * Client-side buttons to trigger refetches against the cache-demo
- * partials. Each button gets its own tuple hook so `isPending`
- * reflects only that button's in-flight refetch.
+ * partials. Each hook owns its own progress so the "…" indicator
+ * reflects only this widget's in-flight work.
  */
 export function CacheControls() {
   const nav = useNavigation()
-  const [reload, reloadPending] = nav.reload()
-  const [navigate, navigatePending] = nav.navigate()
-  const isPending = reloadPending || navigatePending
+  const [reload, reloadProgress] = nav.reload()
+  const [navigate, navigateProgress] = nav.navigate()
+  const isPending =
+    (reloadProgress.committed && !reloadProgress.finished) ||
+    (navigateProgress.committed && !navigateProgress.finished)
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">

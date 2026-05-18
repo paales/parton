@@ -14,7 +14,8 @@ import { Button } from "@parton/copies/components/ui/button"
  * out across every instance.
  */
 export function RefreshPriceButton({ sku }: { sku: string }) {
-  const [reload, isPending] = useNavigation().reload()
+  const [reload, { committed, finished }] = useNavigation().reload()
+  const pending = committed && !finished
   return (
     <Button
       type="button"
@@ -22,10 +23,10 @@ export function RefreshPriceButton({ sku }: { sku: string }) {
       variant="ghost"
       data-testid={`refresh-price-${sku}`}
       onClick={() => reload({ selector: "@self" })}
-      disabled={isPending}
+      disabled={pending}
       className="text-primary"
     >
-      {isPending ? "…" : "↻"}
+      {pending ? "…" : "↻"}
     </Button>
   )
 }

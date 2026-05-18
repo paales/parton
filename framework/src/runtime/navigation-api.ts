@@ -10,19 +10,22 @@
  *
  *   - `FrameworkNavigation` — the public, React-hook-shaped handle
  *     `useNavigation()` returns. Its `navigate()` / `reload()` are
- *     **hooks** (call during render) that return a `[fire, isPending,
- *     error]` tuple. The companion `<NavigationErrorBubbler>` lifts
- *     the error to the nearest React error boundary.
+ *     **hooks** (call during render) that return a
+ *     `[fire, progress]` tuple, where `progress` is a
+ *     `{ committed, streaming, finished }` triple of booleans tracking
+ *     the most recent fire. Errors bubble through
+ *     `<NavigationErrorBubbler>` to the nearest React error boundary.
  *   - `ImperativeNavigation` — the internal handle returned by
  *     `_windowNav()` / `_frame()` for non-render call sites (class
  *     components, module-scope code, `useActivate` subscribers). Its
- *     `navigate(target, options)` / `reload(options)` are plain async
- *     methods returning `Promise<NavigationHistoryEntry>`.
+ *     `navigate(target, options)` / `reload(options)` are sync methods
+ *     returning `NavigationMilestones` — a synchronous object of three
+ *     promises (`committed`, `streaming`, `finished`) mirroring the
+ *     browser's `NavigationResult` plus a framework-native `streaming`
+ *     milestone for the first refetch segment.
  *
  * Access the browser's `navigation` global via `getNavigation()`.
  */
-
-import type { NavigationError } from "./navigation-error.ts"
 
 // ─── Framework state shapes ───────────────────────────────────────
 
@@ -102,21 +105,24 @@ export type NavigateTarget = string | URL | ((current: URL) => URL | string)
  */
 export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
   /**
-   * Bypass the React transition wrapper on commit.
+   * Render mode for the response commit.
    *
-   * Default (`false`): the client wraps the response commit in
-   * `startTransition`, so React keeps the current UI visible until
-   * the new content is fully ready. No Suspense fallback flash, no
-   * per-chunk streaming — the whole refetch appears as one atomic
-   * swap. Good for "just swap values" UX (cart badge, prices).
+   * Default (`false`): atomic swap. The client wraps the response
+   * commit in `startTransition`, so React keeps the current UI visible
+   * until the new content is fully ready. No Suspense fallback flash,
+   * no per-chunk streaming — the whole refetch appears as one swap.
+   * Good for "just swap values" UX (cart badge, prices).
    *
-   * `true`: commit without a transition. React shows Suspense
-   * fallbacks for pending children and commits Flight chunks as
-   * they arrive, giving per-row progressive streaming. Good for
-   * search / filter results where per-row reveal improves perceived
-   * latency.
+   * `true`: progressive reveal. Commit without a transition. React
+   * shows Suspense fallbacks for pending children and commits Flight
+   * chunks as they arrive, giving per-row streaming. Good for search /
+   * filter results where per-row reveal improves perceived latency.
+   *
+   * Not to be confused with the `streaming` boolean in the fire's
+   * progress / milestone — that one is a milestone marker (first
+   * segment has arrived), this is a behavior switch.
    */
-  disableTransition?: boolean
+  streaming?: boolean
   /**
    * CSS-style selector naming the Partials to refetch. Space-separated
    * (or array) list of tokens; each token starts with `#` (unique) or
@@ -194,46 +200,96 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
  */
 export interface FrameworkReloadOptions extends NavigationReloadOptions {
   selector?: string | string[]
-  disableTransition?: boolean
+  /** See `FrameworkNavigateOptions.streaming`. */
+  streaming?: boolean
   /** See `FrameworkNavigateOptions.props`. */
   props?: Record<string, Record<string, unknown>>
 }
 
-// ─── Fire functions + status tuple ────────────────────────────────
+// ─── Fire functions + progress tuple ──────────────────────────────
+
+/**
+ * Three-promise object returned synchronously by the fire fn, mirroring
+ * the browser's `NavigationResult` plus a framework-native `streaming`
+ * milestone for the first refetch segment.
+ *
+ *   - `committed` — resolves when the browser entry has been created
+ *     (history change committed). For frame nav in `history: "auto"`
+ *     mode there's no new entry; this resolves immediately after the
+ *     in-place state patch.
+ *   - `streaming` — resolves when the first response segment has been
+ *     decoded and committed to React (i.e. the new tree has begun
+ *     rendering). For full-page nav this resolves at the same time as
+ *     `finished` (the page-level intercept doesn't expose a per-segment
+ *     hook today).
+ *   - `finished` — resolves when the entire response body has drained
+ *     and every segment has been committed. Equivalent to the prior
+ *     `await navigate()` semantics.
+ *
+ * All three reject with `NavigationError` (network / http / decode) or
+ * `AbortError` (newer navigation superseded the in-flight fetch).
+ * Rejections after a milestone resolved are lost — the milestone
+ * already happened.
+ */
+export interface NavigationMilestones {
+  committed: Promise<NavigationHistoryEntry>
+  streaming: Promise<void>
+  finished: Promise<NavigationHistoryEntry>
+}
 
 /** Reload fire function — returned in the first slot of the tuple. */
 export type Reload = (
   options?: FrameworkReloadOptions,
-) => Promise<NavigationHistoryEntry>
+) => NavigationMilestones
 
 /** Navigate fire function — returned in the first slot of the tuple. */
 export type Navigate = (
   target: NavigateTarget,
   options?: FrameworkNavigateOptions,
-) => Promise<NavigationHistoryEntry>
+) => NavigationMilestones
+
+/**
+ * Renderable progress for the most recent fire. Each boolean is a
+ * "milestone has passed" marker, monotonic within a single fire and
+ * reset to `false` when the next fire starts.
+ *
+ *   t0  fire called          { committed: false, streaming: false, finished: false }
+ *   t1  entry created        { committed: true,  streaming: false, finished: false }
+ *   t2  first segment in     { committed: true,  streaming: true,  finished: false }
+ *   t3  body drained         { committed: true,  streaming: true,  finished: true  }
+ *
+ * Aborted or errored fires flip `finished: true` without `streaming`
+ * or `committed` necessarily ever becoming true — the lifecycle ended,
+ * but the work didn't complete. Errors are also published to the
+ * nearest React error boundary via the bundled
+ * `<NavigationErrorBubbler>`; the progress booleans themselves carry
+ * no error signal.
+ *
+ * Initial state (before any fire) is all `false` — observationally
+ * identical to "fire just called, no milestone yet." Consumers that
+ * need to distinguish idle from in-flight should track their own
+ * has-fired flag from the click handler.
+ */
+export interface NavigationProgress {
+  committed: boolean
+  streaming: boolean
+  finished: boolean
+}
 
 /**
  * Tuple returned by `useNavigation().reload()` (and the equivalent
  * `.navigate()` shape with `Navigate` in the first slot).
  *
- *   const [reload, isPending, error] = useNavigation().reload()
+ *   const [reload, { committed, streaming, finished }] = useNavigation().reload()
  *
- *   - `reload`    — call with no args for a whole-page reload, or
- *     with `{ selector }` for a targeted refetch. Returns a Promise
- *     that resolves to the resulting entry or rejects with
- *     `NavigationError` (network / http / decode) or `AbortError`
- *     (newer navigation superseded — silent in pending/error).
- *   - `isPending` — `true` from the call site until the promise
- *     settles. AbortError still clears pending.
- *   - `error`     — the last `NavigationError`, or `null`. Cleared
- *     on the next fire. The bundled `<NavigationErrorBubbler>` also
- *     publishes this error to the nearest React error boundary, so
- *     hosts can either bubble or render their own UI from the third
- *     slot (third slot wins if both are present — the calling
- *     component renders before the Bubbler re-renders).
+ * Common spinner predicates:
+ *
+ *   committed && !finished   "in flight, post-commit"
+ *   committed && !streaming  "asked, no rows yet"
+ *   streaming && !finished   "rows arriving"
  */
-export type ReloadStatus = readonly [Reload, boolean, NavigationError | null]
-export type NavigateStatus = readonly [Navigate, boolean, NavigationError | null]
+export type ReloadStatus = readonly [Reload, NavigationProgress]
+export type NavigateStatus = readonly [Navigate, NavigationProgress]
 
 // ─── FrameworkNavigation (public, React-hook-shaped) ──────────────
 
@@ -247,10 +303,12 @@ export type NavigateStatus = readonly [Navigate, boolean, NavigationError | null
  *     handle, the frame name for a frame handle). Framework-only —
  *     not on the browser `Navigation` interface.
  *   - `navigate()` is a **React hook** (call during render). Returns
- *     `[navigate, isPending, error]`. The `navigate` fn accepts a
- *     string / URL / URL-updater and the same options bag as the
- *     imperative form (selector, silent, disableTransition, …).
- *   - `reload()` is the same shape: `[reload, isPending, error]`.
+ *     `[navigate, progress]`. The `navigate` fn accepts a string /
+ *     URL / URL-updater and the same options bag as the imperative
+ *     form (selector, silent, streaming, …). `progress` is a
+ *     `NavigationProgress` triple of booleans tracking the most
+ *     recent fire.
+ *   - `reload()` is the same shape: `[reload, progress]`.
  *     `reload()` with no args reloads the whole page; with
  *     `{ selector }` it's a targeted refetch.
  *
@@ -283,11 +341,12 @@ export interface FrameworkNavigation extends Omit<
  * initialization, callbacks subscribed via `useActivate`. Returned
  * by `_windowNav()` and `_frame()`.
  *
- * `navigate(target, options)` / `reload(options)` return a single
- * `Promise<NavigationHistoryEntry>` — there is no `committed` /
- * `finished` split (the imperative path waits for both internally).
- * The promise rejects with `NavigationError` on failure or
- * `AbortError` on supersede.
+ * `navigate(target, options)` / `reload(options)` return
+ * `NavigationMilestones` synchronously — three promises (`committed`,
+ * `streaming`, `finished`) tracking the navigation lifecycle. Each
+ * rejects with `NavigationError` on failure or `AbortError` on
+ * supersede (per-selector in-flight queue aborts predecessors when a
+ * newer fire's `streaming` lands).
  *
  * App code should always reach navigation through `useNavigation()`.
  * This shape is `@internal` and not re-exported through the public
@@ -303,8 +362,8 @@ export interface ImperativeNavigation extends Omit<
   navigate(
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
-  ): Promise<NavigationHistoryEntry>
-  reload(options?: FrameworkReloadOptions): Promise<NavigationHistoryEntry>
+  ): NavigationMilestones
+  reload(options?: FrameworkReloadOptions): NavigationMilestones
 }
 
 /**

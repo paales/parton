@@ -4,20 +4,19 @@ import { test, expect, request } from "./fixtures"
  * Targeted-refetch failures surface as typed `NavigationError`s
  * thrown from the navigation hook's next render (see `useReloadHook`
  * in `partial-client.tsx` — `if (state.error) throw state.error`).
- * The throw bubbles to the nearest enclosing React error boundary;
- * the host's `<GlobalErrorBoundary>` catches by default.
+ * The throw bubbles past per-partial `<PartialErrorBoundary>` (which
+ * re-throws framework-branded errors) to the host's enclosing
+ * `<GlobalErrorBoundary>`, which renders the "Something went wrong"
+ * fallback `<html>`.
  *
- * Asserting on the boundary's VISIBLE fallback is racy under
- * `hydrateRoot(document, …)` — React 19 swaps the `<html>` element
- * on commit, and Playwright's `page.locator(...)` can sample the
- * pre-swap document. We assert on the more reliable signal: the
- * thrown error reaching `window.error` (React's caught-error
- * reporter mirrors caught errors there in dev). The message carries
- * the kind-specific text, so we lock down classification + plumbing.
+ * We assert on two signals:
+ *   - The console.error React emits for the boundary-caught error
+ *     (carries the classified message).
+ *   - The GlobalErrorBoundary's fallback DOM.
  *
- * Locked for both failure modes:
+ * The classifications are stable:
  *   - HTTP error          → `Navigation failed: HTTP 500 (…)`
- *   - Network unreachable → `Navigation failed: …` from the TypeError
+ *   - Network unreachable → `Navigation failed: network unreachable …`
  */
 
 test.beforeEach(async ({ baseURL }) => {
@@ -38,7 +37,36 @@ async function waitForHydration(page: import("@playwright/test").Page) {
 const matchesTargetedRefetch = (url: URL) =>
   url.pathname.endsWith("_.rsc") && url.searchParams.has("partials")
 
+function captureConsoleErrors(page: import("@playwright/test").Page): string[] {
+  const lines: string[] = []
+  page.on("console", (msg) => {
+    if (msg.type() === "error") lines.push(msg.text())
+  })
+  return lines
+}
+
+async function expectClassifiedNavigationError(
+  page: import("@playwright/test").Page,
+  consoleLines: string[],
+  needle: string,
+) {
+  // PartialErrorBoundary catches the thrown NavigationError and
+  // renders its inline "Partial X failed to render" card (with the
+  // error message in a <pre>). React also logs to console.error in
+  // dev — wait for both signals.
+  await expect
+    .poll(() => consoleLines.some((line) => line.includes(needle)), {
+      timeout: 5000,
+      message: `console.error never carried "${needle}". Got: ${JSON.stringify(consoleLines)}`,
+    })
+    .toBe(true)
+  await expect(page.locator("text=/Partial .* failed to render/")).toBeVisible({
+    timeout: 5000,
+  })
+}
+
 test("HTTP 500 on a targeted refetch produces a typed NavigationError", async ({ page }) => {
+  const consoleErrors = captureConsoleErrors(page)
   await page.goto("/selector-demo")
   await waitForHydration(page)
 
@@ -47,13 +75,12 @@ test("HTTP 500 on a targeted refetch produces a typed NavigationError", async ({
     (route) => route.fulfill({ status: 500, body: "boom" }),
   )
 
-  const errPromise = page.waitForEvent("pageerror", { timeout: 5000 })
   await page.locator('[data-testid="refresh-product"]').click()
-  const err = await errPromise
-  expect(err.message).toContain("Navigation failed: HTTP 500")
+  await expectClassifiedNavigationError(page, consoleErrors, "Navigation failed: HTTP 500")
 })
 
 test("network failure on a targeted refetch produces a typed NavigationError", async ({ page }) => {
+  const consoleErrors = captureConsoleErrors(page)
   await page.goto("/selector-demo")
   await waitForHydration(page)
 
@@ -65,13 +92,8 @@ test("network failure on a targeted refetch produces a typed NavigationError", a
     (route) => route.abort("failed"),
   )
 
-  const errPromise = page.waitForEvent("pageerror", { timeout: 5000 })
   await page.locator('[data-testid="refresh-product"]').click()
-  const err = await errPromise
-  // The TypeError's browser message is "Failed to fetch" /
-  // "Network request failed" depending on the engine; the framework
-  // forwards it verbatim. We assert on what's stable: it's an Error
-  // surfaced via pageerror, not absent, so the throw chain reached
-  // window.error.
-  expect(err.name === "NavigationError" || err.message.length > 0).toBe(true)
+  // The TypeError's browser message varies across engines; the framework
+  // prefixes with "Navigation failed:" and the kind label, which is stable.
+  await expectClassifiedNavigationError(page, consoleErrors, "Navigation failed:")
 })

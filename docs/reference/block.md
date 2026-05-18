@@ -170,9 +170,10 @@ JSX placements sharing an id) it refreshes the spec's whole fan-out.
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 
 export function RefreshSelfButton() {
-  const [reload, isPending] = useNavigation().reload()
+  const [reload, { committed, finished }] = useNavigation().reload()
+  const pending = committed && !finished
   return (
-    <button onClick={() => reload({ selector: "@self" })} disabled={isPending}>
+    <button onClick={() => reload({ selector: "@self" })} disabled={pending}>
       Refresh
     </button>
   )

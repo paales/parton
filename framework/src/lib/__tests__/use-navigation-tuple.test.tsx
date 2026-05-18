@@ -5,34 +5,57 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { PartialIdContext, useNavigation } from "../partial-client.tsx"
 import { NavigationError } from "../../runtime/navigation-error.ts"
+import type { NavigationProgress } from "../../runtime/navigation-api.ts"
 
 /**
- * Tuple hook contract:
+ * Hook contract under test:
  *
- *   const [reload, isPending, error] = useNavigation().reload()
+ *   const [reload, progress] = useNavigation().reload()
  *
- *   - `reload(options?)` returns a Promise<entry> that rejects with a
- *     NavigationError on failure or AbortError on supersede.
- *   - `isPending` is `true` from fire until the promise settles.
- *   - The hook ALSO throws on the calling component's next render
- *     after a failure — so the nearest enclosing React error boundary
- *     catches by default. AbortError never throws (lifecycle signal,
- *     not a failure).
+ *   - `reload(options?)` returns `NavigationMilestones` synchronously:
+ *     `{ committed: Promise, streaming: Promise, finished: Promise }`.
+ *     Each rejects with a NavigationError on failure or AbortError on
+ *     supersede.
+ *   - `progress` is `{ committed, streaming, finished }` booleans,
+ *     monotonic-per-fire, reset on each new fire.
+ *   - On rejection (non-Abort), the hook throws on the next render so
+ *     the nearest enclosing React error boundary catches. AbortError
+ *     never throws (lifecycle signal, not a failure).
  *
- * Tests wrap Probe in a TestBoundary to capture both the per-render
- * tuple values (via `cap.states`) AND the thrown error (via
- * `cap.caughtByBoundary`). Tests rely on the same stubbing of
- * `__rsc_partial_refetch` that `when-stored.test.tsx` uses.
+ * Tests wrap `Probe` in a `TestBoundary` to capture both the per-render
+ * progress booleans (via `cap.states`) AND the thrown error (via
+ * `cap.caughtByBoundary`). The host's `__rsc_partial_refetch` is
+ * stubbed to return `{streaming, finished}` exactly as the real entry
+ * does.
  */
 
 let container: HTMLElement
 let root: Root | null = null
 let refetchSpy: ReturnType<typeof vi.fn>
 
+/**
+ * Helper for failure mocks: returns a `{streaming, finished}` pair
+ * pre-rejected with `err`, with no-op rejection handlers attached so
+ * `unhandledrejection` doesn't fire between mock construction and the
+ * framework's downstream `.then(_, errHandler)` attachment. The
+ * pre-attached `.catch` doesn't consume the rejection — subsequent
+ * handlers still see it.
+ */
+function rejectingMilestones(err: unknown) {
+  const streaming = Promise.reject<void>(err as never)
+  const finished = Promise.reject<void>(err as never)
+  streaming.catch(() => {})
+  finished.catch(() => {})
+  return { streaming, finished }
+}
+
 beforeEach(() => {
   container = document.createElement("div")
   document.body.appendChild(container)
-  refetchSpy = vi.fn(() => Promise.resolve())
+  refetchSpy = vi.fn(() => ({
+    streaming: Promise.resolve(),
+    finished: Promise.resolve(),
+  }))
   ;(window as Window & { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch = refetchSpy
 })
 
@@ -51,17 +74,23 @@ interface FireOpts {
 }
 
 interface Capture {
+  /** Returns the `finished` milestone of the most recent fire — most
+   *  tests just want "await the navigation to complete." */
   fire: ((opts?: FireOpts) => Promise<unknown>) | null
-  states: Array<{ pending: boolean; error: NavigationError | null }>
+  states: NavigationProgress[]
   caughtByBoundary: Error | null
 }
 
 function Probe({ capture }: { capture: Capture }) {
-  const [reload, isPending, error] = useNavigation().reload()
+  const [reload, progress] = useNavigation().reload()
   const fireRef = useRef(reload)
   fireRef.current = reload
-  capture.fire = (opts) => reload(opts)
-  capture.states.push({ pending: isPending, error })
+  capture.fire = (opts) => reload(opts).finished
+  capture.states.push({
+    committed: progress.committed,
+    streaming: progress.streaming,
+    finished: progress.finished,
+  })
   return null
 }
 
@@ -99,39 +128,67 @@ function newCapture(): Capture {
   return { fire: null, states: [], caughtByBoundary: null }
 }
 
-describe("useNavigation().reload() tuple hook", () => {
-  it("starts with [_, false, null]", async () => {
+const ALL_FALSE: NavigationProgress = {
+  committed: false,
+  streaming: false,
+  finished: false,
+}
+const ALL_TRUE: NavigationProgress = {
+  committed: true,
+  streaming: true,
+  finished: true,
+}
+
+describe("useNavigation().reload() progress tuple", () => {
+  it("starts with all milestones false", async () => {
     const cap = newCapture()
     await render(cap)
-    expect(cap.states[cap.states.length - 1]).toEqual({ pending: false, error: null })
+    expect(cap.states[cap.states.length - 1]).toEqual(ALL_FALSE)
   })
 
-  it("sets pending true on fire, clears on success", async () => {
+  it("flips committed → streaming → finished as a fire progresses", async () => {
     const cap = newCapture()
-    let resolveFetch!: () => void
-    refetchSpy.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveFetch = resolve
-        }),
-    )
+    let resolveStreaming!: () => void
+    let resolveFinished!: () => void
+    refetchSpy.mockImplementation(() => ({
+      streaming: new Promise<void>((res) => {
+        resolveStreaming = res
+      }),
+      finished: new Promise<void>((res) => {
+        resolveFinished = res
+      }),
+    }))
     await render(cap)
     cap.states = []
 
-    let firePromise: Promise<unknown>
+    let firePromise!: Promise<unknown>
     await act(async () => {
       firePromise = cap.fire!({ selector: "#hero" })
     })
-    // After fire, pending should be true.
-    expect(cap.states.some((s) => s.pending)).toBe(true)
-    expect(cap.states[cap.states.length - 1].pending).toBe(true)
+    // For a selector reload, committed resolves immediately (no URL
+    // change), but streaming + finished are still pending.
+    expect(cap.states[cap.states.length - 1]).toMatchObject({
+      committed: true,
+      streaming: false,
+      finished: false,
+    })
 
-    // Resolve the in-flight refetch; pending clears.
+    // First segment lands.
     await act(async () => {
-      resolveFetch()
+      resolveStreaming()
+    })
+    expect(cap.states[cap.states.length - 1]).toMatchObject({
+      committed: true,
+      streaming: true,
+      finished: false,
+    })
+
+    // Body drains.
+    await act(async () => {
+      resolveFinished()
       await firePromise
     })
-    expect(cap.states[cap.states.length - 1]).toEqual({ pending: false, error: null })
+    expect(cap.states[cap.states.length - 1]).toEqual(ALL_TRUE)
   })
 
   it("throws a NavigationError to the boundary when the refetch rejects", async () => {
@@ -141,11 +198,12 @@ describe("useNavigation().reload() tuple hook", () => {
       url: "http://x/?partials=hero",
       message: "boom",
     })
-    refetchSpy.mockImplementation(() => Promise.reject(failure))
+    refetchSpy.mockImplementation(() => rejectingMilestones(failure))
     await render(cap)
 
     await act(async () => {
-      // The fire promise rejects — swallow so the test doesn't error.
+      // The fire's finished promise rejects — swallow so the test
+      // doesn't error.
       await cap.fire!({ selector: "#hero" }).catch(() => {})
     })
 
@@ -154,7 +212,8 @@ describe("useNavigation().reload() tuple hook", () => {
 
   it("classifies a plain TypeError as a network error and throws it", async () => {
     const cap = newCapture()
-    refetchSpy.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")))
+    const failure = new TypeError("Failed to fetch")
+    refetchSpy.mockImplementation(() => rejectingMilestones(failure))
     await render(cap)
 
     await act(async () => {
@@ -165,11 +224,11 @@ describe("useNavigation().reload() tuple hook", () => {
     expect((cap.caughtByBoundary as NavigationError).kind).toBe("network")
   })
 
-  it("silently clears pending on AbortError (no error stored)", async () => {
+  it("flips finished → true on AbortError but stores no error", async () => {
     const cap = newCapture()
     const abort = new Error("aborted")
     abort.name = "AbortError"
-    refetchSpy.mockImplementation(() => Promise.reject(abort))
+    refetchSpy.mockImplementation(() => rejectingMilestones(abort))
     await render(cap)
     cap.states = []
 
@@ -178,8 +237,14 @@ describe("useNavigation().reload() tuple hook", () => {
     })
 
     const last = cap.states[cap.states.length - 1]
-    expect(last.pending).toBe(false)
-    expect(last.error).toBeNull()
+    // Abort still lands the lifecycle — finished flips true.
+    // committed flips true because the URL didn't change. streaming
+    // stays false because the abort came before the first segment.
+    expect(last.finished).toBe(true)
+    expect(last.committed).toBe(true)
+    expect(last.streaming).toBe(false)
+    // The bubbler never receives an abort.
+    expect(cap.caughtByBoundary).toBeNull()
   })
 })
 
@@ -204,9 +269,9 @@ describe('"@self" token resolution', () => {
       await cap.fire!({ selector: ["@self", ".price"] })
     })
 
-    const labels = (new URL(refetchSpy.mock.calls[0]?.[0] as string).searchParams.get("partials") ?? "").split(
-      ",",
-    )
+    const labels = (
+      new URL(refetchSpy.mock.calls[0]?.[0] as string).searchParams.get("partials") ?? ""
+    ).split(",")
     expect(labels).toContain("card:xyz")
     expect(labels).toContain("price")
   })
@@ -235,6 +300,10 @@ describe('"@self" token resolution', () => {
     await act(async () => {
       caught = await cap.fire!({ selector: "@self" }).catch((e) => e)
     })
+    // Errors thrown synchronously from the fire body (resolveSelfIn…
+    // throws on missing partial id) get wrapped into a
+    // NavigationError and surface through the milestone-rejection /
+    // render-throw bubbler path — same channel as a network failure.
     expect(caught).toBeInstanceOf(NavigationError)
     expect((caught as NavigationError).message).toContain("@self")
     expect(refetchSpy).not.toHaveBeenCalled()

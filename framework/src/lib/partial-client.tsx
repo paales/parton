@@ -51,6 +51,8 @@ import {
   type Navigate,
   type NavigateStatus,
   type NavigateTarget,
+  type NavigationMilestones,
+  type NavigationProgress,
   type Reload,
   type ReloadStatus,
 } from "../runtime/navigation-api.ts"
@@ -905,42 +907,75 @@ function parseSelectorClient(input: string | string[] | undefined): {
 // Multiple `reload` / `navigate({ selector })` calls in the same tick
 // coalesce into one refetch request. Keeps tag-fanout and multi-id
 // event handlers cheap: three buttons clicked in the same frame
-// produce one request with `?partials=a,b,c`.
+// produce one request with `?partials=a,b,c`. Each batched entry
+// carries its own `streaming` / `finished` deferreds so the batched
+// request can fan out its two milestones (first-segment received,
+// full body drained) back to every caller separately.
+
+/** Two-milestone return mirroring the host's `fetchRscPayload`. */
+interface RefetchMilestones {
+  streaming: Promise<void>
+  finished: Promise<void>
+}
 
 interface RefetchBatchEntry {
   /** Selector labels — become `?partials=…` on the wire. The server
    *  walks snapshots looking for matching labels (or matching ids)
    *  and re-renders each match. */
   labels: string[]
-  disableTransition: boolean
+  /** Render mode for the commit — `false` (default) wraps in
+   *  `startTransition`; `true` opts into progressive streaming with
+   *  Suspense fallbacks. Mirrors the `streaming` option on
+   *  `FrameworkNavigateOptions` / `FrameworkReloadOptions`. */
+  streaming: boolean
   /** Per-id props map merged into the wire as `?partialProps=<JSON>`.
    *  Server reads it in `PartialRoot` and forwards to the spec via
    *  `partialFromSnapshot` so `<WhenStored>` and similar activators
    *  can pass values without writing them into the URL. */
   props?: Record<string, Record<string, unknown>>
+  /** Abort signal for the in-flight HTTP fetch on this entry. Per-
+   *  selector supersede sets this to a fresh `AbortController`'s signal
+   *  and aborts predecessors when the newer fire's `streaming`
+   *  resolves. Passed straight through to `__rsc_partial_refetch`. */
+  signal?: AbortSignal
+  /** Resolver for this entry's `streaming` milestone — called when the
+   *  flushed batch's first segment lands. */
+  resolveStreaming: () => void
+  rejectStreaming: (err: unknown) => void
+  /** Resolver for this entry's `finished` milestone — called when the
+   *  flushed batch's full response drains. */
+  resolveFinished: () => void
+  rejectFinished: (err: unknown) => void
 }
 
 let _batchRef: RefetchBatchEntry[] = []
-let _batchPromise: {
-  promise: Promise<void>
-  resolve: () => void
-  reject: (err: unknown) => void
-} | null = null
+let _batchScheduled = false
 
-async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
+function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
   const handler = (
     window as Window & {
-      __rsc_partial_refetch?: (url: string) => Promise<void>
+      __rsc_partial_refetch?: (
+        url: string,
+        signal?: AbortSignal,
+      ) => RefetchMilestones
     }
   ).__rsc_partial_refetch
-  if (!handler) return
+  if (!handler) {
+    // Host bundle hasn't wired the handler yet (SSR / pre-hydration).
+    // Resolve every entry as a no-op so callers don't hang.
+    for (const e of batch) {
+      e.resolveStreaming()
+      e.resolveFinished()
+    }
+    return
+  }
 
   const labelSet = new Set<string>()
   const mergedProps: Record<string, Record<string, unknown>> = {}
-  let disableTransition = false
+  let streamingMode = false
   for (const entry of batch) {
     for (const l of entry.labels) labelSet.add(l)
-    if (entry.disableTransition) disableTransition = true
+    if (entry.streaming) streamingMode = true
     if (entry.props) {
       for (const [id, p] of Object.entries(entry.props)) {
         mergedProps[id] = { ...(mergedProps[id] ?? {}), ...p }
@@ -948,9 +983,24 @@ async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
     }
   }
 
+  // Combine per-entry signals so the batched fetch aborts when any
+  // caller superseded. Batched callers share fate by construction —
+  // they're one HTTP request. (In practice batched entries usually
+  // come from the same event handler; cross-supersede happens only
+  // across microtasks so each fire is in its own batch.)
+  const signals = batch
+    .map((e) => e.signal)
+    .filter((s): s is AbortSignal => s != null)
+  const signal =
+    signals.length === 0
+      ? undefined
+      : signals.length === 1
+        ? signals[0]
+        : AbortSignal.any(signals)
+
   const url = new URL(window.location.href)
   if (labelSet.size > 0) url.searchParams.set("partials", [...labelSet].join(","))
-  if (disableTransition) url.searchParams.set("disableTransition", "1")
+  if (streamingMode) url.searchParams.set("streaming", "1")
   if (Object.keys(mergedProps).length > 0) {
     url.searchParams.set("partialProps", JSON.stringify(mergedProps))
   }
@@ -967,36 +1017,127 @@ async function flushRefetchBatch(batch: RefetchBatchEntry[]): Promise<void> {
     if (cached.length > 0) url.searchParams.set("cached", cached.join(","))
   }
 
-  await handler(url.toString())
+  const milestones = handler(url.toString(), signal)
+  milestones.streaming.then(
+    () => {
+      for (const e of batch) e.resolveStreaming()
+    },
+    (err) => {
+      for (const e of batch) e.rejectStreaming(err)
+    },
+  )
+  milestones.finished.then(
+    () => {
+      for (const e of batch) e.resolveFinished()
+    },
+    (err) => {
+      for (const e of batch) e.rejectFinished(err)
+    },
+  )
 }
 
 /**
  * Enqueue a targeted refetch. Multiple calls in the same microtask
- * coalesce into one request. Returns a Promise that resolves when
- * the flush completes or rejects with whatever
- * `__rsc_partial_refetch` threw — typically a `NavigationError`
- * (network / http / decode) from the host's `fetchRscPayload`. Every
- * caller batched into the same flush sees the same settled value.
+ * coalesce into one request. Returns synchronously with
+ * `{streaming, finished}` promises — the caller can attach handlers
+ * on either milestone independently. Both reject with whatever
+ * `__rsc_partial_refetch` rejected with (typically a
+ * `NavigationError` from `fetchRscPayload`); on supersede, the
+ * shared `AbortSignal` propagates an `AbortError` to both milestones.
  */
-function enqueueRefetch(entry: RefetchBatchEntry): Promise<void> {
-  _batchRef.push(entry)
-  if (!_batchPromise) {
-    let resolve!: () => void
-    let reject!: (err: unknown) => void
-    const promise = new Promise<void>((res, rej) => {
-      resolve = res
-      reject = rej
-    })
-    _batchPromise = { promise, resolve, reject }
+function enqueueRefetch(
+  entry: Omit<
+    RefetchBatchEntry,
+    | "resolveStreaming"
+    | "rejectStreaming"
+    | "resolveFinished"
+    | "rejectFinished"
+  >,
+): RefetchMilestones {
+  let resolveStreaming!: () => void
+  let rejectStreaming!: (err: unknown) => void
+  let resolveFinished!: () => void
+  let rejectFinished!: (err: unknown) => void
+  const streaming = new Promise<void>((res, rej) => {
+    resolveStreaming = res
+    rejectStreaming = rej
+  })
+  const finished = new Promise<void>((res, rej) => {
+    resolveFinished = res
+    rejectFinished = rej
+  })
+  // Pre-attach no-op handlers so a rejection that lands before the
+  // downstream consumer's `.then(_, handler)` registers doesn't
+  // surface as unhandledrejection. The pre-attach does NOT consume
+  // the rejection — subsequent handlers still see the error.
+  streaming.catch(() => {})
+  finished.catch(() => {})
+
+  _batchRef.push({
+    ...entry,
+    resolveStreaming,
+    rejectStreaming,
+    resolveFinished,
+    rejectFinished,
+  })
+  if (!_batchScheduled) {
+    _batchScheduled = true
     queueMicrotask(() => {
       const batch = _batchRef
-      const cur = _batchPromise!
       _batchRef = []
-      _batchPromise = null
-      flushRefetchBatch(batch).then(cur.resolve, cur.reject)
+      _batchScheduled = false
+      flushRefetchBatch(batch)
     })
   }
-  return _batchPromise.promise
+  return { streaming, finished }
+}
+
+// ─── Per-selector in-flight queue + deferred abort ────────────────
+//
+// A new fire for a selector that's already in flight supersedes the
+// older one(s). To avoid yanking the previously-committed tree off
+// the screen, abort is DEFERRED: the older fire keeps streaming
+// bytes into its Suspense boundaries until the newer fire's first
+// segment lands. At that moment the newer fire calls
+// `abortPredecessors` to cancel the older fetches in one shot.
+//
+// Selector identity is the sorted, comma-joined label set. Multiple
+// callers with the same selector key share one stack; their fires
+// race and the newest always wins.
+
+interface InFlightEntry {
+  controller: AbortController
+}
+
+const _inFlight = new Map<string, InFlightEntry[]>()
+
+function inFlightKey(labels: string[]): string | null {
+  if (labels.length === 0) return null
+  return labels.slice().sort().join(",")
+}
+
+function registerInFlight(key: string, entry: InFlightEntry): void {
+  const stack = _inFlight.get(key)
+  if (stack) stack.push(entry)
+  else _inFlight.set(key, [entry])
+}
+
+function unregisterInFlight(key: string, entry: InFlightEntry): void {
+  const stack = _inFlight.get(key)
+  if (!stack) return
+  const idx = stack.indexOf(entry)
+  if (idx >= 0) stack.splice(idx, 1)
+  if (stack.length === 0) _inFlight.delete(key)
+}
+
+/** Abort every entry older than `entry` in this selector's stack. */
+function abortPredecessors(key: string, entry: InFlightEntry): void {
+  const stack = _inFlight.get(key)
+  if (!stack) return
+  const idx = stack.indexOf(entry)
+  if (idx <= 0) return
+  for (let i = 0; i < idx; i++) stack[i].controller.abort()
+  stack.splice(0, idx)
 }
 
 // ─── Frame navigation ─────────────────────────────────────────────
@@ -1212,20 +1353,29 @@ export function FrameNameProvider({
  * refetch handler. Shared between `frame.navigate()` and the browser-
  * traverse listener (which re-invokes it for each frame whose URL
  * differs between the destination entry and the current one).
+ *
+ * Returns the handler's `{streaming, finished}` milestones so frame
+ * `navigate` / `reload` can pipe them straight through to their own
+ * `NavigationMilestones`. Callers awaiting completion use `.finished`.
  */
-export async function _dispatchFrameRefetch(
+export function _dispatchFrameRefetch(
   path: readonly string[],
   url: string,
   options?: FrameworkNavigateOptions,
-): Promise<void> {
+): RefetchMilestones {
   const key = joinFramePath(path)
   _frameUrls.set(key, url)
   const handler = (
     window as Window & {
-      __rsc_partial_refetch?: (url: string) => Promise<void>
+      __rsc_partial_refetch?: (
+        url: string,
+        signal?: AbortSignal,
+      ) => RefetchMilestones
     }
   ).__rsc_partial_refetch
-  if (!handler) return
+  if (!handler) {
+    return { streaming: Promise.resolve(), finished: Promise.resolve() }
+  }
   const refetchUrl = new URL(window.location.href)
   refetchUrl.searchParams.set("__frame", key)
   refetchUrl.searchParams.set("__frameUrl", url)
@@ -1251,10 +1401,10 @@ export async function _dispatchFrameRefetch(
   // switching on `?product=`) rerenders while `__frame` still
   // updates the session.
   refetchUrl.searchParams.set("partials", path[0])
-  if (options?.disableTransition) {
-    refetchUrl.searchParams.set("disableTransition", "1")
+  if (options?.streaming) {
+    refetchUrl.searchParams.set("streaming", "1")
   }
-  await handler(refetchUrl.toString())
+  return handler(refetchUrl.toString())
 }
 
 // ─── NavigateTarget resolution ────────────────────────────────────
@@ -1297,9 +1447,9 @@ function resolveFrameTarget(target: NavigateTarget, frameName: string): string {
 /**
  * Await the browser's `NavigationResult.committed` (or resolve
  * immediately if absent — TS 6's `lib.dom.d.ts` marks it optional).
- * The imperative API doesn't expose `committed` separately, but
- * internal call sites still need to wait for the browser entry to be
- * created before dispatching framework work that reads `currentEntry`.
+ * The framework's `NavigationMilestones.committed` is built off this
+ * — it resolves once the browser entry exists and `currentEntry` can
+ * be read.
  */
 async function awaitCommitted(result: NavigationResult): Promise<void> {
   if (result.committed) await result.committed
@@ -1313,6 +1463,45 @@ async function awaitCommitted(result: NavigationResult): Promise<void> {
  */
 async function awaitFinished(result: NavigationResult): Promise<void> {
   if (result.finished) await result.finished
+}
+
+// ─── Deferred / milestone helpers ─────────────────────────────────
+
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T | PromiseLike<T>) => void
+  reject: (err: unknown) => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (err: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+/**
+ * Build a fresh `NavigationMilestones` shell. Each milestone has a
+ * no-op rejection handler pre-attached so an un-listened branch
+ * doesn't surface as unhandledrejection when the rejection comes
+ * through — the pre-attach doesn't consume the rejection, so
+ * subsequent consumer handlers still see the error.
+ */
+function makeMilestoneDeferreds(): {
+  committed: Deferred<NavigationHistoryEntry>
+  streaming: Deferred<void>
+  finished: Deferred<NavigationHistoryEntry>
+} {
+  const committed = deferred<NavigationHistoryEntry>()
+  const streaming = deferred<void>()
+  const finished = deferred<NavigationHistoryEntry>()
+  committed.promise.catch(() => {})
+  streaming.promise.catch(() => {})
+  finished.promise.catch(() => {})
+  return { committed, streaming, finished }
 }
 
 function parseOptionsSelector(
@@ -1467,7 +1656,11 @@ function projectEntryForFrame(
 
 function nullImperativeNavigation(name: string | null): ImperativeNavigation {
   const stubEntry = null as unknown as NavigationHistoryEntry
-  const stubResolve = (): Promise<NavigationHistoryEntry> => Promise.resolve(stubEntry)
+  const stubMilestones = (): NavigationMilestones => ({
+    committed: Promise.resolve(stubEntry),
+    streaming: Promise.resolve(),
+    finished: Promise.resolve(stubEntry),
+  })
   const stubNavResult = {
     committed: Promise.resolve(stubEntry),
     finished: Promise.resolve(stubEntry),
@@ -1480,8 +1673,8 @@ function nullImperativeNavigation(name: string | null): ImperativeNavigation {
     transition: null,
     activation: null,
     entries: () => [],
-    navigate: stubResolve,
-    reload: stubResolve,
+    navigate: stubMilestones,
+    reload: stubMilestones,
     back: () => stubNavResult,
     forward: () => stubNavResult,
     traverseTo: () => stubNavResult,
@@ -1545,15 +1738,17 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
   const nav = getNavigation()
   if (!nav) return nullImperativeNavigation(null)
 
-  const windowNavigate = async (
+  const windowNavigate = (
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
-  ): Promise<NavigationHistoryEntry> => {
+  ): NavigationMilestones => {
     applyClientCookies(options?.cookies)
     const url = resolveWindowTarget(target)
     const parsed = parseOptionsSelector(options)
     const filtered = parsed.labels.length > 0
     const silent = options?.silent === true
+    const m = makeMilestoneDeferreds()
+
     if (filtered || silent) {
       // URL-only update — the page-level listener sees the branded
       // info and declines to intercept, so no refetch fires from its
@@ -1564,42 +1759,144 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
         state: options?.state ?? null,
         info: makeSilentInfo("window"),
       })
-      await awaitCommitted(result)
-      if (!silent) {
-        await enqueueRefetch({
-          labels: parsed.labels,
-          disableTransition: options?.disableTransition ?? false,
-          props: options?.props,
-        })
+      const key = filtered ? inFlightKey(parsed.labels) : null
+      const controller = key ? new AbortController() : undefined
+      const inFlightEntry: InFlightEntry | null =
+        key && controller ? { controller } : null
+      if (key && inFlightEntry) registerInFlight(key, inFlightEntry)
+
+      void (async () => {
+        try {
+          await awaitCommitted(result)
+          m.committed.resolve(nav.currentEntry!)
+          if (silent) {
+            m.streaming.resolve()
+            m.finished.resolve(nav.currentEntry!)
+            return
+          }
+          const refetch = enqueueRefetch({
+            labels: parsed.labels,
+            streaming: options?.streaming ?? false,
+            props: options?.props,
+            signal: controller?.signal,
+          })
+          await refetch.streaming
+          // Newer fire's first segment landed — kill any older fires
+          // for the same selector so they stop chewing through the
+          // server's response.
+          if (key && inFlightEntry) abortPredecessors(key, inFlightEntry)
+          m.streaming.resolve()
+          await refetch.finished
+          m.finished.resolve(nav.currentEntry!)
+        } catch (err) {
+          m.committed.reject(err)
+          m.streaming.reject(err)
+          m.finished.reject(err)
+        } finally {
+          if (key && inFlightEntry) unregisterInFlight(key, inFlightEntry)
+        }
+      })()
+      return {
+        committed: m.committed.promise,
+        streaming: m.streaming.promise,
+        finished: m.finished.promise,
       }
-      return nav.currentEntry!
     }
+
+    // Full-page nav: the navigate-event listener intercepts and runs
+    // the framework's main refetch via `fetchRscPayload(...).finished`,
+    // so `result.finished` covers both the browser commit and the full
+    // body drain. No per-segment hook is exposed today, so `streaming`
+    // collapses to `finished`.
     const result = nav.navigate(url, {
       history: options?.history,
       state: options?.state,
       info: options?.info,
     })
-    // Full-page nav: `finished` waits for the navigate-event handler
-    // (which does the framework's main refetch via `__rsc_partial_refetch`).
-    await awaitFinished(result)
-    return nav.currentEntry!
+    void (async () => {
+      try {
+        await awaitCommitted(result)
+        m.committed.resolve(nav.currentEntry!)
+        await awaitFinished(result)
+        m.streaming.resolve()
+        m.finished.resolve(nav.currentEntry!)
+      } catch (err) {
+        m.committed.reject(err)
+        m.streaming.reject(err)
+        m.finished.reject(err)
+      }
+    })()
+    return {
+      committed: m.committed.promise,
+      streaming: m.streaming.promise,
+      finished: m.finished.promise,
+    }
   }
 
-  const windowReload = async (
+  const windowReload = (
     options?: FrameworkReloadOptions,
-  ): Promise<NavigationHistoryEntry> => {
+  ): NavigationMilestones => {
     const parsed = parseOptionsSelector(options)
+    const m = makeMilestoneDeferreds()
+
     if (parsed.labels.length > 0) {
-      await enqueueRefetch({
-        labels: parsed.labels,
-        disableTransition: options?.disableTransition ?? false,
-        props: options?.props,
-      })
-      return nav.currentEntry!
+      // Targeted reload — same in-flight-queue behavior as
+      // selector-filtered navigate. No browser nav.navigate call;
+      // `committed` resolves immediately because the URL isn't
+      // changing.
+      const key = inFlightKey(parsed.labels)
+      const controller = key ? new AbortController() : undefined
+      const inFlightEntry: InFlightEntry | null =
+        key && controller ? { controller } : null
+      if (key && inFlightEntry) registerInFlight(key, inFlightEntry)
+
+      m.committed.resolve(nav.currentEntry!)
+      void (async () => {
+        try {
+          const refetch = enqueueRefetch({
+            labels: parsed.labels,
+            streaming: options?.streaming ?? false,
+            props: options?.props,
+            signal: controller?.signal,
+          })
+          await refetch.streaming
+          if (key && inFlightEntry) abortPredecessors(key, inFlightEntry)
+          m.streaming.resolve()
+          await refetch.finished
+          m.finished.resolve(nav.currentEntry!)
+        } catch (err) {
+          m.streaming.reject(err)
+          m.finished.reject(err)
+        } finally {
+          if (key && inFlightEntry) unregisterInFlight(key, inFlightEntry)
+        }
+      })()
+      return {
+        committed: m.committed.promise,
+        streaming: m.streaming.promise,
+        finished: m.finished.promise,
+      }
     }
+
     const result = nav.reload({ state: options?.state, info: options?.info })
-    await awaitFinished(result)
-    return nav.currentEntry!
+    void (async () => {
+      try {
+        await awaitCommitted(result)
+        m.committed.resolve(nav.currentEntry!)
+        await awaitFinished(result)
+        m.streaming.resolve()
+        m.finished.resolve(nav.currentEntry!)
+      } catch (err) {
+        m.committed.reject(err)
+        m.streaming.reject(err)
+        m.finished.reject(err)
+      }
+    })()
+    return {
+      committed: m.committed.promise,
+      streaming: m.streaming.promise,
+      finished: m.finished.promise,
+    }
   }
 
   return new Proxy(nav, {
@@ -1645,10 +1942,10 @@ function buildFrameHandle(path: readonly string[]): ImperativeNavigation {
     throw new Error("buildFrameHandle: path must be non-empty")
   }
 
-  const frameNavigate = async (
+  const frameNavigate = (
     target: NavigateTarget,
     options?: FrameworkNavigateOptions,
-  ): Promise<NavigationHistoryEntry> => {
+  ): NavigationMilestones => {
     applyClientCookies(options?.cookies)
     const url = resolveFrameTarget(target, key)
     const historyMode: NavigationHistoryBehavior = options?.history ?? "auto"
@@ -1689,13 +1986,32 @@ function buildFrameHandle(path: readonly string[]): ImperativeNavigation {
     // stale URL.
     _frameUrls.set(key, url)
 
+    const m = makeMilestoneDeferreds()
+
     if (historyMode === "auto") {
       // No new browser entry. updateCurrentEntry patches state in
       // place, fires currententrychange (consumers update) but NOT
-      // navigate — no silent-info bypass needed.
+      // navigate — no silent-info bypass needed. `committed` resolves
+      // immediately because there's no browser commit to wait on.
       nav.updateCurrentEntry({ state: nextState })
-      await _dispatchFrameRefetch(path, url, options)
-      return nav.currentEntry!
+      m.committed.resolve(nav.currentEntry!)
+      const refetch = _dispatchFrameRefetch(path, url, options)
+      void (async () => {
+        try {
+          await refetch.streaming
+          m.streaming.resolve()
+          await refetch.finished
+          m.finished.resolve(nav.currentEntry!)
+        } catch (err) {
+          m.streaming.reject(err)
+          m.finished.reject(err)
+        }
+      })()
+      return {
+        committed: m.committed.promise,
+        streaming: m.streaming.promise,
+        finished: m.finished.promise,
+      }
     }
 
     // Explicit push/replace — browser entry grows/replaces. Use the
@@ -1706,18 +2022,62 @@ function buildFrameHandle(path: readonly string[]): ImperativeNavigation {
       state: nextState,
       info: makeSilentInfo("frame", key),
     })
-    await awaitCommitted(result)
-    await _dispatchFrameRefetch(path, url, options)
-    return nav.currentEntry!
+    void (async () => {
+      try {
+        await awaitCommitted(result)
+        m.committed.resolve(nav.currentEntry!)
+        const refetch = _dispatchFrameRefetch(path, url, options)
+        await refetch.streaming
+        m.streaming.resolve()
+        await refetch.finished
+        m.finished.resolve(nav.currentEntry!)
+      } catch (err) {
+        m.committed.reject(err)
+        m.streaming.reject(err)
+        m.finished.reject(err)
+      }
+    })()
+    return {
+      committed: m.committed.promise,
+      streaming: m.streaming.promise,
+      finished: m.finished.promise,
+    }
   }
 
-  const frameReload = async (
+  const frameReload = (
     options?: FrameworkReloadOptions,
-  ): Promise<NavigationHistoryEntry> => {
+  ): NavigationMilestones => {
     const url = _frameUrls.get(key)
-    if (!url) return nav.currentEntry!
-    await _dispatchFrameRefetch(path, url, options)
-    return nav.currentEntry!
+    const m = makeMilestoneDeferreds()
+    const entry = nav.currentEntry!
+    m.committed.resolve(entry)
+    if (!url) {
+      // No frame URL known — there's nothing to refetch.
+      m.streaming.resolve()
+      m.finished.resolve(entry)
+      return {
+        committed: m.committed.promise,
+        streaming: m.streaming.promise,
+        finished: m.finished.promise,
+      }
+    }
+    const refetch = _dispatchFrameRefetch(path, url, options)
+    void (async () => {
+      try {
+        await refetch.streaming
+        m.streaming.resolve()
+        await refetch.finished
+        m.finished.resolve(nav.currentEntry!)
+      } catch (err) {
+        m.streaming.reject(err)
+        m.finished.reject(err)
+      }
+    })()
+    return {
+      committed: m.committed.promise,
+      streaming: m.streaming.promise,
+      finished: m.finished.promise,
+    }
   }
 
   /**
@@ -1770,7 +2130,7 @@ function buildFrameHandle(path: readonly string[]): ImperativeNavigation {
     const resolveEntry = () => nav.currentEntry ?? stub
     return {
       committed: Promise.resolve(resolveEntry()),
-      finished: work.then(resolveEntry),
+      finished: work.finished.then(resolveEntry),
     }
   }
 
@@ -1863,59 +2223,134 @@ export function _windowNav(): ImperativeNavigation {
 // ─── Hook wrappers around the imperative handle ───────────────────
 
 /**
- * Inner hook backing `nav.reload()`. Owns the `pending` / `error`
- * state for one call site, wraps the imperative `imperative.reload`
- * with classification + publish, and exposes the fire fn through
- * `useCallback` so consumers can pass it into effect deps without
- * thrash. The fire returns a Promise so chains like
- * `await reload({selector})` still work for callers who want to
- * sequence after the refetch.
+ * Internal state backing the milestone tuple. The three `committed` /
+ * `streaming` / `finished` booleans are what the consumer sees through
+ * `NavigationProgress`. `error` is kept here too so that a fire's
+ * rejection can be thrown from render (the nearest
+ * `<NavigationErrorBubbler>` / error boundary catches), but it's
+ * intentionally NOT surfaced through the tuple — the bubbler is the
+ * one and only consumer-facing error channel.
  *
- * `AbortError` (newer navigation supersedes) clears pending and
- * re-throws without setting `error` or publishing — it's a normal
- * lifecycle event, not a failure.
+ * `fireId` is a monotonic counter that lets per-milestone watchers
+ * skip updates from a fire that's already been superseded by the next
+ * one. Without it, two rapid keystrokes would race: fire-1's commit
+ * watcher could land after fire-2's reset, polluting fire-2's state.
+ */
+interface InternalProgressState {
+  fireId: number
+  committed: boolean
+  streaming: boolean
+  finished: boolean
+  error: NavigationError | null
+}
+
+const INITIAL_PROGRESS_STATE: InternalProgressState = {
+  fireId: 0,
+  committed: false,
+  streaming: false,
+  finished: false,
+  error: null,
+}
+
+/**
+ * Classify a milestone rejection into either a NavigationError (for
+ * the bubbler) or null (AbortError — a normal lifecycle event when a
+ * newer fire supersedes, NOT a failure).
+ */
+function classifyMilestoneError(err: unknown): NavigationError | null {
+  if (err instanceof Error && err.name === "AbortError") return null
+  if (err instanceof NavigationError) return err
+  return toNavigationError(
+    err,
+    typeof window !== "undefined" ? window.location.href : "?",
+  )
+}
+
+/**
+ * Wrap a synchronously-thrown error from the fire body
+ * (`resolveSelfIn…Options` validation, for instance) into a milestones
+ * object whose three promises are all immediately rejected. The
+ * watcher path then classifies and bubbles it the same way as a
+ * mid-fetch rejection — sync and async failures share one channel.
+ */
+function rejectedMilestones(err: unknown): NavigationMilestones {
+  const wrapped =
+    err instanceof NavigationError
+      ? err
+      : toNavigationError(
+          err,
+          typeof window !== "undefined" ? window.location.href : "?",
+        )
+  const m: NavigationMilestones = {
+    committed: Promise.reject(wrapped),
+    streaming: Promise.reject(wrapped),
+    finished: Promise.reject(wrapped),
+  }
+  // Pre-attach no-op rejection handlers so un-listened branches
+  // don't surface as unhandledrejection.
+  m.committed.catch(() => {})
+  m.streaming.catch(() => {})
+  m.finished.catch(() => {})
+  return m
+}
+
+/**
+ * Inner hook backing `nav.reload()`. Owns the milestone-progress state
+ * for one call site, attaches watchers to each fire's
+ * `committed` / `streaming` / `finished` promises to flip the
+ * corresponding boolean to `true`, and surfaces errors through the
+ * render-throw bubbler path. The fire fn returns
+ * `NavigationMilestones` synchronously so consumers can `.finished` /
+ * `.streaming` independently.
  */
 function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
-  const [state, setState] = useState<{
-    pending: boolean
-    error: NavigationError | null
-  }>({ pending: false, error: null })
+  const [state, setState] = useState<InternalProgressState>(INITIAL_PROGRESS_STATE)
   // Capture the enclosing partial id at render so the fire fn can
   // resolve `@self` tokens. The id may be null outside a partial;
   // resolveSelfInReloadOptions throws on use in that case.
   const ambientPartialId = useContext(PartialIdContext)
+  // `fireIdRef` survives across renders without re-triggering useMemo
+  // deps, so the fire callback's identity stays stable for callers
+  // passing it into effect deps. Each invocation bumps to the next
+  // monotonic id, captured into the milestone watchers' closure for
+  // supersede-detection.
+  const fireIdRef = useRef(0)
   // Lift the error to render so the nearest enclosing React error
   // boundary catches. The throw bubbles from THIS component; a
   // boundary reset re-mounts with a fresh useState (no error) so
   // there's no stale-error loop.
   if (state.error) throw state.error
   const fire = useMemo<Reload>(
-    () => async (options) => {
-      setState({ pending: true, error: null })
+    () => (options) => {
+      fireIdRef.current += 1
+      const myFireId = fireIdRef.current
+      setState({
+        fireId: myFireId,
+        committed: false,
+        streaming: false,
+        finished: false,
+        error: null,
+      })
+      let milestones: NavigationMilestones
       try {
         const resolved = resolveSelfInReloadOptions(options, ambientPartialId)
-        const entry = await imperative.reload(resolved)
-        setState({ pending: false, error: null })
-        return entry
+        milestones = imperative.reload(resolved)
       } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          setState({ pending: false, error: null })
-          throw err
-        }
-        const navErr =
-          err instanceof NavigationError
-            ? err
-            : toNavigationError(
-                err,
-                typeof window !== "undefined" ? window.location.href : "?",
-              )
-        setState({ pending: false, error: navErr })
-        throw navErr
+        milestones = rejectedMilestones(err)
       }
+      attachMilestoneWatchers(milestones, myFireId, setState)
+      return milestones
     },
     [imperative, ambientPartialId],
   )
-  return [fire, state.pending, state.error] as const
+  return [
+    fire,
+    {
+      committed: state.committed,
+      streaming: state.streaming,
+      finished: state.finished,
+    } satisfies NavigationProgress,
+  ] as const
 }
 
 /**
@@ -1923,47 +2358,80 @@ function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
  * {@link useReloadHook} — see its comment for the rationale.
  */
 function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
-  const [state, setState] = useState<{
-    pending: boolean
-    error: NavigationError | null
-  }>({ pending: false, error: null })
+  const [state, setState] = useState<InternalProgressState>(INITIAL_PROGRESS_STATE)
   const ambientPartialId = useContext(PartialIdContext)
-  // See `useReloadHook` for the lift-to-render rationale.
+  const fireIdRef = useRef(0)
   if (state.error) throw state.error
   const fire = useMemo<Navigate>(
-    () => async (target, options) => {
-      setState({ pending: true, error: null })
+    () => (target, options) => {
+      fireIdRef.current += 1
+      const myFireId = fireIdRef.current
+      setState({
+        fireId: myFireId,
+        committed: false,
+        streaming: false,
+        finished: false,
+        error: null,
+      })
+      let milestones: NavigationMilestones
       try {
         const resolved = resolveSelfInNavigateOptions(options, ambientPartialId)
-        const entry = await imperative.navigate(target, resolved)
-        setState({ pending: false, error: null })
-        return entry
+        milestones = imperative.navigate(target, resolved)
       } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          setState({ pending: false, error: null })
-          throw err
-        }
-        const navErr =
-          err instanceof NavigationError
-            ? err
-            : toNavigationError(
-                err,
-                typeof window !== "undefined" ? window.location.href : "?",
-              )
-        setState({ pending: false, error: navErr })
-        throw navErr
+        milestones = rejectedMilestones(err)
       }
+      attachMilestoneWatchers(milestones, myFireId, setState)
+      return milestones
     },
     [imperative, ambientPartialId],
   )
-  return [fire, state.pending, state.error] as const
+  return [
+    fire,
+    {
+      committed: state.committed,
+      streaming: state.streaming,
+      finished: state.finished,
+    } satisfies NavigationProgress,
+  ] as const
+}
+
+/**
+ * Wire up the three milestone promises to a setState dispatcher.
+ * Each watcher checks `myFireId` against the latest state's
+ * `fireId` before applying its update, so an older fire that
+ * resolves AFTER a newer one started can't pollute the newer fire's
+ * progress booleans.
+ *
+ * `error` is set from any milestone's rejection (except AbortError);
+ * `finished` flips true on settle (success OR error/abort), so the
+ * `!finished` predicate cleanly reads as "in flight."
+ */
+function attachMilestoneWatchers(
+  milestones: NavigationMilestones,
+  myFireId: number,
+  setState: React.Dispatch<React.SetStateAction<InternalProgressState>>,
+): void {
+  const onSuccess = (key: "committed" | "streaming" | "finished") => () => {
+    setState((s) => (s.fireId !== myFireId ? s : { ...s, [key]: true }))
+  }
+  const onRejection = (err: unknown) => {
+    const navErr = classifyMilestoneError(err)
+    setState((s) =>
+      s.fireId !== myFireId
+        ? s
+        : { ...s, finished: true, error: s.error ?? navErr },
+    )
+  }
+  milestones.committed.then(onSuccess("committed"), onRejection)
+  milestones.streaming.then(onSuccess("streaming"), onRejection)
+  milestones.finished.then(onSuccess("finished"), onRejection)
 }
 
 /**
  * Wrap an imperative handle so its `reload` / `navigate` properties
- * are hooks returning the `[fire, isPending, error]` tuple. Every
- * other property passes straight through to the imperative handle
- * (which itself is a Proxy over `window.navigation` — see
+ * are hooks returning the `[fire, progress]` tuple. Every other
+ * property passes straight through to the imperative handle (which
+ * itself is a Proxy over `window.navigation` — see
  * `buildWindowNavigationHandle`).
  *
  * The returned wrapper is itself a Proxy; `useNavigation()` memoizes
@@ -2005,11 +2473,19 @@ function wrapWithHooks(imperative: ImperativeNavigation): FrameworkNavigation {
  * reactive across any navigation on the page.
  *
  * `handle.reload()` and `handle.navigate()` are **hooks** — call
- * them during render to get back `[fire, isPending, error]`. Calling
- * the fire fn from an event handler triggers the navigation:
+ * them during render to get back `[fire, progress]`. Calling the
+ * fire fn from an event handler triggers the navigation:
  *
- *   const [reload, isPending] = useNavigation().reload()
- *   <Button onClick={() => reload({ selector: "#cart" })} disabled={isPending} />
+ *   const [reload, { committed, finished }] = useNavigation().reload()
+ *   <Button
+ *     onClick={() => reload({ selector: "#cart" })}
+ *     disabled={committed && !finished}
+ *   />
+ *
+ * The fire returns `NavigationMilestones` synchronously, so callers
+ * can also await individual milestones:
+ *
+ *   reload({ selector: "#cart" }).finished
  *
  * Always returns a handle — never throws.
  */

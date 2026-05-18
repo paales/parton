@@ -16,14 +16,15 @@ import { Input } from "@parton/copies/components/ui/input"
  * decides where `?search=` is read from.
  */
 export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
-  const [pageNavigate, pagePending] = useNavigation().navigate()
+  const [pageNavigate, pageProgress] = useNavigation().navigate()
+  const pagePending = pageProgress.committed && !pageProgress.finished
   const frameNav = useNavigation("search")
   const [frameNavigate] = frameNav.navigate()
   const frameEntryUrl = frameNav.currentEntry?.url
   const frameOpen = frameEntryUrl ? new URL(frameEntryUrl).searchParams.has("search") : false
 
   function openUrl() {
-    void pageNavigate(
+    pageNavigate(
       (url) => {
         url.searchParams.set("search", "1")
         return url
@@ -33,7 +34,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   }
 
   function closeUrl() {
-    void pageNavigate(
+    pageNavigate(
       (url) => {
         url.searchParams.delete("search")
         url.searchParams.delete("q")
@@ -44,11 +45,11 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   }
 
   function openFrame() {
-    void frameNavigate("/?search=1")
+    frameNavigate("/?search=1")
   }
 
   function closeFrame() {
-    void frameNavigate("/")
+    frameNavigate("/")
   }
 
   const Spinner = () => (
@@ -119,7 +120,7 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
   }, [open])
 
   function handleClose() {
-    void navigate(
+    navigate(
       (url) => {
         url.searchParams.delete("search")
         url.searchParams.delete("q")
@@ -149,57 +150,49 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
 /**
  * Search input with live partial refetch — scope-agnostic.
  *
- * Sequencing: only one navigation in flight at a time. Newer
- * keystrokes update `latestRef`; the active navigation's settle
- * handler re-checks and fires the next one if needed. `isPending`
- * from the tuple drives the spinner directly — no parallel state.
+ * Fires `navigate({selector})` on every keystroke. The framework's
+ * per-selector in-flight queue tracks all outstanding fires for the
+ * ".search-results" key — when a newer fire's `streaming` milestone
+ * lands (first segment back, new rows about to paint), the queue
+ * aborts every older fire. Until that moment the older fetches keep
+ * filling their Suspense boundaries, so the user sees the previous
+ * query's results gradually being replaced rather than vanishing
+ * mid-type.
+ *
+ * `progress.committed && !progress.streaming` is the spinner predicate:
+ * "asked, no rows back yet" — it clears the moment the first row
+ * paints, even if the rest of the response is still streaming.
  */
 export function SearchInput({ query }: { query: string }) {
   const nav = useNavigation()
-  const [navigate, isPending] = nav.navigate()
+  const [navigate, progress] = nav.navigate()
   const [value, setValue] = useState(query)
-  const [disableTransition, setDisableTransition] = useState(false)
-  const disableTransitionRef = useRef(disableTransition)
-  disableTransitionRef.current = disableTransition
-
-  const latestRef = useRef(query)
-  const dispatchedRef = useRef(query)
-  const inFlightRef = useRef(false)
-
-  async function sendLatest() {
-    if (inFlightRef.current) return
-    const q = latestRef.current
-    if (q === dispatchedRef.current) return
-
-    inFlightRef.current = true
-    dispatchedRef.current = q
-
-    try {
-      await navigate(
-        (url) => {
-          if (q) url.searchParams.set("q", q)
-          else url.searchParams.delete("q")
-          return url
-        },
-        {
-          history: "replace",
-          disableTransition: disableTransitionRef.current,
-          selector: ".search-results",
-        },
-      )
-    } finally {
-      inFlightRef.current = false
-      sendLatest()
-    }
-  }
+  const [streaming, setStreaming] = useState(false)
 
   function handleChange(next: string) {
     setValue(next)
-    latestRef.current = next
-    sendLatest()
+    const milestones = navigate(
+      (url) => {
+        if (next) url.searchParams.set("q", next)
+        else url.searchParams.delete("q")
+        return url
+      },
+      {
+        history: "replace",
+        streaming,
+        selector: ".search-results",
+      },
+    )
+    // Supersede via abort is the lifecycle, not an error. Swallow
+    // AbortError here so the bubbler doesn't see it and consumers
+    // of `.finished` don't have to wrap.
+    milestones.finished.catch((err) => {
+      if (err instanceof Error && err.name === "AbortError") return
+      throw err
+    })
   }
 
-  const isStale = value !== dispatchedRef.current || isPending
+  const isStale = progress.committed && !progress.streaming
 
   return (
     <div>
@@ -218,22 +211,22 @@ export function SearchInput({ query }: { query: string }) {
       </div>
       <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
         <label
-          data-testid="disable-transition-toggle"
+          data-testid="streaming-toggle"
           className="inline-flex cursor-pointer select-none items-center gap-2"
         >
           <input
             type="checkbox"
-            checked={disableTransition}
-            onChange={(e) => setDisableTransition(e.target.checked)}
+            checked={streaming}
+            onChange={(e) => setStreaming(e.target.checked)}
           />
           <span>
-            disableTransition:{" "}
-            <code className={disableTransition ? "text-emerald-400" : "text-sky-400"}>
-              {String(disableTransition)}
+            streaming:{" "}
+            <code className={streaming ? "text-emerald-400" : "text-sky-400"}>
+              {String(streaming)}
             </code>
           </span>
           <span className="text-muted-foreground/70">
-            {disableTransition
+            {streaming
               ? "plain setState — fallback flashes, streams per chunk"
               : "startTransition — preserve UI, no fallback, no streaming"}
           </span>

@@ -27,7 +27,7 @@ export function LiveTickAutostart() {
     // bare DOM, no React handler attached, no replay queue, and the
     // bump action never fires.
     document.body.setAttribute("data-streaming-demo-ready", "1")
-    void reload({ selector: "streaming-demo-tick", disableTransition: true })
+    void reload({ selector: "streaming-demo-tick", streaming: true })
   }, [reload])
   return null
 }

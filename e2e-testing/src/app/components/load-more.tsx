@@ -1,10 +1,8 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import {
-  useNavigation,
-  type Navigate,
-} from "@parton/framework/lib/partial-client.tsx"
+import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import type { Navigate } from "@parton/framework"
 
 /**
  * Tracks which page partials are currently visible.
@@ -27,7 +25,7 @@ function silentlyUpdatePages(navigate: Navigate) {
     // Scrolling up — update URL for bookmarking/refresh without
     // triggering a refetch.
     url.searchParams.set("pages", String(maxVisible))
-    void navigate(url.toString(), { history: "replace", silent: true })
+    navigate(url.toString(), { history: "replace", silent: true })
   }
 }
 
@@ -75,12 +73,13 @@ export function PageSentinel({ page }: { page: number }) {
  *
  * Updates the URL and dispatches a targeted refetch for the new
  * page partial and the load-more sentinel itself in one call.
- * `isPending` from the tuple drives the spinner; no separate state.
+ * The spinner reads `committed && !finished` for "in flight".
  */
 export function LoadMore({ nextPage }: { nextPage: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const triggered = useRef(false)
-  const [navigate, isPending] = useNavigation().navigate()
+  const [navigate, { committed, finished }] = useNavigation().navigate()
+  const pending = committed && !finished
 
   useEffect(() => {
     triggered.current = false
@@ -103,7 +102,7 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
           triggered.current = true
           const url = new URL(window.location.href)
           url.searchParams.set("pages", String(nextPage))
-          void navigate(url.toString(), {
+          navigate(url.toString(), {
             history: "replace",
             selector: `#page-${nextPage} #load-more`,
           })
@@ -118,7 +117,7 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
 
   return (
     <div ref={ref} className="p-8 text-center">
-      {isPending && (
+      {pending && (
         <span className="inline-block size-6 animate-spin rounded-full border-[3px] border-muted border-t-primary" />
       )}
     </div>

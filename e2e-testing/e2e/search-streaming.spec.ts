@@ -34,7 +34,7 @@ test("search stages stream progressively on AJAX refetch", async ({ page }) => {
   // Opt into streaming commit mode. Default is startTransition
   // (preserve UI, no fallback, no per-chunk streaming), which this
   // test is not about.
-  await page.locator('[data-testid="disable-transition-toggle"] input').check()
+  await page.locator('[data-testid="streaming-toggle"] input').check()
 
   // 2. Inject timing tracker before typing
   await page.evaluate(() => {

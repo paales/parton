@@ -260,19 +260,19 @@ export const DeferDemoPage = parton(
                 partialId="concurrent-a"
                 label="refetch a"
                 testId="refresh-concurrent-a"
-                disableTransition
+                streaming
               />
               <ActivateButton
                 partialId="concurrent-b"
                 label="refetch b"
                 testId="refresh-concurrent-b"
-                disableTransition
+                streaming
               />
               <ActivateButton
                 partialId="concurrent-c"
                 label="refetch c"
                 testId="refresh-concurrent-c"
-                disableTransition
+                streaming
               />
             </div>
           </CardContent>

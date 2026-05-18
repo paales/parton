@@ -47,6 +47,8 @@ export type {
   Navigate,
   NavigateStatus,
   NavigateTarget,
+  NavigationMilestones,
+  NavigationProgress,
   Reload,
   ReloadStatus,
 } from "../runtime/navigation-api.ts"

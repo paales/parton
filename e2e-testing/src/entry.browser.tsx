@@ -71,7 +71,7 @@ async function main() {
       return listenNavigation(
         (url, types, signal) => {
           setPendingTransitionTypes(types ?? [])
-          return fetchRscPayload(url, signal)
+          return fetchRscPayload(url, signal).finished
         },
       )
     }, [])
@@ -79,92 +79,139 @@ async function main() {
     return payload.root
   }
 
-  async function fetchRscPayload(overrideUrl?: string, signal?: AbortSignal) {
-    // Tell the server which partials are already cached so it can skip them.
-    // If the caller already set ?cached= (e.g. a targeted refetch built by
-    // `useNavigation().reload({selector})`), respect that instead of overwriting
-    // with the full list.
-    const url = new URL(overrideUrl ?? window.location.href)
-    if (!url.searchParams.has("cached")) {
-      const cachedIds = getCachedPartialIds()
-      if (cachedIds.length > 0) {
-        url.searchParams.set("cached", cachedIds.join(","))
-      }
-    }
-    // Suspense keys are bare partial ids — React reconciles each
-    // boundary in place across refetches. The two commit paths differ
-    // only in how React treats pending children on the client:
-    //
-    //   setPayload (default, wraps in startTransition): React holds
-    //     the current UI visible until the new content is fully
-    //     ready. No Suspense fallback flash, no per-chunk streaming.
-    //     Good for "just swap values" UX like a cart badge or live
-    //     price (pair with `isPending` on the trigger).
-    //
-    //   setPayloadRaw (opt-in via ?disableTransition=1): plain post-
-    //     await setState, outside any transition. React 19 shows
-    //     Suspense fallbacks for pending children and commits Flight
-    //     chunks as they arrive, giving per-row progressive streaming.
-    //     Good for search / filter results where per-row reveal
-    //     improves perceived latency.
-    const disableTransition = url.searchParams.has("disableTransition")
-    const renderRequest = createRscRenderRequest(url.toString())
-    // Network → HTTP → decode. Each failure mode maps to a typed
-    // NavigationError kind so consumers (per-call hook tuple's
-    // third slot, the global Bubbler) can branch on it without
-    // string matching. AbortError stays untouched — it's a normal
-    // lifecycle signal, not a failure.
-    //
-    // `signal` (from `NavigateEvent.signal`) aborts the in-flight
-    // fetch + segment-loop consumption when a newer navigation
-    // supersedes — without this, a long-lived RSC GET (e.g. the
-    // chat's segment-loop connection) keeps emitting segments and
-    // racing with the new navigation's response.
-    let response: Response
-    try {
-      response = await fetch(renderRequest, { signal })
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") throw err
-      throw new NavigationError({
-        kind: "network",
-        url: renderRequest.url,
-        cause: err,
-      })
-    }
-    if (!response.ok || !response.body) {
-      throw new NavigationError({
-        kind: "http",
-        url: renderRequest.url,
-        status: response.status,
-      })
-    }
-    // RSC GET navs carry segmented Flight bytes: one or more Flight
-    // documents on the same response, separated by `next` markers,
-    // each followed by zero-or-more trailer entries (fp-updates,
-    // url-update). The splitter peels each segment off and yields a
-    // `{body, trailers}` pair; we hand each body to `createFromReadableStream`
-    // and call setPayload per segment.
-    //
-    // Single-segment responses (no `next` marker) loop once — same
-    // wire shape and behavior as the legacy fp-trailer flow.
-    try {
-      for await (const segment of splitSegments(response.body)) {
-        const payload = await createFromReadableStream<RscPayload>(segment.body)
-        segment.trailers.then(applyStandardTrailers).catch(() => {})
-        if (disableTransition) {
-          setPayloadRaw(payload)
-        } else {
-          setPayload(payload)
+  /**
+   * Returns synchronously with `{streaming, finished}` promises so
+   * navigation-handle callers can branch off the first-segment moment
+   * separately from the full-body-drained moment. The work runs in a
+   * detached async IIFE so the caller can attach handlers before the
+   * fetch even starts.
+   */
+  function fetchRscPayload(
+    overrideUrl?: string,
+    signal?: AbortSignal,
+  ): { streaming: Promise<void>; finished: Promise<void> } {
+    let resolveStreaming!: () => void
+    let rejectStreaming!: (err: unknown) => void
+    let resolveFinished!: () => void
+    let rejectFinished!: (err: unknown) => void
+    const streaming = new Promise<void>((res, rej) => {
+      resolveStreaming = res
+      rejectStreaming = rej
+    })
+    const finished = new Promise<void>((res, rej) => {
+      resolveFinished = res
+      rejectFinished = rej
+    })
+    // Most callers chain off `finished`. Pre-attach a no-op on
+    // `streaming` so unconsumed rejections don't surface as
+    // unhandledrejection — `streaming` rejecting always implies
+    // `finished` will reject too, where the caller is listening.
+    streaming.catch(() => {})
+
+    void (async () => {
+      let streamingResolved = false
+      try {
+        // Tell the server which partials are already cached so it can skip them.
+        // If the caller already set ?cached= (e.g. a targeted refetch built by
+        // `useNavigation().reload({selector})`), respect that instead of overwriting
+        // with the full list.
+        const url = new URL(overrideUrl ?? window.location.href)
+        if (!url.searchParams.has("cached")) {
+          const cachedIds = getCachedPartialIds()
+          if (cachedIds.length > 0) {
+            url.searchParams.set("cached", cachedIds.join(","))
+          }
         }
+        // Suspense keys are bare partial ids — React reconciles each
+        // boundary in place across refetches. The two commit paths differ
+        // only in how React treats pending children on the client:
+        //
+        //   setPayload (default, wraps in startTransition): React holds
+        //     the current UI visible until the new content is fully
+        //     ready. No Suspense fallback flash, no per-chunk streaming.
+        //     Good for "just swap values" UX like a cart badge or live
+        //     price (pair with the `committed && !finished` predicate).
+        //
+        //   setPayloadRaw (opt-in via ?streaming=1): plain post-await
+        //     setState, outside any transition. React 19 shows Suspense
+        //     fallbacks for pending children and commits Flight chunks
+        //     as they arrive, giving per-row progressive streaming.
+        //     Good for search / filter results where per-row reveal
+        //     improves perceived latency.
+        const streamingMode = url.searchParams.has("streaming")
+        const renderRequest = createRscRenderRequest(url.toString())
+        // Network → HTTP → decode. Each failure mode maps to a typed
+        // NavigationError kind so consumers can branch on it without
+        // string matching. AbortError stays untouched — it's a normal
+        // lifecycle signal, not a failure.
+        //
+        // `signal` (from `NavigateEvent.signal` or per-selector
+        // supersede abort) cancels the in-flight fetch + segment-loop
+        // consumption when a newer navigation supersedes — without
+        // this, a long-lived RSC GET (e.g. the chat's segment-loop
+        // connection) keeps emitting segments and racing with the new
+        // navigation's response.
+        let response: Response
+        try {
+          response = await fetch(renderRequest, { signal })
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") throw err
+          throw new NavigationError({
+            kind: "network",
+            url: renderRequest.url,
+            cause: err,
+          })
+        }
+        if (!response.ok || !response.body) {
+          throw new NavigationError({
+            kind: "http",
+            url: renderRequest.url,
+            status: response.status,
+          })
+        }
+        // RSC GET navs carry segmented Flight bytes: one or more Flight
+        // documents on the same response, separated by `next` markers,
+        // each followed by zero-or-more trailer entries (fp-updates,
+        // url-update). The splitter peels each segment off and yields a
+        // `{body, trailers}` pair; we hand each body to `createFromReadableStream`
+        // and call setPayload per segment.
+        //
+        // Single-segment responses (no `next` marker) loop once — same
+        // wire shape and behavior as the legacy fp-trailer flow.
+        try {
+          for await (const segment of splitSegments(response.body)) {
+            const payload = await createFromReadableStream<RscPayload>(segment.body)
+            segment.trailers.then(applyStandardTrailers).catch(() => {})
+            if (streamingMode) {
+              setPayloadRaw(payload)
+            } else {
+              setPayload(payload)
+            }
+            // First segment landed and React has been told to render it.
+            // Resolve `streaming` so per-selector abort queues can fire
+            // predecessor aborts and consumers can branch off "first
+            // rows visible".
+            if (!streamingResolved) {
+              streamingResolved = true
+              resolveStreaming()
+            }
+          }
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") throw err
+          throw new NavigationError({
+            kind: "decode",
+            url: renderRequest.url,
+            cause: err,
+          })
+        }
+        resolveFinished()
+      } catch (err) {
+        if (!streamingResolved) rejectStreaming(err)
+        rejectFinished(err)
       }
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") throw err
-      throw new NavigationError({
-        kind: "decode",
-        url: renderRequest.url,
-        cause: err,
-      })
-    }
+    })()
+
+    return { streaming, finished }
   }
 
   // Navigation handles (useNavigation / frame) dispatch targeted
@@ -172,7 +219,10 @@ async function main() {
   // Exposed on `window` directly to avoid module-instance duplication
   // between the browser entry bundle and "use client" component
   // bundles.
-  ;(window as any).__rsc_partial_refetch = (url: string) => fetchRscPayload(url)
+  ;(window as any).__rsc_partial_refetch = (
+    url: string,
+    signal?: AbortSignal,
+  ) => fetchRscPayload(url, signal)
 
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet()
@@ -242,7 +292,7 @@ async function main() {
 
   if (import.meta.hot) {
     import.meta.hot.on("rsc:update", () => {
-      fetchRscPayload().catch((err) => {
+      fetchRscPayload().finished.catch((err) => {
         if (err instanceof Error && err.name === "AbortError") return
         console.error(err)
       })
@@ -369,9 +419,9 @@ function listenNavigation(
         event.intercept({
           handler: () =>
             swallowNavigationAbort(() =>
-              Promise.all(diffs.map((d) => _dispatchFrameRefetch(d.key.split("."), d.url))).then(
-                () => undefined,
-              ),
+              Promise.all(
+                diffs.map((d) => _dispatchFrameRefetch(d.key.split("."), d.url).finished),
+              ).then(() => undefined),
             ),
         })
         return

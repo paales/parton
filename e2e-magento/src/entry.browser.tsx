@@ -36,78 +36,102 @@ async function main() {
     }, [setPayload_])
 
     React.useEffect(() => {
-      return listenNavigation((url) => fetchRscPayload(url))
+      return listenNavigation((url) => fetchRscPayload(url).finished)
     }, [])
 
     return payload.root
   }
 
-  async function fetchRscPayload(overrideUrl?: string) {
-    // Tell the server which partials are already cached so it can skip them.
-    // If the caller already set ?cached= (e.g. a targeted refetch built by
-    // `useNavigation().reload({selector})`), respect that instead of overwriting
-    // with the full list.
-    const url = new URL(overrideUrl ?? window.location.href)
-    if (!url.searchParams.has("cached")) {
-      const cachedIds = getCachedPartialIds()
-      if (cachedIds.length > 0) {
-        url.searchParams.set("cached", cachedIds.join(","))
+  /**
+   * Returns synchronously with `{streaming, finished}` promises so
+   * navigation-handle callers can branch off the first-segment moment
+   * separately from the full-body-drained moment. The work runs in a
+   * detached async IIFE so the caller can attach handlers before the
+   * fetch even starts.
+   */
+  function fetchRscPayload(
+    overrideUrl?: string,
+    signal?: AbortSignal,
+  ): { streaming: Promise<void>; finished: Promise<void> } {
+    let resolveStreaming!: () => void
+    let rejectStreaming!: (err: unknown) => void
+    let resolveFinished!: () => void
+    let rejectFinished!: (err: unknown) => void
+    const streaming = new Promise<void>((res, rej) => {
+      resolveStreaming = res
+      rejectStreaming = rej
+    })
+    const finished = new Promise<void>((res, rej) => {
+      resolveFinished = res
+      rejectFinished = rej
+    })
+    streaming.catch(() => {})
+
+    void (async () => {
+      let streamingResolved = false
+      try {
+        // Tell the server which partials are already cached so it can skip them.
+        // If the caller already set ?cached= (e.g. a targeted refetch built by
+        // `useNavigation().reload({selector})`), respect that instead of overwriting
+        // with the full list.
+        const url = new URL(overrideUrl ?? window.location.href)
+        if (!url.searchParams.has("cached")) {
+          const cachedIds = getCachedPartialIds()
+          if (cachedIds.length > 0) {
+            url.searchParams.set("cached", cachedIds.join(","))
+          }
+        }
+        // See `e2e-testing/src/entry.browser.tsx` for the streaming-vs-
+        // transition rationale. `?streaming=1` opts into the
+        // setPayloadRaw path; default is the transition wrap.
+        const streamingMode = url.searchParams.has("streaming")
+        const renderRequest = createRscRenderRequest(url.toString())
+        // Classify fetch failures so they reach the NavigationError
+        // surface — see e2e-testing/src/entry.browser.tsx for rationale.
+        let response: Response
+        try {
+          response = await fetch(renderRequest, { signal })
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") throw err
+          throw new NavigationError({
+            kind: "network",
+            url: renderRequest.url,
+            cause: err,
+          })
+        }
+        if (!response.ok || !response.body) {
+          throw new NavigationError({
+            kind: "http",
+            url: renderRequest.url,
+            status: response.status,
+          })
+        }
+        let payload: RscPayload
+        try {
+          payload = await createFromReadableStream<RscPayload>(response.body)
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") throw err
+          throw new NavigationError({
+            kind: "decode",
+            url: renderRequest.url,
+            cause: err,
+          })
+        }
+        if (streamingMode) {
+          setPayloadRaw(payload)
+        } else {
+          setPayload(payload)
+        }
+        streamingResolved = true
+        resolveStreaming()
+        resolveFinished()
+      } catch (err) {
+        if (!streamingResolved) rejectStreaming(err)
+        rejectFinished(err)
       }
-    }
-    // Suspense keys are bare partial ids — React reconciles each
-    // boundary in place across refetches. The two commit paths differ
-    // only in how React treats pending children on the client:
-    //
-    //   setPayload (default, wraps in startTransition): React holds
-    //     the current UI visible until the new content is fully
-    //     ready. No Suspense fallback flash, no per-chunk streaming.
-    //     Good for "just swap values" UX like a cart badge or live
-    //     price (pair with `isPending` on the trigger).
-    //
-    //   setPayloadRaw (opt-in via ?disableTransition=1): plain post-
-    //     await setState, outside any transition. React 19 shows
-    //     Suspense fallbacks for pending children and commits Flight
-    //     chunks as they arrive, giving per-row progressive streaming.
-    //     Good for search / filter results where per-row reveal
-    //     improves perceived latency.
-    const disableTransition = url.searchParams.has("disableTransition")
-    const renderRequest = createRscRenderRequest(url.toString())
-    // Classify fetch failures so they reach the NavigationError
-    // surface — see e2e-testing/src/entry.browser.tsx for rationale.
-    let response: Response
-    try {
-      response = await fetch(renderRequest)
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") throw err
-      throw new NavigationError({
-        kind: "network",
-        url: renderRequest.url,
-        cause: err,
-      })
-    }
-    if (!response.ok || !response.body) {
-      throw new NavigationError({
-        kind: "http",
-        url: renderRequest.url,
-        status: response.status,
-      })
-    }
-    let payload: RscPayload
-    try {
-      payload = await createFromReadableStream<RscPayload>(response.body)
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") throw err
-      throw new NavigationError({
-        kind: "decode",
-        url: renderRequest.url,
-        cause: err,
-      })
-    }
-    if (disableTransition) {
-      setPayloadRaw(payload)
-    } else {
-      setPayload(payload)
-    }
+    })()
+
+    return { streaming, finished }
   }
 
   // Navigation handles (useNavigation / frame) dispatch targeted
@@ -115,7 +139,10 @@ async function main() {
   // Exposed on `window` directly to avoid module-instance duplication
   // between the browser entry bundle and "use client" component
   // bundles.
-  ;(window as any).__rsc_partial_refetch = (url: string) => fetchRscPayload(url)
+  ;(window as any).__rsc_partial_refetch = (
+    url: string,
+    signal?: AbortSignal,
+  ) => fetchRscPayload(url, signal)
 
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet()
@@ -159,7 +186,7 @@ async function main() {
 
   if (import.meta.hot) {
     import.meta.hot.on("rsc:update", () => {
-      fetchRscPayload().catch((err) => {
+      fetchRscPayload().finished.catch((err) => {
         if (err instanceof Error && err.name === "AbortError") return
         console.error(err)
       })
@@ -246,10 +273,13 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
               }
               const handler = (
                 window as Window & {
-                  __rsc_partial_refetch?: (url: string) => Promise<void>
+                  __rsc_partial_refetch?: (
+                    url: string,
+                    signal?: AbortSignal,
+                  ) => { streaming: Promise<void>; finished: Promise<void> }
                 }
               ).__rsc_partial_refetch
-              if (handler) await handler(url.toString())
+              if (handler) await handler(url.toString()).finished
             }),
         })
         return
@@ -258,9 +288,9 @@ function listenNavigation(onNavigation: (url: string) => Promise<void>) {
         event.intercept({
           handler: () =>
             swallowNavigationAbort(() =>
-              Promise.all(diffs.map((d) => _dispatchFrameRefetch(d.key.split("."), d.url))).then(
-                () => undefined,
-              ),
+              Promise.all(
+                diffs.map((d) => _dispatchFrameRefetch(d.key.split("."), d.url).finished),
+              ).then(() => undefined),
             ),
         })
         return

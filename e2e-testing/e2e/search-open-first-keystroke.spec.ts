@@ -8,7 +8,7 @@ import { test, expect, request } from "./fixtures"
  * writes `?q=` to the page URL (bookmarkable) AND dispatches a
  * targeted refetch of the three stages in one call.
  *
- * Expected streaming sequence with `disableTransition: true`:
+ * Expected streaming sequence with `streaming: true`:
  *   1. Navigate with `?search=url` (no q) — only stage-1 rendered.
  *   2. Type "p" — stage-1 fallback, then stage-1 content; stages 2/3
  *      fallbacks appear immediately and stream in (~1s, ~2s).
@@ -153,7 +153,7 @@ test("URL mode: first keystroke streams stages 2/3 progressively", async ({ page
   // Opt into streaming mode so fallbacks flash + chunks commit per
   // stage. Default is startTransition (preserve old results, no
   // fallback) which this test is not about.
-  await page.locator('[data-testid="disable-transition-toggle"] input').check()
+  await page.locator('[data-testid="streaming-toggle"] input').check()
   const input = page.locator("input[type=text]")
   // Wait for hydration: click+focus the input before the keypress so the
   // React onChange handler is attached. Without this, the first keystroke

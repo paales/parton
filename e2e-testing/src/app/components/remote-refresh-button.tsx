@@ -19,17 +19,18 @@ export function RemoteRefreshButton({
   selector: string
   label: string
 }) {
-  const [reload, isPending] = useNavigation().reload()
+  const [reload, { committed, finished }] = useNavigation().reload()
+  const pending = committed && !finished
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
       onClick={() => reload({ selector })}
-      disabled={isPending}
+      disabled={pending}
       data-testid={`rfd-refresh-${selector}`}
     >
-      {isPending ? "…" : label}
+      {pending ? "…" : label}
     </Button>
   )
 }

@@ -14,29 +14,30 @@ export function ActivateButton({
   partialId,
   label,
   testId,
-  disableTransition,
+  streaming,
 }: {
   partialId: string
   label?: string
   testId?: string
   /**
-   * If true, the refetch bypasses React's `startTransition` wrapper —
-   * each response commits on arrival rather than being held back
-   * waiting for a newer transition.
+   * If true, the refetch commits each response on arrival (progressive
+   * reveal with Suspense fallbacks) rather than being held back inside
+   * a transition until the body is fully ready.
    */
-  disableTransition?: boolean
+  streaming?: boolean
 }) {
-  const [reload, isPending] = useNavigation().reload()
+  const [reload, { committed, finished }] = useNavigation().reload()
+  const pending = committed && !finished
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
       data-testid={testId ?? `activate-${partialId}`}
-      onClick={() => reload({ selector: `#${partialId}`, disableTransition })}
-      disabled={isPending}
+      onClick={() => reload({ selector: `#${partialId}`, streaming })}
+      disabled={pending}
     >
-      {isPending ? "…" : (label ?? "Activate")}
+      {pending ? "…" : (label ?? "Activate")}
     </Button>
   )
 }

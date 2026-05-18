@@ -77,7 +77,7 @@ const FRAMEWORK_INTERNAL_PARAMS = [
   "cached",
   "__frame",
   "__frameUrl",
-  "disableTransition",
+  "streaming",
 ] as const
 
 type Palette = "light" | "dark"

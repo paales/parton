@@ -25,7 +25,10 @@ beforeEach(() => {
   sessionStorage.clear()
   container = document.createElement("div")
   document.body.appendChild(container)
-  refetchSpy = vi.fn(() => Promise.resolve())
+  refetchSpy = vi.fn(() => ({
+    streaming: Promise.resolve(),
+    finished: Promise.resolve(),
+  }))
   ;(window as Window & { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch = refetchSpy
 })
 

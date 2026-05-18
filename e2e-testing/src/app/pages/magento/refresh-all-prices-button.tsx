@@ -4,7 +4,8 @@ import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 
 export function RefreshAllPricesButton() {
-  const [reload, isPending] = useNavigation().reload()
+  const [reload, { committed, finished }] = useNavigation().reload()
+  const pending = committed && !finished
   return (
     <Button
       type="button"
@@ -12,10 +13,10 @@ export function RefreshAllPricesButton() {
       variant="outline"
       data-testid="refresh-all-prices"
       onClick={() => reload({ selector: ".price" })}
-      disabled={isPending}
+      disabled={pending}
       className="mb-4"
     >
-      {isPending ? "Refreshing all prices…" : "Refresh all prices"}
+      {pending ? "Refreshing all prices…" : "Refresh all prices"}
     </Button>
   )
 }

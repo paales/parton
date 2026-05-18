@@ -74,18 +74,31 @@ independent state.
 Client-side: `useNavigation(frameName?)` returns a handle. The
 handle's `reload()` and `navigate()` methods are **React hooks** —
 call them once during render to bind a tuple of
-`[fire, isPending, error]` for one call site.
+`[fire, progress]` for one call site. `progress` is a
+`{ committed, streaming, finished }` triple of booleans, monotonic
+within a single fire and reset to `false` on the next.
 
 ```tsx
 const nav = useNavigation()                       // window scope
-const [reload, isPending] = nav.reload()
+const [reload, { committed, finished }] = nav.reload()
 const [navigate] = useNavigation("cart").navigate()
 
-<Button onClick={() => reload({ selector: "#cart" })} disabled={isPending}>
+<Button
+  onClick={() => reload({ selector: "#cart" })}
+  disabled={committed && !finished}
+>
   Refresh cart
 </Button>
 <Button onClick={() => navigate("/cart/open")}>Open cart drawer</Button>
 ```
+
+Common spinner predicates:
+
+| Predicate | Reads as |
+|---|---|
+| `committed && !finished` | "in flight, post-commit" — the classic disabled-button case. |
+| `committed && !streaming` | "asked, no rows back yet" — clears the moment the first segment paints. |
+| `streaming && !finished` | "rows arriving" — useful for progressive-reveal spinners. |
 
 Fire functions:
 
@@ -100,10 +113,50 @@ whitespace-joined string or array, leading `#`/`.` is cosmetic and
 stripped. Refetch fans out across every spec whose labels include
 any of the wanted tokens (or whose id equals one of them).
 
-The fire function returns `Promise<NavigationHistoryEntry>` — chain
-`await` if you need to sequence work after the navigation, otherwise
-fire-and-forget (`void reload({...})`). Two reload calls in the same
-microtask coalesce into one request.
+The fire function returns `NavigationMilestones` **synchronously** —
+a `{ committed, streaming, finished }` object of three promises
+mirroring the browser's `NavigationResult` plus a framework-native
+`streaming` milestone for the first refetch segment. Chain `await`
+on any of the three if you need to sequence work — typically
+`navigate(...).finished` — or fire-and-forget the object. Two
+reload calls in the same microtask coalesce into one request.
+
+```tsx
+// Wait for the first segment to land (rows visible), then…
+const { streaming } = navigate(url, { selector: ".search-results" })
+await streaming
+// …kick off something the user can do as soon as they see results.
+```
+
+### Deferred-abort supersede for selector refetches
+
+A selector-filtered `navigate({selector})` or `reload({selector})`
+joins a per-selector in-flight queue keyed by the sorted label set.
+When a newer fire for the same selector lands its `streaming`
+milestone (first segment back), the framework aborts every older
+fire in the queue. Until that moment the older fetches keep filling
+their Suspense boundaries, so the user sees the previous query's
+results gradually being replaced rather than vanishing mid-keystroke.
+Aborted fires reject `streaming` and `finished` with `AbortError`
+(a normal lifecycle signal, not surfaced through error boundaries).
+
+A search input becomes a one-liner per keystroke:
+
+```tsx
+const [navigate, progress] = useNavigation().navigate()
+
+function onChange(next: string) {
+  navigate((url) => withQuery(url, next), {
+    history: "replace",
+    selector: ".search-results",
+    streaming: true,
+  }).finished.catch(ignoreAbort)
+}
+```
+
+No stagger / debounce / queue — the framework's in-flight queue
+handles ordering and the React transition wrapper handles visual
+continuity.
 
 When called with no name, `useNavigation()` looks up the closest
 ambient frame from the React context (set by the spec's frame
@@ -114,7 +167,7 @@ window.
 ### Multiple buttons in one component
 
 Each `nav.reload()` / `nav.navigate()` call site owns its own
-`isPending` — sibling buttons stay clickable while one is loading.
+`progress` — sibling buttons stay clickable while one is loading.
 For multiple buttons, prefer one tuple-bound child per button over
 shared state:
 
@@ -126,9 +179,10 @@ function PartialControls() {
 }
 
 function RefreshButton({ id }: { id: string }) {
-  const [reload, isPending] = useNavigation().reload()
+  const [reload, { committed, finished }] = useNavigation().reload()
+  const pending = committed && !finished
   return (
-    <Button onClick={() => reload({ selector: `#${id}` })} disabled={isPending}>
+    <Button onClick={() => reload({ selector: `#${id}` })} disabled={pending}>
       Refresh {id}
     </Button>
   )
@@ -144,9 +198,10 @@ partial body fire `reload({ selector: "@self" })` without threading
 the id through props.
 
 ```tsx
-const [reload, isPending] = useNavigation().reload()
+const [reload, { committed, finished }] = useNavigation().reload()
+const pending = committed && !finished
 return (
-  <Button onClick={() => reload({ selector: "@self" })} disabled={isPending}>
+  <Button onClick={() => reload({ selector: "@self" })} disabled={pending}>
     Refresh this card
   </Button>
 )
@@ -159,36 +214,41 @@ as a `props` key:
 reload({ selector: ["@self", ".price"], props: { "@self": { warm: true } } })
 ```
 
-Used outside any partial, `@self` rejects the fire fn's promise with
-a `NavigationError` (kind `decode`, message explains the wiring) —
+Used outside any partial, `@self` rejects every milestone with a
+`NavigationError` (kind `decode`, message explains the wiring) —
 loud failure beats silent drop.
 
 ### Error handling
 
 Failures (network down, HTTP 5xx, Flight decode error) reject the
-fire fn's promise with a typed `NavigationError`:
+fire's `committed` / `streaming` / `finished` promises with a typed
+`NavigationError`. The hook also throws the error from the calling
+component's next render — bubbling to the nearest enclosing React
+error boundary. `<GlobalErrorBoundary>` catches by default and
+renders the "Something went wrong" page; hosts that want scoped
+recovery can wrap their own boundary closer to the affected
+subtree.
 
 ```tsx
 import { NavigationError } from "@parton/framework"
 
-const [reload, isPending, error] = useNavigation().reload()
-// error.kind: "network" | "http" | "decode"
-// error.status — HTTP status when kind === "http"
-// error.url    — what was being fetched
+// Inline handling — opt out of the bubbler by catching `.finished`.
+const [navigate] = useNavigation().navigate()
+navigate(url, { selector: "#cart" }).finished.catch((err) => {
+  if (err instanceof NavigationError) {
+    // err.kind: "network" | "http" | "decode"
+    // err.status — HTTP status when kind === "http"
+    // err.url    — what was being fetched
+    showToast(err.message)
+  }
+})
 ```
 
-After a failure, the hook re-throws the error on the calling
-component's next render — bubbling to the nearest enclosing React
-error boundary. The framework's `<GlobalErrorBoundary>` catches by
-default and renders the "Something went wrong" page; hosts that
-want scoped recovery can wrap their own boundary closer to the
-affected subtree, and hosts that want inline display can render
-against `error` (and clear via a remount key) instead of letting
-it bubble.
-
-`AbortError` (a newer navigation supersedes one in flight) is a
-normal lifecycle signal, not a failure — pending clears, `error`
-stays `null`, nothing bubbles.
+`AbortError` (a newer navigation supersedes one in flight, or the
+per-selector queue aborted this fire) is a normal lifecycle
+signal, not a failure — `finished` flips true, `error` stays
+unsurfaced, nothing bubbles. Inline `.catch` handlers should treat
+`err.name === "AbortError"` as a no-op.
 
 ### Targeted refetch with explicit props
 
@@ -223,7 +283,7 @@ there's exactly one refetch path.
 
 | Option | Effect |
 |---|---|
-| `disableTransition: true` | Commit without `startTransition`, so Suspense fallbacks paint and Flight chunks reveal per-row. Default is transition-wrapped (atomic swap, no fallback flash). |
+| `streaming: true` | Progressive reveal — commit without `startTransition`, so Suspense fallbacks paint and Flight chunks land per-row. Default is `false` (transition-wrapped, atomic swap, no fallback flash). Not to be confused with the `streaming` milestone in `progress` — the option is a behavior switch, the milestone is an event marker. |
 | `silent: true` | Update the URL without firing any refetch. Wins over `selector` if both are set. Ignored on frame handles. `navigate`-only. |
 | `props` | See above. |
 | `cookies` | Write client-side cookies before the refetch fires. `navigate`-only — `reload` does not accept it. |
