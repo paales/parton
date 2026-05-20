@@ -9,10 +9,6 @@ or moved to [`../archive/`](../archive/) with a Superseded banner
 
 ## Backlog
 
-### Rich refetch event hooks + per-partial progress
-
-`useNavigation().reload()` returns a Promise that resolves on commit, and callers track pending state via their own `useState`. Inertia emits `start / progress / success / error / finish` on every visit. Adding an options bag (`reload({ selector }, { onSuccess, onError, onProgress })`) or an event emitter keyed per-partial would let apps build NProgress-style top bars, per-partial progress affordances, and analytics without forking the framework.
-
 ### Scoped selectors
 
 Resolve selector tokens (`#foo` / `.bar`) per module or per spec-tree
@@ -56,42 +52,11 @@ When tab A runs a server action that invalidates `["cart"]`, tab B is stale. A B
 
 ### Keepalive follow-ups (server-driven TTL, device-aware eviction)
 
-`keepalive` (default `true`) wraps each spec's body in `<Activity
-mode="visible">` and emits hidden Activity siblings for every cached
-variant the client claims via `?cached=id:matchKey:fp`. matchKey
-identifies the rendered variant: a spec with its own named match
-params hashes those; a spec without inherits from the closest
-match-bearing ancestor by walking `parent.path` and consulting the
-spec catalog — so descendants of `/pokemon/:id` track the URL's
-variant identity even with no match of their own, while descendants
-of a literal `match: "/cache-demo"` share a single slot and update
-in place. The derivation reads only the spec catalog plus the
-current request URL, so partial-refetch reconstruction (which
-restores `parent.path` from the snapshot but doesn't run the
-parent) produces the same matchKey as the originating render.
-React's reconciler keeps each variant's fiber alive across
-cross-variant nav. The client cache pool is `Map<id, Map<matchKey,
-ReactNode>>`; per-page prune drops any (id, matchKey) not in the
-new render's seen set.
-
-The fp trailer is orthogonal: at end-of-render the server
-recomputes each spec's fp against the now-populated snapshot
-registry, ships a `{id: warm_fp}` map down (HTML comment after
-`</html>` for SSR responses, an `\xFF[parton:fp:N]\n<json>` trailer
-entry after the Flight bytes for RSC GET responses), and the client
-adds the warm fp to the most-recently-emitted variant's fp set.
-That fixes the cold→warm fp instability — the very next visit
-fp-skips against the warm value instead of paying a wasted
-re-render. Action POSTs omit the `fp` entry (Flight stops reading
-once the result row resolves, so any post-result payload is at risk
-of dropping under backpressure — we keep them single-segment and
-short) and fall back to single-round-trip warm-up via the wrapper's
-PEB-prop hydration. They DO carry a `url` entry when the action
-body called `getServerNavigation().navigate(...)`; the
-splitter-based `setServerCallback` extracts it and applies the URL
-push via `history.{push,replace}State`.
-
-Two extensions are still open:
+Keepalive itself (matchKey-keyed Activity siblings + fp-trailer
+cold→warm drift recovery) is shipped — see
+[`../reference/partial.md`](../reference/partial.md) § `keepalive`
+and [`../internals/render-pipeline.md`](../internals/render-pipeline.md)
+§ "Cold → warm fp drift and the trailer". Two extensions remain:
 
 - **Server-driven cache-control on the wire.** Today `keepalive`
   has no time component — variants stay cached until the next
@@ -451,10 +416,11 @@ Original design exploration archived to
 [`../archive/transient-client-state.md`](../archive/transient-client-state.md).
 Directions A and B (server-authoritative state the partial reads;
 optimistic overlay for in-flight writes) collapsed into the **cell**
-primitive — see [`cells.md`](./cells.md). The cell's `value` is
-optimistic-aware via `useCell`, so consumers bind once and never see
-pending state directly. Two threads from the original doc remain open
-and live below as standalone backlog items.
+primitive — see [`../reference/cells.md`](../reference/cells.md) and
+[`../internals/cell-internals.md`](../internals/cell-internals.md).
+The cell's `value` is optimistic-aware via `useCell`, so consumers
+bind once and never see pending state directly. Two threads from the
+original doc remain open and live below as standalone backlog items.
 
 ## Per-tab session axis
 
@@ -476,6 +442,7 @@ doc. Whether to ship a higher-level form primitive that combines cells
 handle the per-field side via `useCell(cell).input(opts)`; the form
 primitive would own the submit lifecycle (validation, blur, submit
 button state, error display). The `cell.input()` ↔ RHF `register()`
-comparison in `cells.md` is the design surface to start from. Waits
-for a multi-step CMS draft caller — defer until there's a real form
-flow that exercises submit + validation + draft together.
+comparison in [`../reference/cells.md`](../reference/cells.md) is
+the design surface to start from. Waits for a multi-step CMS draft
+caller — defer until there's a real form flow that exercises
+submit + validation + draft together.

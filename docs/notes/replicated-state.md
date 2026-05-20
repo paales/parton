@@ -338,9 +338,9 @@ server rejects one, the rest replay against pre-rejection state.
 - [`../archive/transient-client-state.md`](../archive/transient-client-state.md) —
   the predecessor (archived 2026-05-21 once cells landed); names
   the gap this spec fills.
-- [`cells.md`](./cells.md) — the cell primitive that took the narrow
-  "single typed value, mutate-and-invalidate" lane out of the broader
-  replication problem space.
+- [`../reference/cells.md`](../reference/cells.md) — the cell
+  primitive that took the narrow "single typed value, mutate-and-
+  invalidate" lane out of the broader replication problem space.
 - [`IDEAS.md`](./IDEAS.md) — broader backlog; lossy-channel,
   speculation-rules, cross-tab-broadcast all live there.
 - [`../reference/partial.md`](../reference/partial.md) — the

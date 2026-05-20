@@ -1,6 +1,7 @@
 # Transient client state — the un-URL-able middle
 
-> **Superseded 2026-05-21 by [`docs/notes/cells.md`](../notes/cells.md).**
+> **Superseded 2026-05-21 by [`docs/reference/cells.md`](../reference/cells.md)
+> + [`docs/internals/cell-internals.md`](../internals/cell-internals.md).**
 >
 > The cell primitive + the `useCell` hook (optimistic-aware `value`,
 > microtask-batched `set`, `cell.input(opts)` bindings) implement
@@ -23,12 +24,12 @@
 >     wrapping form + draft + submit. Cells handle the per-field
 >     concerns; whether to extract a higher-level form primitive
 >     waits for a multi-step CMS draft caller. The `cell.input()` ↔
->     RHF `register()` comparison in `cells.md` covers the open
->     design question.
+>     RHF `register()` comparison in the cells reference covers the
+>     open design question.
 >
 > Kept for context — original design exploration that produced cells.
 > Do not consult for how the code works today; start at
-> [`../notes/cells.md`](../notes/cells.md).
+> [`../reference/cells.md`](../reference/cells.md).
 
 ---
 

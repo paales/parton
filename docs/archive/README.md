@@ -43,7 +43,7 @@ For that, start at [`../reference/intro.md`](../reference/intro.md).
 | File | Where the pattern lives |
 |---|---|
 | `STREAMING_CHAT.md` | `e2e-testing/src/app/chat/` — bounded `<Piece>` + compaction |
-| `transient-client-state.md` | [`../notes/cells.md`](../notes/cells.md) — cells + `useCell` implement Directions A + B (server-authoritative state the partial reads + optimistic overlay). Directions C (per-tab session) and D (`<PartialForm>`) carried forward as standalone backlog items in [`../notes/IDEAS.md`](../notes/IDEAS.md). |
+| `transient-client-state.md` | [`../reference/cells.md`](../reference/cells.md) + [`../internals/cell-internals.md`](../internals/cell-internals.md) — cells + `useCell` implement Directions A + B (server-authoritative state the partial reads + optimistic overlay). Directions C (per-tab session) and D (`<PartialForm>`) carried forward as standalone backlog items in [`../notes/IDEAS.md`](../notes/IDEAS.md). |
 
 ## Reference material (not code-bound)
 

@@ -14,9 +14,9 @@ workflow. For framework architecture and APIs, read the docs.
 
 | Folder | For |
 |---|---|
-| [`docs/reference/`](./docs/reference/) | Framework reference. `intro` · `partial` · `block` · `frames-navigation` · `remote-frame` · `cache` · `cms` · `prior-art`. Read these to use the framework. |
-| [`docs/internals/`](./docs/internals/) | Framework internals. `testing` · `render-pipeline` · `streaming` · `cache-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `flight-gotchas`. Read these to modify the framework. |
-| [`docs/notes/`](./docs/notes/) | Active research. Forward-looking backlog (`IDEAS.md`); chat overlay's demo content. |
+| [`docs/reference/`](./docs/reference/) | Framework reference. `intro` · `partial` · `block` · `cells` · `frames-navigation` · `remote-frame` · `cache` · `cms` · `prior-art`. Read these to use the framework. |
+| [`docs/internals/`](./docs/internals/) | Framework internals. `testing` · `render-pipeline` · `streaming` · `cache-internals` · `cell-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `flight-gotchas`. Read these to modify the framework. |
+| [`docs/notes/`](./docs/notes/) | Active research. Forward-looking backlog (`IDEAS.md`); live design docs for unshipped work (`replicated-state`, `remote-frame-design`); framing notes (`perspectives`); chat overlay's demo content. |
 | [`docs/archive/`](./docs/archive/) | Superseded designs and debugging logs. Reference only. |
 
 ## Project structure

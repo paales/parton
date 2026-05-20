@@ -1,6 +1,6 @@
 # Perspectives
 
-The unifying primitive is `parton(Render, options)`: a define-step constructor that returns a placeable React component for an addressable RSC subtree. Each partial has its own fingerprint, cache key, refetch path, and frame scope. `block` (slot-placeable, CMS-driven) and `<Frame>` (URL scope opener) are specialisations on top of the same engine. See [`reference/partial.md`](./reference/partial.md).
+The unifying primitive is `parton(Render, options)`: a define-step constructor that returns a placeable React component for an addressable RSC subtree. Each partial has its own fingerprint, cache key, refetch path, and frame scope. `block` (slot-placeable, CMS-driven), `<Frame>` (URL scope opener), and `cell` (typed server-state slot) are specialisations on top of the same engine. See [`../reference/partial.md`](../reference/partial.md) and [`../reference/cells.md`](../reference/cells.md).
 
 Polysemic by design: the framework is intentionally explainable through Varnish, iframes, Livewire, RSC, and commerce rendering because each lens reveals a different constraint. The "Like" items below are doors into the same room; the "Not" items keep the room's shape sharp. Each item carries a leading **label** so they can be referred to without quoting the whole line.
 
