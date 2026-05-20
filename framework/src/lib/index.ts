@@ -53,6 +53,13 @@ export {
   type ResolvedCell,
 } from "./cell.ts"
 
+export {
+  useCell,
+  type CellInputBindings,
+  type CellInputOpts,
+  type ClientCell,
+} from "./cell-client.tsx"
+
 export { type TimeScope } from "./time.ts"
 
 export type {

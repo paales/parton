@@ -149,6 +149,48 @@ describe("runInvalidationTransaction", () => {
       expect(queryMatchingTs(["cart"], null)).toBeGreaterThan(0)
     })
   })
+
+  it("nested calls participate in the outer transaction (one commit, batched)", async () => {
+    // App-level wrapper batches two cell writes. Each cell.set internally
+    // calls runInvalidationTransaction; with nesting, those inner calls
+    // join the outer tx and all four refreshSelector bumps flush together
+    // at the outer commit — so the segment driver wakes once, not twice.
+    await runInvalidationTransaction(async () => {
+      await runInvalidationTransaction(async () => {
+        refreshSelector("cell:a")
+        refreshSelector("cell:b")
+      })
+      await runInvalidationTransaction(async () => {
+        refreshSelector("cell:c")
+      })
+      // Mid-outer, nothing has committed yet.
+      expect(queryMatchingTs(["cell:a"], null)).toBe(0)
+      expect(queryMatchingTs(["cell:b"], null)).toBe(0)
+      expect(queryMatchingTs(["cell:c"], null)).toBe(0)
+    })
+    // After outer commit, all three are visible with the same ts cohort.
+    const tsA = queryMatchingTs(["cell:a"], null)
+    const tsB = queryMatchingTs(["cell:b"], null)
+    const tsC = queryMatchingTs(["cell:c"], null)
+    expect(tsA).toBeGreaterThan(0)
+    expect(tsB).toBeGreaterThan(0)
+    expect(tsC).toBeGreaterThan(0)
+  })
+
+  it("nested throw discards pending in the outer tx", async () => {
+    await expect(
+      runInvalidationTransaction(async () => {
+        refreshSelector("outer")
+        await runInvalidationTransaction(async () => {
+          refreshSelector("inner")
+        })
+        throw new Error("oops")
+      }),
+    ).rejects.toThrow("oops")
+    // Neither outer nor inner bumps reached the registry.
+    expect(queryMatchingTs(["outer"], null)).toBe(0)
+    expect(queryMatchingTs(["inner"], null)).toBe(0)
+  })
 })
 
 describe("registry state", () => {

@@ -39,6 +39,7 @@ import { createSessionReadSurface } from "./session.ts"
 import { getRequest, getScope, parseCookies } from "./context.ts"
 import { runInvalidationTransaction } from "./invalidation-registry.ts"
 import { getServerNavigation } from "./server-navigation.ts"
+import { _getCellWriteDelay } from "./cell-write-delay.ts"
 
 function searchParamsToRecord(sp: URLSearchParams): Record<string, string> {
   const out: Record<string, string> = {}
@@ -111,17 +112,69 @@ export async function __cellWrite(
   partitionOverride?: { vary?: Record<string, unknown> },
 ): Promise<void> {
   await runInvalidationTransaction(async () => {
-    const cell = getCellById(cellId)
-    if (!cell) throw new Error(`cell-write: unknown cell id "${cellId}"`)
-    const validated = cell.validate(value)
-    let partitionKey: string
-    if (partitionOverride?.vary) {
-      partitionKey = hash(stableStringify(partitionOverride.vary))
-    } else {
-      const scope = buildCellVaryScope()
-      partitionKey = hash(stableStringify(cell.vary(scope)))
-    }
-    getCellStorage().write(getScope(), cellId, partitionKey, validated)
-    getServerNavigation().reload({ selector: `cell:${cellId}` })
+    writeOneCell(cellId, value, partitionOverride)
   })
+}
+
+/**
+ * Batched cell-write entry point. Counterpart of `__cellWrite` for the
+ * client-side microtask coalescer (`_cellSetBatched` in
+ * `lib/cell-client.tsx`): instead of one POST per `cell.set` call, the
+ * batcher accumulates writes within a tick and flushes them as a single
+ * POST into here.
+ *
+ * Writes are processed sequentially in send-order — the framework does
+ * not parallelise commits across cells. The whole batch lives inside
+ * one `runInvalidationTransaction` so every affected `cell:<id>` bump
+ * flushes together at outer commit; the segment driver wakes once and
+ * one segment ships carrying every changed cell.
+ *
+ * On validation failure for ANY entry the whole batch rolls back —
+ * the transaction discards its pending bumps and re-throws the error.
+ * Mirrors the safety guarantee of single-write `__cellWrite`.
+ */
+export async function __cellWriteBatch(
+  updates: ReadonlyArray<{
+    id: string
+    value: unknown
+    partition?: { vary?: Record<string, unknown> }
+  }>,
+): Promise<void> {
+  if (updates.length === 0) return
+  const delay = _getCellWriteDelay()
+  if (typeof delay === "number" && delay > 0) {
+    await new Promise((r) => setTimeout(r, delay))
+  }
+  await runInvalidationTransaction(async () => {
+    for (const u of updates) writeOneCell(u.id, u.value, u.partition)
+  })
+}
+
+/** Shared write implementation. Caller is responsible for wrapping in
+ *  a `runInvalidationTransaction` so the resulting `refreshSelector`
+ *  bumps participate in atomic commit/rollback.
+ *
+ *  Pipeline per write: validate (throws on shape mismatch) → write
+ *  (server's final-say canonicalisation; opt-in via the cell's
+ *  `write` option) → storage → `refreshSelector`. Both validate and
+ *  write run inside the transaction, so a throw rolls back the whole
+ *  batch. */
+function writeOneCell(
+  cellId: string,
+  value: unknown,
+  partitionOverride: { vary?: Record<string, unknown> } | undefined,
+): void {
+  const cell = getCellById(cellId)
+  if (!cell) throw new Error(`cell-write: unknown cell id "${cellId}"`)
+  const validated = cell.validate(value)
+  const stored = cell.write ? cell.write(validated) : validated
+  let partitionKey: string
+  if (partitionOverride?.vary) {
+    partitionKey = hash(stableStringify(partitionOverride.vary))
+  } else {
+    const scope = buildCellVaryScope()
+    partitionKey = hash(stableStringify(cell.vary(scope)))
+  }
+  getCellStorage().write(getScope(), cellId, partitionKey, stored)
+  getServerNavigation().reload({ selector: `cell:${cellId}` })
 }

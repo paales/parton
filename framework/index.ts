@@ -95,6 +95,14 @@ export {
   type CellPartitionKey,
 } from "./src/runtime/cell-storage.ts"
 
+// ── Cell write debug hook (server, demo-only) ──────────────────────────
+// Lets a server-side demo install a per-batch latency simulator so the
+// auto-batched write pipeline produces variable RTTs without losing
+// the microtask-coalescing path. Production code leaves it null. Lives
+// in its own module because `cell-actions.ts` is `"use server"` and
+// every export there must be an async server action.
+export { _setCellWriteDelaySimulator } from "./src/runtime/cell-write-delay.ts"
+
 // ── CMS runtime (server) ────────────────────────────────────────────────
 export {
   EDITOR_COOKIE,

@@ -88,6 +88,14 @@ export interface Cell<T> {
   /** Internal — coerces / validates an incoming value into T. Throws
    *  on shape mismatch. */
   validate(value: unknown): T
+  /** Internal — server-side write-pipeline transform. Runs after
+   *  `validate` and before storage on every write. `undefined` when
+   *  the cell didn't declare a `write` option. Gives the server final
+   *  say on the stored shape regardless of what the client sent
+   *  (uppercase + strip specials on a name field, even when the
+   *  client typed raw). A `read` counterpart for read-time
+   *  transforms is designed but not shipped — waiting for a caller. */
+  write?(value: T): T
 }
 
 /**
@@ -132,6 +140,15 @@ interface CommonOpts<T> {
   id: string
   initial: T
   vary?: (scope: CellVaryScope) => Record<string, unknown>
+  /** Server-side write-pipeline transform. Runs after `validate` and
+   *  before storage on every write — gives the server final say on
+   *  the stored shape regardless of what the client sent. Use for
+   *  canonicalisation (uppercase, trim, format) and server-only rules
+   *  (length cap not shared with the client, deduplication, etc.).
+   *  Called inside the cell-write transaction; throwing rolls the
+   *  batch back. A `read` counterpart for read-time transforms is
+   *  designed but deferred until a caller needs the split. */
+  write?: (value: T) => T
 }
 
 function constantPartitionVary(): Record<string, unknown> {
@@ -227,6 +244,7 @@ function makeString(opts: StringOpts): Cell<string> {
     set: bindSetter(opts.id) as Cell<string>["set"],
     peek: buildPeek(opts.id, validate, opts.initial, varyFn),
     validate,
+    write: opts.write,
   }
   return registerCell(handle)
 }
@@ -249,6 +267,7 @@ function makeNumber(opts: NumberOpts): Cell<number> {
     set: bindSetter(opts.id) as Cell<number>["set"],
     peek: buildPeek(opts.id, validate, opts.initial, varyFn),
     validate,
+    write: opts.write,
   }
   return registerCell(handle)
 }
@@ -271,6 +290,7 @@ function makeBoolean(opts: BooleanOpts): Cell<boolean> {
     set: bindSetter(opts.id) as Cell<boolean>["set"],
     peek: buildPeek(opts.id, validate, opts.initial, varyFn),
     validate,
+    write: opts.write,
   }
   return registerCell(handle)
 }
@@ -299,6 +319,7 @@ function makeEnum<const T extends readonly string[]>(
     set: bindSetter(opts.id) as Cell<T[number]>["set"],
     peek: buildPeek(opts.id, validate, opts.initial, varyFn),
     validate,
+    write: opts.write,
   }
   return registerCell(handle)
 }
@@ -327,6 +348,12 @@ export const cell = {
  * its resolved value. Used by the partial render path (`schema`
  * resolution) — the resolved view is what Render receives and what
  * crosses Flight to client components.
+ *
+ * `.set` is the cell's bound server-action ref (one POST per call).
+ * Client components that want auto-batched writes (multiple cell.set
+ * calls in the same tick collapsed into one POST) + optimistic-aware
+ * `.value` reach for the `useCell(cell)` hook instead — see
+ * `lib/cell-client.tsx`.
  */
 export function buildResolvedCell<T>(handle: Cell<T>, value: T): ResolvedCell<T> {
   return {

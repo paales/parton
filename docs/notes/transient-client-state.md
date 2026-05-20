@@ -2,6 +2,16 @@
 
 > Live design doc. Captured 2026-04-29 as part of the IDEAS backlog
 > and split out 2026-05-12 for room to grow. Decision still open.
+>
+> Status note 2026-05-20: a working controlled-form caller landed on
+> `/streaming-demo` (the card-form card). It doesn't pick A/B/C/D
+> outright — it uses the **cell** primitive (which is closest to
+> Direction A, server-authoritative state the partial reads), bound
+> to inputs via an inline implementation of the four-rule discipline
+> documented in [`cells.md`](./cells.md#controlled-input-discipline-added-2026-05-20)
+> (local-first display, single-inflight + replace-coalesce, caret
+> via layout effect, safe-moment adoption). No `<PartialForm>`
+> primitive yet — waiting for a second caller before extracting.
 
 The framework's load-bearing position is that **state lives in URLs**:
 page URL for shareable, frame URL for subtree-scoped. Combined with

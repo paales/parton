@@ -248,7 +248,8 @@ function harvestPartialIds(node: ReactNode, out: Map<string, Set<string>>): void
   }
   const unwrapped = unwrapLazy(node)
   if (unwrapped !== node) {
-    if (unwrapped == null) return
+    // Errored OR pending lazy — can't descend; skip.
+    if (unwrapped == null || unwrapped === LAZY_PENDING) return
     harvestPartialIds(unwrapped as ReactNode, out)
     return
   }
@@ -314,11 +315,11 @@ function substituteNested(
   // where the server was still streaming when the cache was
   // populated). By the time a refetch lands they've been resolved —
   // unwrap so we can descend into the nested tree and find keyed
-  // partials to swap. Pending / errored lazies return null; we treat
-  // them as opaque and leave the original node in place.
+  // partials to swap. Pending / errored lazies leave the original
+  // node in place so React's native Suspense resolves them later.
   const unwrapped = unwrapLazy(node)
   if (unwrapped !== node) {
-    if (unwrapped == null) return node
+    if (unwrapped == null || unwrapped === LAZY_PENDING) return node
     return substituteNested(unwrapped as ReactNode, cache, skipKey)
   }
 
@@ -388,8 +389,30 @@ function substituteNested(
 
 const LAZY_SYMBOL_STR = "Symbol(react.lazy)"
 
+/** Sentinel returned by `unwrapLazy` when the lazy is pending — distinct
+ *  from `null` (which signaled "unwrap failed, drop the node"). Callers
+ *  who recognise this keep the original lazy in place so React's native
+ *  Suspense machinery resolves it; callers who don't recognise it fall
+ *  back to the legacy "drop" behaviour. */
+const LAZY_PENDING = Symbol("partial-client.lazyPending")
+
 /**
  * Unwrap a raw lazy reference at the tree level.
+ *
+ * Returns the resolved value when the lazy is fulfilled; `LAZY_PENDING`
+ * when the underlying chunk is still in flight; `null` when the lazy
+ * errored (treated as opaque).
+ *
+ * The pending sentinel matters for streaming hydration: the cache-walk
+ * (`cacheFromStreamingChildren`) and the template-derive
+ * (`deriveTemplate`) both encounter Flight lazies while early chunks
+ * are still arriving. Treating pending the same as "drop" silently
+ * loses the partial wrapper inside the lazy — the cache never gets
+ * an entry, the template emits a bare placeholder, and `renderTemplate`
+ * leaves an empty `<i hidden>` in the DOM. Returning a distinct
+ * sentinel lets each caller decide: skip caching this round (the
+ * lazy will be cached on a re-render when it resolves) but keep the
+ * lazy in the rendered output so React resolves it natively.
  */
 function unwrapLazy(node: unknown): unknown {
   if (node == null || typeof node !== "object") return node
@@ -400,9 +423,17 @@ function unwrapLazy(node: unknown): unknown {
   if (payload && payload._status === 1) return payload._result
   try {
     const init = n._init
-    if (typeof init === "function") return init(payload)
-  } catch {
-    // Pending/errored — treat as opaque
+    if (typeof init === "function") {
+      const result = init(payload)
+      // init returned synchronously — fulfilled.
+      return result
+    }
+  } catch (e) {
+    // A thenable throw is React's "pending" signal for lazy refs.
+    // Anything else is an error we treat as opaque.
+    if (e && typeof e === "object" && typeof (e as PromiseLike<unknown>).then === "function") {
+      return LAZY_PENDING
+    }
   }
   return null
 }
@@ -463,23 +494,43 @@ function cacheStore(
   }
 }
 
+/**
+ * Sentinel mutable used by `cacheFromStreamingChildren` to report
+ * whether the walk encountered any pending Flight lazies. PartialsClient's
+ * streaming-mode path uses this to decide: if any lazy is still in flight,
+ * skip the template/derive/substitute machinery and return `children`
+ * directly so the rendered tree matches the SSR HTML exactly. The cache
+ * walk that DID complete is still safe to keep (any wrappers that were
+ * walked are cached); a later PartialsClient render with the lazies
+ * resolved will fill in the gaps.
+ */
+interface LazyWalkStats {
+  pending: number
+}
+
 function cacheFromStreamingChildren(
   node: ReactNode,
   cache: PartialCache,
   seen?: Map<string, Set<string>>,
+  stats?: LazyWalkStats,
 ): void {
   if (node == null || typeof node === "boolean") return
   if (typeof node === "string" || typeof node === "number") return
   if (Array.isArray(node)) {
     for (let i = 0; i < node.length; i++) {
-      cacheFromStreamingChildren(node[i] as ReactNode, cache, seen)
+      cacheFromStreamingChildren(node[i] as ReactNode, cache, seen, stats)
     }
     return
   }
   const unwrapped = unwrapLazy(node)
   if (unwrapped !== node) {
-    if (unwrapped == null) return
-    cacheFromStreamingChildren(unwrapped as ReactNode, cache, seen)
+    if (unwrapped === LAZY_PENDING && stats) stats.pending++
+    // Errored OR pending lazy — can't descend to find wrappers. The
+    // template-derive keeps the lazy in place so React resolves it
+    // through native Suspense; a re-render after resolution will
+    // populate the cache for whatever wrappers are inside.
+    if (unwrapped == null || unwrapped === LAZY_PENDING) return
+    cacheFromStreamingChildren(unwrapped as ReactNode, cache, seen, stats)
     return
   }
   if (!isValidElement(node)) return
@@ -505,7 +556,7 @@ function cacheFromStreamingChildren(
     // entries so subsequent parent-only refetches with inner
     // placeholders can fill the holes.
     const inner = (node.props as any)?.children
-    if (inner != null) cacheFromStreamingChildren(inner, cache, seen)
+    if (inner != null) cacheFromStreamingChildren(inner, cache, seen, stats)
     return
   }
   if (isPlaceholder(node)) {
@@ -525,7 +576,7 @@ function cacheFromStreamingChildren(
 
   const inner = (node.props as any)?.children
   if (inner != null) {
-    cacheFromStreamingChildren(inner, cache, seen)
+    cacheFromStreamingChildren(inner, cache, seen, stats)
   }
 }
 
@@ -552,6 +603,15 @@ function deriveTemplate(node: ReactNode): ReactNode {
   }
   const unwrapped = unwrapLazy(node)
   if (unwrapped !== node) {
+    // Errored OR pending lazy — keep the original node so React's
+    // native Suspense resolves it (pending) or its error boundary
+    // catches (errored). Without this the wrapper inside the lazy
+    // is silently dropped from the derived template and renderTemplate
+    // emits a bare `<i hidden>` for any schema-using partial whose
+    // Flight chunk hadn't arrived when PartialsClient first
+    // committed. See the `streaming-demo-schema-hydration` preview
+    // spec.
+    if (unwrapped == null || unwrapped === LAZY_PENDING) return node
     return deriveTemplate(unwrapped as ReactNode)
   }
   if (!isValidElement(node)) return node
@@ -2849,7 +2909,22 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
     // `substituteNested` no entry to fill the placeholder with on the
     // next render.
     const seen = new Map<string, Set<string>>()
-    cacheFromStreamingChildren(children, cache, seen)
+    const stats: LazyWalkStats = { pending: 0 }
+    cacheFromStreamingChildren(children, cache, seen, stats)
+    if (stats.pending > 0) {
+      // At least one Flight chunk hadn't arrived when we walked the
+      // children tree, so the cache walk is incomplete — any wrapper
+      // inside a pending lazy was missed. Substituting from this
+      // incomplete cache would emit bare `<i hidden>` placeholders
+      // for those partials, which is exactly the
+      // streaming-demo-schema-hydration regression. Mirror the SSR
+      // shape instead: return children directly so React resolves the
+      // lazies through native Suspense. When a parent re-renders this
+      // component (next nav, segment commit, or cache-mode refetch),
+      // the cache walk runs again against the now-resolved children
+      // and the gaps fill in.
+      return renderChildren([children])
+    }
     const derived = deriveTemplate(children)
     _template = derived
 

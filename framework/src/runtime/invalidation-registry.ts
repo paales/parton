@@ -185,8 +185,19 @@ export function _waitForNextBump(sinceTs: number): Promise<number> {
  * Use this for server actions: bump cart on success, leave registry
  * untouched on action throw so a failed mutation doesn't trigger
  * downstream refetches.
+ *
+ * Nested calls participate in the outer transaction — when an enclosing
+ * tx is already active, this is a thin pass-through. Lets an app-level
+ * action wrap multiple `cell.set` calls in one outer
+ * `runInvalidationTransaction` and have all the resulting
+ * `refreshSelector` bumps flush together at the outer commit, so the
+ * segment driver wakes once and one segment ships carrying every
+ * affected cell. Without nesting the inner `__cellWrite`s would each
+ * commit at their own boundary and the writes would arrive as separate
+ * segments.
  */
 export async function runInvalidationTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  if (transactionContext.getStore()) return await fn()
   const tx: InvalidationTransaction = { pending: [] }
   try {
     const result = await transactionContext.run(tx, fn)

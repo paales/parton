@@ -1,11 +1,16 @@
 "use server"
 
 /**
- * Server actions for the /streaming-demo page. The bump button used
- * to live here as a server action; with the cell migration, bump
- * mutation goes through the framework's `__cellWrite` action (bound
- * to the `demo.bumps` cell). What remains is `pushSeq` — an example
- * of `getServerNavigation().navigate(...)` for server-pushed URL
+ * Server actions for the /streaming-demo page.
+ *
+ * The bump and card-form mutations both go through the framework's
+ * built-in cell write path — the bump button via the per-call
+ * server-action ref on the cell handle, the card form via the
+ * client-side microtask coalescer (`useCell(cell).set(...)` →
+ * `__cellWriteBatch`). Neither needs an app-level wrapper action.
+ *
+ * What remains here is `pushSeq` — an example of
+ * `getServerNavigation().navigate(...)` for server-pushed URL
  * updates, unrelated to cells.
  */
 

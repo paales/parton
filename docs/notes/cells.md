@@ -5,6 +5,31 @@
 > the `session.string('name')` + `setSessionValue(name, v)` pair.
 > First in-tree caller: `streaming-demo` (was `streaming-demo-state.ts`
 > + `streaming-demo-actions.ts`).
+>
+> Status note 2026-05-20: a second caller landed on the same page — a
+> three-cell controlled-form card (`cardName` / `cardNumber` /
+> `cardCvc`) bound to a `commitCardForm` action that batches all three
+> writes inside one `runInvalidationTransaction`. Two findings from
+> that exercise are now in scope below: the **controlled-input
+> discipline** for cells driven by a continuous input, and the
+> **nested-transaction batching** behaviour that makes app-level
+> multi-cell writes ship as one segment. See the new sections at the
+> end of this doc.
+>
+> Status note 2026-05-21: the controlled-input discipline is now a
+> framework primitive. `useCell(serverCell)` returns a `ClientCell`
+> with **optimistic-aware `value`** and a **batched `set`**; the
+> per-input glue (refs, layout effects, caret restore, transform
+> pipeline) is exposed as `cell.input(opts)` for spread onto a
+> controlled `<input>`. The `commitCardForm` wrapper action is gone;
+> per-keystroke writes go through a microtask-coalesced batcher
+> (single-inflight, accumulate-pending) that posts one
+> `__cellWriteBatch` per drain. Cells gained a `write?: (T) => T`
+> option (renamed from `normalize`) that runs server-side after
+> `validate` and before storage — the server's final-say
+> canonicalisation. The card-form demo now has five cells (three
+> form values + two global demo toggles `serverDelay` and
+> `applyLocalTransform`); see `/streaming-demo` card 4.
 
 ## Premise
 
@@ -354,6 +379,149 @@ What's NOT a cell:
   matters).
 - Anything sharable that fits a URL → URL, not a cell.
 
+## Controlled-input discipline (added 2026-05-20, extracted 2026-05-21)
+
+A cell mutated from a **discrete event** (toggle, button click, "add
+to cart") is fine with plain `cell.set(v)` — each call is atomic, no
+caret to preserve, no in-progress input to clobber. The bump counter
+on `/streaming-demo` is this regime.
+
+A cell bound to a **controlled input** (text field, slider, drag
+handle) needs four rules together, otherwise rapid-fire typing
+produces visible jank or out-of-order writes. The first card-form
+caller implemented them inline; on 2026-05-21 they were extracted
+into the **`useCell` hook + `ClientCell.input()` binding** so future
+controlled-input cells get the discipline for free.
+
+1. **Display is local-first.** `useCell(cell).value` is
+   optimistic-aware: latest local-set value while writes are queued
+   or in flight; falls back to the server-authoritative value when
+   everything has settled. An optional `transform` fn passed to
+   `cell.input({transform})` runs per keystroke before `set`. The
+   display never waits on a server round-trip to advance to the
+   next character.
+2. **Single in-flight + accumulate-pending.** Every `cell.set`
+   enqueues into the framework's microtask-coalesced batcher. At
+   most one `__cellWriteBatch` POST in flight per tab; new
+   enqueues during in-flight accumulate and flush as the next
+   batch when the current resolves. Writes hit the server in
+   strict send-order regardless of per-batch latency variance —
+   there's no write-write race.
+3. **Caret restoration via `useLayoutEffect`.** Owned by the hook.
+   The transform returns `{value, caret}`; the hook stashes the
+   caret in a ref and restores via `setSelectionRange` after React
+   commits. Per-char transforms (uppercase, strip) keep caret in
+   place; non-monotonic transforms (the card-number space
+   insertion) walk the raw string counting digits-before-caret to
+   find the new logical position.
+4. **Safe-moment adoption.** Implicit. The optimistic value clears
+   when the last pending write for the cell drains, so the next
+   render flips `value` to the server-authoritative shape (the
+   reconcile moment). During a typing burst the optimistic value
+   stays pinned to the user's input — no mid-burst clobber by
+   construction.
+
+**Surface:**
+
+```tsx
+"use client"
+import { useCell } from "@parton/framework/lib/cell-client.tsx"
+
+const name = useCell(props.cardName)   // { value, serverValue, set, input }
+
+<input
+  {...name.input({
+    transform: (raw, caret) => ({ value: raw.toUpperCase(), caret }),
+    onCommit: (v) => fireRelatedCell(v),   // optional cross-cell trigger
+  })}
+  data-testid="..." className="..."
+/>
+```
+
+The author writes the `onChange`-free spread + the transform fn. No
+`useState`, no `useEffect` adoption, no manual refs/layout effects,
+no pending checks. `cell.input()` parallels react-hook-form's
+`register()` (see the "Future research" section below for a closer
+comparison before extending `CellInputOpts` ad-hoc).
+
+Code: `framework/src/lib/cell-client.tsx` (hook), `streaming-demo-card-form.tsx`
++ `streaming-demo-card-shared.ts` for the transforms/caret math.
+
+For fast-fire discrete events (game-style button mashing, slider
+flick), the same four rules apply but with a different **coalesce
+strategy** — sum for counters (`pending = (pending ?? 0) +
+delta`), XOR for toggles, list-concat for append-to-list. The
+matching server-side shape is a delta-style action (`addToBumps(n:
+number)`) the client passes the accumulated count to. The current
+`/streaming-demo` bump counter is the simple discrete-event regime
+(plain `cell.set`); it has a known click-spam race that the
+delta-action shape would fix — filed as a follow-up.
+
+## Nested-transaction batching (added 2026-05-20)
+
+`runInvalidationTransaction` is nestable as of 2026-05-20: when an
+enclosing tx is already active, the inner call is a thin
+pass-through (`if (transactionContext.getStore()) return await
+fn()`). This makes app-level multi-cell writes batch correctly
+without a new public primitive:
+
+```ts
+"use server"
+import { runInvalidationTransaction } from "@parton/framework"
+
+export async function commitCardForm({ name, number }) {
+  // ...compute cleanName, formattedNumber, cvc...
+  await runInvalidationTransaction(async () => {
+    await cardName.set(cleanName)
+    await cardNumber.set(formattedNumber)
+    await cardCvc.set(cvc)
+  })
+}
+```
+
+Each `cell.set` internally wraps in its own
+`runInvalidationTransaction`; with the nesting fix, those inner
+wrappers join the outer tx. All three `refreshSelector("cell:...")`
+bumps flush at the outer commit, the segment driver wakes once,
+one segment ships carrying every affected cell. Without nesting
+each `cell.set` would commit at its own boundary and the three
+writes would arrive as three separate segments — visually
+out-of-step on watching tabs.
+
+Authors don't need a `cellBatch(...)` helper for this — wrap the
+calls in `runInvalidationTransaction` directly, same as a server
+action body. The cost is one extra `await` per cell write (the
+inner tx's `await fn()`); for a 3-cell write that's negligible
+compared to one wire round-trip.
+
+## Future research: `cell.input()` ↔ react-hook-form `register()`
+
+The `useCell(cell).input(opts)` binding ([`framework/src/lib/cell-client.tsx`](../../framework/src/lib/cell-client.tsx))
+returns `{value, onChange, ref}` for spread onto a controlled
+`<input>`. The shape is deliberately RHF-flavoured — react-hook-
+form's [`register()`](https://react-hook-form.com/docs/useform/register)
+returns the same spread surface (`{name, onChange, onBlur, ref}`)
+and absorbs the per-input glue (refs, change handlers,
+validation/transform pipeline).
+
+Worth a closer comparison before extending `CellInputOpts` ad-hoc:
+
+- RHF covers `onBlur`, validation rules (`required`, `min`, `max`,
+  `pattern`, `validate`), `valueAsNumber` / `valueAsDate`, field
+  arrays, and the submit lifecycle (`handleSubmit`). Cells today
+  cover `transform` (per-keystroke with caret math) and `onCommit`
+  (cross-cell trigger).
+- A closer alignment would let cells drop into RHF-style form
+  patterns without translation — and would tell us which RHF
+  features have a natural cell analog vs. which are form-library
+  concerns we should leave to RHF itself (cells own the wire +
+  optimistic-aware value; RHF owns the form-state choreography).
+- Open question: should cells SUBSUME RHF for forms, INTEROP with
+  it (`useCell` returning a shape RHF can register), or stay in a
+  narrower niche (single controlled input, no form-level
+  validation)? The card-form demo is one data point; a multi-step
+  CMS draft form would be a useful second one.
+
 ## Related
 
 - [`replicated-state.md`](./replicated-state.md) — the broader
@@ -361,7 +529,10 @@ What's NOT a cell:
   "single typed value, mutate-and-invalidate" lane.
 - [`transient-client-state.md`](./transient-client-state.md) —
   Direction A (per-session draft store) collapses to a cell with
-  `vary: ({session}) => ({sid: session.id})`.
+  `vary: ({session}) => ({sid: session.id})`. The card-form caller
+  on `/streaming-demo` lands the controlled-input discipline
+  inline; whether to extract it as `<PartialForm>` (Direction D)
+  is open.
 - [`../reference/partial.md`](../reference/partial.md) — the
   `parton` constructor surface that `schema` extends.
 - [`../reference/cms.md`](../reference/cms.md) — block.schema, the
