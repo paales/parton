@@ -445,12 +445,37 @@ The second claim is the one that distinguishes this from Next.js App Router in t
 
 ---
 
-## Transient client state
+## Transient client state — resolved by cells
 
-Live design doc — split out to [`transient-client-state.md`](./transient-client-state.md).
-Captures the gap between client components (any state, no influence on
-Partial render) and server actions (only commits authoritative state):
-drag-to-reorder intermediate state, draft restoration, optimistic UI,
-cross-tab session leaks. Four candidate directions (A: durable draft
-as server entity / B: optimistic overlay channel / C: per-tab session
-axis / D: `<PartialForm>` combining A+B); decision still open.
+Original design exploration archived to
+[`../archive/transient-client-state.md`](../archive/transient-client-state.md).
+Directions A and B (server-authoritative state the partial reads;
+optimistic overlay for in-flight writes) collapsed into the **cell**
+primitive — see [`cells.md`](./cells.md). The cell's `value` is
+optimistic-aware via `useCell`, so consumers bind once and never see
+pending state directly. Two threads from the original doc remain open
+and live below as standalone backlog items.
+
+## Per-tab session axis
+
+Original framing: Direction C from the archived `transient-client-state`
+doc. Cells today are global or session-scoped (cookie-shared across
+tabs). The cross-tab leak via session-scoped frame URL — tab A opens
+a drawer, tab B's drawer opens on next render — wants a per-tab axis
+the server can read sync. Stamp a per-tab id (`sessionStorage`-backed
+nonce) into a header on every request; expose as
+`vary: ({tab}) => ({...})` and `useTabState("key", value)` on the
+client. Sharp constraint (JSON-serializable, small) so it doesn't
+become the dumping ground for "state I didn't want to think about."
+
+## `<PartialForm>` as a composed primitive
+
+Original framing: Direction D from the archived `transient-client-state`
+doc. Whether to ship a higher-level form primitive that combines cells
+(per-field draft) + an optimistic submit overlay. Cells already
+handle the per-field side via `useCell(cell).input(opts)`; the form
+primitive would own the submit lifecycle (validation, blur, submit
+button state, error display). The `cell.input()` ↔ RHF `register()`
+comparison in `cells.md` is the design surface to start from. Waits
+for a multi-step CMS draft caller — defer until there's a real form
+flow that exercises submit + validation + draft together.

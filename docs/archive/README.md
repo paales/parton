@@ -43,6 +43,7 @@ For that, start at [`../reference/intro.md`](../reference/intro.md).
 | File | Where the pattern lives |
 |---|---|
 | `STREAMING_CHAT.md` | `e2e-testing/src/app/chat/` — bounded `<Piece>` + compaction |
+| `transient-client-state.md` | [`../notes/cells.md`](../notes/cells.md) — cells + `useCell` implement Directions A + B (server-authoritative state the partial reads + optimistic overlay). Directions C (per-tab session) and D (`<PartialForm>`) carried forward as standalone backlog items in [`../notes/IDEAS.md`](../notes/IDEAS.md). |
 
 ## Reference material (not code-bound)
 

@@ -1,17 +1,41 @@
 # Transient client state — the un-URL-able middle
 
+> **Superseded 2026-05-21 by [`docs/notes/cells.md`](../notes/cells.md).**
+>
+> The cell primitive + the `useCell` hook (optimistic-aware `value`,
+> microtask-batched `set`, `cell.input(opts)` bindings) implement
+> Directions A and B from this doc — server-authoritative state the
+> partial reads via `schema`, with an optimistic overlay for
+> in-flight writes that's exposed as a single `cell.value` field
+> consumers bind to without knowing about pending state. Failure
+> cases #1 (drag-to-reorder with debounced save), #2 (form draft
+> restoration), and #3 (optimistic UI on a server-rendered region)
+> collapse into "use a cell." Working demo: `/streaming-demo` card 4.
+>
+> Two threads from this doc are NOT resolved by cells and live on as
+> backlog items in [`IDEAS.md`](../notes/IDEAS.md):
+>
+>   - **Direction C — per-tab session axis** (failure case #4,
+>     cross-tab leak via session-scoped frame URL). Cells are global
+>     or session-scoped; per-tab transient state is a separate axis
+>     this doc was the first to name. Not addressed by cells.
+>   - **Direction D — `<PartialForm>`** as a composed primitive
+>     wrapping form + draft + submit. Cells handle the per-field
+>     concerns; whether to extract a higher-level form primitive
+>     waits for a multi-step CMS draft caller. The `cell.input()` ↔
+>     RHF `register()` comparison in `cells.md` covers the open
+>     design question.
+>
+> Kept for context — original design exploration that produced cells.
+> Do not consult for how the code works today; start at
+> [`../notes/cells.md`](../notes/cells.md).
+
+---
+
+# Transient client state — the un-URL-able middle (original 2026-04-29)
+
 > Live design doc. Captured 2026-04-29 as part of the IDEAS backlog
 > and split out 2026-05-12 for room to grow. Decision still open.
->
-> Status note 2026-05-20: a working controlled-form caller landed on
-> `/streaming-demo` (the card-form card). It doesn't pick A/B/C/D
-> outright — it uses the **cell** primitive (which is closest to
-> Direction A, server-authoritative state the partial reads), bound
-> to inputs via an inline implementation of the four-rule discipline
-> documented in [`cells.md`](./cells.md#controlled-input-discipline-added-2026-05-20)
-> (local-first display, single-inflight + replace-coalesce, caret
-> via layout effect, safe-moment adoption). No `<PartialForm>`
-> primitive yet — waiting for a second caller before extracting.
 
 The framework's load-bearing position is that **state lives in URLs**:
 page URL for shareable, frame URL for subtree-scoped. Combined with

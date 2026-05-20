@@ -5,7 +5,8 @@
 > parton primitives. Decision still open; this is the proposal
 > on the table.
 >
-> Predecessor: [`transient-client-state.md`](./transient-client-state.md).
+> Predecessor: [`../archive/transient-client-state.md`](../archive/transient-client-state.md)
+> (archived 2026-05-21 once cells landed Directions A + B).
 > This doc concretises Direction A + B from that doc and adds the
 > RepNotify channel.
 >
@@ -334,8 +335,12 @@ server rejects one, the rest replay against pre-rejection state.
 
 ## Related
 
-- [`transient-client-state.md`](./transient-client-state.md) —
-  the predecessor; names the gap this spec fills.
+- [`../archive/transient-client-state.md`](../archive/transient-client-state.md) —
+  the predecessor (archived 2026-05-21 once cells landed); names
+  the gap this spec fills.
+- [`cells.md`](./cells.md) — the cell primitive that took the narrow
+  "single typed value, mutate-and-invalidate" lane out of the broader
+  replication problem space.
 - [`IDEAS.md`](./IDEAS.md) — broader backlog; lossy-channel,
   speculation-rules, cross-tab-broadcast all live there.
 - [`../reference/partial.md`](../reference/partial.md) — the

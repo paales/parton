@@ -1,35 +1,21 @@
 # Cells
 
-> Live design doc. Captured 2026-05-19 from a design conversation
-> arriving at a typed, identity-keyed, multi-realm replacement for
-> the `session.string('name')` + `setSessionValue(name, v)` pair.
-> First in-tree caller: `streaming-demo` (was `streaming-demo-state.ts`
-> + `streaming-demo-actions.ts`).
+> Live design doc. The cell primitive — a typed, identity-keyed slot
+> of server-authoritative state, originally a replacement for the
+> `session.string('name')` + `setSessionValue(name, v)` pair —
+> shipped 2026-05-19 and grew through three callers on
+> `/streaming-demo` (bump counter, card form, demo toggles). The
+> controlled-input discipline that emerged from the card-form caller
+> is now a framework primitive: `useCell(serverCell)` returns a
+> `ClientCell` with optimistic-aware `value`, a microtask-coalesced
+> batched `set`, and a `.input(opts)` binding for spread onto a
+> controlled `<input>`. Cells also carry a `write?: (T) => T` option
+> (server-side canonicalisation after `validate`, before storage).
 >
-> Status note 2026-05-20: a second caller landed on the same page — a
-> three-cell controlled-form card (`cardName` / `cardNumber` /
-> `cardCvc`) bound to a `commitCardForm` action that batches all three
-> writes inside one `runInvalidationTransaction`. Two findings from
-> that exercise are now in scope below: the **controlled-input
-> discipline** for cells driven by a continuous input, and the
-> **nested-transaction batching** behaviour that makes app-level
-> multi-cell writes ship as one segment. See the new sections at the
-> end of this doc.
->
-> Status note 2026-05-21: the controlled-input discipline is now a
-> framework primitive. `useCell(serverCell)` returns a `ClientCell`
-> with **optimistic-aware `value`** and a **batched `set`**; the
-> per-input glue (refs, layout effects, caret restore, transform
-> pipeline) is exposed as `cell.input(opts)` for spread onto a
-> controlled `<input>`. The `commitCardForm` wrapper action is gone;
-> per-keystroke writes go through a microtask-coalesced batcher
-> (single-inflight, accumulate-pending) that posts one
-> `__cellWriteBatch` per drain. Cells gained a `write?: (T) => T`
-> option (renamed from `normalize`) that runs server-side after
-> `validate` and before storage — the server's final-say
-> canonicalisation. The card-form demo now has five cells (three
-> form values + two global demo toggles `serverDelay` and
-> `applyLocalTransform`); see `/streaming-demo` card 4.
+> Subsumed Directions A + B of [`../archive/transient-client-state.md`](../archive/transient-client-state.md)
+> (archived 2026-05-21). Directions C (per-tab session) and D
+> (`<PartialForm>`) carry forward as separate backlog items in
+> [`IDEAS.md`](./IDEAS.md).
 
 ## Premise
 
@@ -379,7 +365,7 @@ What's NOT a cell:
   matters).
 - Anything sharable that fits a URL → URL, not a cell.
 
-## Controlled-input discipline (added 2026-05-20, extracted 2026-05-21)
+## Controlled-input discipline
 
 A cell mutated from a **discrete event** (toggle, button click, "add
 to cart") is fine with plain `cell.set(v)` — each call is atomic, no
@@ -457,7 +443,7 @@ number)`) the client passes the accumulated count to. The current
 (plain `cell.set`); it has a known click-spam race that the
 delta-action shape would fix — filed as a follow-up.
 
-## Nested-transaction batching (added 2026-05-20)
+## Nested-transaction batching
 
 `runInvalidationTransaction` is nestable as of 2026-05-20: when an
 enclosing tx is already active, the inner call is a thin
@@ -527,12 +513,12 @@ Worth a closer comparison before extending `CellInputOpts` ad-hoc:
 - [`replicated-state.md`](./replicated-state.md) — the broader
   Unreal-actor-shaped state model. Cells are the narrow
   "single typed value, mutate-and-invalidate" lane.
-- [`transient-client-state.md`](./transient-client-state.md) —
-  Direction A (per-session draft store) collapses to a cell with
-  `vary: ({session}) => ({sid: session.id})`. The card-form caller
-  on `/streaming-demo` lands the controlled-input discipline
-  inline; whether to extract it as `<PartialForm>` (Direction D)
-  is open.
+- [`../archive/transient-client-state.md`](../archive/transient-client-state.md) —
+  archived 2026-05-21. The original design exploration that named
+  the four directions (A–D); A and B collapsed into cells +
+  `useCell`. Directions C (per-tab session) and D (`<PartialForm>`)
+  carried forward as standalone backlog items in
+  [`IDEAS.md`](./IDEAS.md).
 - [`../reference/partial.md`](../reference/partial.md) — the
   `parton` constructor surface that `schema` extends.
 - [`../reference/cms.md`](../reference/cms.md) — block.schema, the
