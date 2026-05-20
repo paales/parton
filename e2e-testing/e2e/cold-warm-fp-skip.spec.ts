@@ -64,11 +64,13 @@ test("re-visit to a route fp-skips on the very next nav after cold", async ({ pa
   // /magento's partials from the visible tree (they'll be parked by
   // keepalive).
   await page.getByRole("link", { name: /Pokemon$/ }).click()
-  await page.waitForSelector("[data-testid=page-shell]", { timeout: 10000 })
-
-  // Wait for the away-nav response to land before clicking back, so
-  // the trailer from /magento has time to apply.
-  await page.waitForLoadState("networkidle")
+  // Wait for Pokemon-page content to render — proxy for "away-nav
+  // response landed + trailer applied." `networkidle` would have
+  // worked here but the framework's live-page heartbeat holds a
+  // streaming connection open continuously, so the network never
+  // goes idle. Pokedex heading appearing means the trailer round-
+  // trip is complete.
+  await page.getByRole("heading", { name: "Pokedex" }).waitFor({ timeout: 10000 })
 
   // Nav back to /magento.
   await page.getByRole("link", { name: /Magento Store/ }).click()

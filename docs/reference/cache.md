@@ -1,35 +1,74 @@
 # Cache
 
-Server-side render-output caching. A parton opts in by returning an
-`expiresAt` timestamp from its `vary` callback — the framework uses
-that as the freshness deadline for the byte cache AND as a wake
-hint for the segment driver.
+Server-side render-output caching. A parton opts in by setting the
+`cache` prop; the framework stores the rendered Flight bytes for
+the spec's subtree and replays them on hit. Distinct from
+`expiresAt` in `vary` — that controls when the fp becomes stale
+(wake hint for the segment driver, no byte storage). Caching needs
+an explicit opt-in.
 
 ```tsx
 const ProductHero = parton(ProductHeroRender, {
   match: "/p/:slug",
-  vary: ({ params, search: { variant = "default" }, time }) => ({
+  cache: { maxAge: 60, staleWhileRevalidate: 30 },
+  vary: ({ params, search: { variant = "default" } }) => ({
     slug: params.slug,
     variant,
-    expiresAt: time.in(60_000),
-    staleUntil: time.in(90_000),
   }),
 })
 ```
 
-Within `expiresAt`: serve cached bytes (no re-render). Past
-`expiresAt` but within `staleUntil`: serve cached AND fire a
-background refresh. Past both: miss.
+Within `maxAge`: serve cached bytes (no re-render). Past `maxAge`
+but within `maxAge + staleWhileRevalidate`: serve cached AND fire
+a background refresh. Past both: miss.
 
-`expiresAt` / `staleUntil` are **reserved keys** in `vary`'s
-return — the framework strips them before computing the partial's
-fp and before spreading the result into Render's props. They don't
-participate in identity, just in TTL.
+## Options
 
-## Time helpers
+```ts
+interface CacheOptions {
+  maxAge?: number                  // fresh window in seconds
+  staleWhileRevalidate?: number    // additional stale-but-servable window
+  slowSource?: {…}                 // dev-only debug
+}
+```
 
-The `vary` scope exposes a `time` object with pre-computed boundary
-timestamps so authors don't call `Date.now()` themselves:
+## Time-based reactivity vs. byte caching
+
+The `vary` scope exposes a `time` object that lets a parton declare
+**when its fp becomes stale** without caching anything:
+
+```ts
+vary: ({ time }) => ({
+  tick: Math.floor(time.now / 1000),
+  expiresAt: time.nextSecond,
+})
+```
+
+`expiresAt` is a reserved key in vary's return — the framework
+strips it from the value used in fp + Render, and uses it as a
+wake hint for the segment driver's live-update loop. Each segment
+emits a fresh render at the boundary. **No byte storage.**
+
+To combine both — cached AND time-reactive — set `cache` and
+declare `expiresAt`:
+
+```tsx
+const HotProduct = parton(HotProductRender, {
+  match: "/p/:slug",
+  cache: { maxAge: 60 },
+  vary: ({ params, time }) => ({
+    slug: params.slug,
+    expiresAt: time.in(60_000),
+  }),
+})
+```
+
+There's no useful configuration where the two TTLs differ — the
+cache short-circuits the re-execution that `expiresAt` would
+trigger. Future direction: `cache: true` boolean form that pulls
+TTL from `expiresAt` directly.
+
+## `time` helpers
 
 ```ts
 interface TimeScope {
@@ -43,22 +82,6 @@ interface TimeScope {
 }
 ```
 
-Common patterns:
-
-```ts
-// Cached for 60s
-vary: ({ time }) => ({ expiresAt: time.in(60_000) })
-
-// Re-render at the next minute boundary (clock displays)
-vary: ({ time }) => ({
-  minute: Math.floor(time.now / 60_000),
-  expiresAt: time.nextMinute,
-})
-
-// Cache forever — content never moves
-vary: ({ time }) => ({ expiresAt: time.never })
-```
-
 ## Cache key
 
 ```ts
@@ -67,13 +90,12 @@ key = hash([
   structuralFingerprint,    // function-ref-derived shape salt
   innerPartialIds.sorted,   // Partials nested inside the cached subtree
   spec.varyResult,          // the dependency surface declared by `vary`,
-                            // minus the stripped `expiresAt` / `staleUntil`
+                            // minus stripped `expiresAt` / `staleUntil`
 ])
 ```
 
-The cache key surface is `vary`'s return value, minus the reserved
-keys. There's no separate "vary scalars on top of an opaque
-manifest" — whatever `vary` returns IS what the cache keys on.
+The cache key surface is `vary`'s return value (minus the reserved
+keys). Whatever `vary` returns IS what the cache keys on.
 
 ## Composition with inner partials
 
@@ -81,8 +103,7 @@ A cached spec may contain other specs in its rendered output. Those
 inner partials must stay live across cache hits — refetching them
 shouldn't have to wait for the outer spec's TTL.
 
-`<Cache>` (an internal wrapper applied when `vary` returns a finite
-`expiresAt`):
+`<Cache>` (an internal wrapper applied when `cache` is set):
 
 1. Walks the rendered tree, replaces every `PartialBoundary` with a
    `<i hidden data-partial>` placeholder.
@@ -94,25 +115,16 @@ shouldn't have to wait for the outer spec's TTL.
 ## Stale-while-revalidate
 
 ```ts
-vary: ({ time }) => ({
-  expiresAt: time.in(60_000),
-  staleUntil: time.in(90_000),
-})
+cache: { maxAge: 60, staleWhileRevalidate: 30 }
 ```
 
-Within `expiresAt`: serve cached, no refresh. Past `expiresAt` but
-within `staleUntil`: serve cached AND fire a background re-render
-that overwrites the entry. Past both: miss.
+Within `maxAge`: serve cached, no refresh. Past `maxAge` but within
+`maxAge + staleWhileRevalidate`: serve cached AND fire a background
+re-render that overwrites the entry. Past both: miss.
 
 The background refresh is in-flight-deduped per base key — a
 thundering herd of cache hits past TTL kicks off exactly one
 refresh.
-
-## Bypass
-
-To opt out of caching for a render, don't return `expiresAt` (or
-return a value `≤ now`). Useful in dev when iterating on a
-component whose `vary` doesn't yet capture every dependency.
 
 ## Invalidation
 
@@ -126,18 +138,16 @@ Three axes:
 2. **Vary-result change.** A page nav whose URL changes a value in
    the spec's vary result produces a different cache key. The old
    entry stays in the store but isn't queried.
-3. **`expiresAt` elapsing.** Past the TTL the entry is treated as
-   a miss; next render is fresh.
+3. **TTL elapsing.** Past `maxAge` (no swr) or `maxAge + swr`, the
+   entry is treated as a miss; next render is fresh.
 
 ## Live updates
 
-`expiresAt` is also a wake hint for the segment driver's
-`?streaming=1` long-poll. When a live connection holds the response
-open, the driver races against the earliest `expiresAt` across the
-route's snapshots and re-renders at the boundary — so a clock
-display with `expiresAt: time.nextSecond` ticks once a second
-without any userspace timer. See
-[`docs/internals/streaming.md`](../internals/streaming.md).
+See [`docs/internals/streaming.md`](../internals/streaming.md) for
+the time-based reactivity path. Short version: `expiresAt` in vary
+is a wake hint for the segment driver's `?streaming=1` long-poll
+loop. The `cache` prop is independent — caching is byte storage,
+expiresAt is a freshness boundary.
 
 ## Related
 

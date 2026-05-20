@@ -21,7 +21,7 @@ import {
 } from "@parton/framework/lib/partial-client.tsx"
 import { splitSegments } from "@parton/framework/lib/fp-trailer-split.ts"
 import { applyStandardTrailers } from "@parton/framework/lib/segment-trailers-client.ts"
-import { applyLiveStateFromDocument } from "@parton/framework/lib/live-signal.ts"
+import { startLivePageHeartbeat } from "@parton/framework/lib/live-page-heartbeat.ts"
 import { getNavigation } from "@parton/framework/runtime/navigation-api.ts"
 
 async function main() {
@@ -50,11 +50,6 @@ async function main() {
   // fps in `_currentPageFingerprints` and the very next visit
   // pays a full fresh re-render instead of fp-skipping.
   _applyFpTrailerFromDocument()
-  // Seed the heartbeat's liveness signal from the SSR comment so
-  // pages with live content (`expiresAt` / cells) open the long-poll
-  // connection immediately on mount, and pages without it stay
-  // dormant (no extra fetch, no networkidle interference).
-  applyLiveStateFromDocument()
 
   function BrowserRoot() {
     const [payload, setPayload_] = React.useState(initialPayload)
@@ -295,6 +290,12 @@ async function main() {
       onRecoverableError: silenceTornStream,
     })
   }
+
+  // Opt-in live updates. Holds a `?streaming=1` long-poll connection
+  // open against the current URL; the server's segment driver
+  // pushes refreshSelector / expiresAt updates as they happen. See
+  // `docs/internals/streaming.md`.
+  startLivePageHeartbeat()
 
   if (import.meta.hot) {
     import.meta.hot.on("rsc:update", () => {

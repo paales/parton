@@ -1,18 +1,29 @@
 /**
- * Dev/debug options carried by `<Partial cache={…}>`.
+ * Cache-Control-shaped options carried by `parton(..., { cache })`.
  *
- * Caching itself is now driven by `expiresAt` / `staleUntil` returned
- * from `vary` — the framework strips those reserved keys from the
- * vary result, stores them on the partial's snapshot, and the
- * `<Cache>` wrapper consumes them as freshness boundaries. Authors
- * who just want byte caching never set the `cache` prop; they
- * declare `expiresAt: time.in(60_000)` (or `time.never`) in vary.
+ * Setting the `cache` prop activates byte-level caching: the
+ * framework stores the rendered Flight bytes for the spec's
+ * subtree and replays them on hit. Distinct from `expiresAt` in
+ * `vary` — that controls when the fp becomes stale (wake hint for
+ * the segment driver, no byte storage). Caching needs an explicit
+ * opt-in via this prop.
  *
- * The remaining `CacheOptions` exists solely for the `slowSource`
- * dev hook, which slows the hit-path byte replay so the Suspense
- * streaming behaviour is observable end-to-end. Not for production.
+ * - `maxAge`: HTTP-directive-style fresh window in seconds. After
+ *   `maxAge` elapses the stored entry is stale and the next
+ *   request misses.
+ * - `staleWhileRevalidate`: additional seconds past `maxAge` during
+ *   which stale bytes are served while a background refresh runs.
+ * - `slowSource` (dev only): emit stored bytes in artificially
+ *   throttled chunks so a hit-path replay exercises Suspense
+ *   streaming end-to-end. Used by `cache-streaming-demo.tsx`.
+ *
+ * Future direction: `cache: true` (boolean) replacing the object
+ * form, with TTL coming from vary's `expiresAt`. Not yet — for now
+ * the prop is the byte-cache opt-in AND carries its own maxAge.
  */
 export interface CacheOptions {
+  maxAge?: number
+  staleWhileRevalidate?: number
   /**
    * DEV / DEBUG ONLY. When set on a hit-path read, the stored bytes
    * are emitted through the decoder in chunks separated by `perChunkMs`

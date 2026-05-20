@@ -85,7 +85,7 @@ describe("serializeSnapshot / deserializeSnapshot", () => {
   it("drops non-serializable fields", () => {
     const orig = makeSnapshot({
       fallback: "would be JSX in real life",
-      cache: { slowSource: { perChunkMs: 25 } },
+      cache: { maxAge: 60 },
     })
     const ser = serializeSnapshot(orig)
     expect("fallback" in ser).toBe(false)

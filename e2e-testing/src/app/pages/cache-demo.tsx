@@ -1,9 +1,8 @@
 /**
  * /cache-demo — server-side render-output caching spike.
  *
- * Outer wrapper gates the route once. `Slow` is cached via
- * `vary: ({time}) => ({expiresAt: time.in(60_000)})` and varies by
- * `flavor`; `Clock` stays uncached (no `expiresAt`).
+ * Outer wrapper gates the route once. `Slow` is cached (`cache:
+ * {maxAge: 60}`) and varies by `flavor`; `Clock` stays uncached.
  */
 
 import { parton, getScope, type RenderArgs } from "@parton/framework"
@@ -78,7 +77,7 @@ const Slow = parton(
   },
   {
     selector: "#slow",
-    vary: ({ time }) => ({ expiresAt: time.in(60_000) }),
+    cache: { maxAge: 60 },
     fallback: <div data-testid="slow-fallback">Loading slow…</div>,
   },
 )

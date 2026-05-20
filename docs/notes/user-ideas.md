@@ -29,10 +29,7 @@
 const [reload, { committed, finished }] = useNavigation().reload()
 
 return (
-  <Button
-    onClick={() => reload({ selector: ".price" })}
-    disabled={committed && !finished}
-  >
+  <Button onClick={() => reload({ selector: ".price" })} disabled={committed && !finished}>
     Refresh all prices
   </Button>
 )
@@ -44,4 +41,4 @@ return (
 
 - [ ] "Can you investigate the codebase deeply and after that I'd like to talk about tensions of multi frameworks that a shopify uses (liquid+react checkout/account), hyva alpine catalogs + checkout. Magento Luma server rendered + client side layered + layout checkout variable. admin html xml componetns, etc. All projects seem to abandon their base frameworks to go with a more advanced frameworks."
 
-- [ ] Lets create a fake chat stream like in a live stream situation that has bursts of 20 messages in a few seconds.
+- [ ]

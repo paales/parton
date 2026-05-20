@@ -102,7 +102,8 @@ const MagentoProducts = parton(
   },
   {
     selector: "#products",
-    vary: ({ search: { q = "" }, time }) => ({ q, expiresAt: time.in(12_000) }),
+    cache: { maxAge: 12 },
+    vary: ({ search: { q = "" } }) => ({ q }),
   },
 )
 

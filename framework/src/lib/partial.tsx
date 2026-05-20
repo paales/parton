@@ -33,7 +33,6 @@ import { stableStringify } from "./stable-stringify.ts"
 import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 import { PartialsClient } from "./partial-client.tsx"
-import { LivePageHeartbeat } from "./live-page-heartbeat.tsx"
 import { Cache } from "./cache.tsx"
 import type { CacheOptions } from "./cache-options.ts"
 import { RemoteFrame } from "./remote-frame.tsx"
@@ -1495,22 +1494,9 @@ function createSpecComponent<V>(
 
     let body: ReactNode = spec.Render(renderProps)
 
-    // Caching is opt-in via `vary: ({time}) => ({…, expiresAt: …})`.
-    // The presence of any finite `expiresAt` activates byte caching;
-    // `time.never` (POSITIVE_INFINITY) caches forever. The `cache`
-    // prop on `parton` is now optional dev-debug only (slowSource).
-    const cacheActive =
-      expiresAt !== undefined && expiresAt > Date.now() || opts.cache?.slowSource !== undefined
-    if (cacheActive) {
+    if (opts.cache !== undefined) {
       body = (
-        <Cache
-          id={id}
-          fingerprint={structuralFp}
-          options={opts.cache}
-          varyResult={varyResult}
-          expiresAt={expiresAt ?? Number.POSITIVE_INFINITY}
-          staleUntil={staleUntil}
-        >
+        <Cache id={id} fingerprint={structuralFp} options={opts.cache} varyResult={varyResult}>
           {body}
         </Cache>
       )
@@ -2017,12 +2003,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
       isPartialRefetch: false,
     }
     enterPartialState(streamState)
-    return (
-      <PartialsClient mode="streaming">
-        {children}
-        <LivePageHeartbeat />
-      </PartialsClient>
-    )
+    return <PartialsClient mode="streaming">{children}</PartialsClient>
   }
 
   // Already in cache-mode ctx from the pre-enter above.
