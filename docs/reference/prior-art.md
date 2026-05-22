@@ -76,7 +76,8 @@ frame>` has two axes — browser history (page URLs) and per-entry
   `__frameHistory` (frame URLs scoped to each browser entry) — so
   drawer-shape frames don't pollute browser back.
 - Turbo doesn't have a built-in invalidation graph. `<Partial>` does
-  (selector tokens, server-action `invalidate`).
+  (selector tokens + `getServerNavigation().reload({selector})` from
+  server actions or any server-side task).
 
 ## JS frameworks that gestured at this
 

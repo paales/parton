@@ -36,10 +36,9 @@ Open questions:
   stored as queryable fields. Either keep a side-index
   `(key → varyResult)` to walk, or accept O(n) scan over cache
   entries on invalidation (probably fine for sub-10k entries).
-- **Surface.** A server action could `return { invalidate: { match:
-  { cookie: "user_id", value: "42" }}}`, consistent with the
-  selector-based invalidation shape. Or a server-side
-  `invalidateBy(...)` helper for non-action contexts.
+- **Surface.** Extend `getServerNavigation().reload(...)` to accept
+  a `match: { cookie: "user_id", value: "42" }` shape alongside the
+  current `selector` form. Same call site, additional dimension.
 - **Cross-key dimensions.** Matching on `cookie` keys assumes the
   vary result encodes them in a stable shape. Today `vary` returns
   whatever the author writes; folding the destructured scope keys
@@ -49,6 +48,25 @@ Open questions:
 ### Cross-tab sync via BroadcastChannel
 
 When tab A runs a server action that invalidates `["cart"]`, tab B is stale. A BroadcastChannel propagating invalidation signals across same-origin tabs would make multi-tab behaviour correct by default. Strictly simpler than server-push realtime (no websocket infra) and probably what 90% of apps actually need.
+
+### Persist optimistic unsaved cell values
+
+`useCell` shows the optimistic-aware value (`latestSentByCell`) while writes are pending; on reconcile the server's value wins. The optimistic value lives in React memory and dies on reload. For drafts and rapid-edit flows the user may close the tab mid-write, return, and expect the unsaved value to still be there.
+
+Persist `latestSentByCell` to `sessionStorage` (or IndexedDB for larger payloads) keyed by cell id + partition key, with a short TTL. On mount, hydrate the optimistic map from storage. Only persist entries with `pendingByCell[id] > 0` — once a write settles, drop the persisted entry. Open questions: cross-tab coherence (two tabs both write the same cell — last-write-wins?), and whether to surface the persisted state to the renderer differently from a fresh in-flight write.
+
+### Sharp edge: `reload({selector})` is too broad by default
+
+Today `getServerNavigation().reload({ selector: "cart" })` with no constraints bumps **every** cart-tagged parton across every connected viewer. The grammar supports per-request scoping via query-string constraints (`cart?cart_id=${cartId}`), but the safe pattern is opt-in: forget the constraint and one user's cart mutation causes every other viewer's cart to refetch on their next nav. Silent footgun — the caller sees correct local behaviour; the cross-user fan-out only shows up under load or as unnecessary upstream round-trips.
+
+Cells partially mitigate via the value-fold (re-renders that produce identical bytes hit fp-skip on the way out), but the registry walk + re-render still happens. For GraphQL-backed partons like `cart`, the re-render is a real Magento round-trip per viewer.
+
+Possible directions:
+- **Syntactic sugar.** `reload({ selector: "cart", scope: { cart_id: cartId } })` as a readable alternative to query-string interpolation. Same semantics; easier to read for multi-key cases.
+- **Auto-scope from declared read keys.** If the framework tracks which `readCookie` / `readHeader` calls happened during the action body, fold those into default constraints. Small instrumentation cost, large ergonomic win — the action says what it touched without naming each axis.
+- **Dev warning on bare bumps.** Warn when a `reload({selector})` would match >1 distinct vary tuple in the current registry snapshot. Catches the footgun in development; ships nothing to production.
+
+Not urgent: the cart action is the only real per-user mutation in-tree today; CMS draft is process-global; cells absorb the bare-bump cost via fp-skip. Real pressure arrives when a multi-user app ships several per-user mutating actions and the upstream round-trips start showing in flame graphs.
 
 ### Keepalive follow-ups (server-driven TTL, device-aware eviction)
 

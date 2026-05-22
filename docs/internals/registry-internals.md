@@ -127,19 +127,21 @@ mis-firing further up the tree. Merging keeps the prior commit's
 descendant entries alive as long as the ancestor stays on the page.
 
 Stale entries that legitimately need removal flow through
-`ctx.invalidations`: server actions return `{invalidate: {selector}}`
-which the dispatcher converts into id-wide invalidations
+`ctx.invalidations`: server-side `getServerNavigation().reload({selector})`
+calls bump the invalidation registry, and on commit the dispatcher
+converts each bumped name into an id-wide invalidation
 (`invalidateSnapshot(id)` clears every variant of the id and every
-hint pointing at it), and CMS edits invalidate the affected blocks
-via the same path.
+hint pointing at it). CMS edits flow through the same `reload()`
+path.
 
 ## Invalidation
 
 `invalidateSnapshot(id)` clears every variant of that id from the
-variant store and every hint pointing at it. Server actions
-request invalidation by id (`return { invalidate: { selector:
-"#cart" } }`); the meaning is "this content has changed for every
-placement of this partial."
+variant store and every hint pointing at it. Server-side
+`getServerNavigation().reload({ selector: "cart" })` bumps the
+invalidation registry under the name `cart`; the meaning is "this
+content has changed for every placement of any partial carrying
+the `cart` label or id."
 
 ## LRU bound
 

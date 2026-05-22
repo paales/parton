@@ -101,10 +101,12 @@ function buildCellVaryScope(): CellVaryScope {
  * Wrapped in `runInvalidationTransaction` so a thrown validation
  * error (bad client payload) leaves the registry untouched.
  *
- * Returns `{invalidate: {selector: "cell:<id>"}}` — the framework's
- * action-response pipeline reads this and refetches every parton
- * carrying the matching label (cells auto-stamp `cell:<id>` onto
- * the labels of any parton whose `schema` reads them).
+ * The write itself calls `getServerNavigation().reload({selector:
+ * "cell:<id>"})` (see `writeOneCell`), which bumps the invalidation
+ * registry inside the active transaction. Every parton whose schema
+ * reads this cell (cells auto-stamp `cell:<id>` onto those partons'
+ * labels) sees a new fingerprint and re-renders on the action's
+ * response render.
  */
 export async function __cellWrite(
   cellId: string,

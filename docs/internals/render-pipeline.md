@@ -92,8 +92,15 @@ Wire params:
 | `partials` | Selector labels (cosmetic `#`/`.` stripped). Resolves against snapshot `labels` AND `id` for fan-out targeting. |
 | `cached` | `id:matchKey:fp,…` — fingerprints the client has |
 | `partialProps` | JSON `{"<id>":{<propName>:<value>}}` — call-site prop overlay; overrides snapshot-replayed `props` |
-| `__populateCache` | flag to re-render fresh after a server-action invalidate, repopulating the client cache |
 | `__frame=...&__frameUrl=...` | session-write a frame URL before render |
+
+After a server action commits, refetch routing is driven entirely by
+the invalidation registry — actions call `getServerNavigation().reload({selector})`
+in-body (queued inside the action's `runInvalidationTransaction`),
+and the response render computes fresh fps for any partial whose
+selector matches. Cold clients (no `?cached=`) receive the full root
+tree; warm clients get fp-skip placeholders for everything unchanged.
+No URL-rewrite step in between.
 
 `PartialRoot` resolves `partials` against the route's hint table to
 derive the union of ids to refetch — direct id match plus any

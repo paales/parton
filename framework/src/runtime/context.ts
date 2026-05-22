@@ -362,10 +362,10 @@ export function readCookie(name: string): string | undefined {
  * Vary's `cookies` scope feeds off this. The overlay keeps vary
  * consistent with `readCookie`: a partial re-rendered immediately
  * after a server action calls `setCookie("cart_id", X) +
- * return {invalidate: {selector: ".cart"}}` sees the new value, so
- * its fingerprint moves and the action's invalidate directive
- * produces fresh content on the same request rather than stale
- * content that catches up on the next nav.
+ * getServerNavigation().reload({selector: "cart"})` sees the new
+ * value, so its fingerprint moves and the reload's selector produces
+ * fresh content on the same request rather than stale content that
+ * catches up on the next nav.
  *
  * Max-Age=0 follows browser deletion semantics — the cookie disappears
  * from the overlay. A non-zero Max-Age with an empty value is a set,

@@ -1,21 +1,16 @@
 # Replicated parton state
 
-> Live design doc. Captured 2026-05-16 from a design conversation
-> exploring how Unreal Engine's actor replication model maps onto
-> parton primitives. Decision still open; this is the proposal
-> on the table.
+> Live design doc. Originally captured 2026-05-16 from a design
+> conversation exploring how Unreal Engine's actor replication
+> model maps onto parton primitives. Latest pass: 2026-05-22 —
+> narrowed scope after rolling back the `usePartialReconcile`
+> prototype and recognising that cells already cover the
+> typed-value lane. The doc now describes the *current* model
+> (cells + `useOptimistic` + in-body `reload()`) and a small set
+> of genuinely open questions.
 >
 > Predecessor: [`../archive/transient-client-state.md`](../archive/transient-client-state.md)
 > (archived 2026-05-21 once cells landed Directions A + B).
-> This doc concretises Direction A + B from that doc and adds the
-> RepNotify channel.
->
-> Status note 2026-05-17: a `usePartialReconcile` prototype landed
-> briefly and was rolled back — no in-tree callers and the
-> microtask-defer plumbing it required was paying for nothing. The
-> RepNotify channel described below is still the right design
-> direction; this doc keeps it as the forward-looking proposal,
-> not as something currently shipping.
 
 ## Premise
 
@@ -26,19 +21,16 @@ tick-loop / FPS assumptions.
 ## What survives from Unreal
 
 1. **Per-property authority** — not per-parton. A parton's state is
-   composed of fields, each with explicit authority.
-2. **RepNotify** — incoming updates fire a side-effect channel;
-   value sync and consequence are decoupled.
-3. **Prediction is optional and shape-only** — clients predict the
+   composed of fields, each with explicit authority. Cells make
+   this first-class for typed values.
+2. **Prediction is optional and shape-only** — clients predict the
    structural change (row appears, count increments), not the
    authoritative value (price, validated state). Complex / secret /
    fragile business logic stays server-side.
-4. **Saved-moves replay** — pending optimistic actions replay
-   against the new authoritative state when the server reconciles.
-5. **Smooth correction** — view-transition over snap.
-6. **Reliable vs lossy channels** — reliable for commits, lossy
-   for high-frequency intent.
-7. **Relevancy** — already in parton via `?cached=`; covers
+3. **Smooth correction** — view-transition over snap. Available
+   client-side via `document.startViewTransition` around the
+   reconcile; no spec-level option today.
+4. **Relevancy** — already in parton via `?cached=`; covers
    single-client. Multi-client routing deferred.
 
 ## What we drop
@@ -49,171 +41,118 @@ tick-loop / FPS assumptions.
   not 16ms.
 - UDP / unreliable transport. WebSocket / HTTP/3 streams are
   the upper bound — QUIC is good enough.
+- **RepNotify (`usePartialReconcile`).** Prototyped 2026-05-17,
+  rolled back same week — no in-tree callers and the
+  microtask-defer plumbing it required was paying for nothing.
+  The fingerprint substrate (cold→warm trailer, `PartialIdContext`)
+  is intact, so re-landing is cheap if a real case appears.
+- **Saved-moves replay (`useReplayableOptimistic`).** Cells
+  cover the typed-value lane cleanly, `useOptimistic` covers the
+  structural-prediction lane. A queued-replay primitive hasn't
+  found an in-tree case where neither suffices.
+- **Reliable vs lossy channels.** Reliable (server actions) is the
+  default and exists today. Lossy is filed in
+  [`IDEAS.md`](./IDEAS.md) under "Restart-streaming via segmented
+  Flight."
 
 ## Authority taxonomy
 
 Every piece of state in a parton lives in one of four modes. The
-author picks the mode by picking the hook / spec option — there is
-no per-field `authority: …` declaration. Same discipline as
+author picks the mode by picking the primitive — there is no
+per-field `authority: …` declaration. Same discipline as
 [`cms.text(name)`](../reference/cms.md): name the role, the
 framework owns the cascade.
 
 | Mode | Where it lives | API surface | Example |
 |---|---|---|---|
 | **server-only** | `vary` / `schema` output | normal parton render | price, inventory, permissions |
-| **server-with-rep-notify** | server-authoritative + client side-effect | `usePartialReconcile()` + `transition: "view"` | toast on order-status change; flash on price update |
-| **server-with-optimistic** | server-authoritative + client prediction overlay | `useOptimistic` (single-shot) / `useReplayableOptimistic` (queued) | add-to-cart, drag-reorder, mark-as-read |
+| **server-with-cell** | server-authoritative typed value, partition-keyed | `cell(...)` + `useCell` (optimistic-aware value, batched `set`, `input()` bindings) | counter, draft text, drawer-open state, anything keyed by partition |
+| **server-with-optimistic-shape** | server-authoritative + client structural prediction | React-native `useOptimistic` (single-shot) | add-to-cart (line disappears optimistically; totals/taxes from server), drag-reorder |
 | **client-only** | React memory | plain `useState` | hover, focus, drag-position-during-drag |
 
+Cells are the answer for the typed-value lane: pick a cell when the
+state is one named value whose authority lives on the server but
+whose UI is interactive (counter, drawer, draft, tag). The cell's
+`set` is what the client calls; cells auto-bump the invalidation
+registry so every parton reading the cell re-renders with the new
+value.
+
+`useOptimistic` covers the structural-prediction lane: pick it when
+the client is predicting a shape change (a row disappearing, a
+count incrementing) rather than a single typed value.
+Discard-on-commit is fine — totals / taxes / promos arrive from
+the server's authoritative re-render.
+
+`client-only` covers the never-leaves-the-tab case: hover, focus,
+the drag position WHILE dragging. `useState` and we're done.
+
 Unreal's "client-authoritative-server-validated" (its character
-input shape) maps to **server-with-optimistic** + a server action
-that returns the validated result. The client predicts the shape;
-the server commits with authority. Even when "client-authoritative"
-in name, the server has the final say — same as Unreal's input
-validation.
-
-## Client hook surface
-
-```tsx
-"use client"
-import {
-  useOptimistic,              // React, unchanged
-  useReplayableOptimistic,    // new
-  usePartialReconcile,        // new — RepNotify
-  useNavigation,              // existing
-} from "@parton/framework/client"
-```
-
-### `useOptimistic` — React-native, unchanged
-
-For single-shot optimistic updates that discard on commit. Use when
-the prediction is one action at a time and replay isn't needed.
-
-```tsx
-const [items, addOptimistic] = useOptimistic(initial, (state, op) =>
-  op.kind === "remove" ? state.filter(i => i.id !== op.id) : state
-)
-```
-
-### `useReplayableOptimistic(serverState, reducer)` — new
-
-Same call shape as `useOptimistic`; action queue survives across
-renders and replays on reconcile. Use for rapid-fire optimistic
-flows (multi-cell admin edits, multi-step drag, queued
-mark-as-read).
-
-```tsx
-const [rows, dispatch, pending] = useReplayableOptimistic(serverRows, applyAction)
-
-function onCellEdit(id, field, value) {
-  const opId = crypto.randomUUID()
-  dispatch({ kind: "edit", opId, id, field, value })
-  saveCellAction({ opId, id, field, value })
-}
-```
-
-Behavior:
-
-- Display = `queue.reduce(reducer, serverState)`.
-- On reconcile (the enclosing parton's `serverState` prop is
-  replaced by the framework's refetch), the queue filters out
-  actions whose `opId` was acked, then replays remaining against
-  the new `serverState`.
-- `pending` is the queue length — for spinners and "saving N
-  changes…" indicators.
-
-The `opId` is the join key between client-side queue and
-server-side ack. Without it the framework can't tell whether a
-returned `serverState` already incorporates a given action.
-
-### `usePartialReconcile(handler)` — new (RepNotify)
-
-Fires when the enclosing parton's server fingerprint changes. Pure
-side-effect channel — no state read or write here, that's what
-props are for.
-
-```tsx
-usePartialReconcile(({ oldFp, newFp, reason }) => {
-  document.startViewTransition(() => {})
-})
-```
-
-`reason` enum: `"initial"` | `"refetch"` | `"action"` |
-`"invalidate"`. Lets the handler distinguish first-mount from
-subsequent updates.
-
-Reads enclosing parton id from the same React context the
-navigation hook's `@self` token resolves through. No-arg form is the
-common case; an explicit-id form is open for cross-parton
-coordination (toast parton reacting to cart parton's update).
-
-## Spec options (server)
-
-### `transition` — auto view-transition on swap
-
-```tsx
-const Price = parton(PriceRender, {
-  selector: ".price",
-  transition: "view",     // wrap next client paint in startViewTransition
-})
-```
-
-Three values:
-
-- `"view"` — `document.startViewTransition` when supported,
-  no-op fallback.
-- `"none"` (default) — instant swap.
-- `(prev, next) => void` — author callback fired client-side on
-  every reconcile.
-
-Implementation: the trailer / PEB-prop hydration carries a
-`transition` hint per spec; the client wraps the affected
-substitution in a view transition. Composes with `keepalive`
-(Activity-wrapped specs transition between Activity siblings).
+input shape) maps to **server-with-optimistic-shape** + a server
+action that returns the validated result. The client predicts the
+shape; the server commits with authority. Even when
+"client-authoritative" in name, the server has the final say —
+same as Unreal's input validation.
 
 ## Action semantics
 
-### Reliable (default — exists today)
+### Action body — in-body `reload({selector})`
 
-Server actions. Guaranteed delivery, author-supplied idempotency.
-Returns `{ invalidate: { selector } }` to drive refetch.
+Server actions drive refetch via a side-effect call in the body.
+Inside the action body, call
+`getServerNavigation().reload({selector})` to bump the invalidation
+registry — the surrounding `runInvalidationTransaction` (installed
+by the RSC entry handler) buffers the bump and flushes on success.
+On throw, the queue is discarded so a failed mutation leaves the
+registry untouched.
 
-For replay correctness, actions invoked from
-`useReplayableOptimistic` SHOULD return their `opId`:
-
-```tsx
+```ts
 "use server"
-async function saveCellAction({ opId, id, field, value }) {
-  await db.update(id, { [field]: value })
-  return { ack: opId, invalidate: { selector: "grid" } }
+
+import { getServerNavigation, setCookie } from "@parton/framework"
+
+export async function addToCart(sku: string) {
+  const cart = await magento.addItem(sku)
+  setCookie("cart_id", cart.id)
+  getServerNavigation().reload({ selector: `cart?cart_id=${cart.id}` })
 }
 ```
 
-The framework lifts `ack` from the action return and routes it to
-the dispatching queue automatically. Wiring: at `dispatch` time,
-the framework records `(opId → queueRef)`; on action commit, it
-calls `queueRef.ack(opId)` before the parton refetches. Open:
-needs a per-tab registry keyed by opId; collision-resistant
-because opIds are UUIDs.
+The selector's query-string fragment (`?cart_id=${cart.id}`)
+scopes the bump: only partons whose `vary` output contains
+`cart_id=<cart.id>` get a fresh fingerprint. Bare `"cart"` (no
+constraints) would fan out to every cart-tagged parton across
+every user — overwhelmingly the wrong default for per-user state.
+The author owns this discipline; the framework doesn't auto-scope
+because it doesn't know which `vary` keys are partition axes vs
+incidental reads.
 
-### Lossy (filed, not v1)
+The action's response render fires immediately after the body
+returns — every parton whose selector matches the bumped name AND
+constraints sees a fresh fingerprint and emits new bytes on the
+same response. No URL rewrite, no return-value lifting.
 
-A streaming "up" channel for high-frequency intent — cursor,
-scroll, focus changes, typing-in-progress. Transport: WebSocket
-or HTTP/3 stream of small frames; the server consumes them and
-emits invalidations downstream via the existing mechanism.
+Cell writes do this automatically: `cell.set(v)` calls
+`getServerNavigation().reload({ selector: "cell:<id>" })` after
+the write, so every parton whose `schema` reads the cell
+re-renders.
 
-```tsx
-const stream = useLossyStream("cursor")
-stream.send({ x, y })  // fire-and-forget
-```
+### Action results
 
-Server-side handler is opt-in per parton via a `subscribe`
-callback. Out of scope for v1 — file it once the role-based hook
-story lands. See also "Restart-streaming via segmented Flight"
-in [`IDEAS.md`](./IDEAS.md).
+Today an action's return value flows back to the caller as the
+promise resolution. There's no framework-level "result slot" the
+renderer can observe — if a caller wants to render the result
+(e.g. a form-level error), it stashes the value in client state
+at the call site.
 
-## Worked example — cart
+A future direction worth exploring: an implicit per-callsite
+result slot — like react-hook-form's root error — that the
+framework owns and a hook exposes. Shape something like
+`{ success, error, value }`, scoped to React identity at the
+call site, surviving until the next call, composing with
+streaming (the slot updates as the action streams). Deferred
+until a concrete in-tree use case lands.
+
+## Worked example — cart with optimistic shape
 
 ```tsx
 // Server
@@ -224,7 +163,6 @@ const Cart = parton(
   },
   {
     selector: "cart",
-    transition: "view",
     vary: ({ cookies: { cart_id: cartId } }) => ({ cartId }),
   },
 )
@@ -251,102 +189,66 @@ function CartClient({ initial }: { initial: CartItem[] }) {
 
 The optimistic reducer predicts the **shape change** (line
 disappears). It does NOT predict the authoritative values — new
-totals / taxes / promos all come from the server reconcile. The
-`transition: "view"` option means the post-reconcile substitution
-animates smoothly.
-
-## Worked example — admin grid with replay
-
-```tsx
-"use client"
-function GridClient({ initial }: { initial: Row[] }) {
-  const [rows, dispatch, pending] = useReplayableOptimistic(initial,
-    (state, op) =>
-      op.kind === "edit"
-        ? state.map(r => r.id === op.id ? { ...r, [op.field]: op.value } : r)
-        : state
-  )
-
-  return (
-    <>
-      {pending > 0 && <PendingBadge count={pending} />}
-      <Grid rows={rows} onCellEdit={(id, field, value) => {
-        const opId = crypto.randomUUID()
-        dispatch({ kind: "edit", opId, id, field, value })
-        saveCellAction({ opId, id, field, value })
-      }} />
-    </>
-  )
-}
-```
-
-Server returns `{ ack: opId, invalidate: { selector: "grid" } }`.
-Framework refetches; queue replays uncommitted ops against the new
-state. Rapid-fire edits (cell A, cell B, cell C all in 200ms) all
-display optimistically; each gets acked independently; if the
-server rejects one, the rest replay against pre-rejection state.
+totals / taxes / promos all come from the server re-render once
+the action's in-body `reload({ selector: "cart" })` lands.
 
 ## Contracts
 
-1. **Reducer purity.** The reducer in `useReplayableOptimistic`
-   runs client-side at dispatch time, again at every render that
-   has pending ops, and again on reconcile. It must be
-   deterministic and pure. Hard contract.
-2. **OpId uniqueness.** Per-tab unique (UUID is fine). Crossing
-   tabs is undefined behavior — replay queues are per-tab.
-3. **Authority wins on reconcile.** If the server's authoritative
-   state contradicts the prediction, the prediction is replaced.
+1. **Reducer purity.** The `useOptimistic` reducer runs client-side
+   at dispatch and again on each render that still has pending ops.
+   Must be deterministic and pure.
+2. **Authority wins on reconcile.** If the server's authoritative
+   re-render contradicts the prediction, the prediction is replaced.
    No "client wins" mode.
-4. **Prediction is shape, not value.** Author rule, not
+3. **Prediction is shape, not value.** Author rule, not
    framework-enforced — reducers should predict structural changes
    (rows present / absent, counts changed, selections toggled) but
    not authoritative values (final prices, validated states,
    business-rule outputs). Predicting values invites drift between
-   client and server logic; predicting shape is structurally
-   stable.
+   client and server logic; predicting shape is structurally stable.
 
 ## Open questions
 
-1. **Action ack auto-wiring.** Does the framework auto-extract
-   `ack: opId` from action returns and route to the right queue,
-   or does the author wire it manually? Auto is cleaner but
-   requires the framework to know which queue owns each opId.
-   Probably: per-tab opId-→-queue registry, populated on
-   `dispatch`, consumed on action commit.
-2. **Replay-after-error.** Action errors → drop the failed op,
-   replay subsequent against pre-error state. Default behavior;
-   per-op `onError` override probably wanted later.
-3. **Conflict resolution between concurrent optimistic ops.**
-   "Last action wins" is fine for commerce; collab editing wants
-   CRDTs. Out of scope for v1.
-4. **Cross-parton reconcile.** A toast parton reacting to a cart
-   parton's update needs an explicit-id
-   `usePartialReconcile(cartId, handler)`. Defer until a real
-   case appears.
-5. **Replay queue persistence.** Today: queue lives in React
-   state, dies on reload. Cross-tab consistency (user backgrounds
-   the tab for 10 minutes, returns): queue should probably
-   persist to sessionStorage with a short TTL.
-6. **Predictive world loading.** Different axis — pre-loading
-   partons for likely-next routes. See "Speculation Rules API for
-   partial prefetch" in [`IDEAS.md`](./IDEAS.md). Doesn't
-   interact with the per-parton optimistic story; can ship
-   independently.
+1. **Action result shape.** Is the framework-owned per-callsite
+   result slot worth building, and at what surface? `{ success,
+   error, value }` is the natural envelope, but the migration cost
+   is non-trivial and no in-tree caller forces the decision yet.
+2. **Failure-mode propagation.** A single-action throw already
+   rolls back the action's queued bumps via the transaction. What's
+   not pinned: per-cell granularity inside a batch (today the whole
+   batch rolls back; a partial-commit semantic may be wanted later),
+   and how the caller learns *which* part failed when the action
+   throws. Both questions become urgent the day a multi-cell batch
+   ships with mixed-validity semantics.
+3. **Cross-tab consistency.** Optimistic state lives in React
+   memory and dies on reload. Cells' `latestSentByCell` map has
+   the same property. Tracked separately in
+   [`IDEAS.md`](./IDEAS.md): "persist optimistic unsaved cell
+   values" (single-tab durability) and "Cross-tab sync via
+   BroadcastChannel" (multi-tab coherence).
+4. **Cell dimensionality.** Cells today carry one value per
+   partition (`vary` output). Time (history / undo), translations,
+   currency, domain — these all want different storage shapes and
+   different fallback chains. Lives in
+   [`cell-dimensionality.md`](./cell-dimensionality.md).
 
 ## Related
 
 - [`../archive/transient-client-state.md`](../archive/transient-client-state.md) —
   the predecessor (archived 2026-05-21 once cells landed); names
-  the gap this spec fills.
+  the gap this doc fills.
 - [`../reference/cells.md`](../reference/cells.md) — the cell
-  primitive that took the narrow "single typed value, mutate-and-
-  invalidate" lane out of the broader replication problem space.
-- [`IDEAS.md`](./IDEAS.md) — broader backlog; lossy-channel,
-  speculation-rules, cross-tab-broadcast all live there.
+  primitive that covers the typed-value lane.
+- [`./cell-dimensionality.md`](./cell-dimensionality.md) —
+  exploration of further axes for cell storage (time,
+  translations, currency, domain).
+- [`./IDEAS.md`](./IDEAS.md) — broader backlog; persistence,
+  cross-tab, restart-streaming all live there.
 - [`../reference/partial.md`](../reference/partial.md) — the
   `parton` constructor surface.
 - [`../reference/frames-navigation.md`](../reference/frames-navigation.md)
-  — `useNavigation().reload({ selector, props })` (already the
-  refetch path replay would build on).
+  — `useNavigation().reload({ selector, props })` (client-side
+  refetch; symmetric to the server-side
+  `getServerNavigation().reload(...)` used by actions).
 - [`../internals/render-pipeline.md`](../internals/render-pipeline.md)
-  — fingerprint protocol the RepNotify hook keys on.
+  — fingerprint protocol that drives all selector-based refetch.

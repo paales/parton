@@ -107,7 +107,7 @@ test.describe("CMS editor — smoke", () => {
     })
     await page.getByRole("button", { name: "Save to draft" }).click()
     await responseP
-    // After the invalidate-driven refetch completes, the preview
+    // After the reload-driven refetch completes, the preview
     // still shows the default value — confirming the edit didn't
     // bleed into the default config.
     await expect(preview).toContainText("Default greeting")
@@ -298,7 +298,7 @@ test.describe("CMS editor — smoke", () => {
     await page.getByTestId("cms-edit-field-input-headline").fill("Edited via the editor")
     await page.getByRole("button", { name: "Save to draft" }).click()
 
-    // Preview refetches via invalidate directive and shows the draft.
+    // Preview refetches via the action's in-body reload() and shows the draft.
     await expect(preview).toContainText("Edited via the editor")
     // Tree now marks the edited entry as draft-only? No — it was
     // already in published; the draft write just overrides. Badge
@@ -743,13 +743,14 @@ test.describe("CMS editor — smoke", () => {
       await page.getByRole("button", { name: "Save to draft" }).click()
       await responseP
 
-      // The action's `invalidate` directive folds `partials=` into
-      // the same response (vs. firing a separate GET), so the new
-      // bytes arrive on the action POST itself. Playwright's auto-
-      // retrying assertions handle the small window between
-      // response receipt and React's commit; we use a generous
-      // timeout to absorb commit jitter under heavy parallel-test
-      // load.
+      // The action's in-body reload() bumps the invalidation
+      // registry inside the same `runInvalidationTransaction`, so
+      // the action POST's response render emits the fresh bytes for
+      // every selector-matched partial on the same response — no
+      // separate GET. Playwright's auto-retrying assertions handle
+      // the small window between response receipt and React's
+      // commit; we use a generous timeout to absorb commit jitter
+      // under heavy parallel-test load.
       const preview = page.getByTestId("page-shell")
       await expect(preview.getByTestId("product-card-title").first()).toHaveText(
         "Editor-set title",

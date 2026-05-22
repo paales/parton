@@ -325,12 +325,12 @@ describe("<Frame> — scope opener", () => {
 describe("parton — vary sees mid-request setCookie writes", () => {
   // The cart pattern (e2e-testing/src/app/pages/magento/cart-actions.ts):
   // an action calls `setCookie("cart_id", X)` to persist a freshly-
-  // created cart, then returns `{invalidate: {selector: ".cart"}}`. The
-  // re-rendered cart spec's vary reads `cookies.cart_id` — without the
+  // created cart, then `getServerNavigation().reload({selector: "cart"})`.
+  // The re-rendered cart spec's vary reads `cookies.cart_id` — without the
   // overlay it sees the stale request header (undefined / old value),
   // and the cart badge stays at 0 until the next nav. With the overlay,
   // the immediate re-render sees the new id, hits Magento, and the
-  // badge updates as the action's invalidate intended.
+  // badge updates as the reload intended.
   it("setCookie before a descendant spec is visible to that spec's vary", async () => {
     function CookiePreloader({ children }: { children: React.ReactNode }) {
       setCookie("cart_id", "fresh-cart-123")

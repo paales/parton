@@ -8,9 +8,11 @@
  * by user when the component reads cookies/headers for query arguments
  * (e.g., cart_id). No explicit "vary" needed for the common case.
  *
- * Tag-based invalidation: server actions return { invalidate: { tags: ["cart"] } },
- * which purges all cache entries tagged with "cart". Partials tagged
- * with "cart" are then re-rendered with fresh data.
+ * Tag-based invalidation: server actions call `invalidateByTags(["cart"])`
+ * to purge all cache entries tagged with "cart". Pair with
+ * `getServerNavigation().reload({selector: "cart"})` so partials tagged
+ * with "cart" both lose their cached upstream data AND get re-rendered
+ * with fresh data on the action's response render.
  *
  * This is the ESI model: compose pages from independently cached
  * fragments, fetch only what's stale.

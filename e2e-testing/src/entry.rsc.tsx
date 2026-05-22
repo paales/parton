@@ -15,7 +15,6 @@ import {
   _captureCommitHandle,
   getFrameworkControl,
   runWithRequestAsync,
-  setRequest,
 } from "@parton/framework/runtime/context.ts"
 import { warmCmsCache } from "@parton/framework/runtime/cms-runtime.ts"
 import {
@@ -156,51 +155,6 @@ async function handleRequest(
         return new Response("Internal Server Error", { status: 500 })
       }
     }
-  }
-
-  const clientHasCache = renderRequest.url.searchParams.has("cached")
-  const resultData = returnValue?.ok ? (returnValue.data as any) : null
-  const directive = resultData?.revalidate ?? resultData?.invalidate
-
-  let needsUpdate = false
-
-  if (directive && typeof directive === "object" && !Array.isArray(directive)) {
-    const { selector } = directive as { selector?: string | string[] }
-    if (selector) {
-      // Selectors are flat labels now — leading `#`/`.` is cosmetic and
-      // stripped. All tokens merge into the unified `?partials=` wire
-      // param; the server resolves each token against snapshot ids and
-      // labels (fan-out across carriers).
-      const raw = Array.isArray(selector) ? selector.join(" ") : selector
-      const labels: string[] = []
-      for (const tok of raw.split(/\s+/).map((t) => t.trim()).filter(Boolean)) {
-        const name = tok.startsWith("#") || tok.startsWith(".") ? tok.slice(1) : tok
-        if (name && !labels.includes(name)) labels.push(name)
-      }
-      if (labels.length > 0) {
-        const existing = renderRequest.url.searchParams.get("partials")
-        const merged = existing ? `${existing},${labels.join(",")}` : labels.join(",")
-        renderRequest.url.searchParams.set("partials", merged)
-        // Also bust any tagged GraphQL cache entries that carry these
-        // labels — the action mutated upstream data, so cached
-        // requests are stale.
-        const { invalidateByTags } = await import("@parton/framework/lib/partial-cache.ts")
-        invalidateByTags(labels)
-        needsUpdate = true
-      }
-      if (!clientHasCache) {
-        renderRequest.url.searchParams.set("__populateCache", "1")
-        needsUpdate = true
-      }
-    }
-  }
-
-  if (needsUpdate) {
-    setRequest(
-      new Request(renderRequest.url, {
-        headers: renderRequest.request.headers,
-      }),
-    )
   }
 
   const buildRscPayload = (): RscPayload => ({

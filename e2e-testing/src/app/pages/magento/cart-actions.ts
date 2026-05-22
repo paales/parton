@@ -2,7 +2,8 @@
 
 import { client } from "../../magento-data.ts"
 import { graphql } from "../../magento-graphql.ts"
-import { readCookie, setCookie } from "@parton/framework"
+import { getServerNavigation, readCookie, setCookie } from "@parton/framework"
+import { invalidateByTags } from "@parton/framework/lib/partial-cache.ts"
 
 const CreateEmptyCart = graphql(`
   mutation CreateEmptyCart {
@@ -34,10 +35,7 @@ export async function getOrCreateCart(): Promise<string> {
   return cartId
 }
 
-export async function addToCart(
-  sku: string,
-  quantity: number,
-): Promise<{ revalidate: { selector: string } }> {
+export async function addToCart(sku: string, quantity: number): Promise<void> {
   const cartId = await getOrCreateCart()
   const data = await client.request(AddToCart, { cartId, sku, quantity })
   const result = data.addProductsToCart
@@ -46,7 +44,12 @@ export async function addToCart(
   if (errors.length > 0) {
     throw new Error(errors.map((e) => e.message).join("; "))
   }
-  return { revalidate: { selector: ".cart" } }
+  // Bust any GraphQL response cache tagged with "cart" so the next
+  // CartPartial render re-queries total_quantity, then bump the
+  // invalidation registry — scoped to THIS cartId so other users'
+  // cart partials don't refetch on their next nav.
+  invalidateByTags(["cart"])
+  getServerNavigation().reload({ selector: `cart?cart_id=${cartId}` })
 }
 
 export async function getCartId(): Promise<string | undefined> {

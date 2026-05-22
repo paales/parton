@@ -130,11 +130,26 @@ refresh.
 
 Three axes:
 
-1. **Server-action directives.** An action returns `{invalidate:
-   {selector: "cart price"}}` and the framework refetches every spec
-   whose id or label list contains "cart" or "price" on the next
-   render — bypassing their cache by marking them as explicit
-   refetch targets.
+1. **Server-side `reload({selector})`.** An action body (or any
+   server-side task) calls `getServerNavigation().reload({selector:
+   "cart price"})` and the framework bumps the invalidation registry
+   so every spec whose id or label list contains "cart" or "price"
+   sees a fresh fingerprint on the next render — bypassing their
+   cache. Pair with `invalidateByTags(["cart","price"])` to also
+   purge the upstream GraphQL response cache (independent axis).
+
+   > **Scope per-user state.** A bare selector like `"cart"` has no
+   > constraints and matches every cart-tagged parton across every
+   > viewer — one user's mutation fans out to every other user's
+   > next nav. For per-request state, add a query-string fragment:
+   > `reload({ selector: "cart?cart_id=" + cartId })` matches only
+   > partons whose `vary` output contains `cart_id=<cartId>`. The
+   > author owns this discipline; the framework can't auto-scope
+   > because it doesn't know which `vary` keys are partition axes
+   > vs incidental reads. See "Sharp edge: `reload({selector})`
+   > is too broad by default" in
+   > [`../notes/IDEAS.md`](../notes/IDEAS.md) for the ergonomic
+   > follow-up being tracked.
 2. **Vary-result change.** A page nav whose URL changes a value in
    the spec's vary result produces a different cache key. The old
    entry stays in the store but isn't queried.

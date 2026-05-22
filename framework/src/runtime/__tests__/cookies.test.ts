@@ -4,14 +4,16 @@
  * Vary's `cookies` scope is computed from `parseCookies(request)`. The
  * incoming request header is the base, but any `setCookie()` writes
  * made earlier in the same request (typically inside a server action
- * that returns `{invalidate}`) overlay on top — so a partial re-rendered
- * immediately after the action sees the new cookie value, consistent
- * with `readCookie` (which already walks `store.cookies` first).
+ * that also calls `getServerNavigation().reload(...)`) overlay on top —
+ * so a partial re-rendered immediately after the action sees the new
+ * cookie value, consistent with `readCookie` (which already walks
+ * `store.cookies` first).
  *
  * Without the overlay, the cart pattern `setCookie("cart_id", X) +
- * return {invalidate: {selector: ".cart"}}` leaves the immediate
- * re-render reading `cookies.cart_id === undefined` — the cart spec
- * skips its data fetch and the badge stays at 0 until the next nav.
+ * getServerNavigation().reload({selector: "cart"})` leaves the
+ * immediate re-render reading `cookies.cart_id === undefined` — the
+ * cart spec skips its data fetch and the badge stays at 0 until the
+ * next nav.
  */
 import { describe, expect, it } from "vitest"
 import { parseCookies, runWithRequestAsync, setCookie } from "../context.ts"
@@ -34,8 +36,9 @@ describe("parseCookies", () => {
 
   it("setCookie writes override matching request-header values", async () => {
     // The cart pattern: action receives request with stale cart_id (or none),
-    // creates a new cart, setCookie("cart_id", newId), invalidates ".cart".
-    // The re-rendered cart spec's vary must see the NEW cart_id.
+    // creates a new cart, setCookie("cart_id", newId), then
+    // getServerNavigation().reload({selector: "cart"}). The re-rendered
+    // cart spec's vary must see the NEW cart_id.
     const req = new Request("http://t/", { headers: { cookie: "theme=light" } })
     const { result } = await runWithRequestAsync(req, async () => {
       setCookie("theme", "dark")

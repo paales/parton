@@ -8,10 +8,12 @@ import { test, expect } from "./fixtures"
  *   1. Page renders with cart quantity = N (likely 0 on fresh context).
  *   2. Click "Add to Cart" on a product that succeeds server-side
  *      (no user_errors from Magento).
- *   3. Server action returns { invalidate: { tags: ["cart"] } }.
- *   4. entry.rsc injects ?tags=cart onto the re-render request, so only
- *      the "cart" partial re-renders; CartPartial runs, re-queries
- *      total_quantity, and emits a fresh <CartBadge quantity={N+1} />.
+ *   3. Server action calls `invalidateByTags(["cart"])` (purge
+ *      cached GraphQL response) + `getServerNavigation().reload({
+ *      selector: "cart" })` (bump the invalidation registry).
+ *   4. The action's response render computes a fresh fp for the
+ *      cart partial; CartPartial runs, re-queries total_quantity,
+ *      and emits a fresh <CartBadge quantity={N+1} />.
  *   5. CartBadge DOM updates to N+1.
  *
  * Observed bug: the badge never updates. The test asserts (4) + (5).

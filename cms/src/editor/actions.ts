@@ -9,9 +9,15 @@
  *  - `resetCmsDraft(id)` — drop a single id's draft override.
  *  - `addBlockToSlot` / `removeBlockFromSlot` / `moveBlockInSlot` —
  *    structural slot mutations.
+ *
+ * Refetch is driven via in-body `getServerNavigation().reload(...)`
+ * — the surrounding `runInvalidationTransaction` (installed by the
+ * RSC entry) buffers the bump and flushes it on success, so a
+ * thrown action leaves the registry untouched.
  */
 
 import {
+  getServerNavigation,
   getSlotBlockMeta,
   lookupDraftNode,
   publishDraft,
@@ -21,17 +27,17 @@ import {
   type CmsNode,
 } from "@parton/framework"
 
-function invalidateEditorAround(id: string): { invalidate: { selector: string } } {
-  return {
-    invalidate: { selector: `#${id} #cms-edit-tree #cms-edit-fields` },
-  }
+function refetchEditorAround(id: string): void {
+  getServerNavigation().reload({
+    selector: `${id} cms-edit-tree cms-edit-fields`,
+  })
 }
 
 export async function saveCmsFields(
   id: string,
   configIndex: number,
   formData: FormData,
-): Promise<{ invalidate: { selector: string } }> {
+): Promise<void> {
   const existing: CmsNode = lookupDraftNode(id) ?? { id: id, configs: [] }
   const node: CmsNode = {
     ...existing,
@@ -84,19 +90,17 @@ export async function saveCmsFields(
   }
 
   await writeDraftNode(id, node)
-  return invalidateEditorAround(id)
+  refetchEditorAround(id)
 }
 
-export async function publishCmsDraft(): Promise<{ invalidate: { selector: string } }> {
+export async function publishCmsDraft(): Promise<void> {
   await publishDraft()
-  return { invalidate: { selector: "#cms-edit-tree" } }
+  getServerNavigation().reload({ selector: "cms-edit-tree" })
 }
 
-export async function resetCmsDraft(
-  id: string,
-): Promise<{ invalidate: { selector: string } }> {
+export async function resetCmsDraft(id: string): Promise<void> {
   await revertDraftNode(id)
-  return invalidateEditorAround(id)
+  refetchEditorAround(id)
 }
 
 function cloneNode(node: CmsNode): CmsNode {
@@ -122,7 +126,7 @@ export async function addBlockToSlot(
   parentId: string,
   slotName: string,
   blockType: string,
-): Promise<{ invalidate: { selector: string } }> {
+): Promise<void> {
   if (!getSlotBlockMeta(blockType)) {
     throw new Error(
       `addBlockToSlot: block type "${blockType}" is not registered. ` +
@@ -145,14 +149,14 @@ export async function addBlockToSlot(
   }
   parent.slots = { ...slots, [slotName]: [...children, newChild] }
   await writeDraftNode(parentId, parent)
-  return invalidateEditorAround(parentId)
+  refetchEditorAround(parentId)
 }
 
 export async function removeBlockFromSlot(
   parentId: string,
   slotName: string,
   childId: string,
-): Promise<{ invalidate: { selector: string } }> {
+): Promise<void> {
   const existing = lookupDraftNode(parentId)
   if (!existing) {
     throw new Error(`removeBlockFromSlot: parent "${parentId}" not found.`)
@@ -165,7 +169,7 @@ export async function removeBlockFromSlot(
     [slotName]: children.filter((c) => c.id !== childId),
   }
   await writeDraftNode(parentId, parent)
-  return invalidateEditorAround(parentId)
+  refetchEditorAround(parentId)
 }
 
 export async function moveBlockInSlot(
@@ -173,7 +177,7 @@ export async function moveBlockInSlot(
   slotName: string,
   childId: string,
   direction: "up" | "down",
-): Promise<{ invalidate: { selector: string } }> {
+): Promise<void> {
   const existing = lookupDraftNode(parentId)
   if (!existing) {
     throw new Error(`moveBlockInSlot: parent "${parentId}" not found.`)
@@ -182,13 +186,19 @@ export async function moveBlockInSlot(
   const slots = parent.slots ?? {}
   const children = [...(slots[slotName] ?? [])]
   const idx = children.findIndex((c) => c.id === childId)
-  if (idx < 0) return invalidateEditorAround(parentId)
+  if (idx < 0) {
+    refetchEditorAround(parentId)
+    return
+  }
   const swapIdx = direction === "up" ? idx - 1 : idx + 1
-  if (swapIdx < 0 || swapIdx >= children.length) return invalidateEditorAround(parentId)
+  if (swapIdx < 0 || swapIdx >= children.length) {
+    refetchEditorAround(parentId)
+    return
+  }
   const tmp = children[idx]
   children[idx] = children[swapIdx]
   children[swapIdx] = tmp
   parent.slots = { ...slots, [slotName]: children }
   await writeDraftNode(parentId, parent)
-  return invalidateEditorAround(parentId)
+  refetchEditorAround(parentId)
 }
