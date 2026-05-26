@@ -52,7 +52,7 @@ afterEach(() => {
 describe("scoped cell — schema-callback factory", () => {
   it("descriptor declares shape + default without an id", () => {
     const factories = makeScopedCellFactories<object>()
-    const d = factories.string({ initial: "hello" })
+    const d = factories.localCell({ shape: "string", initial: "hello" })
     expect(d.__scopedCellDescriptor).toBe(true)
     expect(d.shape).toEqual({ kind: "string" })
     expect(d.defaultValue).toBe("hello")
@@ -61,7 +61,7 @@ describe("scoped cell — schema-callback factory", () => {
 
   it("finalizes into a Cell<T> with compound id `<partonId>/<schemaKey>`", () => {
     const factories = makeScopedCellFactories<object>()
-    const d = factories.number({ initial: 0 }) as ScopedCellDescriptor<number>
+    const d = factories.localCell({ shape: "number", initial: 0 }) as ScopedCellDescriptor<number>
     const handle = finalizeScopedCell(d, "my-parton", "counter")
     expect(handle.id).toBe("my-parton/counter")
     expect(handle.defaultValue).toBe(0)
@@ -70,7 +70,7 @@ describe("scoped cell — schema-callback factory", () => {
 
   it("validate uses the finalized id in error messages", () => {
     const factories = makeScopedCellFactories<object>()
-    const d = factories.boolean({ initial: false }) as ScopedCellDescriptor<boolean>
+    const d = factories.localCell({ shape: "boolean", initial: false }) as ScopedCellDescriptor<boolean>
     const handle = finalizeScopedCell(d, "my-parton", "flag")
     expect(() => handle.validate("not a bool")).toThrow(/my-parton\/flag.*expected boolean/)
   })
@@ -86,7 +86,7 @@ describe("scoped cell — schema resolution in a parton", () => {
       },
       {
         match: "/page",
-        schema: ({ cell }) => ({ notes: cell.string({ initial: "" }) }),
+        schema: ({ localCell }) => ({ notes: localCell({ shape: "string", initial: "" }) }),
       },
     )
     const out = await flightAt("http://t/page", <Page parent={ROOT} />)
@@ -104,7 +104,7 @@ describe("scoped cell — schema resolution in a parton", () => {
         selector: "scoped-default-partition",
         match: "/p/:id",
         vary: ({ params }) => ({ productId: params.id }),
-        schema: ({ cell }) => ({ notes: cell.string({ initial: "" }) }),
+        schema: ({ localCell }) => ({ notes: localCell({ shape: "string", initial: "" }) }),
       },
     )
 
@@ -137,8 +137,9 @@ describe("scoped cell — schema resolution in a parton", () => {
         // generic). v2 ships a slightly weaker cascading inference
         // here; an explicit cast is needed when destructuring
         // narrower keys. See cells.md "Type inference" caveat.
-        schema: ({ cell }) => ({
-          sharedNotes: cell.string({
+        schema: ({ localCell }) => ({
+          sharedNotes: localCell({
+            shape: "string",
             initial: "",
             vary: (pv) => ({ productId: (pv as { productId: string }).productId }),
           }),
@@ -157,10 +158,11 @@ describe("scoped cell — schema resolution in a parton", () => {
   })
 
   it("scoped descriptors and module-scope cells coexist in the same schema record", async () => {
-    // Module-scope cell using the public cell factory
-    const { cell: moduleCell } = await import("../cell.ts")
-    const palette = moduleCell.enum(["light", "dark"] as const, {
+    // Module-scope cell using the public localCell constructor
+    const { localCell: moduleLocalCell } = await import("../cell.ts")
+    const palette = moduleLocalCell({
       id: "test.coexist.palette",
+      shape: { enum: ["light", "dark"] as const },
       vary: () => ({}),
       initial: "light",
     })
@@ -182,9 +184,9 @@ describe("scoped cell — schema resolution in a parton", () => {
       {
         selector: "scoped-coexist",
         match: "/mixed",
-        schema: ({ cell }) => ({
+        schema: ({ localCell }) => ({
           palette,
-          notes: cell.string({ initial: "" }),
+          notes: localCell({ shape: "string", initial: "" }),
         }),
       },
     )
@@ -210,7 +212,7 @@ describe("scoped cell — schema resolution in a parton", () => {
         selector: "scoped-wire-partition",
         match: "/p/:id",
         vary: ({ params }) => ({ productId: params.id }),
-        schema: ({ cell }) => ({ notes: cell.string({ initial: "" }) }),
+        schema: ({ localCell }) => ({ notes: localCell({ shape: "string", initial: "" }) }),
       },
     )
     await flightAt("http://t/p/42", <Page parent={ROOT} />)

@@ -257,13 +257,14 @@ interface InternalSpecConfig<V> {
    *    output (or a narrower subset via the descriptor's optional
    *    `vary` callback).
    *  - a **module-scope cell handle** imported from elsewhere
-   *    (`cell.string({id, vary, initial})` at module scope) — resolved
-   *    via its own vary against the request scope, same as before.
+   *    (`localCell({id, vary, initial, ...})` at module scope) —
+   *    resolved via its own vary against the request scope, same as
+   *    before.
    *  - any other value — passed through to Render's prop bag as-is.
    *
    *  Resolved cells get `cell:<id>` selector labels auto-stamped on
    *  the parton so `refreshSelector` fires on `cell.set`. */
-  schema?: (scope: { cell: ScopedCellFactories<V> }) => Record<string, unknown>
+  schema?: (scope: ScopedCellFactories<V>) => Record<string, unknown>
   /** Server-side handlers declared on the parton. Each handler runs
    *  inside `runInvalidationTransaction` and receives `(scope, args)`:
    *  scope is the parton's vary output + resolved schema + parent
@@ -436,7 +437,7 @@ type ResolveSchemaProps<S> = {
 }
 
 type InferSchema<Opts> = Opts extends {
-  schema: (scope: { cell: ScopedCellFactories<infer _V> }) => infer S
+  schema: (scope: ScopedCellFactories<infer _V>) => infer S
 }
   ? S extends Record<string, unknown>
     ? ResolveSchemaProps<S>
@@ -1337,7 +1338,7 @@ function createSpecComponent<V>(
     let schemaKeyHash = ""
     if (opts.schema) {
       const factories = makeScopedCellFactories<unknown>()
-      const raw = opts.schema({ cell: factories })
+      const raw = opts.schema(factories)
       const cellScope: CellVaryScope = {
         url: ourUrl,
         pathname: ourUrl.pathname,

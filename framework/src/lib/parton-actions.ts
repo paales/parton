@@ -78,17 +78,17 @@ export function _clearActionRegistry(): void {
 // it so partial.tsx's catalog stays minimal.
 
 /**
- * The schema callback shape — receives `{cell}` (and optionally `{cms}`
- * for blocks via the broader scope), returns a record of cells +
- * plain values.
+ * The schema callback shape — receives the parton-scoped `localCell`
+ * factory (and optionally `{cms}` for blocks via the broader scope),
+ * returns a record of cells + plain values.
  *
  * Loose typing here because the registry stores callbacks across all
  * partons regardless of their specific vary / schema types. The render
  * path narrows via the public types in `partial.tsx`.
  */
-export type SchemaCallback = (scope: {
-  cell: import("./cell.ts").ScopedCellFactories<unknown>
-}) => Record<string, unknown>
+export type SchemaCallback = (
+  scope: import("./cell.ts").ScopedCellFactories<unknown>,
+) => Record<string, unknown>
 
 const schemaRegistry = new Map<string, SchemaCallback>()
 

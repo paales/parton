@@ -41,7 +41,7 @@ export {
 } from "./partial-client.tsx"
 
 export {
-  cell,
+  localCell,
   buildResolvedCell,
   computeCellPartitionKey,
   computeScopedCellPartitionKey,
@@ -53,10 +53,14 @@ export {
   makeScopedCellFactories,
   type Cell,
   type CellShape,
+  type CellShapeSpec,
   type CellVaryScope,
+  type LocalCellOpts,
   type ResolvedCell,
   type ScopedCellDescriptor,
   type ScopedCellFactories,
+  type ScopedLocalCellOpts,
+  type ValueOfShape,
 } from "./cell.ts"
 
 export {

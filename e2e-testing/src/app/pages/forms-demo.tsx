@@ -36,15 +36,15 @@ const FormsDemoBuilder = parton({
   // parton's vary output by default). A second tab on the same
   // session shares the slot; a private-browsing tab gets its own.
   vary: ({ session }) => ({ sid: session.id }),
-  schema: ({ cell }) => ({
-    cardName: cell.string({ initial: "" }),
-    cardCvc: cell.string({ initial: "" }),
+  schema: ({ localCell }) => ({
+    cardName: localCell({ shape: "string", initial: "" }),
+    cardCvc: localCell({ shape: "string", initial: "" }),
     /** Live-bound textarea — per-keystroke writes via `useCell.input`. */
-    notes: cell.string({ initial: "" }),
+    notes: localCell({ shape: "string", initial: "" }),
     /** JSON snapshot of the most recent successful save. */
-    saves: cell.string({ initial: "" }),
+    saves: localCell({ shape: "string", initial: "" }),
     /** Failure-simulation probability, 0–1. */
-    failChance: cell.number({ initial: 0 }),
+    failChance: localCell({ shape: "number", initial: 0 }),
   }),
   actions: {
     save: async ({ saves, failChance }, args: { cardName?: string; cardCvc?: string }) => {

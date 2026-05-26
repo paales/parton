@@ -19,40 +19,46 @@
  *     on mutation, no per-key snapshot walk.
  */
 
-import { cell } from "@parton/framework"
+import { localCell } from "@parton/framework"
 
-export const editorLeftTab = cell.enum(["layers", "settings"] as const, {
+export const editorLeftTab = localCell({
   id: "editor-left-tab",
+  shape: { enum: ["layers", "settings"] as const },
   vary: ({ session }) => ({ sid: session.id }),
   initial: "layers",
 })
 
-export const editorTreeStyle = cell.enum(["jsx", "plain"] as const, {
+export const editorTreeStyle = localCell({
   id: "editor-tree-style",
+  shape: { enum: ["jsx", "plain"] as const },
   vary: ({ session }) => ({ sid: session.id }),
   initial: "plain",
 })
 
-export const editorPalette = cell.enum(["light", "dark"] as const, {
+export const editorPalette = localCell({
   id: "editor-palette",
+  shape: { enum: ["light", "dark"] as const },
   vary: ({ session }) => ({ sid: session.id }),
   initial: "light",
 })
 
-export const editorSurface = cell.enum(["light", "translucent", "solid"] as const, {
+export const editorSurface = localCell({
   id: "editor-surface",
+  shape: { enum: ["light", "translucent", "solid"] as const },
   vary: ({ session }) => ({ sid: session.id }),
   initial: "translucent",
 })
 
-export const editorAttachment = cell.enum(["floating", "docked"] as const, {
+export const editorAttachment = localCell({
   id: "editor-attachment",
+  shape: { enum: ["floating", "docked"] as const },
   vary: ({ session }) => ({ sid: session.id }),
   initial: "docked",
 })
 
-export const editorDevice = cell.enum(["desktop", "tablet", "mobile"] as const, {
+export const editorDevice = localCell({
   id: "editor-device",
+  shape: { enum: ["desktop", "tablet", "mobile"] as const },
   vary: ({ session }) => ({ sid: session.id }),
   initial: "desktop",
 })

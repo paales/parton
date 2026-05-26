@@ -105,24 +105,25 @@ read fallback.
 
 All five cases share the same shape:
 
-- One or more vary keys are *partition* dimensions (storage keys).
+- One or more partition keys are *partition* dimensions (storage keys).
 - One or more of those keys have a *fallback ordering* the cell
   declares.
 - Reads walk the ordering until a stored value appears, then
   return it; otherwise fall through to the cell's `default`.
 
 Today's cell sits at the trivial end of this spectrum — no
-fallback, all vary keys are exact-match. The cases above each
-want a different fallback shape for a different vary key.
+fallback, all partition keys are exact-match. The cases above
+each want a different fallback shape for a different partition key.
 
 ## Sketch of an API
 
 Strawman, not committed:
 
 ```ts
-const translation = cell({
-  shape: z.string(),
-  default: "",
+const translation = localCell({
+  id: "translation",
+  shape: "string",
+  initial: "",
   vary: ({ cookies: { locale } }) => ({ locale }),
   fallback: {
     // For the `locale` key: walk en-US → en → default.
@@ -137,9 +138,10 @@ const translation = cell({
 For CMS draft/published:
 
 ```ts
-const cmsField = cell({
-  shape: z.string(),
-  default: "",
+const cmsField = localCell({
+  id: "cms-field",
+  shape: "string",
+  initial: "",
   vary: ({ cookies: { __editor } }) => ({
     stage: __editor ? "draft" : "published",
   }),
@@ -152,9 +154,10 @@ const cmsField = cell({
 For time:
 
 ```ts
-const versioned = cell({
-  shape: z.string(),
-  default: "",
+const versioned = localCell({
+  id: "versioned",
+  shape: "string",
+  initial: "",
   vary: ({ search }) => ({ at: search.at ?? "latest" }),
   fallback: {
     at: "latest",  // any `at=X` not found falls back to `at=latest`

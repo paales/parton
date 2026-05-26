@@ -66,7 +66,7 @@ describe("parton actions — Render-prop injection", () => {
       {
         selector: "action-prop-injection",
         match: "/x",
-        schema: ({ cell }) => ({ name: cell.string({ initial: "" }) }),
+        schema: ({ localCell }) => ({ name: localCell({ shape: "string", initial: "" }) }),
         actions: {
           save: async () => undefined,
         },
@@ -90,7 +90,7 @@ describe("parton actions — dispatch + auto-write", () => {
       {
         selector: "action-auto-write",
         match: "/x",
-        schema: ({ cell }) => ({ name: cell.string({ initial: "" }) }),
+        schema: ({ localCell }) => ({ name: localCell({ shape: "string", initial: "" }) }),
         actions: {
           // Pure auto-write: handler does nothing.
           save: async () => undefined,
@@ -124,9 +124,9 @@ describe("parton actions — dispatch + auto-write", () => {
       {
         selector: "action-handler-write",
         match: "/x",
-        schema: ({ cell }) => ({
-          name: cell.string({ initial: "" }),
-          saves: cell.number({ initial: 0 }),
+        schema: ({ localCell }) => ({
+          name: localCell({ shape: "string", initial: "" }),
+          saves: localCell({ shape: "number", initial: 0 }),
         }),
         actions: {
           save: async ({ saves }: { saves: ResolvedCell<number> }) => {
@@ -161,9 +161,9 @@ describe("parton actions — dispatch + auto-write", () => {
       {
         selector: "action-rollback",
         match: "/x",
-        schema: ({ cell }) => ({
-          name: cell.string({ initial: "prior" }),
-          saves: cell.number({ initial: 0 }),
+        schema: ({ localCell }) => ({
+          name: localCell({ shape: "string", initial: "prior" }),
+          saves: localCell({ shape: "number", initial: 0 }),
         }),
         actions: {
           save: async ({ saves }: { saves: ResolvedCell<number> }) => {
@@ -203,7 +203,7 @@ describe("parton actions — dispatch + auto-write", () => {
       {
         selector: "action-overlay",
         match: "/x",
-        schema: ({ cell }) => ({ name: cell.string({ initial: "" }) }),
+        schema: ({ localCell }) => ({ name: localCell({ shape: "string", initial: "" }) }),
         actions: {
           save: async ({ name }: { name: ResolvedCell<string> }) => {
             observedNameValue = name.value

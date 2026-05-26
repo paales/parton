@@ -65,8 +65,8 @@ the action, which bumps the invalidation registry and shifts the
 fp of every parton reading the cell on the next render.
 
 The cell module handle (the module-singleton thing constructed via
-`cell.string(...)`) is **distinct** from `ResolvedCell<T>`. The
-module handle carries `vary`, `defaultValue`, `validate`, `write`;
+`localCell(...)`) is **distinct** from `ResolvedCell<T>`. The module
+handle carries `partition`, `defaultValue`, `validate`, `write`;
 the resolved cell carries `value` (and `set`, the bound action ref
 the module handle also exposes). Only the resolved form is passed
 to Render and across Flight.
@@ -367,7 +367,7 @@ be a regular sync export.
 ## Cell registry (module-scope state)
 
 `framework/src/lib/cell.ts`. Module-scope `Map<id, Cell<unknown>>`
-populated by `cell.<shape>({id, ...})` at module-init time. HMR
+populated by `localCell({id, ...})` at module-init time. HMR
 overwrites in place; the storage layer keys by id, so values from
 the prior registration are unaffected.
 

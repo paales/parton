@@ -106,7 +106,7 @@ function resolveSchemaForAction(
   const cellsByKey = new Map<string, ResolvedCell<unknown>>()
   if (!schemaCb) return { resolved, cellsByKey }
   const factories = makeScopedCellFactories<unknown>()
-  const raw = schemaCb({ cell: factories })
+  const raw = schemaCb(factories)
   for (const key of Object.keys(raw)) {
     const val = raw[key]
     if (isScopedCellDescriptor(val)) {

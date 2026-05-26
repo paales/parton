@@ -462,10 +462,10 @@ const CheckoutForm = parton(
   },
   {
     match: "/checkout",
-    schema: ({ cell }) => ({
-      cardName: cell.string({ initial: "" }),
-      cardCvc:  cell.string({ initial: "" }),
-      saves:    cell.number({ initial: 0 }),
+    schema: ({ localCell }) => ({
+      cardName: localCell({ shape: "string", initial: "" }),
+      cardCvc:  localCell({ shape: "string", initial: "" }),
+      saves:    localCell({ shape: "number", initial: 0 }),
     }),
     actions: {
       // Handler receives `(scope, args)` — scope is the same prop bag

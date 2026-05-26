@@ -6,6 +6,12 @@ prop. Clients read its `.value` and call `.set(v)`; the framework
 fans the write back out to every parton that read it via the
 parton's `schema` callback.
 
+`localCell` is the today shape — every cell is backed by the active
+`CellStorage` adapter (default: JSON file at `cms/data/cells.json`).
+Future implementors (`gqlCell`, etc.) will sit alongside as separate
+constructors carrying their own loaders — see
+[`../notes/cells-as-resolvers.md`](../notes/cells-as-resolvers.md).
+
 Use a cell when:
 
 - The state isn't shareable (so it doesn't belong in a URL) but is
@@ -30,10 +36,10 @@ Cells can live in two places:
   belong to any one parton (palette, cart contents, maintenance flag,
   featured product).
 - **Parton-scoped** — declared inline inside a parton's
-  `schema({cell})` callback. Wire id auto-derives as
+  `schema({localCell})` callback. Wire id auto-derives as
   `<partonId>/<schemaKey>`; partition derives from the parton's vary
-  output (optionally narrowed via the descriptor's `vary`). Reach for
-  this when the cell is owned by a specific parton (form fields,
+  output (optionally narrowed via the descriptor's `vary`). Reach
+  for this when the cell is owned by a specific parton (form fields,
   per-instance UI state, draft data).
 
 Cross-tree sharing rule: if two unrelated partons need the cell, hoist
@@ -45,43 +51,48 @@ parton via Render's prop bag.
 ### Module-scope construction
 
 ```ts
-import { cell } from "@parton/framework"
+import { localCell } from "@parton/framework"
 
 // "global" — single value cluster-wide
-export const featured = cell.string({
+export const featured = localCell({
   id: "featured",
+  shape: "string",
   vary: () => ({}),
   initial: "none",
 })
 
 // "user" — per-session
-export const palette = cell.enum(["light", "dark"] as const, {
+export const palette = localCell({
   id: "palette",
+  shape: { enum: ["light", "dark"] as const },
   vary: ({ session }) => ({ sid: session.id }),
   initial: "dark",
 })
 
 // per-product
-export const productNotes = cell.string({
+export const productNotes = localCell({
   id: "product-notes",
+  shape: "string",
   vary: ({ params }) => ({ productId: params.id }),
   initial: "",
 })
 
 // server-side write-pipeline transform — canonicalises every value
 // before storage, regardless of what the client sent
-export const cardName = cell.string({
+export const cardName = localCell({
   id: "card-name",
+  shape: "string",
   vary: () => ({}),
   initial: "",
   write: (raw) => raw.toUpperCase().replace(/[^A-Z ]/g, "").slice(0, 26),
 })
 ```
 
-Shape catalog: `cell.string` / `cell.number` / `cell.boolean` /
-`cell.enum(values, opts)`. The shape drives runtime validation on
+Shape catalog: `"string"` / `"number"` / `"boolean"` /
+`{ enum: [...] as const }`. The shape drives runtime validation on
 writes — `__cellWrite(id, value)` rejects mismatched shapes before
-storage.
+storage. Use `as const` on enum values so TypeScript narrows the
+cell's value type to the literal union.
 
 The `id` is **required**. Explicit ids are stable across renames,
 survive HMR, and identify the cell on the wire.
@@ -91,6 +102,7 @@ survive HMR, and identify the cell on the wire.
 | Option | Notes |
 |---|---|
 | `id` | Wire identifier. Required. |
+| `shape` | Runtime shape. One of `"string"` / `"number"` / `"boolean"` / `{enum: [...] as const}`. |
 | `initial` | Default value when storage is empty. |
 | `vary` | Optional. Sync callback `({url, pathname, search, cookies, headers, params, session, time}) => Record<string, unknown>`. Output hashes into the storage partition key — pick what scopes the cell ("global" = `() => ({})`, "per-session" = `({session}) => ({sid: session.id})`, per-anything else via `params` / `cookies` / `headers`). Omit for a single-partition cell. |
 | `write` | Optional. Server-side `(T) => T`. Runs after `validate` and before storage on every write — the server's final say on the stored shape regardless of what the client sent (uppercase, trim, format, length cap, profanity filter). Throws roll back the batch. |
@@ -102,9 +114,9 @@ split between stored canonical and display format.
 ### Parton-scoped construction
 
 Declare the cell inline inside the parton's `schema` callback. The
-framework injects a `{cell}` factory whose options omit `id` (auto-
-derives) and whose `vary` narrows the parton's vary output rather
-than taking a request scope.
+framework injects a `{localCell}` factory whose options omit `id`
+(auto-derives) and whose `vary` narrows the parton's vary
+output rather than taking a request scope.
 
 ```tsx
 const ProductPage = parton(
@@ -117,12 +129,13 @@ const ProductPage = parton(
       productId: params.id,
       locale: lang,
     }),
-    schema: ({ cell }) => ({
+    schema: ({ localCell }) => ({
       // Default: partitioned by the full parton vary (productId + locale)
-      notes: cell.string({ initial: "" }),
+      notes: localCell({ shape: "string", initial: "" }),
 
       // Narrowed: shared across locales for the same product
-      sharedNotes: cell.string({
+      sharedNotes: localCell({
+        shape: "string",
         initial: "",
         vary: ({ productId }) => ({ productId }),
       }),
@@ -138,9 +151,9 @@ Key properties:
   `product-page/notes` and `product-page/sharedNotes`. Stable across
   renders + HMR as long as the parton id + schema key don't change.
 - **Partition**: defaults to the parton's full vary output. Narrow
-  with `vary: (partonVary) => subset` to share values across other
-  dimensions. Can NOT expand beyond the parton's vary surface — fp-
-  skip safety would break otherwise.
+  with `vary: (partonVary) => subset` to share values across
+  other dimensions. Can NOT expand beyond the parton's vary surface
+  — fp-skip safety would break otherwise.
 - **`set` binding**: the resolved cell's `set` is bound at parton
   resolution time with the partition baked. Client invocations from
   `useCell(scopedCell).set(v)` land on the right partition regardless
@@ -153,13 +166,14 @@ Key properties:
 
 When a scoped cell narrows the parton's vary via `vary: ({foo}) =>
 ({foo})`, the cascading inference is currently weak — TypeScript
-treats the cell's vary input as `object` rather than the parton's
-actual vary return type. Cast at the destructure if you want named
-keys:
+treats the cell's vary input as `object` rather
+than the parton's actual vary return type. Cast at the destructure
+if you want named keys:
 
 ```ts
-schema: ({ cell }) => ({
-  sharedNotes: cell.string({
+schema: ({ localCell }) => ({
+  sharedNotes: localCell({
+    shape: "string",
     initial: "",
     vary: (pv) => ({ productId: (pv as { productId: string }).productId }),
   }),
@@ -169,7 +183,7 @@ schema: ({ cell }) => ({
 The runtime behavior is correct — the partition is computed from the
 narrowed return regardless. This is a typing limitation only.
 Tightening this requires reshaping `PartialOptions<V>`'s generic to
-propagate the parton's vary return through to schema's `cell`
+propagate the parton's vary return through to schema's `localCell`
 factory — tracked as a follow-up.
 
 ### Reading in a parton's `schema`
@@ -448,7 +462,9 @@ What's NOT a cell:
 ## Composition with existing primitives
 
 - **vary** — unchanged. Pure request-dimensions. Cell reads do NOT
-  happen inside vary; that's what `schema` is for.
+  happen inside vary; that's what `schema` is for. Cells have their
+  own `vary` callback for the storage partition axis (same shape as
+  parton's, different role — partition key, not fingerprint).
 - **selector** — cells auto-stamp `cell:<id>` on the spec's labels.
   Authors can declare additional labels via `selector:` as before.
 - **invalidation registry** — `cell.set(v)` calls
@@ -456,8 +472,8 @@ What's NOT a cell:
   reuses today's `queryMatchingTs(labels, varyInputs)` against the
   expanded label set.
 - **CMS reads** — `block.schema({cms})` already exists. Cell reads
-  live on the parton's `schema()` callback (no `{cms}` argument);
-  the two are parallel surfaces with the same shape.
+  live on the parton's `schema({localCell})` callback; the two are
+  parallel surfaces with the same shape.
 
 ## Related
 
@@ -467,11 +483,12 @@ What's NOT a cell:
 - [`../notes/replicated-state.md`](../notes/replicated-state.md) —
   the broader Unreal-actor-shaped state model. Cells are the
   narrow "single typed value, mutate-and-invalidate" lane.
-- [`../archive/transient-client-state.md`](../archive/transient-client-state.md)
-  — original design exploration that produced cells. Archived
-  2026-05-21. Directions C (per-tab session) and D (`<PartialForm>`)
-  carry forward as backlog items in
-  [`../notes/IDEAS.md`](../notes/IDEAS.md).
+- [`../notes/cells-as-resolvers.md`](../notes/cells-as-resolvers.md)
+  — future implementor sketches (`gqlCell`, etc.) — the resolver
+  shape for cells backed by external data sources.
+- [`../notes/cell-dimensionality.md`](../notes/cell-dimensionality.md)
+  — orthogonal axis: inheritance walks within a single cell's
+  storage (translations, draft/published, time/history).
 - [`./partial.md`](./partial.md) — the `parton` constructor surface
   that `schema` extends.
 - [`./cms.md`](./cms.md) — block.schema, the existing template for

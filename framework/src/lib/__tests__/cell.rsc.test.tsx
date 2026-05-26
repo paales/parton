@@ -8,7 +8,7 @@ import {
   ROOT,
   type RenderArgs,
 } from "../partial.tsx"
-import { cell, type ResolvedCell } from "../cell.ts"
+import { localCell, type ResolvedCell } from "../cell.ts"
 import { hash } from "../hash.ts"
 import { stableStringify } from "../stable-stringify.ts"
 import {
@@ -51,8 +51,9 @@ afterEach(() => {
 
 describe("cell — schema resolution", () => {
   it("threads a resolved cell into render props with the default value on miss", async () => {
-    const flag = cell.boolean({
+    const flag = localCell({
       id: "test.flag",
+      shape: "boolean",
       vary: () => ({}),
       initial: false,
     })
@@ -70,8 +71,9 @@ describe("cell — schema resolution", () => {
   })
 
   it("reads the stored cell value from storage", async () => {
-    const palette = cell.enum(["light", "dark"] as const, {
+    const palette = localCell({
       id: "test.palette",
+      shape: { enum: ["light", "dark"] as const },
       vary: () => ({}),
       initial: "light",
     })
@@ -91,8 +93,9 @@ describe("cell — schema resolution", () => {
   })
 
   it("stamps the cell selector label onto the partial", async () => {
-    const counter = cell.number({
+    const counter = localCell({
       id: "test.counter",
+      shape: "number",
       vary: () => ({}),
       initial: 0,
     })
@@ -121,8 +124,9 @@ describe("cell — schema resolution", () => {
   })
 
   it("partitions storage by the cell's vary output", async () => {
-    const notes = cell.string({
+    const notes = localCell({
       id: "test.notes",
+      shape: "string",
       vary: ({ params }) => ({ productId: params.id ?? "" }),
       initial: "",
     })
@@ -146,8 +150,9 @@ describe("cell — schema resolution", () => {
 
 describe("cell — runtime validation", () => {
   it("rejects mismatched value at validate", () => {
-    const bumps = cell.number({
+    const bumps = localCell({
       id: "test.bumps",
+      shape: "number",
       vary: () => ({}),
       initial: 0,
     })
@@ -155,8 +160,9 @@ describe("cell — runtime validation", () => {
   })
 
   it("rejects out-of-set enum values", () => {
-    const palette = cell.enum(["light", "dark"] as const, {
+    const palette = localCell({
       id: "test.palette2",
+      shape: { enum: ["light", "dark"] as const },
       vary: () => ({}),
       initial: "light",
     })
@@ -166,8 +172,9 @@ describe("cell — runtime validation", () => {
 
 describe("cell — fp transitive on partition change", () => {
   it("parton fp shifts when navigating to a different partition", async () => {
-    const notes = cell.string({
+    const notes = localCell({
       id: "test.notes-fp",
+      shape: "string",
       vary: ({ params }) => ({ productId: params.id ?? "" }),
       initial: "default",
     })

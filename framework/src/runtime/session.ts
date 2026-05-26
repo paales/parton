@@ -152,8 +152,8 @@ export function clearSessionFrame(path: readonly string[]): void {
 
 /**
  * Bare session identity — the only session surface vary and cells
- * see. `cell.vary({session}) => ({sid: session.id})` is the
- * canonical per-user partition pattern.
+ * see. `vary: ({session}) => ({sid: session.id})` is the canonical
+ * per-user partition pattern on a `localCell`.
  *
  * Empty string when no session cookie yet AND no write has triggered
  * cookie creation (read-only anon request) — cells should treat
@@ -165,7 +165,8 @@ export interface SessionId {
 }
 
 /**
- * Session surface exposed to `vary` and `cell.vary` callbacks.
+ * Session surface exposed to a spec's `vary` and a cell's `vary`
+ * callbacks.
  * Today this is just `SessionId` — the legacy named-key readers
  * (`session.text/number/boolean/enum`) moved to the cell primitive.
  * Kept as a separate type name for forward extensibility (a future

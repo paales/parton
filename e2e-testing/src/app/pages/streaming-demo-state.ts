@@ -31,15 +31,16 @@
  * `streaming-demo.tsx`'s `LiveTick`.
  */
 
-import { _setCellWriteDelaySimulator, cell } from "@parton/framework"
+import { _setCellWriteDelaySimulator, localCell } from "@parton/framework"
 import {
   extractNumberDigits,
   formatNumberDigits,
   transformName,
 } from "./streaming-demo-card-shared.ts"
 
-export const bumps = cell.number({
+export const bumps = localCell({
   id: "demo.bumps",
+  shape: "number",
   vary: () => ({}),
   initial: 0,
 })
@@ -48,22 +49,25 @@ export const bumps = cell.number({
 // toggle ON, the client sends already-cleaned values and write is
 // idempotent. With the toggle OFF, the client sends raw and the server
 // canonicalises here.
-export const cardName = cell.string({
+export const cardName = localCell({
   id: "demo.card.name",
+  shape: "string",
   vary: () => ({}),
   initial: "",
   write: transformName,
 })
 
-export const cardNumber = cell.string({
+export const cardNumber = localCell({
   id: "demo.card.number",
+  shape: "string",
   vary: () => ({}),
   initial: "",
   write: (raw) => formatNumberDigits(extractNumberDigits(raw)),
 })
 
-export const cardCvc = cell.string({
+export const cardCvc = localCell({
   id: "demo.card.cvc",
+  shape: "string",
   vary: () => ({}),
   initial: "",
 })
@@ -74,8 +78,9 @@ export const cardCvc = cell.string({
 // own write still pays the prior delay, so the change takes effect
 // one batch later). Lets the demo flip between "stressful slow" and
 // "instant" without redeploy.
-export const serverDelay = cell.boolean({
+export const serverDelay = localCell({
   id: "demo.server-delay",
+  shape: "boolean",
   vary: () => ({}),
   initial: true,
 })
@@ -85,8 +90,9 @@ export const serverDelay = cell.boolean({
 // reloads — same shape as `serverDelay`. The CardForm client reads
 // it via `useCell(...).value` and gates whether it passes a transform
 // fn to `input()`.
-export const applyLocalTransform = cell.boolean({
+export const applyLocalTransform = localCell({
   id: "demo.apply-local-transform",
+  shape: "boolean",
   vary: () => ({}),
   initial: true,
 })
