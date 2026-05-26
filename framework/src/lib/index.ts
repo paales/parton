@@ -67,7 +67,14 @@ export {
   type ValueOfShape,
 } from "./cell.ts"
 
-export { gqlCell, type GqlCellOpts, type GqlClient } from "./cell-gql.ts"
+export {
+  gqlCell,
+  fragmentCell,
+  type GqlCellOpts,
+  type GqlClient,
+  type FragmentCellOpts,
+  type FragmentOf,
+} from "./cell-gql.ts"
 
 export {
   useCell,

@@ -34,7 +34,11 @@ import {
   __cellWrite as _cellWriteAction,
   __scopedCellWrite as _scopedCellWriteAction,
 } from "../runtime/cell-actions.ts"
-import { getCellStorage } from "../runtime/cell-storage.ts"
+import {
+  getCellStorage,
+  getEphemeralCellStorage,
+  type CellStorage,
+} from "../runtime/cell-storage.ts"
 import { getRequest, getScope, parseCookies } from "../runtime/context.ts"
 import { createSessionReadSurface } from "../runtime/session.ts"
 import { hash } from "./hash.ts"
@@ -104,6 +108,13 @@ export interface Cell<T> {
   readonly id: string
   readonly shape: CellShape
   readonly defaultValue: T
+  /** Storage-adapter getter — invoked per-use rather than cached at
+   *  construction, because ephemeral storage is request-scoped (a
+   *  fresh adapter per request) and module-init runs outside any
+   *  request. `localCell` returns the persistent disk-backed
+   *  singleton; `gqlCell` + `fragmentCell` return the active request's
+   *  per-request `MemoryCellStorage`. */
+  readonly storage: () => CellStorage
   /** Vary callback. Runs against the request scope; the hashed output
    *  is part of the storage partition key. Default: `() => ({})`. */
   readonly vary: (scope: CellVaryScope) => CellArgs
@@ -297,6 +308,7 @@ function bindSetter(id: string): Cell<unknown>["set"] {
  *  from the cell's own vary against the active ALS request context. */
 function buildPeek<T>(
   id: string,
+  storage: () => CellStorage,
   validate: (v: unknown) => T,
   defaultValue: T,
   varyFn: (scope: CellVaryScope) => CellArgs,
@@ -304,7 +316,7 @@ function buildPeek<T>(
   return () => {
     const varyOut = varyFn(buildCellVaryScopeFromRequest())
     const partitionKey = hash(stableStringify(varyOut))
-    const stored = getCellStorage().read(getScope(), id, partitionKey)
+    const stored = storage().read(getScope(), id, partitionKey)
     if (stored === undefined) return defaultValue
     try {
       return validate(stored)
@@ -352,7 +364,7 @@ export async function resolveCellValue<T>(
   args: CellArgs,
 ): Promise<T> {
   const partitionKey = hash(stableStringify(args))
-  const stored = getCellStorage().read(getScope(), cell.id, partitionKey)
+  const stored = cell.storage().read(getScope(), cell.id, partitionKey)
   if (stored !== undefined) {
     try {
       return cell.validate(stored)
@@ -364,7 +376,7 @@ export async function resolveCellValue<T>(
     const loaded = await cell.load(args)
     const validated = cell.validate(loaded)
     const transformed = cell.write ? cell.write(validated) : validated
-    getCellStorage().write(getScope(), cell.id, partitionKey, transformed)
+    cell.storage().write(getScope(), cell.id, partitionKey, transformed)
     return transformed
   }
   return cell.defaultValue
@@ -400,7 +412,7 @@ function buildBoundCell<T>(cell: Cell<T>, args: CellArgs): BoundCell<T> {
       // Then fire the partition-scoped signal so connected viewers
       // re-resolve (and hit the loader since storage is now empty).
       const partitionKey = hash(stableStringify(args))
-      getCellStorage().write(getScope(), cellId, partitionKey, undefined)
+      cell.storage().write(getScope(), cellId, partitionKey, undefined)
       const { __cellInvalidate } = await import("../runtime/cell-actions.ts")
       await __cellInvalidate(cellId, args)
     },
@@ -408,7 +420,7 @@ function buildBoundCell<T>(cell: Cell<T>, args: CellArgs): BoundCell<T> {
       const partitionKey = hash(stableStringify(args))
       const validated = cell.validate(value)
       const stored = cell.write ? cell.write(validated) : validated
-      getCellStorage().write(getScope(), cellId, partitionKey, stored)
+      cell.storage().write(getScope(), cellId, partitionKey, stored)
     },
   }
 }
@@ -426,17 +438,24 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
    *  cell when nothing binds args). */
   vary?: (scope: CellVaryScope) => CellArgs
   /** Async loader — runs on storage miss at a partition. Result is
-   *  validated, run through `write` if present, then stored. Use for
-   *  cells whose initial value is fetched from upstream (GraphQL,
-   *  REST, etc.) instead of a static default. */
+   *  validated, run through `write` if present, then stored. */
   load?: (args: CellArgs) => Promise<T>
   /** Server-side write-pipeline transform. Runs after `validate` and
    *  before storage on every write. */
   write?: (value: T) => T
+  /** Optional storage adapter. Defaults to the persistent disk-backed
+   *  singleton (`getCellStorage`). Pass `getEphemeralCellStorage` to
+   *  opt into request-scoped in-memory storage (for cells whose data
+   *  flows from upstream and shouldn't persist to disk). Pass a
+   *  function for any custom backend. */
+  storage?: CellStorage | (() => CellStorage)
 }
 
 /**
- * Module-scope cell backed by local storage.
+ * Module-scope cell backed by PERSISTENT local storage. Survives
+ * process restart; values land in `cms/data/cells.json` (default
+ * adapter). Use for state you actually want to keep across runs —
+ * user preferences, editor toggles, draft form data.
  *
  *     export const palette = localCell({
  *       id: "palette",
@@ -445,12 +464,10 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
  *       initial: "dark",
  *     })
  *
- *     export const cartItemCell = localCell({
- *       id: "cart-item",
- *       shape: "opaque",
- *       initial: null as CartItem | null,
- *       // No vary — partition comes from .with({itemId}) at placement sites.
- *     })
+ * For upstream-loaded entity caches (cart, product, user) use
+ * `gqlCell`. For sibling-hydrated entities (cart-line) use
+ * `fragmentCell`. Both default to ephemeral in-memory storage so
+ * disk doesn't accumulate stale cache entries.
  */
 export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
   opts: LocalCellOpts<S, T>,
@@ -458,18 +475,57 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
   const shape = shapeFromSpec(opts.shape)
   const validate = makeValidator<T>(opts.id, shape)
   const varyFn = opts.vary ?? constantVary
+  const storage: () => CellStorage = !opts.storage
+    ? getCellStorage
+    : typeof opts.storage === "function"
+      ? opts.storage
+      : () => opts.storage as CellStorage
   const handle: Cell<T> = {
     __cell: true,
     id: opts.id,
     shape,
     defaultValue: opts.initial,
+    storage,
     vary: varyFn,
     load: opts.load,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     set: bindSetter(opts.id) as Cell<T>["set"],
-    peek: buildPeek(opts.id, validate, opts.initial, varyFn),
+    peek: buildPeek(opts.id, storage, validate, opts.initial, varyFn),
     validate,
     write: opts.write,
+  }
+  return registerCell(handle)
+}
+
+// ─── Ephemeral-cell builder (shared by gqlCell + fragmentCell) ────────
+
+/**
+ * Internal helper — build an `opaque`-shaped Cell backed by the
+ * ephemeral in-memory storage. Used by `gqlCell` (with a loader) and
+ * `fragmentCell` (without). Authors supply the TS type parameter to
+ * narrow the cell's value; runtime treats the value as a black box.
+ */
+export function buildEphemeralCell<T>(
+  id: string,
+  initial: T,
+  load: ((args: CellArgs) => Promise<T>) | undefined,
+): Cell<T> {
+  const shape: CellShape = { kind: "opaque" }
+  const validate = makeValidator<T>(id, shape)
+  const handle: Cell<T> = {
+    __cell: true,
+    id,
+    shape,
+    defaultValue: initial,
+    // Lazy getter — ephemeral storage is request-scoped, can't be
+    // resolved at module-init time.
+    storage: getEphemeralCellStorage,
+    vary: constantVary,
+    load,
+    with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
+    set: bindSetter(id) as Cell<T>["set"],
+    peek: buildPeek(id, getEphemeralCellStorage, validate, initial, constantVary),
+    validate,
   }
   return registerCell(handle)
 }
@@ -598,11 +654,16 @@ export function finalizeScopedCell<T>(
 ): Cell<T> {
   const id = `${partonId}/${schemaKey}`
   const validate = makeValidator<T>(id, descriptor.shape)
+  // Scoped cells default to persistent storage — they're typically
+  // tied to parton state like form drafts that authors want to keep
+  // across renders. Override via a future `storage` option on the
+  // descriptor if needed.
   const handle: Cell<T> = {
     __cell: true,
     id,
     shape: descriptor.shape,
     defaultValue: descriptor.defaultValue,
+    storage: getCellStorage,
     vary: () => ({}),
     load: descriptor.load,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),

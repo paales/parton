@@ -88,6 +88,7 @@ export {
 export {
   getCellStorage,
   setCellStorage,
+  getEphemeralCellStorage,
   defaultCellsPath,
   MemoryCellStorage,
   JsonFileCellStorage,

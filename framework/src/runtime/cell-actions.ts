@@ -32,7 +32,6 @@
  */
 
 import { getCellById, type CellVaryScope } from "../lib/cell.ts"
-import { getCellStorage } from "./cell-storage.ts"
 import { hash } from "../lib/hash.ts"
 import { stableStringify } from "../lib/stable-stringify.ts"
 import { getRegisteredMatchPatterns } from "../lib/partial.tsx"
@@ -245,7 +244,7 @@ function writeOneCell(
     args = cell.vary(scope)
   }
   const partitionKey = hash(stableStringify(args))
-  getCellStorage().write(getScope(), cellId, partitionKey, stored)
+  cell.storage().write(getScope(), cellId, partitionKey, stored)
   getServerNavigation().reload({ selector: buildCellSelector(cellId, args) })
 }
 

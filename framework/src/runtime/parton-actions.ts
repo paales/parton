@@ -51,7 +51,6 @@ import {
   type ScopedCellDescriptor,
 } from "../lib/cell.ts"
 import { ROOT, type PartialCtx } from "../lib/partial-context.ts"
-import { getCellStorage } from "./cell-storage.ts"
 import { getRequest, getScope, parseCookies } from "./context.ts"
 import { runInvalidationTransaction } from "./invalidation-registry.ts"
 import { createSessionReadSurface } from "./session.ts"
@@ -113,7 +112,7 @@ function resolveSchemaForAction(
       const descriptor = val as ScopedCellDescriptor<unknown>
       const cell = finalizeScopedCell(descriptor, partonId, key)
       const partitionKey = computeScopedCellPartitionKey(descriptor, partonVary)
-      const stored = getCellStorage().read(getScope(), cell.id, partitionKey)
+      const stored = cell.storage().read(getScope(), cell.id, partitionKey)
       const value = stored === undefined ? cell.defaultValue : stored
       const partitionVary = descriptor.varyFn
         ? descriptor.varyFn(partonVary as never)
@@ -125,7 +124,7 @@ function resolveSchemaForAction(
       const c = val as Cell<unknown>
       const cellScope = buildCellVaryScope()
       const partitionKey = computeCellPartitionKey(c, cellScope)
-      const stored = getCellStorage().read(getScope(), c.id, partitionKey)
+      const stored = c.storage().read(getScope(), c.id, partitionKey)
       const value = stored === undefined ? c.defaultValue : stored
       const resolvedCell = buildResolvedCell(c, value)
       resolved[key] = resolvedCell

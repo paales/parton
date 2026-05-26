@@ -32,6 +32,7 @@
 import { existsSync, readFileSync as fsReadFileSync, writeFileSync as fsWriteFileSync } from "node:fs"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
+import { _getRequestEphemeralStorage } from "./context.ts"
 
 export type CellPartitionKey = string
 
@@ -271,14 +272,20 @@ export function defaultCellsPath(): string {
 
 let _instance: CellStorage | null = null
 
-/** Lazy singleton — created on first access. Tests / advanced
- *  callers can swap the backend via `setCellStorage()`. */
+/**
+ * The PERSISTENT cell storage singleton. Backs `localCell`. By
+ * default a `JsonFileCellStorage` that writes to disk at
+ * `cms/data/cells.json` (or `$CELLS_DATA_PATH`). Survives process
+ * restart.
+ *
+ * Test/advanced callers can swap the backend via `setCellStorage()`.
+ */
 export function getCellStorage(): CellStorage {
   if (!_instance) _instance = new JsonFileCellStorage(defaultCellsPath())
   return _instance
 }
 
-/** Replace the singleton storage. */
+/** Replace the persistent singleton storage. */
 export function setCellStorage(backend: CellStorage): void {
   _instance = backend
 }
@@ -286,4 +293,36 @@ export function setCellStorage(backend: CellStorage): void {
 /** Reset to the default-resolved JsonFileCellStorage. Test cleanup helper. */
 export function _resetCellStorage(): void {
   _instance = null
+}
+
+/**
+ * Outside-request fallback for the ephemeral storage. Used only
+ * when `_getRequestEphemeralStorage` returns `null` (test bootstrap
+ * paths, framework-internal callers without a request scope). Each
+ * fallback instance is a fresh `MemoryCellStorage` — there's no
+ * shared global to leak between tests.
+ *
+ * NOT a singleton — calling this returns a brand-new instance every
+ * time. Use only when there's truly no request context to attach to.
+ * Production cell reads/writes ALWAYS run inside a request context,
+ * so they ALWAYS get the per-request storage.
+ */
+function _newEphemeralFallback(): CellStorage {
+  return new MemoryCellStorage()
+}
+
+/**
+ * Look up the active request's ephemeral cell storage. Backs `gqlCell`
+ * and `fragmentCell` reads/writes during the request and is discarded
+ * when the request finishes — strict per-request isolation, no
+ * leakage between users / sessions / heartbeats.
+ *
+ * Cross-request caching (when we eventually want it) is a separate
+ * layer; this primitive is intentionally short-lived.
+ */
+export function getEphemeralCellStorage(): CellStorage {
+  const store = _getRequestEphemeralStorage(_newEphemeralFallback)
+  // Outside-request fallback only used for tests/bootstrap; framework
+  // call sites always have a request context.
+  return store ?? _newEphemeralFallback()
 }

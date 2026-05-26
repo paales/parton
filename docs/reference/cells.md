@@ -6,17 +6,28 @@ prop. Clients read its `.value` and call `.set(v)`; the framework
 fans the write back out to every parton that read it via the
 parton's `schema` callback or via JSX prop binding.
 
-Two constructors today:
+Three constructors today, each backed by a different storage tier:
 
-- **`localCell({...})`** — storage-backed by the active `CellStorage`
-  adapter (default: JSON file at `cms/data/cells.json`). Initial
-  value is static.
-- **`gqlCell({client, doc, ...})`** — storage-backed too, but cold-
-  start populates the slot by running a gql.tada-typed GraphQL query
-  with the bound args.
+| Constructor | Storage | Loader | Use case |
+|---|---|---|---|
+| `localCell({...})` | **Persistent** — disk-backed (`cms/data/cells.json`). Survives process restart. | Optional. | User preferences, editor toggles, form drafts. State you actually want to keep. |
+| `gqlCell({client, doc})` | **Ephemeral, request-scoped** — fresh in-memory storage per request, discarded on request finish. | Always (typed GraphQL query). | Upstream-loaded entity reads — cart, product details, user data. |
+| `fragmentCell({fragment, initial})` | **Ephemeral, request-scoped** — same as gqlCell. | Never. | Sub-entities populated by another cell's loader via `hydrate()` — cart-line is hydrated by the cart query. |
 
-Both implement the same `Cell<T>` interface — Render code doesn't
-know or care which backend produced the value.
+All three implement the same `Cell<T>` interface — Render code
+doesn't know which backend produced the value.
+
+**Why request-scoped for ephemeral?** Each request gets its own
+in-memory cache. No leakage between users / sessions / heartbeats.
+A mutation in one request can't accidentally serve another request's
+viewer. Cross-request caching (when we eventually want it) is a
+separate layer added on top, not a default.
+
+**Custom storage on localCell:** pass `storage: getEphemeralCellStorage`
+to opt a localCell into request-scoped storage (useful when you want
+a custom loader with side effects, like the cart loader that
+hydrates child cells). Or pass any `CellStorage` adapter for Redis,
+S3, etc.
 
 Use a cell when:
 

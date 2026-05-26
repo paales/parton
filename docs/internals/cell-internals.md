@@ -84,14 +84,47 @@ the action, which bumps the invalidation registry and shifts the
 fp of every parton reading the cell on the next render.
 
 The cell module handle (the module-singleton thing constructed via
-`localCell(...)` or `gqlCell(...)`) is **distinct** from
-`ResolvedCell<T>`. The module handle carries `vary`, `defaultValue`,
-`validate`, `write`, `load`, plus `with(args)` returning a
+`localCell(...)`, `gqlCell(...)`, or `fragmentCell(...)`) is
+**distinct** from `ResolvedCell<T>`. The module handle carries
+`vary`, `defaultValue`, `validate`, `write`, `load`, `storage` (a
+lazy getter, see below), plus `with(args)` returning a
 `BoundCell<T>`. The resolved cell carries `value` (and `set`, the
 bound action ref the module handle also exposes). A `BoundCell<T>`
 carries the partition args baked plus its own `set` / `update` /
 `clear` / `invalidate` / `hydrate` methods. Only the resolved form
 crosses Flight.
+
+## Storage tiers
+
+Two storage tiers, accessed via different module functions:
+
+- **Persistent (`getCellStorage`)** — disk-backed singleton
+  (`JsonFileCellStorage` at `cms/data/cells.json` by default).
+  Survives process restart. `localCell` defaults here.
+- **Ephemeral (`getEphemeralCellStorage`)** — request-scoped
+  `MemoryCellStorage`. Lazily created on first access inside a
+  request via `_getRequestEphemeralStorage` (an ALS hook on the
+  `RequestStore`). Discarded when the request finishes. `gqlCell` +
+  `fragmentCell` always use this; `localCell` can opt in via
+  `storage: getEphemeralCellStorage`.
+
+The cell handle carries `storage: () => CellStorage` — a *getter*,
+not a cached reference. Module-init runs outside any request, so a
+cached ephemeral reference would lock to the wrong storage forever.
+The getter pattern lets `localCell` use a stable singleton (where
+late resolution doesn't matter) AND lets ephemeral cells resolve
+fresh per request.
+
+Every read/write site (`resolveCellValue`, `BoundCell.set/clear/
+invalidate/hydrate`, `__cellWrite`'s `writeOneCell`, the schema-
+resolution path in `partial.tsx`) calls `cell.storage()` to fetch
+the current storage. Same code path for both tiers; the only
+difference is which adapter the getter returns.
+
+Outside-request fallback: `getEphemeralCellStorage` returns a fresh
+`MemoryCellStorage` if no request is active (bootstrap, isolated
+tests). Production paths always run inside `runWithRequestAsync`,
+so they always get the per-request storage.
 
 ## Resolution path — parton's wrapper component
 

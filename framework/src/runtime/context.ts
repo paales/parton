@@ -23,6 +23,15 @@ interface RequestStore {
    *  `x-test-scope` header (Playwright workers stamp a per-worker
    *  value so process-wide state buckets don't collide). */
   scope: string
+  /** Request-scoped ephemeral cell storage. Backs `gqlCell` +
+   *  `fragmentCell` reads / writes during this request and is
+   *  discarded when the request finishes. Lazily initialized — the
+   *  field is `null` until the first ephemeral-cell access opens it,
+   *  so requests that never touch a gqlCell/fragmentCell pay nothing.
+   *  Strict per-request isolation: no leakage between users / sessions
+   *  / heartbeats. Cross-request caching (when we eventually want it)
+   *  is a separate layer on top, not this one. */
+  ephemeralCellStorage?: import("./cell-storage.ts").CellStorage | null
   control?: FrameworkControl
   /** Hook the partial-registry layer registers when it opens its
    *  per-request context. Auto-fires on `runWithRequestAsync` exit
@@ -283,6 +292,27 @@ export function setRequest(request: Request): void {
 
 export function getScope(): string {
   return requestContext.getStore()?.scope ?? DEFAULT_SCOPE
+}
+
+/**
+ * Look up the active request's ephemeral cell storage, creating it
+ * lazily on first access. Returns `null` when called outside a
+ * request context — callers should fall back to a process-wide
+ * fallback or throw, depending on whether they're in user code
+ * (throw) or framework plumbing (fallback).
+ *
+ * Per-request isolation: each request gets its own storage, discarded
+ * when the request finishes. No leakage between users.
+ */
+export function _getRequestEphemeralStorage(
+  factory: () => import("./cell-storage.ts").CellStorage,
+): import("./cell-storage.ts").CellStorage | null {
+  const store = requestContext.getStore()
+  if (!store) return null
+  if (!store.ephemeralCellStorage) {
+    store.ephemeralCellStorage = factory()
+  }
+  return store.ephemeralCellStorage
 }
 
 export function getDefaultScope(): string {
