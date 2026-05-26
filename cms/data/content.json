@@ -39,6 +39,19 @@
             ]
           },
           {
+            "id": "app-nav-link-magento-cart",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/magento/cart",
+                  "label": "Cart"
+                }
+              }
+            ]
+          },
+          {
             "id": "app-nav-link-bare",
             "type": "nav-link",
             "configs": [

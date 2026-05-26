@@ -101,12 +101,14 @@ Two storage tiers, accessed via different module functions:
 - **Persistent (`getCellStorage`)** — disk-backed singleton
   (`JsonFileCellStorage` at `cms/data/cells.json` by default).
   Survives process restart. `localCell` defaults here.
-- **Ephemeral (`getEphemeralCellStorage`)** — request-scoped
-  `MemoryCellStorage`. Lazily created on first access inside a
-  request via `_getRequestEphemeralStorage` (an ALS hook on the
-  `RequestStore`). Discarded when the request finishes. `gqlCell` +
-  `fragmentCell` always use this; `localCell` can opt in via
-  `storage: getEphemeralCellStorage`.
+- **Ephemeral (`getEphemeralCellStorage`)** — connection-scoped
+  `MemoryCellStorage`. Lazily created on first access via
+  `_getRequestEphemeralStorage` (an ALS hook on the `RequestStore`).
+  Discarded when the connection closes. The "connection" here is
+  one ALS request context — same scope across all segments a
+  streaming heartbeat emits, separate from concurrent POSTs and
+  other tabs' heartbeats. `gqlCell` + `fragmentCell` always use
+  this; `localCell` can opt in via `storage: getEphemeralCellStorage`.
 
 The cell handle carries `storage: () => CellStorage` — a *getter*,
 not a cached reference. Module-init runs outside any request, so a

@@ -23,14 +23,22 @@ interface RequestStore {
    *  `x-test-scope` header (Playwright workers stamp a per-worker
    *  value so process-wide state buckets don't collide). */
   scope: string
-  /** Request-scoped ephemeral cell storage. Backs `gqlCell` +
-   *  `fragmentCell` reads / writes during this request and is
-   *  discarded when the request finishes. Lazily initialized — the
-   *  field is `null` until the first ephemeral-cell access opens it,
-   *  so requests that never touch a gqlCell/fragmentCell pay nothing.
-   *  Strict per-request isolation: no leakage between users / sessions
-   *  / heartbeats. Cross-request caching (when we eventually want it)
-   *  is a separate layer on top, not this one. */
+  /** Connection-scoped ephemeral cell storage. Backs `gqlCell` +
+   *  `fragmentCell` reads / writes for the lifetime of this ALS
+   *  request context. In the framework, that context spans ONE HTTP
+   *  connection — including all segments emitted by a streaming
+   *  heartbeat's segment driver, because the driver loops inside the
+   *  same `runWithRequestAsync` scope. Short POSTs and cold GETs each
+   *  get their own short-lived storage; long heartbeats hold their
+   *  storage for the connection's lifetime.
+   *
+   *  Lazily initialized — `null` until the first ephemeral-cell
+   *  access opens it, so requests that never touch a gqlCell or
+   *  fragmentCell pay nothing.
+   *
+   *  Strict isolation: no leakage between connections (different
+   *  tabs, different users). Cross-connection caching (when we
+   *  eventually want it) is a separate layer added on top. */
   ephemeralCellStorage?: import("./cell-storage.ts").CellStorage | null
   control?: FrameworkControl
   /** Hook the partial-registry layer registers when it opens its
@@ -295,14 +303,15 @@ export function getScope(): string {
 }
 
 /**
- * Look up the active request's ephemeral cell storage, creating it
- * lazily on first access. Returns `null` when called outside a
- * request context — callers should fall back to a process-wide
- * fallback or throw, depending on whether they're in user code
- * (throw) or framework plumbing (fallback).
+ * Look up the active ALS context's ephemeral cell storage, creating
+ * it lazily on first access. Returns `null` outside a request
+ * context — callers fall back to a process-wide instance or throw,
+ * depending on whether they're in user code (throw) or framework
+ * plumbing (fallback).
  *
- * Per-request isolation: each request gets its own storage, discarded
- * when the request finishes. No leakage between users.
+ * Connection-scoped: one storage per `runWithRequestAsync` scope,
+ * which in this framework is one HTTP connection (including all
+ * streaming segments). Discarded when the scope exits.
  */
 export function _getRequestEphemeralStorage(
   factory: () => import("./cell-storage.ts").CellStorage,

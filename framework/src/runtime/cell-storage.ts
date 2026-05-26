@@ -312,13 +312,16 @@ function _newEphemeralFallback(): CellStorage {
 }
 
 /**
- * Look up the active request's ephemeral cell storage. Backs `gqlCell`
- * and `fragmentCell` reads/writes during the request and is discarded
- * when the request finishes — strict per-request isolation, no
- * leakage between users / sessions / heartbeats.
+ * Look up the active connection's ephemeral cell storage. Backs
+ * `gqlCell` and `fragmentCell` reads/writes for the lifetime of one
+ * ALS request context — which in this framework is one HTTP
+ * connection (a streaming heartbeat's segment loop shares one
+ * context across all its segments). Discarded when the connection
+ * closes.
  *
- * Cross-request caching (when we eventually want it) is a separate
- * layer; this primitive is intentionally short-lived.
+ * Cross-connection caching (when we eventually want it) is a
+ * separate layer; this primitive intentionally lives only as long
+ * as the connection that opened it.
  */
 export function getEphemeralCellStorage(): CellStorage {
   const store = _getRequestEphemeralStorage(_newEphemeralFallback)

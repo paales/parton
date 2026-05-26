@@ -17,10 +17,14 @@ Three constructors today, each backed by a different storage tier:
 All three implement the same `Cell<T>` interface — Render code
 doesn't know which backend produced the value.
 
-**Why request-scoped for ephemeral?** Each request gets its own
-in-memory cache. No leakage between users / sessions / heartbeats.
-A mutation in one request can't accidentally serve another request's
-viewer. Cross-request caching (when we eventually want it) is a
+**Why connection-scoped for ephemeral?** Each HTTP connection gets
+its own in-memory cache for the duration of its ALS request context
+— including all segments a streaming heartbeat emits, because the
+segment driver loops inside one `runWithRequestAsync` scope. Short
+POSTs (mutations) and cold GETs each get their own short-lived
+storage; long heartbeats hold their storage for the connection's
+lifetime. No leakage between connections (different tabs, different
+users). Cross-connection caching (when we eventually want it) is a
 separate layer added on top, not a default.
 
 **Custom storage on localCell:** pass `storage: getEphemeralCellStorage`
