@@ -47,11 +47,15 @@ export {
   computeScopedCellPartitionKey,
   finalizeScopedCell,
   getCellById,
+  isBoundCell,
   isCellHandle,
   isModuleCell,
   isScopedCellDescriptor,
   makeScopedCellFactories,
+  resolveCellValue,
+  type BoundCell,
   type Cell,
+  type CellArgs,
   type CellShape,
   type CellShapeSpec,
   type CellVaryScope,
@@ -62,6 +66,8 @@ export {
   type ScopedLocalCellOpts,
   type ValueOfShape,
 } from "./cell.ts"
+
+export { gqlCell, type GqlCellOpts, type GqlClient } from "./cell-gql.ts"
 
 export {
   useCell,

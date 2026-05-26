@@ -24,9 +24,11 @@
  *        registered URLPattern that matches the request URL — same
  *        derivation pass `partial.tsx` does for spec match.
  *   4. Write storage at `(getScope(), cellId, partitionKey)`.
- *   5. Fire `refreshSelector("cell:<id>")` inside a transaction so
- *      every parton reading this cell has its fp shift on the next
- *      render.
+ *   5. Fire `refreshSelector("cell:<id>?<args>")` inside a transaction
+ *      — partition-scoped, only partons whose constraint surface
+ *      includes matching args see fp shift on the next render. Args
+ *      are URL-encoded as the query-string fragment; bare
+ *      `cell:<id>` is emitted only when args are empty.
  */
 
 import { getCellById, type CellVaryScope } from "../lib/cell.ts"
@@ -177,15 +179,55 @@ export async function __cellWriteBatch(
   })
 }
 
+/**
+ * Encode args object as a query-string fragment for partition-scoped
+ * selectors: `{itemId: "abc"}` → `itemId=abc`. Empty args → empty
+ * string (bare selector). Used to emit `cell:<id>?<args>` from the
+ * write/invalidate path so only partons whose constraint surface
+ * includes the same args refetch.
+ *
+ * Encoding rules:
+ *   - Keys sorted (deterministic across same args object).
+ *   - Values stringified via `String(v)`; constraint matching is
+ *     string-equality (see `matchesConstraints` in
+ *     invalidation-registry.ts).
+ *   - URL-encoded so `&`, `=`, `?` in values don't break the parser.
+ */
+function encodeArgsForSelector(args: Record<string, unknown>): string {
+  const keys = Object.keys(args).sort()
+  if (keys.length === 0) return ""
+  const parts: string[] = []
+  for (const k of keys) {
+    const v = args[k]
+    if (v === undefined || v === null) continue
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+  }
+  return parts.join("&")
+}
+
+/** Build the partition-scoped selector string for a cell + args.
+ *  Returns bare `cell:<id>` when args are empty. */
+function buildCellSelector(cellId: string, args: Record<string, unknown>): string {
+  const encoded = encodeArgsForSelector(args)
+  return encoded ? `cell:${cellId}?${encoded}` : `cell:${cellId}`
+}
+
 /** Shared write implementation. Caller is responsible for wrapping in
  *  a `runInvalidationTransaction` so the resulting `refreshSelector`
  *  bumps participate in atomic commit/rollback.
  *
  *  Pipeline per write: validate (throws on shape mismatch) → write
  *  (server's final-say canonicalisation; opt-in via the cell's
- *  `write` option) → storage → `refreshSelector`. Both validate and
- *  write run inside the transaction, so a throw rolls back the whole
- *  batch. */
+ *  `write` option) → storage → `refreshSelector` (partition-scoped).
+ *  Both validate and write run inside the transaction, so a throw
+ *  rolls back the whole batch.
+ *
+ *  Selector emission is partition-scoped: if args are available (via
+ *  `partitionOverride.vary` or `cell.vary(scope)`), the emitted
+ *  selector carries them as constraints (`cell:<id>?key=value`).
+ *  Only partons whose effective constraint surface includes the same
+ *  args match — other placements of the same cell at different
+ *  partitions don't refetch. */
 function writeOneCell(
   cellId: string,
   value: unknown,
@@ -195,13 +237,29 @@ function writeOneCell(
   if (!cell) throw new Error(`cell-write: unknown cell id "${cellId}"`)
   const validated = cell.validate(value)
   const stored = cell.write ? cell.write(validated) : validated
-  let partitionKey: string
+  let args: Record<string, unknown>
   if (partitionOverride?.vary) {
-    partitionKey = hash(stableStringify(partitionOverride.vary))
+    args = partitionOverride.vary
   } else {
     const scope = buildCellVaryScope()
-    partitionKey = hash(stableStringify(cell.vary(scope)))
+    args = cell.vary(scope)
   }
+  const partitionKey = hash(stableStringify(args))
   getCellStorage().write(getScope(), cellId, partitionKey, stored)
-  getServerNavigation().reload({ selector: `cell:${cellId}` })
+  getServerNavigation().reload({ selector: buildCellSelector(cellId, args) })
+}
+
+/**
+ * Partition-scoped invalidate — fires the `cell:<id>?<args>` signal
+ * WITHOUT writing storage. Used by `BoundCell.invalidate()` to force
+ * matching placements to re-resolve (re-run the loader on next render
+ * if storage is empty, or just refetch the parton's bytes if not).
+ */
+export async function __cellInvalidate(
+  cellId: string,
+  args: Record<string, unknown>,
+): Promise<void> {
+  await runInvalidationTransaction(async () => {
+    getServerNavigation().reload({ selector: buildCellSelector(cellId, args) })
+  })
 }

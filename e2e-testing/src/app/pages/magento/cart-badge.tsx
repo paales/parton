@@ -2,7 +2,11 @@
 
 export function CartBadge({ quantity = 0 }: { quantity?: number | string }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm text-card-foreground">
+    <a
+      href="/magento/cart"
+      data-testid="cart-badge-link"
+      className="inline-flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm text-card-foreground hover:bg-accent"
+    >
       <svg
         width="20"
         height="20"
@@ -18,6 +22,6 @@ export function CartBadge({ quantity = 0 }: { quantity?: number | string }) {
         <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
       </svg>
       <span className="min-w-[18px] text-center font-semibold">{quantity}</span>
-    </div>
+    </a>
   )
 }

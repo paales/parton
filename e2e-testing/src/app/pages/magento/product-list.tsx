@@ -159,5 +159,6 @@ export const MagentoPage = parton(
       </>
     )
   },
-  { match: "/magento{/*}?" },
+  // `/magento` exact — `/magento/cart` is its own page (see cart-page.tsx).
+  { match: "/magento" },
 )

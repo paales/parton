@@ -1,226 +1,155 @@
-# Cells as resolvers
+# Cells as resolvers — what shipped, what's still open
 
-> Live design doc. Captured 2026-05-26 from a conversation about
-> growing the cell primitive into a normalised-entity layer for
-> upstream-loaded data (GraphQL, REST, anything else). The shipped
-> `localCell` is the first implementor; this note sketches the
-> future variants (`gqlCell`, etc.) and the open questions before
-> any are built. Decision open; not currently shipping.
->
-> Predecessor context: `replicated-state.md` (state-mode taxonomy),
-> `cell-dimensionality.md` (the orthogonal axis — inheritance walks
-> inside a single cell's storage).
+> Captured 2026-05-26 during the design conversation that produced
+> bound cells (`.with(args)`), the prop-bag resolution path,
+> partition-scoped invalidation, and `gqlCell`. The user-facing
+> surface lives in [`../reference/cells.md`](../reference/cells.md);
+> this note tracks the residue — design questions that were noted
+> but deferred during the shipped change.
 
-## Premise
+## What shipped (resolved questions)
 
-Today's `localCell({id, shape, vary, initial, write})` is the
-shipped shape. Storage IS the source of truth: writes hit the
-configured `CellStorage` adapter, reads come straight back out. The
-adapter is the cell's "loader" in the most degenerate sense — read
-returns whatever the storage layer has.
+- **Resolver-shape primitive.** Cells are normalised entity slots with
+  loaders. Same `Cell<T>` contract across `localCell` (storage-only,
+  static `initial`) and `gqlCell` (loader = gql.tada-typed query).
+- **Args mechanism.** `cellHandle.with(args)` returns a `BoundCell<T>`
+  with partition baked. Authors pass `BoundCell`s as JSX props; the
+  framework resolves them in the parton's prop-bag resolution phase.
+- **Storage-as-authoritative.** Loader runs on cold-start; storage is
+  the source thereafter. No TTL, no `freshFor` — that was an
+  anti-pattern. Mutations write the cell explicitly; reads dedupe.
+- **Partition-scoped invalidation.** Cell writes emit
+  `cell:<id>?<args>` selectors; only placements whose merged
+  constraints (vary ∪ bound args) match refetch. 200 cart lines, one
+  update, one refetch.
+- **`hydrate(value)` for parent loaders.** Sync write without firing
+  the signal — solves the cascade-on-cold-load problem when a parent
+  cell's loader populates child cells.
+- **`gqlCell` via gql.tada.** Thin wrapper; args inferred from query
+  variables, return type from gql.tada inference, loader is
+  `client.request(doc, args)`.
 
-The next implementor is upstream-loaded cells: a cell whose value
-comes from a GraphQL query (or any other server-side data source).
-The shape we converged on: same primitive contract (typed,
-partition-keyed, signal-emitting), different option bag —
-`gqlCell({args, shape, load, ...})` with a callable loader instead
-of an in-process storage write.
+## What's still open
 
-The cart line-item case is the load-bearing motivator: a 200-item
-cart can't reload everything on every mutation. With normalised
-entity cells, a mutation that returns updated item + new totals
-flushes only those two cells, only the matching `<CartItem>`
-placement and the `<Cart>` totals view refetch, no upstream
-round-trip on the connected viewers (the warm cell value is the
-new value).
+### 1. Typed args (deferred — works as `Record<string, unknown>`)
 
-## Resolver architecture
+Today `args` is `CellArgs = Record<string, unknown>`. The cell's
+shape doesn't propagate to its `.with(args)` parameter — authors
+get no compile-time check that they're passing the right args.
 
-Cells become server-side resolvers, structurally equivalent to a
-GraphQL field resolver. The mapping:
+For `gqlCell`, gql.tada's inferred `TVars` IS the args shape, so the
+type information is present at construction; threading it through
+`.with()` is a TS-generic exercise. For `localCell`, args would
+either need a runtime validator (zod-shaped) or just a TS-only type
+parameter.
 
-| GraphQL resolver | Cell |
-|---|---|
-| `(parent, args, context) => result` | `(args) => T` (loader); request context is ambient |
-| Type schema | Cell `shape` declaration |
-| Argument shape | Cell `args` schema |
-| Cache hint (per-type policy) | Cell `freshFor` / `merge` / `read` options |
-| Mutation returns updated entity | Action calls `cell.set(args, value)` |
-| Normalised cache | Cell storage indexed by `(cellId, hashedArgs)` |
+Defer until a caller hits the lack of typing. The functional
+behaviour is correct; the typing layer can tighten later.
 
-Each implementor wraps the resolver pattern with a specific data
-source:
+### 2. Object / list cell shapes (we have `opaque`)
 
-- `localCell` — local file-backed storage; "loader" is the storage
-  layer.
-- `gqlCell` — GraphQL query as the loader; result populates the
-  cell's storage slot.
-- (Future) REST / Redis / IPC / whatever — any source that takes
-  args and returns a typed value.
+The shape catalog now includes `"opaque"` — accepts any value, no
+runtime validation. Real object validation (`{object: {a: string,
+b: number}}`, `{list: shape}`) would require building out a small
+shape DSL that the framework can walk. Not urgent — `opaque` covers
+the cart-line case and any other "trust the loader" pattern.
 
-All implementors share the same `Cell<T>` handle shape and
-`ResolvedCell<T>` wire shape. The framework's invalidation
-registry, fp folding, scoped descriptors, and `useCell` machinery
-don't care which loader produced the value.
+The CMS migration likely needs proper object shapes (nested
+configs + slots with field-level validation). That's the trigger
+for building this out.
 
-## Sketch — `gqlCell`
+### 3. Fragment composition + relay-style auto-hydration
 
-Strawman, not committed:
+Today a parent cell's loader explicitly calls
+`cartItemCell.with({uid}).hydrate(value)` for each child. Manual,
+explicit, verbose. The Relay-deep version:
 
 ```ts
-const cartItem = gqlCell({
-  id: "cart-item",
-  args: { itemId: "string" },          // call-site args — partition source
-  shape: { /* graph type contract */ },
-  load: async ({ itemId }) => gql.fetchCartItem(itemId),
-  freshFor: 5_000,                      // ms; mutation-result window
+const cartCell = gqlCell({
+  doc: graphql(`...`),
+  hydrates: {
+    items: cartItemCell,  // declares "rows of `items` populate cartItemCell"
+  },
 })
 ```
 
-Or via a typed-document tag (gql.tada gives the inference for
-free):
+The framework reads the relation map and auto-hydrates child cells
+from the query result. Saves typing; centralises the normalisation
+logic.
+
+Cost: needs a way to express "this field is an array of CartItem
+entities," a way to extract identity keys (probably `__typename + id`
+or a custom keyer), and a way for the framework to walk the result
+recursively. Not small.
+
+Defer until the manual hydration shape repeats often enough to show
+the abstraction's shape.
+
+### 4. Mutation result auto-write from action returns
+
+Today actions imperatively call `cell.with(args).set(value)` after
+the upstream mutation returns. The framework doesn't know "this
+action result populates this cell." A future shape:
 
 ```ts
-const cartItem = cellGql(graphql(`
-  query GetCartItem($itemId: ID!) {
-    cartItem(id: $itemId) { id qty sku product { id name } }
-  }
-`), { freshFor: 5_000 })
-```
-
-`cellGql` extracts variable definitions from the query AST →
-`args` validator, infers the shape from gql.tada's return type,
-synthesises the loader as `(args) => client.request(doc, args)`.
-Thin wrapper around the more general `gqlCell`.
-
-### Reading at a parton
-
-Schema stays static. The cell handle is declared in the schema
-record; Render calls `.load(args)` with placement-derived
-arguments:
-
-```tsx
-const CartItem = parton(
-  async function CartItemRender({ item, props: { itemId } }) {
-    const value = await item.load({ itemId })
-    return <Line {...value} />
+const updateLineMutation = gqlMutation({
+  doc: graphql(`mutation UpdateLine($uid, $qty) { ... cartItem { ... } }`),
+  writes: {
+    "data.cartItem": (cartItem) => cartItemCell.with({ uid: cartItem.uid }),
   },
-  { schema: () => ({ item: cartItem }) },
-)
+})
 ```
 
-The framework records the `(cellId, args-hash)` dependency for this
-placement. fp folds the resolved value's hash; partition-scoped
-invalidation (cell-write with bound args) only re-renders the
-matching placement.
+The framework reads `writes`, finds the corresponding field in the
+mutation response, calls the bound cell's `.set()` with the field
+value. Reduces action boilerplate; ensures the cell update happens
+inside the same transaction as the mutation.
 
-### Mutations push to the warm cache
+Needs typed paths (`"data.cartItem"`) — gql.tada's response type can
+drive this with a tagged-template path utility. Adjacent to (3); same
+caller pressure.
 
-```ts
-"use server"
-async function updateLineQty(itemId, qty) {
-  const r = await gql.updateCartItem({ itemId, qty })
-  await cartItem.set({ itemId }, r.item)
-  await cart.set({ cartId }, c => ({ ...c, totals: r.cart.totals }))
-}
-```
+### 5. Multi-tab / multi-viewer mutation propagation
 
-Two cell writes, both inside the implicit action transaction. Each
-fires its partition-scoped signal (`cell:cart-item?itemId=abc` and
-`cell:cart?cartId=xyz`). Connected clients re-render the matching
-`<CartItem>` placement and the `<Cart>` parton; both find the cell
-value warm (inside `freshFor`) and skip the upstream call. **Zero
-Magento round-trips on the re-render after the mutation.** Other
-199 cart-item placements stay put — their partition wasn't bumped.
+Today, partition-scoped invalidation propagates within ONE process.
+Connected clients on the SAME process re-render through the
+heartbeat stream. Multiple processes / multiple users on the same
+cart: a write in process A doesn't reach process B's clients.
 
-### Cold-load hydration at the cart boundary
+Solutions:
+- `BroadcastChannel` for same-origin tabs (filed in
+  [`./IDEAS.md`](./IDEAS.md)).
+- Pluggable invalidation backend (Redis pub/sub) for cross-process.
 
-To avoid N+1 on cold load, the cart parton's Render fetches the
-full cart in one GraphQL query and hydrates child cells before
-placing them:
+Independent of cells; affects the registry layer.
 
-```tsx
-const Cart = parton(
-  async function CartRender({ cart, parent }) {
-    const data = await cart.load({ cartId })
-    await Promise.all(
-      data.items.map(i => cartItem.hydrate({ itemId: i.id }, i)),
-    )
-    return data.itemIds.map(id => <CartItem itemId={id} parent={parent} />)
-  },
-  { schema: () => ({ cart }) },
-)
-```
+### 6. Eviction policy
 
-`hydrate(args, value)` primes the cache WITHOUT firing the
-partition signal — the child placements would re-render
-unnecessarily otherwise. Verbose but explicit; duplication across
-multiple cart-like callers will eventually pressure-test what
-declarative shape it wants.
+`localCell` + `gqlCell` storage grows indefinitely until process
+restart. For long-running production usage with N users × M
+cart-items, this matters. Today's `CellStorage` adapter contract
+doesn't have LRU/maxBytes/TTL eviction.
 
-## What stays the same
-
-- `Cell<T>` and `ResolvedCell<T>` interfaces — the consumer side is
-  identical regardless of loader.
-- `useCell` + `cell.input()` — the client surface is shape-agnostic.
-- Invalidation registry, partition signals, fp folding — all reused.
-- Scoped cells inside `schema({localCell})` — `gqlCell` can sit
-  alongside in the same scope record.
+Eviction is a property of the adapter, not the cell primitive. A
+Redis-backed adapter gets eviction for free. The default JSON-file
+adapter could grow a TTL pass. Not urgent — even sloppy in-memory
+storage handles tens of thousands of entries fine.
 
 ## Inspirations
 
 - **Apollo typePolicies** — per-type config (key fields, merge
-  functions, field policies, freshness). Direct precedent for what
-  per-cell options end up wanting once real callers arrive.
-- **Relay** — fragment colocation + normalised cache + per-entity
-  refetch. The eventual destination if fragment composition at
-  parton boundaries proves load-bearing.
-- **Pothos** — type-safe schema builder. Less relevant for the
-  consumer side; matters if/when we go fragment-composition.
-
-## Open questions
-
-1. **Args typing.** `args` is `Record<string, unknown>` today (same
-   as `vary`'s output). Loader-cells want typed args
-   (`{itemId: string}`) for the `load` callback to be sound. Whether
-   to add a runtime validator (zod or built-in) and how it composes
-   with `vary` is unresolved. Defer until first loader-cell
-   caller forces it.
-2. **Mutation shape.** `cell.set(args, value)` is the natural shape
-   for partition-arg-explicit writes. Today's `cell.set(value,
-   {vary?})` already supports an explicit partition override —
-   `set(args, value)` is just a different signature ordering. Pick
-   one when the first caller lands.
-3. **Hydrate vs set.** `hydrate` writes without firing the signal
-   (cold-load priming); `set` writes and fires (mutation result).
-   Single API with a flag, or two methods? Two methods feels right
-   — the intent is different and the call sites read differently.
-4. **TTL / `freshFor` defaults.** localCell has no TTL (storage IS
-   source). gqlCell needs one (loader is source; storage is cache).
-   Reasonable default: maybe 5s, configurable per-cell. Eviction
-   beyond TTL — LRU? maxBytes? Pluggable adapter property.
-5. **Fragment composition.** The Relay-deep version: cells declare
-   fragments, framework composes them at parton boundaries into one
-   query, auto-hydrates from the response. Big new surface; likely
-   not worth doing until the imperative `await Promise.all(items.map
-   (i => cartItem.hydrate(...)))` shape repeats often enough to
-   show the sugar.
-6. **Mutation auto-write from action returns.** Today actions
-   imperatively call `cell.set(...)`. A future shape: action declares
-   a return type (e.g. `{updatedItem: CartItem, updatedCart: Cart}`)
-   and the framework infers which cells to write from the field
-   names. Cleaner and composes with optimistic; needs a type
-   contract sharp enough to drive the inference.
+  functions, field policies). The direct precedent for what
+  per-cell options end up looking like once real callers arrive.
+- **Relay** — fragment colocation + normalised cache. The eventual
+  destination if fragment composition (item 3) earns its place.
 
 ## Related
 
-- [`../reference/cells.md`](../reference/cells.md) — the today
-  `localCell` surface.
+- [`../reference/cells.md`](../reference/cells.md) — the shipped
+  user-facing surface (localCell, gqlCell, .with(), hydrate, etc.).
 - [`../internals/cell-internals.md`](../internals/cell-internals.md)
-  — wire shape, batcher mechanics, storage layer.
-- [`./replicated-state.md`](./replicated-state.md) — the broader
-  state-model lens; cells are the typed-value lane.
+  — wire shape, batcher, prop-bag resolution path.
 - [`./cell-dimensionality.md`](./cell-dimensionality.md) — the
   orthogonal axis (inheritance walks inside one cell's storage).
-- [`./IDEAS.md`](./IDEAS.md) — broader backlog; some adjacent items
-  (cross-tab sync, persist optimistic, pattern-based invalidation).
+- [`./IDEAS.md`](./IDEAS.md) — broader backlog; cross-tab sync,
+  persist optimistic state, pattern-based invalidation.

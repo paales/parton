@@ -15,32 +15,51 @@ implementation: `writeOneCell(cellId, value, partitionOverride?)`
 in `framework/src/runtime/cell-actions.ts`.
 
 ```
-validate(value)          ← throws on shape mismatch (defends against
-                            malicious client writes)
+validate(value)             ← throws on shape mismatch (defends against
+                              malicious client writes)
 ↓
-write(validated)          ← optional cell-declared canonicalisation
-                            (server's final say on stored shape)
+write(validated)             ← optional cell-declared canonicalisation
+                              (server's final say on stored shape)
 ↓
-storage.write(scope, id,  ← writes to the active scope's bucket
+storage.write(scope, id,     ← writes to the active scope's bucket
               partKey, v)
 ↓
-refreshSelector("cell:" + id)   ← bumps the invalidation registry
+refreshSelector(             ← bumps the invalidation registry with
+  "cell:" + id +               partition-scoped constraints encoded
+  "?<argsEncoded>")            as the query-string fragment
 ```
 
 The whole pipeline runs inside a `runInvalidationTransaction`. A
 throw in `validate` or `write` discards the pending refreshSelector
 bumps — observers can't see a partial commit.
 
-Two server actions wrap the pipeline:
+The emitted selector is **partition-scoped**: args are URL-encoded
+as `key1=value1&key2=value2` (keys sorted). Selector matching
+against the registry uses `queryMatchingTs(labels, vary ∪ boundArgs)`
+— a `cell:<id>?uid=X` write only refreshes placements whose
+effective constraints contain `uid=X`. Empty args fall back to bare
+`cell:<id>` (matches every placement of that cell, used for cells
+with no `vary` and no `.with()`).
+
+Three server actions wrap the pipeline:
 
 - **`__cellWrite(cellId, value, partitionOverride?)`** — single-cell
   write. The shape `cellHandle.set` binds to via
   `Function.prototype.bind`. Each invocation = one POST.
+- **`__scopedCellWrite(cellId, partitionVary, value)`** — partition-
+  args-baked write. The shape `cellHandle.with(args).set(value)`
+  binds to. Args from the binding are part of the selector
+  constraint.
 - **`__cellWriteBatch(updates[])`** — multi-cell write. The shape
   the client-side coalescer (`_cellSetBatched` →
   `useCell(cell).set`) targets. Inside one transaction so all
-  resulting `cell:<id>` bumps flush at outer commit and the
+  resulting `cell:<id>?<args>` bumps flush at outer commit and the
   segment driver wakes once.
+
+Additionally, **`__cellInvalidate(cellId, args)`** fires the
+partition-scoped selector WITHOUT touching storage — used by
+`BoundCell.invalidate()` to force matching placements to re-resolve
+(re-run the loader if storage is empty).
 
 ## Wire shape
 
@@ -65,11 +84,49 @@ the action, which bumps the invalidation registry and shifts the
 fp of every parton reading the cell on the next render.
 
 The cell module handle (the module-singleton thing constructed via
-`localCell(...)`) is **distinct** from `ResolvedCell<T>`. The module
-handle carries `partition`, `defaultValue`, `validate`, `write`;
-the resolved cell carries `value` (and `set`, the bound action ref
-the module handle also exposes). Only the resolved form is passed
-to Render and across Flight.
+`localCell(...)` or `gqlCell(...)`) is **distinct** from
+`ResolvedCell<T>`. The module handle carries `vary`, `defaultValue`,
+`validate`, `write`, `load`, plus `with(args)` returning a
+`BoundCell<T>`. The resolved cell carries `value` (and `set`, the
+bound action ref the module handle also exposes). A `BoundCell<T>`
+carries the partition args baked plus its own `set` / `update` /
+`clear` / `invalidate` / `hydrate` methods. Only the resolved form
+crosses Flight.
+
+## Resolution path — parton's wrapper component
+
+`createSpecComponent` builds an async React component for every spec.
+On each render the wrapper:
+
+1. **match phase** — URLPattern gate. Mismatch → parked keepalive.
+2. **vary phase** — sync callback, output drives fp's vary axis.
+3. **schema phase** — for each entry in the schema record:
+   - **Module cell**: run `cell.vary(scope)` → args; await
+     `resolveCellValue(cell, args)` (storage hit returns sync;
+     storage miss + `load` defined runs loader). Build
+     `ResolvedCell`. Stamp `cell:<id>` label. Add args to
+     `boundArgsMerged`.
+   - **Scoped descriptor**: finalize → compute partition from
+     descriptor's `vary` over the parton's vary output → resolve.
+   - **Bound cell** (a `BoundCell<T>` in the schema record): use
+     baked args directly. Same resolution.
+4. **Props phase** *(new)* — walk top-level JSX props:
+   - For each prop whose value is a `Cell<T>` or `BoundCell<T>`,
+     resolve as above, replace the prop with `ResolvedCell<T>`,
+     stamp label, add args.
+5. **Constraint surface** — `effectiveConstraints = vary ∪
+   boundArgsMerged`. Passed to `queryMatchingTs(labels, surface)` →
+   `inv` fold.
+6. **fp** = `id|matchKey|vary|schema=<cellHashes>|props|inv`.
+7. **Render** with the assembled prop bag (resolved cells, vary
+   output, schema-resolved entries, parent context).
+
+The wrapper is `async`. Cold-load paths await; hot paths (storage
+warm) settle in a microtask — sync-equivalent in practice.
+
+The props phase is top-level only. Cells nested inside object props
+are NOT auto-resolved — pass them as top-level props if you want
+framework tracking.
 
 ### Why `set` on the resolved cell isn't a bound *client* function
 

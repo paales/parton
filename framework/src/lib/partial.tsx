@@ -73,10 +73,15 @@ import {
   computeCellPartitionKey,
   computeScopedCellPartitionKey,
   finalizeScopedCell,
+  getCellById,
+  isBoundCell,
   isModuleCell,
   isScopedCellDescriptor,
   makeScopedCellFactories,
+  resolveCellValue,
+  type BoundCell,
   type Cell,
+  type CellArgs,
   type CellVaryScope,
   type ResolvedCell,
   type ScopedCellDescriptor,
@@ -1184,7 +1189,12 @@ function effectiveIdForInstance(
 function createSpecComponent<V>(
   spec: InternalSpec<V>,
 ): FC<PartialComponentProps & Record<string, unknown>> {
-  const Component: FC<PartialComponentProps & Record<string, unknown>> = (props) => {
+  // Async: schema/props resolution can `await` the loader on
+  // storage-cold cells (gqlCell + localCell with `load`). Storage-warm
+  // paths still settle in a microtask (await of a resolved value), so
+  // overhead is one Promise tick on hot reads — sync-equivalent in
+  // practice.
+  const Component: FC<PartialComponentProps & Record<string, unknown>> = async (props) => {
     const {
       parent,
       __instanceId: instanceIdOverride,
@@ -1335,58 +1345,128 @@ function createSpecComponent<V>(
     const cellsByKey = new Map<string, ResolvedCell<unknown>>()
     const cellIdByArgKey: Record<string, string> = {}
     const cellLabels: string[] = []
+    /** Bound args from any cell resolution (schema OR props). Merged
+     *  with vary into the parton's effective constraint surface for
+     *  invalidation matching — a `cell:<id>?itemId=X` selector only
+     *  matches placements whose effective constraints include
+     *  `itemId=X`. */
+    const boundArgsMerged: Record<string, unknown> = {}
+    /** Components contributing to schemaKeyHash: cell-id × partition ×
+     *  value. Sorted before hashing. */
+    const resolutionParts: string[] = []
     let schemaKeyHash = ""
+    const cellScope: CellVaryScope = {
+      url: ourUrl,
+      pathname: ourUrl.pathname,
+      search: searchParamsToRecord(ourUrl.searchParams),
+      cookies: parseCookies(ourRequest),
+      headers: headersToRecord(ourRequest.headers),
+      params,
+      session,
+      time,
+    }
     if (opts.schema) {
       const factories = makeScopedCellFactories<unknown>()
       const raw = opts.schema(factories)
-      const cellScope: CellVaryScope = {
-        url: ourUrl,
-        pathname: ourUrl.pathname,
-        search: searchParamsToRecord(ourUrl.searchParams),
-        cookies: parseCookies(ourRequest),
-        headers: headersToRecord(ourRequest.headers),
-        params,
-        session,
-        time,
-      }
       const partonVaryForCells = (varyResult ?? {}) as Record<string, unknown>
-      const resolutionParts: string[] = []
       for (const key of Object.keys(raw)) {
         const val = raw[key]
         if (isScopedCellDescriptor(val)) {
           const descriptor = val as ScopedCellDescriptor<unknown>
           const cellHandle = finalizeScopedCell(descriptor, spec.id, key)
-          const partitionKey = computeScopedCellPartitionKey(descriptor, partonVaryForCells)
-          const stored = getCellStorage().read(getScope(), cellHandle.id, partitionKey)
-          const value = stored === undefined ? cellHandle.defaultValue : stored
           const partitionVary = descriptor.varyFn
             ? descriptor.varyFn(partonVaryForCells as never)
             : partonVaryForCells
+          const partitionKey = computeScopedCellPartitionKey(descriptor, partonVaryForCells)
+          const value = await resolveCellValue(cellHandle, partitionVary)
           const resolved = buildResolvedCell(cellHandle, value, partitionVary)
           schemaResult[key] = resolved
           cellsByKey.set(key, resolved)
           cellIdByArgKey[key] = cellHandle.id
           cellLabels.push(`cell:${cellHandle.id}`)
+          Object.assign(boundArgsMerged, partitionVary)
+          resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
+        } else if (isBoundCell(val)) {
+          const bound = val as BoundCell<unknown>
+          const cellHandle = getCellById(bound.cellId)
+          if (!cellHandle) {
+            throw new Error(`schema: bound cell "${bound.cellId}" not in registry`)
+          }
+          const args = bound.args
+          const partitionKey = hash(stableStringify(args))
+          const value = await resolveCellValue(cellHandle, args)
+          const resolved = buildResolvedCell(cellHandle, value, args)
+          schemaResult[key] = resolved
+          cellsByKey.set(key, resolved)
+          cellIdByArgKey[key] = cellHandle.id
+          cellLabels.push(`cell:${cellHandle.id}`)
+          Object.assign(boundArgsMerged, args)
           resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
         } else if (isModuleCell(val)) {
           const c = val as Cell<unknown>
-          const partitionKey = computeCellPartitionKey(c, cellScope)
-          const stored = getCellStorage().read(getScope(), c.id, partitionKey)
-          const value = stored === undefined ? c.defaultValue : stored
+          const args = c.vary(cellScope)
+          const partitionKey = hash(stableStringify(args))
+          const value = await resolveCellValue(c, args)
           const resolved: ResolvedCell<unknown> = buildResolvedCell(c, value)
           schemaResult[key] = resolved
           cellsByKey.set(key, resolved)
           cellIdByArgKey[key] = c.id
           cellLabels.push(`cell:${c.id}`)
+          Object.assign(boundArgsMerged, args)
           resolutionParts.push(`${c.id}:${partitionKey}:${stableStringify(value)}`)
         } else {
           schemaResult[key] = val
         }
       }
-      if (resolutionParts.length > 0) {
-        resolutionParts.sort()
-        schemaKeyHash = `|schema=${hash(resolutionParts.join("|"))}`
+    }
+
+    // ── Props cell-resolution phase ──
+    // Walk top-level extraProps for Cell handles or BoundCell
+    // descriptors. Resolve each one in place: storage read (running
+    // loader on miss), build ResolvedCell, replace the prop. Stamp
+    // `cell:<id>` on the parton's labels and merge args into the
+    // effective constraint surface — so a partition-scoped invalidation
+    // (`cell:<id>?key=value`) only refetches placements whose bound
+    // args match.
+    //
+    // Only top-level props are scanned. Nested cells inside object
+    // props aren't resolved (keeps the rule simple; if you want a cell
+    // visible to the framework, pass it as a top-level prop).
+    const resolvedExtraProps: Record<string, unknown> = {}
+    for (const key of Object.keys(extraProps)) {
+      const val = extraProps[key]
+      if (isBoundCell(val)) {
+        const bound = val as BoundCell<unknown>
+        const cellHandle = getCellById(bound.cellId)
+        if (!cellHandle) {
+          throw new Error(`prop "${key}": bound cell "${bound.cellId}" not in registry`)
+        }
+        const args = bound.args
+        const partitionKey = hash(stableStringify(args))
+        const value = await resolveCellValue(cellHandle, args)
+        const resolved = buildResolvedCell(cellHandle, value, args)
+        resolvedExtraProps[key] = resolved
+        cellLabels.push(`cell:${cellHandle.id}`)
+        Object.assign(boundArgsMerged, args)
+        resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
+      } else if (isModuleCell(val)) {
+        const c = val as Cell<unknown>
+        const args = c.vary(cellScope)
+        const partitionKey = hash(stableStringify(args))
+        const value = await resolveCellValue(c, args)
+        const resolved = buildResolvedCell(c, value)
+        resolvedExtraProps[key] = resolved
+        cellLabels.push(`cell:${c.id}`)
+        Object.assign(boundArgsMerged, args)
+        resolutionParts.push(`${c.id}:${partitionKey}:${stableStringify(value)}`)
+      } else {
+        resolvedExtraProps[key] = val
       }
+    }
+
+    if (resolutionParts.length > 0) {
+      resolutionParts.sort()
+      schemaKeyHash = `|schema=${hash(resolutionParts.join("|"))}`
     }
     const expandedLabels =
       cellLabels.length > 0 ? [...parsed.labels, ...cellLabels] : parsed.labels
@@ -1446,9 +1526,18 @@ function createSpecComponent<V>(
     // fp shift on the next render, mismatching the client's cached fp,
     // and emit fresh content. No registry entries → 0 → no
     // contribution; same fp as before the registry existed.
+    // Constraint surface for selector-constrained invalidation:
+    // merge vary output with bound args from any resolved cells
+    // (schema OR props). `cell:<id>?key=value` selectors match
+    // partons whose merged constraints contain the key=value pair —
+    // so partition-scoped writes only refetch matching placements.
+    const effectiveConstraints: Record<string, unknown> | null =
+      varyResult == null && Object.keys(boundArgsMerged).length === 0
+        ? null
+        : { ...(varyResult as Record<string, unknown> | null ?? {}), ...boundArgsMerged }
     const invalidationTs = queryMatchingTs(
       expandedLabels,
-      varyResult as Record<string, unknown> | null | undefined,
+      effectiveConstraints,
     )
     const invalidationKey = invalidationTs > 0 ? `|inv=${invalidationTs}` : ""
     const ownStructuralFp = hash(
@@ -1526,7 +1615,7 @@ function createSpecComponent<V>(
     // (CMS content key resolution, etc.). Plain Renders just ignore
     // the prop.
     const renderProps = {
-      ...extraProps,
+      ...resolvedExtraProps,
       ...(varyResult as object),
       ...schemaResult,
       ...actionsResult,

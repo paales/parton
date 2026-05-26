@@ -4,13 +4,19 @@ A cell is a **typed, identity-keyed slot** of server-authoritative
 state that crosses Flight to client components as a `ResolvedCell<T>`
 prop. Clients read its `.value` and call `.set(v)`; the framework
 fans the write back out to every parton that read it via the
-parton's `schema` callback.
+parton's `schema` callback or via JSX prop binding.
 
-`localCell` is the today shape — every cell is backed by the active
-`CellStorage` adapter (default: JSON file at `cms/data/cells.json`).
-Future implementors (`gqlCell`, etc.) will sit alongside as separate
-constructors carrying their own loaders — see
-[`../notes/cells-as-resolvers.md`](../notes/cells-as-resolvers.md).
+Two constructors today:
+
+- **`localCell({...})`** — storage-backed by the active `CellStorage`
+  adapter (default: JSON file at `cms/data/cells.json`). Initial
+  value is static.
+- **`gqlCell({client, doc, ...})`** — storage-backed too, but cold-
+  start populates the slot by running a gql.tada-typed GraphQL query
+  with the bound args.
+
+Both implement the same `Cell<T>` interface — Render code doesn't
+know or care which backend produced the value.
 
 Use a cell when:
 
@@ -21,47 +27,37 @@ Use a cell when:
   tab the user has open).
 - Multiple partons need to react to changes (cells auto-stamp
   `cell:<id>` on every reading parton's labels, so a `cell.set`
-  refetches them all on the next render).
+  refetches matching placements on the next render).
 
 For internals (storage adapters, wire shape, batcher mechanics) see
 [`../internals/cell-internals.md`](../internals/cell-internals.md).
 
-## Two construction sites
+## Partition axes
 
-Cells can live in two places:
+A cell's storage is keyed by `(id, partitionKey)` where partitionKey
+hashes the cell's **args** for this render. Args come from two
+sources:
 
-- **Module-scope** — exported from a module, identified by an explicit
-  `id`, partitioned by a `vary` callback over the request scope.
-  Reach for this when the cell is shared across partons or doesn't
-  belong to any one parton (palette, cart contents, maintenance flag,
-  featured product).
-- **Parton-scoped** — declared inline inside a parton's
-  `schema({localCell})` callback. Wire id auto-derives as
-  `<partonId>/<schemaKey>`; partition derives from the parton's vary
-  output (optionally narrowed via the descriptor's `vary`). Reach
-  for this when the cell is owned by a specific parton (form fields,
-  per-instance UI state, draft data).
+- **`vary` callback** on the cell — derives args from the request
+  scope (`session`, `cookies`, `headers`, `params`, etc.). Sync,
+  runs per-render. For request-derived partitioning (palette by
+  session, notes by URL param).
+- **`.with(args)` at the call site** — author binds explicit args
+  when placing a cell handle into a parton's schema or as a JSX
+  prop. For placement-derived partitioning (cart line by item id).
 
-Cross-tree sharing rule: if two unrelated partons need the cell, hoist
-to module-scope. Scoped cells flow strictly *down* from the owning
-parton via Render's prop bag.
+Both can compose: a cell with `vary` *and* `.with()` ends up with
+merged args. Vary's output forms the base; `.with()` overlays.
 
-## Surface
+## Three placement patterns
 
-### Module-scope construction
+### 1. Module-scope cell, declared in schema
+
+For cells where the partition is fully derived from request scope:
 
 ```ts
-import { localCell } from "@parton/framework"
+import { localCell, parton, type RenderArgs, type ResolvedCell } from "@parton/framework"
 
-// "global" — single value cluster-wide
-export const featured = localCell({
-  id: "featured",
-  shape: "string",
-  vary: () => ({}),
-  initial: "none",
-})
-
-// "user" — per-session
 export const palette = localCell({
   id: "palette",
   shape: { enum: ["light", "dark"] as const },
@@ -69,209 +65,320 @@ export const palette = localCell({
   initial: "dark",
 })
 
-// per-product
-export const productNotes = localCell({
-  id: "product-notes",
-  shape: "string",
-  vary: ({ params }) => ({ productId: params.id }),
-  initial: "",
+const ProductHeader = parton(
+  function Render({ palette }: { palette: ResolvedCell<"light" | "dark"> } & RenderArgs) {
+    return <header data-palette={palette.value}>...</header>
+  },
+  { schema: () => ({ palette }) },
+)
+```
+
+The framework resolves `palette` against the request, passes
+`ResolvedCell<...>` to Render via `palette` prop.
+
+### 2. Parton-scoped cell, declared inline in schema
+
+For cells owned by a specific parton, partitioned by the parton's
+vary output:
+
+```tsx
+const ProductPage = parton(
+  function Render({ notes, parent }) {
+    return <NotesEditor notes={notes} />
+  },
+  {
+    match: "/product/:id",
+    vary: ({ params }) => ({ productId: params.id }),
+    schema: ({ localCell }) => ({
+      notes: localCell({ shape: "string", initial: "" }),
+    }),
+  },
+)
+```
+
+Wire id auto-derives as `<partonId>/<schemaKey>` (e.g.
+`product-page/notes`). Partition is the parton's vary output by
+default; narrow via `vary: (partonVary) => subset` on the descriptor.
+
+### 3. Placement-bound cell, passed as a JSX prop
+
+For per-instance addressability — the new shape that enables
+fine-grained refetch:
+
+```tsx
+const cartItemCell = localCell({
+  id: "cart-item",
+  shape: "opaque",
+  initial: null as CartItem | null,
 })
 
-// server-side write-pipeline transform — canonicalises every value
-// before storage, regardless of what the client sent
-export const cardName = localCell({
+// Parent renders many lines, each bound to a specific itemId:
+function CartRender({ cart, parent }) {
+  return cart.value.itemIds.map((uid) => (
+    <CartLine key={uid} parent={parent} item={cartItemCell.with({ uid })} />
+  ))
+}
+
+// Child reads the bound cell from its prop bag:
+const CartLine = parton(
+  function Render({ item }: { item: ResolvedCell<CartItem | null> } & RenderArgs) {
+    return <Line {...item.value} />
+  },
+  { selector: "cart-line" },
+)
+```
+
+`cellHandle.with(args)` returns a `BoundCell<T>` descriptor. When the
+framework sees a `BoundCell` in a parton's top-level JSX props, it:
+
+1. Resolves the cell's value at the bound partition (running the
+   loader if present and storage is cold).
+2. Replaces the `BoundCell` with a `ResolvedCell<T>` in the prop bag.
+3. Stamps `cell:<id>` onto the parton's invalidation labels.
+4. Merges the bound args into the parton's effective constraint
+   surface — so partition-scoped writes (`cell:<id>?<args>`) only
+   refetch placements whose bound args match.
+
+The result: 200 `<CartLine>` placements, one quantity update via
+`cartItemCell.with({uid: "X"}).set(...)` → only that one placement
+refetches. The others stay put.
+
+## Surface — `localCell`
+
+```ts
+const palette = localCell({
+  id: "palette",
+  shape: { enum: ["light", "dark"] as const },
+  vary: ({ session }) => ({ sid: session.id }),
+  initial: "dark",
+})
+
+const cartItemCell = localCell({
+  id: "cart-item",
+  shape: "opaque",
+  initial: null as CartItem | null,
+  // no `vary` — partition entirely from `.with()` at placement sites
+})
+
+const cardName = localCell({
   id: "card-name",
   shape: "string",
   vary: () => ({}),
   initial: "",
+  // server-side canonicalisation: every write runs through this
   write: (raw) => raw.toUpperCase().replace(/[^A-Z ]/g, "").slice(0, 26),
 })
 ```
-
-Shape catalog: `"string"` / `"number"` / `"boolean"` /
-`{ enum: [...] as const }`. The shape drives runtime validation on
-writes — `__cellWrite(id, value)` rejects mismatched shapes before
-storage. Use `as const` on enum values so TypeScript narrows the
-cell's value type to the literal union.
-
-The `id` is **required**. Explicit ids are stable across renames,
-survive HMR, and identify the cell on the wire.
 
 ### Options
 
 | Option | Notes |
 |---|---|
 | `id` | Wire identifier. Required. |
-| `shape` | Runtime shape. One of `"string"` / `"number"` / `"boolean"` / `{enum: [...] as const}`. |
-| `initial` | Default value when storage is empty. |
-| `vary` | Optional. Sync callback `({url, pathname, search, cookies, headers, params, session, time}) => Record<string, unknown>`. Output hashes into the storage partition key — pick what scopes the cell ("global" = `() => ({})`, "per-session" = `({session}) => ({sid: session.id})`, per-anything else via `params` / `cookies` / `headers`). Omit for a single-partition cell. |
-| `write` | Optional. Server-side `(T) => T`. Runs after `validate` and before storage on every write — the server's final say on the stored shape regardless of what the client sent (uppercase, trim, format, length cap, profanity filter). Throws roll back the batch. |
+| `shape` | Runtime shape. `"string"` / `"number"` / `"boolean"` / `"opaque"` / `{enum: [...] as const}`. `"opaque"` accepts any value without validation — author owns the TS type. |
+| `initial` | Default value when storage is empty and no loader is configured. |
+| `vary` | Optional. `(scope) => CellArgs`. Output hashes into the partition key. Omit for a cell whose partition comes entirely from `.with()`. |
+| `load` | Optional async `(args) => T`. Runs on cold-start (storage miss) — result is validated, written to storage, then returned. Storage stays the source of truth thereafter. |
+| `write` | Optional `(T) => T`. Server-side canonicalisation. Runs after `validate` and before storage on every write. |
 
-A `read` counterpart (server-side transform on every read) is
-designed but not yet shipped — deferred until a caller needs the
-split between stored canonical and display format.
+## Surface — `gqlCell`
 
-### Parton-scoped construction
-
-Declare the cell inline inside the parton's `schema` callback. The
-framework injects a `{localCell}` factory whose options omit `id`
-(auto-derives) and whose `vary` narrows the parton's vary
-output rather than taking a request scope.
-
-```tsx
-const ProductPage = parton(
-  function ProductRender({ notes, sharedNotes, parent }) {
-    return <NotesEditor notes={notes} shared={sharedNotes} />
-  },
-  {
-    match: "/product/:id",
-    vary: ({ params, search: { lang = "en" } }) => ({
-      productId: params.id,
-      locale: lang,
-    }),
-    schema: ({ localCell }) => ({
-      // Default: partitioned by the full parton vary (productId + locale)
-      notes: localCell({ shape: "string", initial: "" }),
-
-      // Narrowed: shared across locales for the same product
-      sharedNotes: localCell({
-        shape: "string",
-        initial: "",
-        vary: ({ productId }) => ({ productId }),
-      }),
-    }),
-  },
-)
-```
-
-Key properties:
-
-- **Wire id**: `<partonId>/<schemaKey>` (auto-derived). For
-  `ProductPage` with selector "product-page", the cells are
-  `product-page/notes` and `product-page/sharedNotes`. Stable across
-  renders + HMR as long as the parton id + schema key don't change.
-- **Partition**: defaults to the parton's full vary output. Narrow
-  with `vary: (partonVary) => subset` to share values across
-  other dimensions. Can NOT expand beyond the parton's vary surface
-  — fp-skip safety would break otherwise.
-- **`set` binding**: the resolved cell's `set` is bound at parton
-  resolution time with the partition baked. Client invocations from
-  `useCell(scopedCell).set(v)` land on the right partition regardless
-  of URL changes between render and call.
-- **Schema mixing**: scoped descriptors and module-scope cell handles
-  coexist in the same schema record. The framework detects each shape
-  and resolves accordingly.
-
-### Type-inference caveat (v2)
-
-When a scoped cell narrows the parton's vary via `vary: ({foo}) =>
-({foo})`, the cascading inference is currently weak — TypeScript
-treats the cell's vary input as `object` rather
-than the parton's actual vary return type. Cast at the destructure
-if you want named keys:
+Convenience wrapper over `localCell` for cells loaded from a
+GraphQL endpoint:
 
 ```ts
-schema: ({ localCell }) => ({
-  sharedNotes: localCell({
-    shape: "string",
-    initial: "",
-    vary: (pv) => ({ productId: (pv as { productId: string }).productId }),
-  }),
+import { gqlCell } from "@parton/framework"
+import { client } from "../magento-data.ts"
+import { graphql } from "../magento-graphql.ts"
+
+export const cartItemCell = gqlCell({
+  id: "cart-item",
+  client,
+  doc: graphql(`
+    query GetCartItem($itemId: ID!) {
+      cartItem(uid: $itemId) {
+        uid
+        quantity
+        product { name sku }
+      }
+    }
+  `),
 })
 ```
 
-The runtime behavior is correct — the partition is computed from the
-narrowed return regardless. This is a typing limitation only.
-Tightening this requires reshaping `PartialOptions<V>`'s generic to
-propagate the parton's vary return through to schema's `localCell`
-factory — tracked as a follow-up.
+The args shape is inferred from the query's variable definitions
+(via gql.tada). Cold-start runs the query; subsequent reads return
+from storage. Mutations write the cell explicitly:
 
-### Reading in a parton's `schema`
+```ts
+"use server"
+async function updateLineQty(itemId: string, qty: number) {
+  const r = await client.request(UpdateCartItemMutation, { itemId, qty })
+  await cartItemCell.with({ itemId }).set(r.updatedItem)
+}
+```
 
-```tsx
-import { parton, type RenderArgs, type ResolvedCell } from "@parton/framework"
-import { palette, productNotes } from "./state.ts"
+## Bound cells — mutation surface
 
-const ProductHeader = parton(
-  function ProductHeaderRender({ palette, notes, parent }: {
-    palette: ResolvedCell<"light" | "dark">
-    notes: ResolvedCell<string>
-  } & RenderArgs) {
-    return (
-      <header data-palette={palette.value}>
-        <NotesEditor notes={notes} />          {/* handle passes to client */}
-      </header>
-    )
+`cellHandle.with(args)` returns a `BoundCell<T>` carrying:
+
+| Method | Behaviour |
+|---|---|
+| `set(value)` | Write storage at this partition, fire `cell:<id>?<args>`. |
+| `update(updater)` | Read current value (running loader on miss), apply `updater(current) => next`, write back. |
+| `clear()` | Reset storage to `defaultValue`, fire partition-scoped invalidation. |
+| `invalidate()` | Fire `cell:<id>?<args>` WITHOUT touching storage. Forces matching placements to re-resolve. |
+| `hydrate(value)` | Sync write to storage with NO signal. Used by parent loaders to populate child cells on cold load. |
+
+`set` / `update` / `clear` / `invalidate` are server-action refs —
+Flight-serializable, callable from client components.
+
+The cell-write path emits **partition-scoped selectors**:
+`cell:<id>?<key>=<value>&<key>=<value>`. Only partons whose effective
+constraint surface (vary output ∪ bound args) contains a matching
+subset get invalidated.
+
+## Reading patterns
+
+### In schema
+
+Schema callbacks return a record of cell handles / scoped
+descriptors. The framework resolves each entry into a
+`ResolvedCell<T>` and passes it to Render via the prop bag.
+
+```ts
+const Cart = parton(
+  function Render({ cart, parent }) {
+    return cart.value.itemUids.map((uid) => (
+      <CartLine key={uid} parent={parent} item={cartItemCell.with({ uid })} />
+    ))
   },
-  {
-    match: "/product/:id",
-    schema: () => ({ palette, notes: productNotes }),
-  },
+  { schema: () => ({ cart: cartCell }) },
 )
 ```
 
-`schema` is a sync callback returning a record. Each entry whose
-value is a `Cell<T>` is resolved (own vary → partition key →
-storage read) and the resolved `ResolvedCell<T>` (`{__cell, id,
-value, set}`) is passed to `Render` in its place.
+### As a JSX prop
 
-The resolved cell auto-stamps `cell:<id>` onto the parton's labels,
-so any `cell.set` of that cell refetches every parton reading it.
+Top-level JSX props that are `Cell<T>` or `BoundCell<T>` are auto-
+resolved before Render runs. Pass a `BoundCell` from a parent to a
+child parton:
 
-### Resolution order per partial render
+```tsx
+<CartLine parent={parent} item={cartItemCell.with({ uid })} />
+```
+
+The child's Render receives `item` as a `ResolvedCell<T>`. The
+child's labels include `cell:<id>` automatically.
+
+**Scope:** only top-level JSX props are walked. Nested cells inside
+object props are NOT auto-resolved — if you want a cell to be
+framework-tracked, pass it as its own top-level prop.
+
+### Server-side via `cell.peek()`
+
+`peek()` is a sync server-side read at the partition derived from
+the cell's own `vary` against the active request. Returns
+`defaultValue` on miss. Does NOT trigger the loader. Useful inside
+actions or vary callbacks.
+
+```ts
+const showAdvanced = palette.peek() === "dark"
+```
+
+## Resolution order per partial render
 
 1. **match phase** — URLPattern gates rendering.
 2. **vary phase** — sync callback against request scope; output participates in fp.
 3. **schema phase** — for each cell handle:
-   - Run `cell.vary(scope)` → partition key.
-   - Storage read `(scope, cell.id, partitionKey)` → value (or `cell.defaultValue` on miss).
-   - Build `ResolvedCell<T> = {id, value, set}` for Render.
-   - Stamp `cell:<id>` onto the partial's labels.
-4. **fp** = `id|matchKey|vary|schema=<cellHashes>|props|inv`. Changing any cell value OR navigating across cell partitions both shift fp.
-5. **Render** runs with merged props.
+   - Module cell: run `cell.vary(scope)` → args; resolve via storage (or loader on miss); build `ResolvedCell`.
+   - Scoped descriptor: finalize → run descriptor's vary against partonVary → args; resolve.
+   - Bound cell: use baked args; resolve.
+   - Stamp `cell:<id>` onto labels; merge args into constraint surface.
+4. **props phase** — walk top-level JSX props for Cell / BoundCell:
+   - Resolve each; replace prop with `ResolvedCell`.
+   - Stamp label; merge args.
+5. **fp** = `id|matchKey|vary|schema=<cellHashes>|props|inv`. `inv` folds the latest `queryMatchingTs(labels, vary ∪ args)` — partition-scoped invalidations move fp only for matching placements.
+6. **Render** runs with the merged prop bag.
 
-The parton author does NOT need to redeclare cell-vary dimensions
-in their own vary. A cell partitioned by `productId` makes the
-parton's fp move on productId transitively, because resolving the
-cell at fp time produces a different value per productId.
+## Mutation patterns
 
-### Mutation — server side
+### Direct write — `cell.set(value, opts?)`
+
+For module-scope cells where partition is fully derived from request scope:
 
 ```ts
-import { palette } from "./state.ts"
-import { runInvalidationTransaction } from "@parton/framework"
-
 "use server"
+import { palette } from "./state.ts"
+
 export async function reset() {
-  await runInvalidationTransaction(async () => {
-    await palette.set("dark")
-  })
+  await palette.set("dark") // partition from palette.vary(currentRequest)
 }
 ```
 
-`cell.set(v)` resolves the partition key from the **current request
-scope** automatically. The action invocation request has URL +
-cookies + headers; `cell.vary` runs against that scope.
-
-Optional override for cross-context mutations:
+Optional `opts.vary` overrides the cell's own vary for cross-context
+mutations:
 
 ```ts
 await productNotes.set("New notes", { vary: { productId: "abc" } })
 ```
 
-When the explicit `vary` override is supplied, `cell.vary` is
-skipped and the override is used directly. Useful when an action
-fired from `/cart` needs to update notes for a product not in the
-current URL.
+### Bound write — `cell.with(args).set(value)`
 
-### Mutation — client side: `useCell` + `cell.input()`
+For placement-derived partitions:
 
-The cell's `.set` (the server-action ref) works directly from a
-client component for fire-and-forget mutations (one POST per call):
+```ts
+"use server"
+async function updateLineQty(uid: string, qty: number) {
+  const r = await magento.updateCartItem({ uid, qty })
+  await cartItemCell.with({ uid }).set(r.updatedItem)
+}
+```
+
+The selector `cell:cart-item?uid=<uid>` fires; only the matching
+`<CartLine item={cartItemCell.with({uid})}>` placement refetches.
+
+### Hydration in parent loaders — `cell.with(args).hydrate(value)`
+
+When a parent cell's loader returns nested data, hydrate child cells
+without firing signals (the children haven't rendered yet — a signal
+would just be noise):
+
+```ts
+export const cartCell = localCell({
+  id: "cart",
+  shape: "opaque",
+  vary: ({ cookies }) => ({ cartId: cookies.cart_id }),
+  initial: null as CartShape | null,
+  load: async ({ cartId }) => {
+    const data = await client.request(CartQuery, { cartId })
+    // Populate per-line cells without firing partition signals.
+    for (const item of data.cart.items) {
+      cartItemCell.with({ uid: item.uid }).hydrate(item)
+    }
+    return { itemUids: data.cart.items.map((i) => i.uid), totals: data.cart.totals }
+  },
+})
+```
+
+### Client-side via `useCell`
+
+`useCell(resolvedCell)` returns a `ClientCell` with optimistic-aware
+`.value`, microtask-batched `set`, and controlled-input bindings.
+See [`./useCell` section below](#client-side-mutation) — unchanged from
+prior versions.
+
+## Controlled-input discipline (four rules)
+
+See [`useCell` section](#client-side-mutation) — same as before.
+Cells driven by a controlled input use `useCell(cell).input(opts)`
+to get the four behaviours (display-local-first, single-inflight
+batch, caret restoration, safe-moment adoption) for free.
+
+## Client-side mutation
 
 ```tsx
 "use client"
-import type { ResolvedCell } from "@parton/framework"
+import { useCell } from "@parton/framework/lib/cell-client.tsx"
 
 export function PaletteToggle({ palette }: { palette: ResolvedCell<"light" | "dark"> }) {
   return (
@@ -299,197 +406,50 @@ export function MessageField({ message }: { message: ResolvedCell<string> }) {
 }
 ```
 
-`useCell(serverCell)` returns a `ClientCell` with:
-
-| Field | Behaviour |
-|---|---|
-| `value: T` | **Optimistic-aware.** Latest local-set value while writes are queued or in flight; falls back to `serverValue` when everything has settled. Components can bind controlled inputs directly to `value` — no `useState`, no `useEffect`-based adoption. |
-| `serverValue: T` | Always the server snapshot (same as `cell.value` from the prop). Use for "server says: …" panels alongside the optimistic `value`. |
-| `set(value, opts?): Promise<void>` | Microtask-coalesced batched write. Multiple `set` calls in the same tick collapse into one `__cellWriteBatch` POST. At most one POST in flight per tab; new sets during in-flight accumulate and flush as the next batch. Writes always reach the server in strict send-order. |
-| `input(opts?): {value, onChange, ref}` | Spread onto a controlled `<input>`. Handles value binding, onChange → transform → set, and caret restoration via an internal ref + `useLayoutEffect`. See below. |
-
-### `cell.input()` — controlled-input binding
-
-```tsx
-"use client"
-import { useCell } from "@parton/framework/lib/cell-client.tsx"
-
-function CardholderField({ name }: { name: ResolvedCell<string> }) {
-  const cell = useCell(name)
-  return (
-    <input
-      {...cell.input({
-        transform: (raw, caret) => {
-          const value = raw.toUpperCase().replace(/[^A-Z ]/g, "")
-          return { value, caret }
-        },
-        onCommit: (v) => { /* cross-cell trigger */ },
-      })}
-      data-testid="cardholder"
-    />
-  )
-}
-```
-
-Options:
-
-| Option | Behaviour |
-|---|---|
-| `mode?: 'onChange' \| 'onSubmit'` | Default `'onChange'`. `'onSubmit'` makes the input **uncontrolled**: bindings carry `defaultValue` (seeded from `cell.value`) + `ref` only — no `value` / `onChange` — so the DOM owns the input's state and **the hook does not re-render on every keystroke**. Harvest the current value at submit time via `cell.read()` (reads through the bound ref). See "Two write paths" below. |
-| `transform?(raw, caret) => {value, caret}` | Per-keystroke transform. Author returns the value to display (= what we send to `cell.set`) and the new caret position. Without this, the input is uncontrolled-by-author and raw `event.target.value` flows straight to `cell.set` (server's `write` is the only canonicalisation). **`'onChange'` mode only.** |
-| `onCommit?(value)` | Fired after the local transform and after `cell.set` has been enqueued. Use for cross-cell triggers — e.g. firing a derived cell's `set` whenever this input changes. **`'onChange'` mode only.** |
-
-Returned bindings cover the entire input lifecycle for whichever
-mode is active. The author spreads them onto the element; the
-framework handles refs, layout effects, caret restoration, and the
-batched set call. The `ref` is a callback that accepts either
-`HTMLInputElement` or `HTMLTextAreaElement`, so the same bindings
-work on both elements without a generic call signature.
-
-### Two write paths — `'onChange'` vs `'onSubmit'`
-
-The mode flag distinguishes two patterns that previously needed
-hand-rolled `useState` plumbing:
-
-- **`mode: 'onChange'`** — controlled. The cell is the source of
-  truth, every keystroke commits via the batcher. The bound input's
-  `.value` is optimistic-aware, so display is local-first while the
-  write is in flight. Use for autosave-on-type, draft fields that
-  persist across reloads, cross-tab broadcast state.
-
-- **`mode: 'onSubmit'`** — uncontrolled. The cell seeds the input's
-  `defaultValue` on first mount; further user edits live in DOM
-  state alone — no hook re-renders, no React state. The cell does
-  NOT update during typing. Read the current value at submit time via
-  `cell.read()`:
-
-  ```tsx
-  const name = useCell(cardName)
-  const nameInput = name.input({ mode: "onSubmit" })
-  // ...
-  <input {...nameInput} />
-  // Later:
-  await save({ cardName: name.read() })
-  ```
-
-  `read()` returns the DOM `<input>`'s `value` via the hook-owned
-  ref (or falls back to `cell.value` when no input is mounted). The
-  action's auto-write commits the value atomically.
-
-The two modes coexist on the same form. The `/forms-demo` example
-combines them: a `notes` textarea in `'onChange'` mode (every
-keystroke persists) and two card fields in `'onSubmit'` mode
-(committed via a `save` action that demonstrates transactional
-rollback on failure).
-
-The shape parallels react-hook-form's
-[`register()`](https://react-hook-form.com/docs/useform/register) —
-worth comparing API surfaces before extending `CellInputOpts`
-ad-hoc. See the "Future research" section in
-[`../notes/IDEAS.md`](../notes/IDEAS.md).
-
-## Controlled-input discipline (four rules)
-
-Cells driven by a controlled input (text field, slider, drag handle)
-need four rules together, otherwise rapid-fire typing produces
-visible jank or out-of-order writes. **`useCell` + `cell.input()`
-implement all four — author code gets them for free.**
-
-1. **Display is local-first.** `cell.value` is optimistic-aware:
-   latest local-set value while writes are queued or in flight,
-   falls back to server-authoritative when settled. An optional
-   `transform` fn runs per keystroke. The display never waits on a
-   server round-trip to advance to the next character.
-2. **Single in-flight + accumulate-pending.** Every `cell.set`
-   enqueues into the framework's microtask-coalesced batcher. At
-   most one `__cellWriteBatch` POST in flight per tab; new
-   enqueues during in-flight accumulate and flush as the next
-   batch when the current resolves. Writes hit the server in
-   strict send-order — no write-write race.
-3. **Caret restoration via `useLayoutEffect`.** Owned by the hook.
-   The transform returns `{value, caret}`; the hook stashes the
-   caret in a ref and restores via `setSelectionRange` after React
-   commits.
-4. **Safe-moment adoption.** Implicit. The optimistic value clears
-   when the last pending write for the cell drains, so the next
-   render flips `value` to the server-authoritative shape (the
-   reconcile moment). During a typing burst the optimistic value
-   stays pinned to the user's input — no mid-burst clobber by
-   construction.
-
-Discrete-event cells (a "favorite" toggle, "add to cart") don't
-need the discipline — plain `cell.set(v)` is fine. Each call is
-atomic, no caret to preserve, no in-progress input to clobber.
-
-## Storage
-
-v1 ships with **JSON file storage** at `cms/data/cells.json`,
-mirroring the CMS storage pattern. Pluggable via
-`setCellStorage(backend)`. See
-[`../internals/cell-internals.md`](../internals/cell-internals.md)
-for the disk shape, the in-memory cache, per-scope bucketing,
-debounced flushes, and the pluggable adapter contract.
+See [`../internals/cell-internals.md`](../internals/cell-internals.md)
+for the client-side batcher, optimistic value tracking, and the
+`cell.input()` controlled-input binding.
 
 ## Examples table
 
-| What | Cell vary |
+| What | Pattern |
 |---|---|
-| Featured product banner (admin-set) | `() => ({})` |
-| Maintenance mode flag | `() => ({})` |
-| Site-wide announcement text | `() => ({})` |
-| User palette / locale | `({session}) => ({sid: session.id})` |
-| Wishlist | `({session}) => ({sid: session.id})` |
-| Cart contents (logged-in user) | `({session}) => ({sid: session.id})` |
-| Multi-step checkout draft | `({session}) => ({sid: session.id})` |
-| Recent searches | `({session}) => ({sid: session.id})` |
-| A/B test bucket | `({session}) => ({sid: session.id})` |
-| Like state for blog post | `({session, params}) => ({sid: session.id, postId: params.id})` |
-| Add-to-cart form draft per product | `({session, params}) => ({sid: session.id, productId: params.id})` |
-| Comment count for post | `({params}) => ({postId: params.id})` |
-| Admin price override for SKU | `({params}) => ({sku: params.sku})` |
-| Cart for anonymous user | `({cookies}) => ({cartId: cookies.cart_id})` |
+| Featured product banner (admin-set) | `localCell({vary: () => ({}), ...})` |
+| User palette / locale | `localCell({vary: ({session}) => ({sid: session.id}), ...})` |
+| Cart contents (per session) | `localCell({vary: ({cookies}) => ({cartId: cookies.cart_id}), ...})` |
+| Per cart-line | `cartItemCell.with({uid})` — placement-bound |
+| GraphQL-loaded product | `gqlCell({doc: graphql(\`query Product($sku){...}\`), ...}).with({sku})` |
+| Add-to-cart form draft per product | `localCell({vary: ({session, params}) => ({sid, productId}), ...})` |
 
 What's NOT a cell:
 
 - Drawer / modal open/closed → frame URL or URL search.
-- PDP variant selection → URL search (`?variant=red`), shareable.
-- PLP filters → URL search.
-- Currently-typing-into-textarea state → bind to `useCell(cell).value`
-  and call `cell.set(v)` on every keystroke; the framework's
-  microtask-coalesced batcher handles the wire side.
+- PDP variant selection → URL search (shareable).
 - Anything sharable that fits a URL → URL, not a cell.
 
 ## Composition with existing primitives
 
-- **vary** — unchanged. Pure request-dimensions. Cell reads do NOT
-  happen inside vary; that's what `schema` is for. Cells have their
-  own `vary` callback for the storage partition axis (same shape as
-  parton's, different role — partition key, not fingerprint).
-- **selector** — cells auto-stamp `cell:<id>` on the spec's labels.
-  Authors can declare additional labels via `selector:` as before.
-- **invalidation registry** — `cell.set(v)` calls
-  `refreshSelector("cell:" + id)` inside a transaction. fp folding
-  reuses today's `queryMatchingTs(labels, varyInputs)` against the
-  expanded label set.
-- **CMS reads** — `block.schema({cms})` already exists. Cell reads
-  live on the parton's `schema({localCell})` callback; the two are
-  parallel surfaces with the same shape.
+- **vary** — unchanged. Pure request-dimensions on parton specs.
+  Cells have their own `vary` callback (same shape, different role —
+  storage partition key vs parton fp).
+- **selector** — cells auto-stamp `cell:<id>` on the parton's
+  labels. Partition-scoped writes emit `cell:<id>?<args>`.
+- **invalidation registry** — `cell.set` calls
+  `refreshSelector("cell:" + id + "?" + args)` inside a transaction;
+  fp folding reuses `queryMatchingTs(labels, varyInputs ∪ boundArgs)`.
 
 ## Related
 
 - [`../internals/cell-internals.md`](../internals/cell-internals.md)
-  — storage backends, wire shape, batcher mechanics, nested-tx
-  batching, debug hooks.
-- [`../notes/replicated-state.md`](../notes/replicated-state.md) —
-  the broader Unreal-actor-shaped state model. Cells are the
-  narrow "single typed value, mutate-and-invalidate" lane.
+  — storage backends, wire shape, batcher mechanics, prop-bag
+  resolution path, partition-scoped selector encoding.
 - [`../notes/cells-as-resolvers.md`](../notes/cells-as-resolvers.md)
-  — future implementor sketches (`gqlCell`, etc.) — the resolver
-  shape for cells backed by external data sources.
+  — the design conversation behind this surface; resolved questions
+  + open ones.
 - [`../notes/cell-dimensionality.md`](../notes/cell-dimensionality.md)
-  — orthogonal axis: inheritance walks within a single cell's
-  storage (translations, draft/published, time/history).
-- [`./partial.md`](./partial.md) — the `parton` constructor surface
-  that `schema` extends.
+  — separate axis: inheritance walks within a single cell's storage
+  (translations, draft/published, time/history). Deferred.
+- [`./partial.md`](./partial.md) — the `parton` constructor that
+  hosts schema + props.
 - [`./cms.md`](./cms.md) — block.schema, the existing template for
   the schema callback shape.
