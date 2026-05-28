@@ -145,6 +145,18 @@ restart is rarely needed during dev.
 - **Slot blocks** are constructed via `block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` is a flat list of refetch labels (`"page-block"` or `["page-block", "composed-hero"]`); leading `#`/`.` is cosmetic and stripped. The first label is the spec's catalog id — and for singleton blocks, also the CMS storage key. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / per-instance content keys; the framework wires it internally.
 - `parent: PartialCtx` is required on every spec call site. `Render` receives `{...vary, ...schema, parent, children}` — pass `parent` to descendant spec calls. There is no `id` prop on the JSX call site and no `id` in the Render prop bag; CMS content flows via `schema` reads bound by the framework.
 
+## Comments
+
+Code comments describe the present — what the code does and why it is
+the way it is now. They never narrate change: no "used to be X", no
+"we removed Y", no arguing against an approach that's no longer in the
+file. That rationale is real and worth keeping — it goes in the commit
+message and the diff, not the source. The code a future reader sees
+should read as if it was always this way. Same principle as the docs
+rule below ("latest state only, no progression"): a comment that only
+makes sense if you know what the code replaced is transient — move it
+to the commit.
+
 ## Workflow — after a task is done
 
 When a non-trivial task reaches a clean end state (feature landed,
