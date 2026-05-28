@@ -13,7 +13,8 @@ export function AddToCartButton({ sku }: { sku: string }) {
     setError(null)
     startTransition(async () => {
       try {
-        await addToCart(sku, 1)
+        const userErrors = await addToCart(sku, 1)
+        if (userErrors.length > 0) setError(userErrors.join("; "))
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }

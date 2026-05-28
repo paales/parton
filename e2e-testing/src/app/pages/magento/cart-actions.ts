@@ -70,14 +70,18 @@ export async function getOrCreateCart(): Promise<string> {
   return cartId
 }
 
-export async function addToCart(sku: string, quantity: number): Promise<void> {
+export async function addToCart(sku: string, quantity: number): Promise<string[]> {
   const cartId = await getOrCreateCart()
   const data = await client.request(AddToCart, { cartId, sku, quantity })
   const result = data.addProductsToCart
   if (!result) throw new Error("addProductsToCart returned null")
   const errors = result.user_errors.filter((e) => e != null)
   if (errors.length > 0) {
-    throw new Error(errors.map((e) => e.message).join("; "))
+    // Magento user_errors (e.g. "you need to choose options" on a
+    // configurable product) are an expected outcome, not a server
+    // fault — return them as data for the caller to render. Throwing
+    // would surface as an HTTP 500 on the action POST.
+    return errors.map((e) => e.message)
   }
   const updated = result.cart
   if (!updated) throw new Error("addProductsToCart returned cart=null")
@@ -106,6 +110,8 @@ export async function addToCart(sku: string, quantity: number): Promise<void> {
   await cartBadgeCell.with({ cartId }).set({
     total_quantity: updated.total_quantity ?? 0,
   })
+
+  return []
 }
 
 export async function getCartId(): Promise<string | undefined> {
