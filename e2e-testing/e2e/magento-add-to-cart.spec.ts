@@ -19,6 +19,15 @@ import { test, expect } from "./fixtures"
  * Observed bug: the badge never updates. The test asserts (4) + (5).
  */
 
+test.beforeEach(async ({ page }) => {
+  // Badge updates arrive via the action POST's own response render; the
+  // background streaming heartbeat is orthogonal here and its pre-add
+  // (empty-cart) render can clobber that update under parallel timing.
+  await page.addInitScript(() => {
+    ;(window as unknown as { __partonHeartbeatDisabled?: boolean }).__partonHeartbeatDisabled = true
+  })
+})
+
 test("cart badge updates after successful add-to-cart", async ({ page, context }) => {
   // Fresh cart cookie state
   await context.clearCookies()

@@ -106,6 +106,17 @@ Behaviour:
   pays the cost of one open streaming connection — the fp-skip
   cascade makes that ~free, but `page.waitForLoadState("networkidle")`
   in tests won't settle.
+- **Pinned to its open-time cookies.** The stream renders against the
+  request that opened it. An action that changes a `vary`-input cookie
+  (e.g. `cart_id` on a first add to an empty cart) is NOT reflected by
+  the already-open stream — it keeps rendering the old cookie's view,
+  which can clobber a fresh action-response update on the client. The
+  action POST response is authoritative for these (its render sees the
+  new cookie via the `setCookie` overlay); the heartbeat's stale render
+  is the hazard. Pages whose action mutates a `vary` cookie rely on the
+  action response and can opt the stream out (below); reopening the
+  stream on a `vary`-cookie change would remove the hazard at the
+  source.
 
 What this means for tests: sync on a specific selector / element /
 DOM state, not on `networkidle`. The latter assumes "all requests

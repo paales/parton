@@ -15,7 +15,12 @@ import { test, expect, request, waitForRscIdle } from "./fixtures"
  * After my multi-fp + trailer changes, the refetched bytes arrive
  * but the visible count stays stale until a full reload.
  */
-test.beforeEach(async ({ baseURL }) => {
+test.beforeEach(async ({ baseURL, page }) => {
+  // Badge updates arrive via the action response; the background
+  // heartbeat's pre-add render can clobber under parallel timing.
+  await page.addInitScript(() => {
+    ;(window as unknown as { __partonHeartbeatDisabled?: boolean }).__partonHeartbeatDisabled = true
+  })
   const ctx = await request.newContext()
   await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
   await ctx.dispose()

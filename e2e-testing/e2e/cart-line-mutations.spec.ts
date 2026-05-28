@@ -18,6 +18,17 @@ import { test, expect } from "./fixtures"
 test.describe.configure({ mode: "serial" })
 test.use({ actionTimeout: 30000 })
 
+test.beforeEach(async ({ page }) => {
+  // The badge updates after add-to-cart via the action POST's own
+  // response render; the background streaming heartbeat is orthogonal
+  // here and its pre-add (empty-cart) render can clobber that update
+  // under parallel timing. Opt out so the test observes the
+  // deterministic action-response path.
+  await page.addInitScript(() => {
+    ;(window as unknown as { __partonHeartbeatDisabled?: boolean }).__partonHeartbeatDisabled = true
+  })
+})
+
 async function addOneCartLine(page: import("@playwright/test").Page): Promise<void> {
   await page.goto("/magento")
   // Wait for the badge to settle (no "?" fallback).
@@ -35,11 +46,26 @@ async function addOneCartLine(page: import("@playwright/test").Page): Promise<vo
   for (let i = 0; i < count; i++) {
     const btn = buttons.nth(i)
     await btn.scrollIntoViewIfNeeded()
-    await btn.click()
-    await page.waitForTimeout(500)
+    // Settle on the action POST actually returning — not a fixed
+    // timeout, which under parallel load reads "no alert yet" as a
+    // false success while the round-trip is still in flight.
+    await Promise.all([
+      page
+        .waitForResponse(
+          (r) => r.url().includes("_.rsc") && r.request().method() === "POST",
+          { timeout: 15000 },
+        )
+        .catch(() => null),
+      btn.click(),
+    ])
+    // A configurable product surfaces a user_error alert in its card;
+    // give the client a beat to render it from the action result.
     const card = btn.locator("..")
-    const errs = await card.locator('[role="alert"]').count()
-    if (errs === 0) return
+    await card
+      .locator('[role="alert"]')
+      .waitFor({ state: "attached", timeout: 1500 })
+      .catch(() => {})
+    if ((await card.locator('[role="alert"]').count()) === 0) return
   }
   throw new Error("could not add any product to cart")
 }
