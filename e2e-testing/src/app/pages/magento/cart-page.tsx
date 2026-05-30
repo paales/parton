@@ -3,34 +3,44 @@
  *
  * Demonstrates the bound-cell + partition-scoped invalidation model:
  *
- *   - CartPage reads `cartCell` (loader fetches full cart, hydrates
- *     per-line cells). Renders a <CartLine> for each itemUid.
+ *   - MagentoCartPage derives `cartId` from the cookie (`vary`) and
+ *     binds `cartCell.with({ cartId })` as a prop to CartContents.
  *
- *   - Each CartLine is a separate parton. The page binds the
- *     per-line cell via `item={cartItemCell.with({uid})}` — the
- *     framework auto-resolves the bound cell into a ResolvedCell at
- *     the placement, stamps `cell:magento.cart-item?uid=X` onto the
- *     placement's invalidation surface.
+ *   - CartContents reads the cart cell. Its value is the query result
+ *     with the `...CartLine` spread rewritten to per-line BoundCells, so
+ *     `cart.value.cart.items` is an array of forwardable cells —
+ *     `<CartLine item={line} />`, no manual `.with({ uid })`. The prop
+ *     resolution stamps `cell:magento.cart-item?uid=X` onto each line's
+ *     invalidation surface.
  *
- *   - Mutations (updateLineQty / removeFromCart) write the affected
- *     cell partition; only matching placements refetch. The cart
- *     totals refetch when the cart cell changes, but unaffected
+ *   - Mutations (updateLineQty / removeFromCart) value-key-write the
+ *     changed line (`cartItemCell.set(line)`) and invalidate the cart
+ *     cell for totals; only matching placements refetch, unaffected
  *     CartLine placements keep their fp and skip the wire.
  */
 
-import { parton, type PartialCtx, type RenderArgs, type ResolvedCell } from "@parton/framework"
+import {
+  parton,
+  type CellValue,
+  type PartialCtx,
+  type RenderArgs,
+  type ResolvedCell,
+} from "@parton/framework"
 import { Card } from "@parton/copies/components/ui/card"
-import { cartCell, type CartData, type CartLineValue } from "./cart-cells.ts"
+import { cartCell, cartItemCell } from "./cart-cells.ts"
 import { CartLineControls } from "./cart-line-controls.tsx"
 
 const CartLine = parton(
   function CartLineRender({
     item,
-  }: { item: ResolvedCell<CartLineValue | null> } & RenderArgs) {
+  }: { item: ResolvedCell<CellValue<typeof cartItemCell>> } & RenderArgs) {
     const line = item.value
     if (!line) {
       return (
-        <div data-testid="cart-line-empty" className="rounded border p-3 text-sm text-muted-foreground">
+        <div
+          data-testid="cart-line-empty"
+          className="rounded border p-3 text-sm text-muted-foreground"
+        >
           (no data)
         </div>
       )
@@ -54,7 +64,10 @@ const CartLine = parton(
             <div className="font-mono tabular-nums" data-testid={`cart-line-total-${line.uid}`}>
               {currency} {rowTotal.toFixed(2)}
             </div>
-            <div className="text-xs text-muted-foreground" data-testid={`cart-line-qty-${line.uid}`}>
+            <div
+              className="text-xs text-muted-foreground"
+              data-testid={`cart-line-qty-${line.uid}`}
+            >
               qty {line.quantity}
             </div>
           </div>
@@ -72,14 +85,17 @@ const CartContents = parton(
   function CartContentsRender({
     cart,
     parent,
-  }: { cart: ResolvedCell<CartData | null> } & RenderArgs) {
+  }: { cart: ResolvedCell<CellValue<typeof cartCell>> } & RenderArgs) {
     const c = cart.value?.cart
     // `items` are per-line BoundCells (the query result→cells rewrite) —
     // forward each straight to <CartLine>, no manual `.with({uid})`.
     const lines = (c?.items ?? []).filter((l): l is NonNullable<typeof l> => l != null)
     if (lines.length === 0) {
       return (
-        <div data-testid="cart-empty" className="rounded border p-6 text-center text-muted-foreground">
+        <div
+          data-testid="cart-empty"
+          className="rounded border p-6 text-center text-muted-foreground"
+        >
           Your cart is empty.
         </div>
       )
@@ -102,9 +118,7 @@ const CartContents = parton(
       </div>
     )
   },
-  {
-    selector: "#cart-contents",
-  },
+  { selector: "#cart-contents" },
 )
 
 export const MagentoCartPage = parton(
@@ -114,9 +128,9 @@ export const MagentoCartPage = parton(
         <title>Magento cart — cell demo</title>
         <h1 className="text-2xl font-semibold">Cart</h1>
         <p className="text-sm text-muted-foreground">
-          Cart-backed cells with per-line partitioning. Update qty or
-          remove a line — only the matching line refetches; other
-          lines keep their fp. The cart totals refetch on every change.
+          Cart-backed cells with per-line partitioning. Update qty or remove a line — only the
+          matching line refetches; other lines keep their fp. The cart totals refetch on every
+          change.
         </p>
         <CartContents parent={parent as PartialCtx} cart={cartCell.with({ cartId })} />
       </main>

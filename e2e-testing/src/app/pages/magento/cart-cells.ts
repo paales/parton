@@ -49,9 +49,6 @@ export const cartItemCell = magento.fragment(
   { key: (d) => ({ uid: d.uid }) },
 )
 
-/** The per-line value — inferred from the cell. */
-export type CartLineValue = NonNullable<typeof cartItemCell.defaultValue>
-
 /**
  * The cart query — composes `...CartLine` by passing the cell, loaded per
  * `.with({ cartId })`. Its loader hydrates the per-line cells from the
@@ -78,7 +75,3 @@ export const cartCell = magento.query(
   `,
   [cartItemCell],
 )
-
-/** The cart query result the cell stores — its `items` are per-line
- *  `BoundCell`s (the result→cells rewrite), which the view forwards. */
-export type CartData = NonNullable<typeof cartCell.defaultValue>

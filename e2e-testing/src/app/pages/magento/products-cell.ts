@@ -6,7 +6,8 @@
  * "Refresh products" button) rather than a TTL on the parton.
  *
  * Built via the per-backend `magento` constructor — the raw `graphql()`
- * call is hidden; `ProductsResult` is derived from the cell's value type.
+ * call is hidden. Consumers type off the cell via
+ * `CellValue<typeof magentoProductsCell>`.
  */
 
 import { gqlCellBuilder } from "@parton/framework"
@@ -39,5 +40,3 @@ export const magentoProductsCell = magento.query(`
     }
   }
 `)
-
-export type ProductsResult = NonNullable<typeof magentoProductsCell.defaultValue>

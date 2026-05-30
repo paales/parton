@@ -8,18 +8,23 @@
  */
 
 import { Suspense } from "react"
-import { parton, type PartialCtx, type RenderArgs, type ResolvedCell } from "@parton/framework"
+import {
+  parton,
+  type CellValue,
+  type PartialCtx,
+  type RenderArgs,
+  type ResolvedCell,
+} from "@parton/framework"
 import { AddToCartButton } from "./add-to-cart-button.tsx"
 import { CartBadge } from "./cart-badge.tsx"
 import { cartBadgeCell, type CartBadgeData } from "./cart-badge-cell.ts"
 import { LivePricePartial, LivePriceFallback } from "./live-price.tsx"
 import { RefreshAllPricesButton } from "./refresh-all-prices-button.tsx"
-import { magentoProductsCell, type ProductsResult } from "./products-cell.ts"
+import { magentoProductsCell } from "./products-cell.ts"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
 
-type ProductItem = NonNullable<
-  NonNullable<NonNullable<ProductsResult["products"]>["items"]>[number]
->
+type ProductsValue = NonNullable<CellValue<typeof magentoProductsCell>>
+type ProductItem = NonNullable<NonNullable<NonNullable<ProductsValue["products"]>["items"]>[number]>
 
 const MagentoCartBadge = parton(
   function MagentoCartBadgeRender({
@@ -59,7 +64,7 @@ const MagentoProducts = parton(
     q,
     parent,
     products,
-  }: { q: string; products: ResolvedCell<ProductsResult | null> } & RenderArgs) {
+  }: { q: string; products: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
     const items = (products.value?.products?.items ?? []).filter(
       (item): item is ProductItem => item != null,
     )

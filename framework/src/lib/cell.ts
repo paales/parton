@@ -206,6 +206,15 @@ export interface ResolvedCell<T> {
   set(value: T, opts?: { vary?: CellArgs }): Promise<void>
 }
 
+/**
+ * The resolved value type of a cell handle — what `ResolvedCell` carries
+ * and a parton's Render receives. Use it to type Render props off the cell
+ * itself instead of a hand-written alias:
+ *
+ *     function CartRender({ cart }: { cart: ResolvedCell<CellValue<typeof cartCell>> })
+ */
+export type CellValue<C> = C extends Cell<infer T> ? T : never
+
 // ─── Cell registry (module-scope state) ───────────────────────────────
 
 const cellRegistry = new Map<string, Cell<unknown>>()

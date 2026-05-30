@@ -58,6 +58,7 @@ export {
   type CellArgs,
   type CellShape,
   type CellShapeSpec,
+  type CellValue,
   type CellVaryScope,
   type LocalCellOpts,
   type ResolvedCell,
