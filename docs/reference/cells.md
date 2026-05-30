@@ -297,17 +297,20 @@ bound cell. The consumer forwards those cells straight to children; there
 is no manual `.with({ uid })` re-keying:
 
 ```tsx
-function CartContents({ cart }: { cart: ResolvedCell<CartData> } & RenderArgs) {
-  // cart.value.cart.items is BoundCell<CartLineValue>[] — forward directly:
+// Type the prop off the cell with CellValue — no hand-written alias:
+function CartContents({ cart }: { cart: ResolvedCell<CellValue<typeof cartCell>> } & RenderArgs) {
+  // cart.value.cart.items is BoundCell<…>[] — forward directly:
   return cart.value.cart.items.map((line) => <CartLine item={line} parent={parent} />)
 }
 ```
 
 The cell's value type reflects this via `RewriteSpreads<ResultOf<doc>,
 cells>`: spread sites become `BoundCell<V>`, everything else (scalars,
-non-fragment objects like `prices`) is untouched. Because the rewritten
-value isn't the raw result, **mutations refresh such a cell with
-`.invalidate()`** (re-run the loader + rewrite), not `.set(raw)`.
+non-fragment objects like `prices`) is untouched. `CellValue<typeof
+cartCell>` surfaces that whole value type for the Render prop, so you
+never restate it. Because the rewritten value isn't the raw result,
+**mutations refresh such a cell with `.invalidate()`** (re-run the loader
++ rewrite), not `.set(raw)`.
 
 ### Auto-hydration via `runQuery`
 
