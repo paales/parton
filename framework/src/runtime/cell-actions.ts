@@ -4,7 +4,7 @@
  * Cell-write server action.
  *
  * One generic action: `__cellWrite(cellId, value, partition?)`. Each
- * `Cell<T>` exposes `.set` as a `Function.prototype.bind`-bound
+ * `CellInterface<T>` exposes `.set` as a `Function.prototype.bind`-bound
  * reference (`__cellWrite.bind(null, id)`), so author code calls
  * `palette.set("dark")` and the framework routes by the bound id.
  *

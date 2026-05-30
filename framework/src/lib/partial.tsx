@@ -80,7 +80,7 @@ import {
   makeScopedCellFactories,
   resolveCellValue,
   type BoundCell,
-  type Cell,
+  type CellInterface,
   type CellArgs,
   type CellVaryScope,
   type ResolvedCell,
@@ -344,13 +344,13 @@ export interface PartialComponentProps {
  * is just `<Spec parent={...} />`.
  */
 /** A prop the Render receives as `ResolvedCell<T>` may be SUPPLIED at
- *  the call site as a `BoundCell<T>` (`cell.with(args)`) or a `Cell<T>`
+ *  the call site as a `BoundCell<T>` (`cell.with(args)`) or a `CellInterface<T>`
  *  (module / scoped handle) — the framework resolves it to a
  *  `ResolvedCell<T>` in the props phase before Render runs. Widen each
  *  such prop so the JSX call site type-checks against what authors
  *  actually pass. Non-cell props pass through unchanged. */
 type AcceptBindableCell<X> = [X] extends [ResolvedCell<infer T>]
-  ? ResolvedCell<T> | BoundCell<T> | Cell<T>
+  ? ResolvedCell<T> | BoundCell<T> | CellInterface<T>
   : X
 export type SpecExtraProps<R, V> = {
   [K in keyof Omit<R, keyof RenderArgs | keyof V>]: AcceptBindableCell<
@@ -442,12 +442,12 @@ type InferVaryOrMatch<Opts> = Opts extends string
 /**
  * Map cell handles + scoped descriptors in a schema record to their
  * `ResolvedCell<T>` counterparts — what Render actually receives after
- * framework resolution. Both `Cell<T>` (module-scope) and
+ * framework resolution. Both `CellInterface<T>` (module-scope) and
  * `ScopedCellDescriptor<T>` (declared via the `{cell}` factory inside
  * the schema callback) become `ResolvedCell<T>`.
  */
 type ResolveSchemaProps<S> = {
-  [K in keyof S]: S[K] extends Cell<infer T>
+  [K in keyof S]: S[K] extends CellInterface<infer T, any>
     ? ResolvedCell<T>
     : S[K] extends ScopedCellDescriptor<infer T>
       ? ResolvedCell<T>
@@ -1440,7 +1440,7 @@ function createSpecComponent<V>(
           Object.assign(boundArgsMerged, args)
           resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
         } else if (isModuleCell(val)) {
-          const c = val as Cell<unknown>
+          const c = val as CellInterface<unknown>
           const args = c.vary(cellScope)
           const partitionKey = hash(stableStringify(args))
           const value = await resolveCellValue(c, args)
@@ -1487,7 +1487,7 @@ function createSpecComponent<V>(
         Object.assign(boundArgsMerged, args)
         resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
       } else if (isModuleCell(val)) {
-        const c = val as Cell<unknown>
+        const c = val as CellInterface<unknown>
         const args = c.vary(cellScope)
         const partitionKey = hash(stableStringify(args))
         const value = await resolveCellValue(c, args)

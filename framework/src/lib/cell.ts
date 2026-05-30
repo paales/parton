@@ -8,7 +8,7 @@
  *     `vary` (optional) derives partition from request scope; `.with(args)`
  *     binds explicit placement-derived args.
  *
- *   - `gqlCell(typedDoc)` (in cell-gql.ts) — same `Cell<T>` shape with
+ *   - `gqlCell(typedDoc)` (in cell-gql.ts) — same `CellInterface<T>` shape with
  *     `load` auto-synthesized from a gql.tada-typed document.
  *
  * Partitioning sources:
@@ -103,7 +103,7 @@ export type ValueOfShape<S> =
  *   - `peek()` sync-reads the current stored value at the partition
  *     derived from request scope.
  */
-export interface Cell<T> {
+export interface CellInterface<T, A extends CellArgs = CellArgs> {
   readonly __cell: true
   readonly id: string
   readonly shape: CellShape
@@ -132,8 +132,11 @@ export interface Cell<T> {
    * the partition baked. Use at JSX placement sites:
    *
    *     <CartLine item={cartItemCell.with({itemId})} parent={parent} />
+   *
+   * `A` (the args type) defaults to `CellArgs`; gqlCell/fragmentCell set
+   * it to the document's variables / key shape so `.with` is typed.
    */
-  with(args: CellArgs): BoundCell<T>
+  with(args: A): BoundCell<T>
   /**
    * Mutation surface. Server-side: invokes the action synchronously
    * against the current request scope. Client-side: Flight-serialized
@@ -155,7 +158,15 @@ export interface Cell<T> {
 }
 
 /**
- * Bound cell — a `Cell<T>` with a specific partition baked. Created by
+ * A persistent local cell — what `localCell(...)` returns. Same contract
+ * as `CellInterface<T>`; named for symmetry with `GqlCell` / `FragmentCell`
+ * (the three constructors' return types) and as a home for any future
+ * local-only surface.
+ */
+export interface LocalCell<T> extends CellInterface<T> {}
+
+/**
+ * Bound cell — a `CellInterface<T>` with a specific partition baked. Created by
  * `cell.with(args)`. The framework recognizes bound cells in parton
  * props and resolves them to `ResolvedCell<T>` before Render. The
  * bound `args` participate in the parton's invalidation-constraint
@@ -213,23 +224,23 @@ export interface ResolvedCell<T> {
  *
  *     function CartRender({ cart }: { cart: ResolvedCell<CellValue<typeof cartCell>> })
  */
-export type CellValue<C> = C extends Cell<infer T> ? T : never
+export type CellValue<C> = C extends CellInterface<infer T, any> ? T : never
 
 // ─── Cell registry (module-scope state) ───────────────────────────────
 
-const cellRegistry = new Map<string, Cell<unknown>>()
+const cellRegistry = new Map<string, CellInterface<unknown>>()
 
-export function getCellById(id: string): Cell<unknown> | undefined {
+export function getCellById(id: string): CellInterface<unknown> | undefined {
   return cellRegistry.get(id)
 }
 
 /** Type predicate — works on module handles and resolved cells. */
-export function isCellHandle(value: unknown): value is Cell<unknown> | ResolvedCell<unknown> {
+export function isCellHandle(value: unknown): value is CellInterface<unknown> | ResolvedCell<unknown> {
   return typeof value === "object" && value !== null && (value as { __cell?: boolean }).__cell === true
 }
 
-export function isModuleCell(value: unknown): value is Cell<unknown> {
-  return isCellHandle(value) && typeof (value as Cell<unknown>).vary === "function"
+export function isModuleCell(value: unknown): value is CellInterface<unknown> {
+  return isCellHandle(value) && typeof (value as CellInterface<unknown>).vary === "function"
 }
 
 export function isBoundCell(value: unknown): value is BoundCell<unknown> {
@@ -241,7 +252,7 @@ export function isBoundCell(value: unknown): value is BoundCell<unknown> {
 }
 
 /** Compute the partition key for a cell against a request scope. */
-export function computeCellPartitionKey(cell: Cell<unknown>, scope: CellVaryScope): string {
+export function computeCellPartitionKey(cell: CellInterface<unknown>, scope: CellVaryScope): string {
   const out = cell.vary(scope)
   return hash(stableStringify(out))
 }
@@ -307,16 +318,16 @@ function constantVary(): CellArgs {
   return {}
 }
 
-function registerCell<T>(handle: Cell<T>): Cell<T> {
+function registerCell<T>(handle: CellInterface<T>): CellInterface<T> {
   // HMR overwrites in place. Storage is keyed by id, so values from
   // the prior registration are unaffected.
-  cellRegistry.set(handle.id, handle as Cell<unknown>)
+  cellRegistry.set(handle.id, handle as CellInterface<unknown>)
   return handle
 }
 
 /** Bind the generic `__cellWrite` server action to a specific cell id. */
-function bindSetter(id: string): Cell<unknown>["set"] {
-  return _cellWriteAction.bind(null, id) as unknown as Cell<unknown>["set"]
+function bindSetter(id: string): CellInterface<unknown>["set"] {
+  return _cellWriteAction.bind(null, id) as unknown as CellInterface<unknown>["set"]
 }
 
 /** Per-cell `peek` — sync server-side read at the partition derived
@@ -327,7 +338,7 @@ function buildPeek<T>(
   validate: (v: unknown) => T,
   defaultValue: T,
   varyFn: (scope: CellVaryScope) => CellArgs,
-): Cell<T>["peek"] {
+): CellInterface<T>["peek"] {
   return () => {
     const varyOut = varyFn(buildCellVaryScopeFromRequest())
     const partitionKey = hash(stableStringify(varyOut))
@@ -375,7 +386,7 @@ function buildCellVaryScopeFromRequest(): CellVaryScope {
  * hydration). The cold-start path is the only async branch.
  */
 export async function resolveCellValue<T>(
-  cell: Cell<T>,
+  cell: CellInterface<T>,
   args: CellArgs,
 ): Promise<T> {
   const partitionKey = hash(stableStringify(args))
@@ -403,7 +414,7 @@ export async function resolveCellValue<T>(
 /** Construct a bound cell from a Cell handle + args. The bound view
  *  carries the cellId + args plus convenience methods that bake the
  *  args into the write action invocation. */
-function buildBoundCell<T>(cell: Cell<T>, args: CellArgs): BoundCell<T> {
+function buildBoundCell<T>(cell: CellInterface<T>, args: CellArgs): BoundCell<T> {
   const cellId = cell.id
   return {
     __boundCell: true,
@@ -487,7 +498,7 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
  */
 export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
   opts: LocalCellOpts<S, T>,
-): Cell<T> {
+): LocalCell<T> {
   const shape = shapeFromSpec(opts.shape)
   const validate = makeValidator<T>(opts.id, shape)
   const varyFn = opts.vary ?? constantVary
@@ -496,7 +507,7 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
     : typeof opts.storage === "function"
       ? opts.storage
       : () => opts.storage as CellStorage
-  const handle: Cell<T> = {
+  const handle: CellInterface<T> = {
     __cell: true,
     id: opts.id,
     shape,
@@ -505,7 +516,7 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
     vary: varyFn,
     load: opts.load,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
-    set: bindSetter(opts.id) as Cell<T>["set"],
+    set: bindSetter(opts.id) as CellInterface<T>["set"],
     peek: buildPeek(opts.id, storage, validate, opts.initial, varyFn),
     validate,
     write: opts.write,
@@ -527,10 +538,10 @@ export function buildEphemeralCell<T>(
   load: ((args: CellArgs) => Promise<T>) | undefined,
   keyOf?: (value: T) => CellArgs,
   write?: (value: T) => T,
-): Cell<T> {
+): CellInterface<T> {
   const shape: CellShape = { kind: "opaque" }
   const validate = makeValidator<T>(id, shape)
-  const handle: Cell<T> = {
+  const handle: CellInterface<T> = {
     __cell: true,
     id,
     shape,
@@ -542,7 +553,7 @@ export function buildEphemeralCell<T>(
     load,
     keyOf,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
-    set: bindSetter(id) as Cell<T>["set"],
+    set: bindSetter(id) as CellInterface<T>["set"],
     peek: buildPeek(id, getEphemeralCellStorage, validate, initial, constantVary),
     validate,
     write,
@@ -567,7 +578,7 @@ export function buildEphemeralCell<T>(
  * regardless of URL changes between render and call.
  */
 export function buildResolvedCell<T>(
-  handle: Cell<T>,
+  handle: CellInterface<T>,
   value: T,
   partition?: CellArgs,
 ): ResolvedCell<T> {
@@ -605,7 +616,7 @@ export function _clearCellRegistry(): void {
 
 /**
  * Descriptor returned by the schema-callback `localCell(...)` factory.
- * Carries everything needed to finalize into a `Cell<T>` once the
+ * Carries everything needed to finalize into a `CellInterface<T>` once the
  * framework knows the schema key and the owning parton id.
  */
 export interface ScopedCellDescriptor<T> {
@@ -663,7 +674,7 @@ export function makeScopedCellFactories<PV>(): ScopedCellFactories<PV> {
 }
 
 /**
- * Finalize a scoped descriptor into a `Cell<T>` handle keyed by
+ * Finalize a scoped descriptor into a `CellInterface<T>` handle keyed by
  * compound id `<partonId>/<schemaKey>`. Registered into the cell
  * registry so `__cellWrite` / `__cellWriteBatch` can look it up by id.
  */
@@ -671,14 +682,14 @@ export function finalizeScopedCell<T>(
   descriptor: ScopedCellDescriptor<T>,
   partonId: string,
   schemaKey: string,
-): Cell<T> {
+): CellInterface<T> {
   const id = `${partonId}/${schemaKey}`
   const validate = makeValidator<T>(id, descriptor.shape)
   // Scoped cells default to persistent storage — they're typically
   // tied to parton state like form drafts that authors want to keep
   // across renders. Override via a future `storage` option on the
   // descriptor if needed.
-  const handle: Cell<T> = {
+  const handle: CellInterface<T> = {
     __cell: true,
     id,
     shape: descriptor.shape,
@@ -687,12 +698,12 @@ export function finalizeScopedCell<T>(
     vary: () => ({}),
     load: descriptor.load,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
-    set: bindSetter(id) as Cell<T>["set"],
+    set: bindSetter(id) as CellInterface<T>["set"],
     peek: () => descriptor.defaultValue,
     validate,
     write: descriptor.write,
   }
-  cellRegistry.set(id, handle as Cell<unknown>)
+  cellRegistry.set(id, handle as CellInterface<unknown>)
   return handle
 }
 

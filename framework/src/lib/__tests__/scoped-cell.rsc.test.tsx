@@ -59,7 +59,7 @@ describe("scoped cell — schema-callback factory", () => {
     expect(d.varyFn).toBeUndefined()
   })
 
-  it("finalizes into a Cell<T> with compound id `<partonId>/<schemaKey>`", () => {
+  it("finalizes into a CellInterface<T> with compound id `<partonId>/<schemaKey>`", () => {
     const factories = makeScopedCellFactories<object>()
     const d = factories.localCell({ shape: "number", initial: 0 }) as ScopedCellDescriptor<number>
     const handle = finalizeScopedCell(d, "my-parton", "counter")

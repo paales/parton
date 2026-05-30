@@ -24,7 +24,7 @@ import {
 } from "./pokemon-cells.ts"
 
 // Derive each result type from the cell's value type. A cell's `load`
-// is optional on `Cell<T>` (localCell / fragmentCell have none), so
+// is optional on `CellInterface<T>` (localCell / fragmentCell have none), so
 // `ReturnType<typeof cell.load>` can't be used — `load` widens to
 // `… | undefined`, which fails `ReturnType`'s callable constraint.
 // `cell.defaultValue` is `TResult | null`; strip the null.

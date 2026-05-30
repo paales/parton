@@ -39,7 +39,7 @@ import type {
 import {
   buildEphemeralCell,
   type BoundCell,
-  type Cell,
+  type CellInterface,
   type CellArgs,
 } from "./cell.ts"
 
@@ -59,15 +59,12 @@ export interface GqlClient {
 }
 
 /**
- * A GraphQL-loaded cell. Identical to `Cell<TResult | null>` except
- * `.with(args)` is narrowed to the document's inferred variables — so
- * placement sites get a compile-time check that they're binding the
- * right partition args.
+ * A GraphQL-loaded cell. `CellInterface` with its args type bound to the
+ * document's inferred variables, so `.with(args)` is typed — no override
+ * needed, the base method picks up `TVars`.
  */
 export interface GqlCell<TResult, TVars extends Record<string, unknown>>
-  extends Cell<TResult | null> {
-  with(args: TVars): BoundCell<TResult | null>
-}
+  extends CellInterface<TResult | null, TVars> {}
 
 // ─── id derivation ────────────────────────────────────────────────────
 
@@ -284,7 +281,7 @@ export function gqlCellBuilder<Schema extends SchemaLike, Config extends ConfigL
 export interface FragmentCell<
   V,
   F extends TadaDocumentNode<any, any, any> = TadaDocumentNode<any, any, any>,
-> extends Cell<V | null> {
+> extends CellInterface<V | null> {
   /** The fragment document this cell is typed by. Carries the precise
    *  doc type so a query built with `q.query(str, [cell])` can extract +
    *  compose it (the raw `graphql()` call stays hidden at the call site). */

@@ -45,7 +45,7 @@ import {
   isModuleCell,
   isScopedCellDescriptor,
   makeScopedCellFactories,
-  type Cell,
+  type CellInterface,
   type CellVaryScope,
   type ResolvedCell,
   type ScopedCellDescriptor,
@@ -121,7 +121,7 @@ function resolveSchemaForAction(
       resolved[key] = resolvedCell
       cellsByKey.set(key, resolvedCell)
     } else if (isModuleCell(val)) {
-      const c = val as Cell<unknown>
+      const c = val as CellInterface<unknown>
       const cellScope = buildCellVaryScope()
       const partitionKey = computeCellPartitionKey(c, cellScope)
       const stored = c.storage().read(getScope(), c.id, partitionKey)
