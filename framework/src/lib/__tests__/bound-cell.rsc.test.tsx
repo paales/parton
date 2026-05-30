@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { parton, ROOT, type RenderArgs } from "../partial.tsx"
+import { parton, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { localCell, type BoundCell, type ResolvedCell } from "../cell.ts"
 import { hash } from "../hash.ts"
 import { stableStringify } from "../stable-stringify.ts"
@@ -308,5 +308,120 @@ describe("BoundCell.update — read-modify-write", () => {
     await counter.with({ k: "x" }).update((n) => n + 1)
     expect(loaderCalls).toBe(1)
     expect(readCell("test.update.cold", { k: "x" })).toBe(101)
+  })
+})
+
+/** Map every partial's `partialId` → its `partialFingerprint`. Same
+ *  spec placed twice (two cart lines) gets two distinct ids
+ *  (`spec.id:<propsHash>`), so sibling placements are individually
+ *  keyed. */
+function fingerprintsByPartialId(flight: string): Map<string, string | undefined> {
+  const out = new Map<string, string | undefined>()
+  const idRe = /"partialId":"([^"]+)"/g
+  let m: RegExpExecArray | null
+  while ((m = idRe.exec(flight)) !== null) {
+    const tail = flight.slice(m.index, m.index + 200)
+    const fp = /"partialFingerprint":"([^"]+)"/.exec(tail)
+    out.set(m[1], fp ? fp[1] : undefined)
+  }
+  return out
+}
+
+describe("merged cart granularity — parent re-renders, only the touched line follows", () => {
+  // Models the flattened MagentoCartPage: ONE parton reads the cart
+  // cell in its `schema` AND hosts a per-line placement bound to a
+  // line cell at `{ uid }`. A qty update writes the touched line's
+  // partition + the cart cell (totals). The parent re-renders (its
+  // cart-cell value folds into its fp) and the touched line re-renders
+  // — but the untouched sibling line keeps its fingerprint, so the
+  // segment driver skips its bytes. This is the property the merge
+  // must preserve: a parent re-render does NOT cascade to children.
+  it("qty update shifts the parent fp + the touched line fp, holds the sibling line fp", async () => {
+    const cart = localCell({
+      id: "test.gran.cart",
+      shape: "opaque",
+      initial: null as { total: number; uids: string[] } | null,
+    })
+    const line = localCell({
+      id: "test.gran.line",
+      shape: "opaque",
+      initial: null as { qty: number } | null,
+    })
+
+    seedCell("test.gran.cart", { cartId: "c1" }, { total: 10, uids: ["A", "B"] })
+    seedCell("test.gran.line", { uid: "A" }, { qty: 1 })
+    seedCell("test.gran.line", { uid: "B" }, { qty: 9 })
+
+    const Line = parton(
+      function GranLineRender({
+        item,
+      }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
+        return <span>{`qty ${item.value?.qty ?? "—"}`}</span>
+      },
+      { selector: "gran-line", match: "/gc" },
+    )
+
+    const Cart = parton(
+      function GranCartRender({
+        cart,
+        parent,
+      }: { cart: ResolvedCell<{ total: number; uids: string[] } | null> } & RenderArgs) {
+        const uids = cart.value?.uids ?? []
+        return (
+          <main>
+            <span data-testid="total">{`total ${cart.value?.total ?? 0}`}</span>
+            {uids.map((uid) => (
+              <Line key={uid} parent={parent} item={line.with({ uid })} />
+            ))}
+          </main>
+        )
+      },
+      {
+        selector: "gran-cart",
+        match: "/gc",
+        vary: () => ({ cartId: "c1" }),
+        schema: (_f, vary) => ({ cart: cart.with(vary as { cartId: string }) }),
+      },
+    )
+
+    const tree = (
+      <PartialRoot>
+        <Cart parent={ROOT} />
+      </PartialRoot>
+    )
+
+    const before = await flightAt("http://t/gc", tree)
+    const fpsBefore = fingerprintsByPartialId(before)
+    const lineKeys = [...fpsBefore.keys()].filter((k) => k.startsWith("gran-line"))
+
+    // Sanity: parent + exactly two distinct line placements rendered.
+    expect(before).toContain("qty 1")
+    expect(before).toContain("qty 9")
+    expect(fpsBefore.get("gran-cart")).toMatch(/^[0-9a-f]{16}$/)
+    expect(lineKeys).toHaveLength(2)
+
+    // The mutation: bump line A's qty (1 → 2) and the cart total.
+    seedCell("test.gran.cart", { cartId: "c1" }, { total: 11, uids: ["A", "B"] })
+    seedCell("test.gran.line", { uid: "A" }, { qty: 2 })
+
+    const after = await flightAt("http://t/gc", tree)
+    const fpsAfter = fingerprintsByPartialId(after)
+
+    // Content moved as expected: A now 2, B still 9.
+    expect(after).toContain("qty 2")
+    expect(after).toContain("qty 9")
+
+    // Parent fp shifted (its cart-cell value folded into the fp).
+    expect(fpsAfter.get("gran-cart")).not.toEqual(fpsBefore.get("gran-cart"))
+
+    // Of the two sibling lines, EXACTLY one fp moved (the touched one);
+    // the other is byte-identical and would fp-skip on the wire.
+    const moved = lineKeys.filter((k) => fpsAfter.get(k) !== fpsBefore.get(k))
+    const held = lineKeys.filter((k) => fpsAfter.get(k) === fpsBefore.get(k))
+    expect(moved).toHaveLength(1)
+    expect(held).toHaveLength(1)
+    // The held line still carries a real fingerprint (it rendered, it
+    // just didn't change) — not an accidental undefined collapse.
+    expect(fpsAfter.get(held[0])).toMatch(/^[0-9a-f]{16}$/)
   })
 })

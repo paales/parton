@@ -3,15 +3,14 @@
  *
  * Demonstrates the bound-cell + partition-scoped invalidation model:
  *
- *   - MagentoCartPage derives `cartId` from the cookie (`vary`) and
- *     binds `cartCell.with({ cartId })` as a prop to CartContents.
- *
- *   - CartContents reads the cart cell. Its value is the query result
- *     with the `...CartLine` spread rewritten to per-line BoundCells, so
- *     `cart.value.cart.items` is an array of forwardable cells —
- *     `<CartLine item={line} />`, no manual `.with({ uid })`. The prop
- *     resolution stamps `cell:magento.cart-item?uid=X` onto each line's
- *     invalidation surface.
+ *   - MagentoCartPage derives `cartId` from the cookie (`vary`), binds +
+ *     reads `cartCell.with({ cartId })` in its own `schema`, and renders
+ *     the lines + totals. One parton — no binder/reader split. Its cart
+ *     value is the query result with the `...CartLine` spread rewritten
+ *     to per-line BoundCells, so `cart.value.cart.items` is an array of
+ *     forwardable cells — `<CartLine item={line} />`, no manual
+ *     `.with({ uid })`. The prop resolution stamps
+ *     `cell:magento.cart-item?uid=X` onto each line's invalidation surface.
  *
  *   - Mutations (updateLineQty / removeFromCart) value-key-write the
  *     changed line (`cartItemCell.set(line)`) and invalidate the cart
@@ -22,7 +21,6 @@
 import {
   parton,
   type CellValue,
-  type PartialCtx,
   type PartonProps,
   type ResolvedCell,
 } from "@parton/framework"
@@ -81,8 +79,13 @@ const CartLine = parton(
   // label (stamped by the prop binding), not a selector reload.
 )
 
-const CartContents = parton(
-  function CartContentsRender({
+// One parton: derives cartId from the cookie (`vary`), binds + reads the
+// cart cell at that partition (`schema`), and renders the lines + totals.
+// No binder/reader split — the cart cell's `cell:magento.cart` label is
+// stamped here, so it refetches in place; the per-line BoundCells carry
+// their own `cell:magento.cart-item?uid` labels for line-level granularity.
+export const MagentoCartPage = parton(
+  function MagentoCartRender({
     cart,
     parent,
   }: PartonProps<{ cart: ResolvedCell<CellValue<typeof cartCell>> }>) {
@@ -90,56 +93,47 @@ const CartContents = parton(
     // `items` are per-line BoundCells (the query result→cells rewrite) —
     // forward each straight to <CartLine>, no manual `.with({uid})`.
     const lines = (c?.items ?? []).filter((l): l is NonNullable<typeof l> => l != null)
-    if (lines.length === 0) {
-      return (
-        <div
-          data-testid="cart-empty"
-          className="rounded border p-6 text-center text-muted-foreground"
-        >
-          Your cart is empty.
-        </div>
-      )
-    }
     const currency = c?.prices?.grand_total?.currency ?? "USD"
     const grandTotal = c?.prices?.grand_total?.value ?? 0
-    return (
-      <div className="space-y-4">
-        <div className="space-y-3" data-testid="cart-lines">
-          {lines.map((line) => (
-            <CartLine key={String(line.args.uid)} parent={parent} item={line} />
-          ))}
-        </div>
-        <Card className="flex items-center justify-between p-4" data-testid="cart-totals">
-          <span className="font-medium">Grand total</span>
-          <span className="font-mono tabular-nums" data-testid="cart-grand-total">
-            {currency} {grandTotal.toFixed(2)}
-          </span>
-        </Card>
-      </div>
-    )
-  },
-  // No selector: auto-id "cart-contents"; it refetches via its
-  // `cell:magento.cart` label, not a selector reload.
-)
-
-export const MagentoCartPage = parton(
-  function MagentoCartRender({ cartId, parent }: PartonProps<{ cartId: string }>) {
     return (
       <main className="py-4 space-y-4">
         <title>Magento cart — cell demo</title>
         <h1 className="text-2xl font-semibold">Cart</h1>
         <p className="text-sm text-muted-foreground">
           Cart-backed cells with per-line partitioning. Update qty or remove a line — only the
-          matching line refetches; other lines keep their fp. The cart totals refetch on every
-          change.
+          matching line refetches; other lines keep their fp.
         </p>
-        <CartContents parent={parent as PartialCtx} cart={cartCell.with({ cartId })} />
+        {lines.length === 0 ? (
+          <div
+            data-testid="cart-empty"
+            className="rounded border p-6 text-center text-muted-foreground"
+          >
+            Your cart is empty.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="space-y-3" data-testid="cart-lines">
+              {lines.map((line) => (
+                <CartLine key={String(line.args.uid)} parent={parent} item={line} />
+              ))}
+            </div>
+            <Card className="flex items-center justify-between p-4" data-testid="cart-totals">
+              <span className="font-medium">Grand total</span>
+              <span className="font-mono tabular-nums" data-testid="cart-grand-total">
+                {currency} {grandTotal.toFixed(2)}
+              </span>
+            </Card>
+          </div>
+        )}
       </main>
     )
   },
   {
     match: "/magento/cart",
-    // cart_id cookie → the cell's `.with({ cartId })` input param.
+    // cart_id cookie → the cart cell's partition. The schema's 2nd arg is
+    // this vary output; TS widens it to `object` here (it can't thread the
+    // sibling vary's return), so narrow with a cast to bind `.with`.
     vary: ({ cookies }) => ({ cartId: cookies.cart_id ?? "" }),
+    schema: (_f, vary) => ({ cart: cartCell.with(vary as { cartId: string }) }),
   },
 )

@@ -29,3 +29,6 @@ cms/data/cells.json
 
 # Claude Code harness runtime artifacts.
 .claude/
+
+# Scratch / throwaway logs.
+.tmp/

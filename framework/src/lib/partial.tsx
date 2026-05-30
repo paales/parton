@@ -269,7 +269,13 @@ interface InternalSpecConfig<V> {
    *
    *  Resolved cells get `cell:<id>` selector labels auto-stamped on
    *  the parton so `refreshSelector` fires on `cell.set`. */
-  schema?: (scope: ScopedCellFactories<V>) => Record<string, unknown>
+  // 2nd arg is the parton's vary output — so a parton can bind its own
+  // cells from request-derived params: `schema: (_, vary) =>
+  // ({ cart: cartCell.with(vary as { cartId: string }) })`. Typed as the
+  // parton's `V`; the options generic widens it to `object` at the call
+  // site (TS can't thread a sibling `vary` callback's return into this
+  // position), so a parton reading specific keys narrows with a cast.
+  schema?: (scope: ScopedCellFactories<V>, vary: V) => Record<string, unknown>
   /** Server-side handlers declared on the parton. Each handler runs
    *  inside `runInvalidationTransaction` and receives `(scope, args)`:
    *  scope is the parton's vary output + resolved schema + parent
@@ -449,22 +455,23 @@ type InferVaryOrMatch<Opts> = Opts extends string
 type ResolveSchemaProps<S> = {
   [K in keyof S]: S[K] extends CellInterface<infer T, any>
     ? ResolvedCell<T>
-    : S[K] extends ScopedCellDescriptor<infer T>
+    : S[K] extends BoundCell<infer T>
       ? ResolvedCell<T>
-      : S[K]
+      : S[K] extends ScopedCellDescriptor<infer T>
+        ? ResolvedCell<T>
+        : S[K]
 }
 
+// One pattern covers 0-, 1-, and 2-arg schema callbacks: a callback
+// taking fewer params is assignable to the 2-param shape, so `(scope,
+// vary) => S` matches `() => S` and `(scope) => S` too.
 type InferSchema<Opts> = Opts extends {
-  schema: (scope: ScopedCellFactories<infer _V>) => infer S
+  schema: (scope: ScopedCellFactories<infer _V>, vary: infer _VO) => infer S
 }
   ? S extends Record<string, unknown>
     ? ResolveSchemaProps<S>
     : object
-  : Opts extends { schema: () => infer S }
-    ? S extends Record<string, unknown>
-      ? ResolveSchemaProps<S>
-      : object
-    : object
+  : object
 
 /**
  * Map an action handler to the Render-prop view of it: caller-args
@@ -1404,7 +1411,9 @@ function createSpecComponent<V>(
     }
     if (opts.schema) {
       const factories = makeScopedCellFactories<unknown>()
-      const raw = opts.schema(factories)
+      // 2nd arg: the parton's vary output, so a parton can bind its own
+      // cells (`cartCell.with({ cartId })`) from request-derived params.
+      const raw = opts.schema(factories, (varyResult ?? {}) as V)
       const partonVaryForCells = (varyResult ?? {}) as Record<string, unknown>
       for (const key of Object.keys(raw)) {
         const val = raw[key]

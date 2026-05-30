@@ -297,10 +297,15 @@ bound cell. The consumer forwards those cells straight to children; there
 is no manual `.with({ uid })` re-keying:
 
 ```tsx
-// Type the prop off the cell with CellValue — no hand-written alias:
-function CartContents({ cart }: { cart: ResolvedCell<CellValue<typeof cartCell>> } & RenderArgs) {
+// The host parton reads its own cart cell in `schema` and forwards each
+// per-line BoundCell. Type the prop off the cell with CellValue — no
+// hand-written alias:
+function MagentoCartRender({
+  cart,
+  parent,
+}: { cart: ResolvedCell<CellValue<typeof cartCell>> } & RenderArgs) {
   // cart.value.cart.items is BoundCell<…>[] — forward directly:
-  return cart.value.cart.items.map((line) => <CartLine item={line} parent={parent} />)
+  return cart.value?.cart.items.map((line) => <CartLine item={line} parent={parent} />)
 }
 ```
 
@@ -349,24 +354,37 @@ subset get invalidated.
 ### In schema
 
 Schema callbacks return a record of cell handles / scoped
-descriptors. The framework resolves each entry into a
+descriptors / `BoundCell`s. The framework resolves each entry into a
 `ResolvedCell<T>` and passes it to Render via the prop bag.
+
+The callback's **2nd argument is the parton's `vary` output** — so one
+parton can derive a partition from the request and bind+read its own
+cell, no binder/reader split:
 
 ```ts
 const Cart = parton(
   function Render({ cart, parent }) {
-    return cart.value.itemUids.map((uid) => (
-      <CartLine key={uid} parent={parent} item={cartItemCell.with({ uid })} />
+    // cart.value.cart.items are per-line BoundCells (result → cells):
+    return cart.value?.cart.items.map((line) => (
+      <CartLine key={String(line.args.uid)} parent={parent} item={line} />
     ))
   },
-  { schema: () => ({ cart: cartCell }) },
+  {
+    match: "/cart",
+    // cart_id cookie → the cart cell's partition.
+    vary: ({ cookies }) => ({ cartId: cookies.cart_id ?? "" }),
+    // 2nd arg is the vary output. The options generic widens it to
+    // `object` (TS can't thread a sibling `vary`'s return into this
+    // position), so narrow with a cast to bind `.with`.
+    schema: (_f, vary) => ({ cart: cartCell.with(vary as { cartId: string }) }),
+  },
 )
 ```
 
 ### As a JSX prop
 
-Top-level JSX props that are `Cell<T>` or `BoundCell<T>` are auto-
-resolved before Render runs. Pass a `BoundCell` from a parent to a
+Top-level JSX props that are `CellInterface<T>` or `BoundCell<T>` are
+auto-resolved before Render runs. Pass a `BoundCell` from a parent to a
 child parton:
 
 ```tsx
