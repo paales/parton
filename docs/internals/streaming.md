@@ -174,3 +174,26 @@ re-execution policy — but a "different TTL between cache and
 expiresAt" combination has no useful interpretation (the cache
 short-circuits the re-execution that expiresAt would have
 triggered).
+
+## GraphQL `@defer` (incremental delivery)
+
+Distinct from the framework's own parton-level streaming: `@defer` lets a
+GraphQL server send a query's slow fields *after* the initial payload, as
+`multipart/mixed` chunks (`{data, hasNext: true}` then
+`{incremental: [{data, path}], hasNext}`). `framework/src/lib/multipart.ts`
+parses this — `parseMultipartStream` yields each chunk as its bytes
+arrive (the unit a defer-aware loader consumes); `parseMultipartResponse`
+is the buffered merge.
+
+How it maps onto the existing machinery (design; the loader is future
+work): a `@defer`'d *named fragment* becomes a pending `fragmentCell`
+partition. A child parton bound to it reads cold and **suspends at its
+own boundary** — which is already a Suspense boundary, so its `fallback`
+streams within the same response (no heartbeat needed; the patches arrive
+on the same upstream request). When the parent's streaming loader sees the
+matching `incremental` patch, it hydrates the partition and the child
+resolves. That's a server-side `useSuspenseFragment`: the cell is the
+addressable, independently-re-renderable unit; `@defer` is just the wire
+telling us when each one is ready. `graphql-request` buffers, so the
+loader needs a raw streaming `fetch` + the multipart parser — the piece
+still to build, behind a concrete `@defer` demo.

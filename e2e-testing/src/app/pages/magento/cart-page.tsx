@@ -20,41 +20,50 @@
 
 import { parton, type PartialCtx, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import { Card } from "@parton/copies/components/ui/card"
-import { cartCell, cartItemCell, type CartItemValue, type CartValue } from "./cart-cells.ts"
+import {
+  cartCell,
+  cartItemCell,
+  type CartLineValue,
+  type CartValue,
+} from "./cart-cells.ts"
 import { CartLineControls } from "./cart-line-controls.tsx"
 
 const CartLine = parton(
   function CartLineRender({
     item,
-  }: { item: ResolvedCell<CartItemValue | null> } & RenderArgs) {
-    const v = item.value
-    if (!v) {
+  }: { item: ResolvedCell<CartLineValue | null> } & RenderArgs) {
+    const line = item.value
+    if (!line) {
       return (
         <div data-testid="cart-line-empty" className="rounded border p-3 text-sm text-muted-foreground">
           (no data)
         </div>
       )
     }
+    const name = line.product?.name ?? "(unknown)"
+    const sku = line.product?.sku ?? ""
+    const rowTotal = line.prices?.row_total?.value ?? 0
+    const currency = line.prices?.row_total?.currency ?? "USD"
     return (
-      <Card className="p-4" data-testid={`cart-line-${v.uid}`}>
+      <Card className="p-4" data-testid={`cart-line-${line.uid}`}>
         <div className="flex items-center justify-between gap-4">
           <div className="flex-1">
-            <div className="font-medium" data-testid={`cart-line-name-${v.uid}`}>
-              {v.name}
+            <div className="font-medium" data-testid={`cart-line-name-${line.uid}`}>
+              {name}
             </div>
             <div className="text-xs text-muted-foreground">
-              <code>{v.sku}</code>
+              <code>{sku}</code>
             </div>
           </div>
           <div className="text-right">
-            <div className="font-mono tabular-nums" data-testid={`cart-line-total-${v.uid}`}>
-              {v.currency} {v.rowTotal.toFixed(2)}
+            <div className="font-mono tabular-nums" data-testid={`cart-line-total-${line.uid}`}>
+              {currency} {rowTotal.toFixed(2)}
             </div>
-            <div className="text-xs text-muted-foreground" data-testid={`cart-line-qty-${v.uid}`}>
-              qty {v.quantity}
+            <div className="text-xs text-muted-foreground" data-testid={`cart-line-qty-${line.uid}`}>
+              qty {line.quantity}
             </div>
           </div>
-          <CartLineControls uid={v.uid} quantity={v.quantity} />
+          <CartLineControls uid={line.uid} quantity={line.quantity} />
         </div>
       </Card>
     )

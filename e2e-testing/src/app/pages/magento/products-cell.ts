@@ -11,6 +11,10 @@
  * prices/availability change on Magento's schedule, explicit refresh
  * triggers via the existing RefreshAllPricesButton are clearer than
  * an invisible 12s TTL.
+ *
+ * Built via the doc-mode `gqlCell(client, doc)` primitive (rather than
+ * a query-string builder) because `ProductsResult` is exported and
+ * needs the document around for the type.
  */
 
 import { gqlCell } from "@parton/framework"
@@ -43,8 +47,5 @@ const ProductsQuery = graphql(`
 
 export type ProductsResult = ResultOf<typeof ProductsQuery>
 
-export const magentoProductsCell = gqlCell({
-  id: "magento.products",
-  client,
-  doc: ProductsQuery,
-})
+// id auto-derives to "magento.products" (operation name + prefix).
+export const magentoProductsCell = gqlCell(client, ProductsQuery, { prefix: "magento" })

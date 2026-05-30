@@ -239,6 +239,11 @@ function writeOneCell(
   let args: Record<string, unknown>
   if (partitionOverride?.vary) {
     args = partitionOverride.vary
+  } else if (cell.keyOf) {
+    // Value-keyed cell (fragment cells): the partition lives in the
+    // value itself. `cell.set(value)` routes to `keyOf(value)`'s
+    // partition without the caller restating the identity in `.with()`.
+    args = cell.keyOf(stored)
   } else {
     const scope = buildCellVaryScope()
     args = cell.vary(scope)

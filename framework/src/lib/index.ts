@@ -69,9 +69,16 @@ export {
 
 export {
   gqlCell,
+  gqlCellBuilder,
+  runQuery,
   fragmentCell,
+  hydrateFragmentsFromResult,
+  spreadSitesOf,
+  _clearFragmentCellRegistry,
+  type GqlCell,
   type GqlCellOpts,
   type GqlClient,
+  type FragmentCell,
   type FragmentCellOpts,
   type FragmentOf,
 } from "./cell-gql.ts"

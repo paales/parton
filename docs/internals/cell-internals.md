@@ -41,6 +41,14 @@ effective constraints contain `uid=X`. Empty args fall back to bare
 `cell:<id>` (matches every placement of that cell, used for cells
 with no `vary` and no `.with()`).
 
+**Partition derivation in `writeOneCell`.** The args come from, in
+priority order: an explicit `partitionOverride.vary` (the
+`.with(args).set` path) → the cell's `keyOf(value)` if present (value-keyed
+fragment cells: the identity lives in the value, so `cell.set(value)`
+needs no restated args) → `cell.vary(scope)` (request-derived). `keyOf` is
+set by `fragmentCell` from its `key` option and runs against the validated
++ `write`-transformed value.
+
 Three server actions wrap the pipeline:
 
 - **`__cellWrite(cellId, value, partitionOverride?)`** — single-cell
@@ -60,6 +68,30 @@ Additionally, **`__cellInvalidate(cellId, args)`** fires the
 partition-scoped selector WITHOUT touching storage — used by
 `BoundCell.invalidate()` to force matching placements to re-resolve
 (re-run the loader if storage is empty).
+
+## Fragment auto-hydration
+
+`fragmentCell(doc, {key})` self-registers in a module-scope
+`Map<fragmentName, FragmentCell>` (HMR overwrites in place, like the cell
+registry). `runQuery(client, doc, vars)` runs the query then calls
+`hydrateFragmentsFromResult(doc, result)`:
+
+1. `spreadSitesOf(doc)` walks the document AST once (cached per doc via a
+   `WeakMap`), collecting every fragment spread as `{path, fragName,
+   deferred}` — `path` uses result aliases, `deferred` flags an `@defer`
+   directive on the spread.
+2. For each non-deferred spread whose `fragName` has a registered cell,
+   `collectAtPath(result, path)` gathers the node(s) at that path
+   (flattening intermediate arrays), and each non-null node is hydrated
+   via `cell.with(cell.keyOf(node)).hydrate(node)`.
+
+`gqlCell`'s synthesized loader is `runQuery`, so pure query cells
+auto-hydrate for free; custom loaders (a `localCell` computing an
+aggregate) call `runQuery` themselves; mutations call
+`hydrateFragmentsFromResult` directly on their response. Deferred spreads
+are skipped here — they'd be resolved incrementally by a streaming loader
+built on `parseMultipartStream` (see `multipart.ts`; the loader itself is
+future work).
 
 ## Wire shape
 

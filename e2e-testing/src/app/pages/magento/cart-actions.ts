@@ -2,15 +2,9 @@
 
 import { client } from "../../magento-data.ts"
 import { graphql } from "../../magento-graphql.ts"
-import { readCookie, setCookie } from "@parton/framework"
+import { hydrateFragmentsFromResult, readCookie, setCookie } from "@parton/framework"
 import { cartBadgeCell } from "./cart-badge-cell.ts"
-import {
-  cartCell,
-  cartItemCell,
-  toCartItemValue,
-  type CartValue,
-  type FullCartItem,
-} from "./cart-cells.ts"
+import { cartCell, cartAggregate, CartLineFragment } from "./cart-cells.ts"
 
 const CreateEmptyCart = graphql(`
   mutation CreateEmptyCart {
@@ -25,40 +19,33 @@ const CreateEmptyCart = graphql(`
  * upstream call. No follow-up cart query, no invalidation-driven
  * refetch.
  */
-const AddToCart = graphql(`
-  mutation AddToCart($cartId: String!, $sku: String!, $quantity: Float!) {
-    addProductsToCart(cartId: $cartId, cartItems: [{ sku: $sku, quantity: $quantity }]) {
-      cart {
-        id
-        total_quantity
-        items {
-          uid
-          quantity
-          product {
-            name
-            sku
+const AddToCart = graphql(
+  `
+    mutation AddToCart($cartId: String!, $sku: String!, $quantity: Float!) {
+      addProductsToCart(cartId: $cartId, cartItems: [{ sku: $sku, quantity: $quantity }]) {
+        cart {
+          id
+          total_quantity
+          items {
+            uid
+            ...CartLine
           }
           prices {
-            row_total {
+            grand_total {
               value
               currency
             }
           }
         }
-        prices {
-          grand_total {
-            value
-            currency
-          }
+        user_errors {
+          code
+          message
         }
       }
-      user_errors {
-        code
-        message
-      }
     }
-  }
-`)
+  `,
+  [CartLineFragment],
+)
 
 export async function getOrCreateCart(): Promise<string> {
   const existing = readCookie("cart_id")
@@ -86,23 +73,16 @@ export async function addToCart(sku: string, quantity: number): Promise<string[]
   const updated = result.cart
   if (!updated) throw new Error("addProductsToCart returned cart=null")
 
-  const items = (updated.items ?? []).filter((i): i is FullCartItem => i != null)
-  const itemUids = items.map((i) => i.uid)
-  const grandTotal = updated.prices?.grand_total?.value ?? 0
-  const currency = updated.prices?.grand_total?.currency ?? "USD"
-
-  // Hydrate per-line cells without firing partition signals — the
-  // CartLine placements aren't rendered on /magento, so a signal
-  // per-item would be noise. They'll resolve from warm storage next
-  // time /cart is visited.
-  for (const item of items) {
-    cartItemCell.with({ uid: item.uid }).hydrate(toCartItemValue(item))
-  }
+  // Hydrate per-line cells from the `...CartLine` spread without firing
+  // partition signals — the CartLine placements aren't rendered on
+  // /magento, so a signal per-item would be noise. They resolve from
+  // warm storage next time /cart is visited.
+  hydrateFragmentsFromResult(AddToCart, data)
 
   // Write the cart aggregate — fires `cell:magento.cart?cartId=X`,
   // refreshing any /cart placement currently rendering.
-  const next: CartValue = { itemUids, grandTotal, currency }
-  await cartCell.with({ cartId }).set(next)
+  const next = cartAggregate(updated)
+  if (next) await cartCell.with({ cartId }).set(next)
 
   // Push the updated total into the badge cell — fires
   // `cell:magento.cart-badge?cartId=X`, refreshing the header on any

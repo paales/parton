@@ -1,6 +1,8 @@
 /**
- * Pokemon cells — every PokeAPI read flows through a gqlCell.
- * Storage caches per args; effectively-immutable data so no TTL.
+ * Pokemon cells — every PokeAPI read flows through a gqlCell built by
+ * the per-backend `pokemonQuery` constructor. Storage caches per args;
+ * effectively-immutable data so no TTL. Each cell's wire id auto-derives
+ * from its operation name (`query PokemonHero` → `pokemon-hero`).
  *
  * `pokemonHero / Stats / Species` — placement-bound per id from
  * the detail page.
@@ -12,11 +14,13 @@
  * Each search Stage binds different offsets.
  */
 
-import { gqlCell } from "@parton/framework"
+import { gqlCellBuilder } from "@parton/framework"
 import { client } from "../data.ts"
 import { graphql } from "../pokeapi-graphql.ts"
 
-const PokemonHeroQuery = graphql(`
+const pokemonQuery = gqlCellBuilder({ client, graphql })
+
+export const pokemonHeroCell = pokemonQuery(`
   query PokemonHero($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       id
@@ -36,7 +40,7 @@ const PokemonHeroQuery = graphql(`
   }
 `)
 
-const PokemonStatsQuery = graphql(`
+export const pokemonStatsCell = pokemonQuery(`
   query PokemonStats($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       pokemon_v2_pokemonstats {
@@ -49,7 +53,7 @@ const PokemonStatsQuery = graphql(`
   }
 `)
 
-const PokemonSpeciesQuery = graphql(`
+export const pokemonSpeciesCell = pokemonQuery(`
   query PokemonSpecies($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       pokemon_v2_pokemonspecy {
@@ -70,24 +74,6 @@ const PokemonSpeciesQuery = graphql(`
   }
 `)
 
-export const pokemonHeroCell = gqlCell({
-  id: "pokemon-hero",
-  client,
-  doc: PokemonHeroQuery,
-})
-
-export const pokemonStatsCell = gqlCell({
-  id: "pokemon-stats",
-  client,
-  doc: PokemonStatsQuery,
-})
-
-export const pokemonSpeciesCell = gqlCell({
-  id: "pokemon-species",
-  client,
-  doc: PokemonSpeciesQuery,
-})
-
 // ─── List + search cells (shared with pokemon.tsx) ─────────────────────
 
 export const PokemonListFields = graphql(`
@@ -105,7 +91,7 @@ export const PokemonListFields = graphql(`
   }
 `)
 
-const PokemonListQuery = graphql(
+export const pokemonListCell = pokemonQuery(
   `
     query PokemonList($limit: Int!, $offset: Int!) {
       pokemon_v2_pokemon(limit: $limit, offset: $offset, order_by: { id: asc }) {
@@ -116,9 +102,9 @@ const PokemonListQuery = graphql(
   [PokemonListFields],
 )
 
-const PokemonSearchQuery = graphql(
+export const pokemonSearchCell = pokemonQuery(
   `
-    query SearchPokemon($pattern: String!, $offset: Int!, $limit: Int!) {
+    query PokemonSearch($pattern: String!, $offset: Int!, $limit: Int!) {
       pokemon_v2_pokemon(
         where: { name: { _ilike: $pattern } }
         limit: $limit
@@ -131,15 +117,3 @@ const PokemonSearchQuery = graphql(
   `,
   [PokemonListFields],
 )
-
-export const pokemonListCell = gqlCell({
-  id: "pokemon-list",
-  client,
-  doc: PokemonListQuery,
-})
-
-export const pokemonSearchCell = gqlCell({
-  id: "pokemon-search",
-  client,
-  doc: PokemonSearchQuery,
-})

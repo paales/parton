@@ -121,6 +121,12 @@ export interface Cell<T> {
   /** Optional async loader — runs on cold-start (storage miss) at the
    *  partition, result populates storage. */
   readonly load?: (args: CellArgs) => Promise<T>
+  /** Optional value→partition extractor. When present, `cell.set(value)`
+   *  with no explicit `.with()` partition derives the partition from
+   *  `keyOf(value)` rather than the `vary` callback — the identity lives
+   *  in the value itself (fragment cells keyed by `id`/`uid`). Set by
+   *  `fragmentCell` from its `key` option. */
+  readonly keyOf?: (value: T) => CellArgs
   /**
    * Bind this cell to explicit args, returning a `BoundCell<T>` with
    * the partition baked. Use at JSX placement sites:
@@ -510,6 +516,7 @@ export function buildEphemeralCell<T>(
   id: string,
   initial: T,
   load: ((args: CellArgs) => Promise<T>) | undefined,
+  keyOf?: (value: T) => CellArgs,
 ): Cell<T> {
   const shape: CellShape = { kind: "opaque" }
   const validate = makeValidator<T>(id, shape)
@@ -523,6 +530,7 @@ export function buildEphemeralCell<T>(
     storage: getEphemeralCellStorage,
     vary: constantVary,
     load,
+    keyOf,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     set: bindSetter(id) as Cell<T>["set"],
     peek: buildPeek(id, getEphemeralCellStorage, validate, initial, constantVary),

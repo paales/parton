@@ -25,26 +25,44 @@
 - **`hydrate(value)` for parent loaders.** Sync write without firing
   the signal — solves the cascade-on-cold-load problem when a parent
   cell's loader populates child cells.
-- **`gqlCell` via gql.tada.** Thin wrapper; args inferred from query
-  variables, return type from gql.tada inference, loader is
-  `client.request(doc, args)`.
+- **`gqlCellBuilder` / `gqlCell` via gql.tada.** Per-backend constructor
+  mirroring the `graphql()` tag — quick-string mode (`q(\`query …\`)`)
+  with the doc parsed by the bound tag, plus a doc-mode primitive. Wire
+  id auto-derives from the operation name (kebab + optional prefix).
+- **Typed `.with()` (item 1, shipped).** `gqlCell` returns
+  `GqlCell<TResult, TVars>` narrowing `with(args: TVars)` from the query's
+  inferred variables — verified with a `tsc` proof that inference threads
+  through the builder closure.
+- **`fragmentCell(doc, {key})` + auto-hydration (item 3, shipped).** The
+  fragment doc carries the value type, derives the id (kebab of the
+  fragment name), and is matched against query spreads. `key` defaults to
+  `{ id: d.id }` (throws if no `id` and no `key`). When a query spreads a
+  registered fragment, `runQuery` / `hydrateFragmentsFromResult` walks the
+  result at each spread path and hydrates the keyed partitions.
+- **Value-keyed `.set(value)` (item 4 primitive, shipped).** A cell's
+  optional `keyOf(value)` derives the partition from the value itself;
+  `cartItemCell.set(line)` routes to `key(line)`'s partition and fires
+  `cell:<id>?<args>`, so a mutation that colocates `...Fragment` updates
+  exactly one line with no restated id.
 
 ## What's still open
 
-### 1. Typed args (deferred — works as `Record<string, unknown>`)
+### 1. ~~Typed args~~ → shipped; residue: `localCell` + the `key` callback
 
-Today `args` is `CellArgs = Record<string, unknown>`. The cell's
-shape doesn't propagate to its `.with(args)` parameter — authors
-get no compile-time check that they're passing the right args.
+`gqlCell.with()` is typed (`GqlCell<TResult, TVars>`), and value-keyed
+`.set` is typed off the fragment value. Two residues remain: `localCell`'s
+`.with()` is still `Record<string, unknown>` (no caller has needed it
+typed), and `fragmentCell`'s `key` callback param is typed `any` — gql.tada
+can't resolve `ResultOf<F>` in a contravariant position for an inferred
+generic `F` (it collapses to `never`), so authors annotate
+`(d: ResultOf<typeof Frag>)` explicitly if they want the check.
 
-For `gqlCell`, gql.tada's inferred `TVars` IS the args shape, so the
-type information is present at construction; threading it through
-`.with()` is a TS-generic exercise. For `localCell`, args would
-either need a runtime validator (zod-shaped) or just a TS-only type
-parameter.
-
-Defer until a caller hits the lack of typing. The functional
-behaviour is correct; the typing layer can tighten later.
+**Gotcha learned:** gql.tada does NOT validate a fragment's type condition
+against the schema. `fragment X on CartItem` (a type that doesn't exist —
+the real one is `CartItemInterface`) passes `tsc` and collapses
+`ResultOf`/`FragmentOf` to `never`, then fails at runtime with
+`Unknown type "CartItem"`. Always use the exact (interface) type name; for
+abstract targets, supply an explicit value type + `@_unmask`.
 
 ### 2. Object / list cell shapes (we have `opaque`)
 
@@ -58,38 +76,27 @@ The CMS migration likely needs proper object shapes (nested
 configs + slots with field-level validation). That's the trigger
 for building this out.
 
-### 3. Fragment composition + relay-style auto-hydration
+### 3. ~~Fragment composition + relay-style auto-hydration~~ → shipped
 
-Today a parent cell's loader explicitly calls
-`cartItemCell.with({uid}).hydrate(value)` for each child. Manual,
-explicit, verbose. The Relay-deep version:
+Auto-hydration ships: the framework parses a query doc's fragment
+spreads (`spreadSitesOf` → `{path, fragName, deferred}`), and for each
+spread backed by a registered `fragmentCell`, walks the result at that
+path and hydrates each node into its `key`-derived partition. Identity is
+the cell's `key` (default `id`); the result walk handles intermediate
+arrays. Wired through `runQuery` (gqlCell loaders + custom loaders) and
+`hydrateFragmentsFromResult` (mutations).
 
-```ts
-const cartCell = gqlCell({
-  doc: graphql(`...`),
-  hydrates: {
-    items: cartItemCell,  // declares "rows of `items` populate cartItemCell"
-  },
-})
-```
+Residue: matching is by AST path + fragment NAME, one level of nesting at
+a time (lists of entities under a path). Deep/recursive normalisation
+across many fragment types in one response is still future work — no
+caller needs it yet.
 
-The framework reads the relation map and auto-hydrates child cells
-from the query result. Saves typing; centralises the normalisation
-logic.
+### 4. Mutation result auto-write from action returns (primitive shipped)
 
-Cost: needs a way to express "this field is an array of CartItem
-entities," a way to extract identity keys (probably `__typename + id`
-or a custom keyer), and a way for the framework to walk the result
-recursively. Not small.
-
-Defer until the manual hydration shape repeats often enough to show
-the abstraction's shape.
-
-### 4. Mutation result auto-write from action returns
-
-Today actions imperatively call `cell.with(args).set(value)` after
-the upstream mutation returns. The framework doesn't know "this
-action result populates this cell." A future shape:
+The primitive — value-keyed `cell.set(value)` deriving its partition from
+`keyOf(value)` — ships. Actions now call `cartItemCell.set(line)` with no
+restated id; auto-hydration covers the other lines. What's still open is
+the *declarative* layer that removes even the imperative `.set` call:
 
 ```ts
 const updateLineMutation = gqlMutation({
