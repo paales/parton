@@ -517,6 +517,7 @@ export function buildEphemeralCell<T>(
   initial: T,
   load: ((args: CellArgs) => Promise<T>) | undefined,
   keyOf?: (value: T) => CellArgs,
+  write?: (value: T) => T,
 ): Cell<T> {
   const shape: CellShape = { kind: "opaque" }
   const validate = makeValidator<T>(id, shape)
@@ -535,6 +536,7 @@ export function buildEphemeralCell<T>(
     set: bindSetter(id) as Cell<T>["set"],
     peek: buildPeek(id, getEphemeralCellStorage, validate, initial, constantVary),
     validate,
+    write,
   }
   return registerCell(handle)
 }

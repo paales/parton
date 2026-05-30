@@ -79,9 +79,10 @@ export async function addToCart(sku: string, quantity: number): Promise<string[]
   // warm storage next time /cart is visited.
   hydrateFragmentsFromResult(AddToCart, data)
 
-  // Write the raw cart into the cart cell — fires `cell:magento.cart?cartId=X`,
-  // refreshing any /cart placement currently rendering.
-  await cartCell.with({ cartId }).set({ cart: updated })
+  // Refresh the cart cell — fires `cell:magento.cart?cartId=X`, refreshing
+  // any /cart placement currently rendering (loader re-runs the
+  // result→cells rewrite).
+  await cartCell.with({ cartId }).invalidate()
 
   // Push the updated total into the badge cell — fires
   // `cell:magento.cart-badge?cartId=X`, refreshing the header on any

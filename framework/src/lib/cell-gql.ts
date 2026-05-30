@@ -242,8 +242,20 @@ export function gqlCellBuilder<Schema extends SchemaLike, Config extends ConfigL
       [K in keyof Items]: FragDocOf<Items[K]>
     }
     const doc = config.graphql(input, frags)
-    return gqlCell(config.client, doc, { id: opts?.id, prefix: config.prefix }) as GqlCell<
-      ResultOf<typeof doc>,
+    const id = deriveCellId(
+      doc as TadaDocumentNode<unknown, Record<string, unknown>>,
+      config.prefix,
+      opts?.id,
+    )
+    // The fragment cells among the items drive the result→cell rewrite:
+    // every `...Fragment` spread location becomes a forwardable BoundCell.
+    const cells = (items ?? []).filter(isFragmentCellInput) as ReadonlyArray<FragmentCell<unknown>>
+    const handle = buildEphemeralCell<unknown>(id, null, async (args: CellArgs) => {
+      const raw = await config.client.request(doc, args as never)
+      return cells.length ? rewriteResultToCells(doc, cells, raw) : raw
+    })
+    return handle as unknown as GqlCell<
+      RewriteSpreads<ResultOf<typeof doc>, Items>,
       VariablesOf<typeof doc>
     >
   }
@@ -478,5 +490,89 @@ export function hydrateFragmentsFromResult(
     }
   }
 }
+
+// ─── result → cells rewrite ───────────────────────────────────────────
+//
+// A query built with `q.query(str, [cell])` rewrites its result so each
+// fragment-spread location holds the per-entity `BoundCell` (forwardable
+// to a child parton) instead of raw data — the runtime twin of
+// `RewriteSpreads` below. Spread sites are found by AST path (`spreadSitesOf`),
+// not masking markers, so this is masking-independent at runtime.
+
+/** Replace each node at `segments` (flattening intermediate arrays) via
+ *  `replace`, mutating `root` in place (the loaded result is freshly
+ *  allocated, so mutation is safe). */
+function replaceAtPath(node: unknown, segments: string[], replace: (n: object) => unknown): void {
+  if (node == null || typeof node !== "object") return
+  if (Array.isArray(node)) {
+    for (const el of node) replaceAtPath(el, segments, replace)
+    return
+  }
+  const rec = node as Record<string, unknown>
+  const [seg, ...rest] = segments
+  const v = rec[seg]
+  if (rest.length === 0) {
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) {
+        const el = v[i]
+        if (el != null && typeof el === "object") v[i] = replace(el)
+      }
+    } else if (v != null && typeof v === "object") {
+      rec[seg] = replace(v)
+    }
+  } else {
+    replaceAtPath(v, rest, replace)
+  }
+}
+
+/**
+ * Hydrate each fragment-spread node into its keyed partition AND replace
+ * it in the result with the bound cell. Returns the same (mutated) result.
+ */
+function rewriteResultToCells(
+  doc: TadaDocumentNode<any, any, any>,
+  cells: ReadonlyArray<FragmentCell<unknown>>,
+  result: unknown,
+): unknown {
+  const byName = new Map<string, FragmentCell<unknown>>()
+  for (const c of cells) {
+    const name = fragmentNameOf(c.fragment)
+    if (name) byName.set(name, c)
+  }
+  for (const site of spreadSitesOf(doc)) {
+    if (site.deferred) continue
+    const cell = byName.get(site.fragName)
+    if (!cell || !cell.keyOf) continue
+    const keyOf = cell.keyOf
+    replaceAtPath(result, site.path, (node) => {
+      const args = keyOf(node)
+      cell.with(args).hydrate(node)
+      return cell.with(args)
+    })
+  }
+  return result
+}
+
+/** Type transform: replace each fragment-spread location in a query
+ *  result with the matching cell's `BoundCell<V>` (forwardable), leaving
+ *  everything else untouched. Distributes over union members so a
+ *  nullable spread element (`Member | null`) keeps its `null`. */
+type FragMatch<T, Cells extends readonly unknown[]> = Cells extends readonly [infer C, ...infer Rest]
+  ? C extends FragmentCell<infer V, infer F>
+    ? [T] extends [FragmentOf<F>]
+      ? BoundCell<V | null>
+      : FragMatch<T, Rest>
+    : FragMatch<T, Rest> // non-cell item (raw fragment doc) — skip
+  : never
+
+export type RewriteSpreads<T, Cells extends readonly unknown[]> = T extends unknown
+  ? [FragMatch<T, Cells>] extends [never]
+    ? T extends readonly (infer E)[]
+      ? ReadonlyArray<RewriteSpreads<E, Cells>>
+      : T extends object
+        ? { [K in keyof T]: RewriteSpreads<T[K], Cells> }
+        : T
+    : FragMatch<T, Cells>
+  : never
 
 export type { FragmentOf }

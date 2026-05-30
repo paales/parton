@@ -11,8 +11,11 @@
  *
  *   cartCell     — `magento.query(..., [cartItemCell])`. Loaded per
  *                  `.with({ cartId })`; composes `...CartLine` by passing
- *                  the CELL (not a raw fragment doc). Stores the raw query
- *                  result; the view derives its aggregate (cart-page.tsx).
+ *                  the CELL (not a raw fragment doc). The result→cells
+ *                  rewrite turns each `...CartLine` spread site into its
+ *                  per-line BoundCell, so `cart.value.cart.items` is an
+ *                  array of forwardable cells (cart-page.tsx maps them
+ *                  straight to <CartLine>, no manual `.with({uid})`).
  *
  * Mutations still spread `...CartLine` via `cartItemCell.fragment` (the
  * GraphQL mutations themselves migrate later).
@@ -51,8 +54,10 @@ export type CartLineValue = NonNullable<typeof cartItemCell.defaultValue>
 
 /**
  * The cart query — composes `...CartLine` by passing the cell, loaded per
- * `.with({ cartId })`. Its loader auto-hydrates the per-line cells from
- * the spread. id auto-derives to `magento.cart`.
+ * `.with({ cartId })`. Its loader hydrates the per-line cells from the
+ * spread AND rewrites each spread site to its `BoundCell` (so
+ * `cart.value.cart.items` is an array of forwardable line cells). id
+ * auto-derives to `magento.cart`.
  */
 export const cartCell = magento.query(
   `
@@ -74,6 +79,6 @@ export const cartCell = magento.query(
   [cartItemCell],
 )
 
-/** The raw cart query result the cell stores. The view derives its
- *  aggregate (see `cartAggregate` in `cart-page.tsx`). */
+/** The cart query result the cell stores — its `items` are per-line
+ *  `BoundCell`s (the result→cells rewrite), which the view forwards. */
 export type CartData = NonNullable<typeof cartCell.defaultValue>

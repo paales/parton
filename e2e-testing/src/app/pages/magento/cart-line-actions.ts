@@ -100,9 +100,11 @@ export async function updateLineQty(uid: string, quantity: number): Promise<void
     cartItemCell.with({ uid }).hydrate(null)
   }
 
-  // Refresh the cart cell with the raw post-mutation cart (totals +
-  // item list); the view re-derives its aggregate from this.
-  await cartCell.with({ cartId }).set({ cart: updated })
+  // Refresh the cart cell (its value holds the per-line BoundCells + the
+  // totals) so the grand total re-renders. Invalidate (not set): the cell
+  // value is the rewritten BoundCell shape, so its loader re-runs the
+  // result→cells rewrite. The unchanged line placements fp-skip.
+  await cartCell.with({ cartId }).invalidate()
 }
 
 export async function removeFromCart(uid: string): Promise<void> {
@@ -120,9 +122,9 @@ export async function removeFromCart(uid: string): Promise<void> {
   const remainingTotalQty = items.reduce((sum, i) => sum + i.quantity, 0)
   await cartBadgeCell.with({ cartId }).set({ total_quantity: remainingTotalQty })
 
-  // Refresh the cart cell with the raw post-mutation cart (shorter item
-  // list + new totals); the view re-derives its aggregate.
-  await cartCell.with({ cartId }).set({ cart: updated })
+  // Refresh the cart cell so the shorter line list + new totals render
+  // (loader re-runs the result→cells rewrite).
+  await cartCell.with({ cartId }).invalidate()
 
   // Free the removed line's storage slot (no signal — its placement is
   // gone from the parent's render now that the uid left the item list).

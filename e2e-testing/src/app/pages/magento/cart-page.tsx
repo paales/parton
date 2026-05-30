@@ -20,29 +20,8 @@
 
 import { parton, type PartialCtx, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import { Card } from "@parton/copies/components/ui/card"
-import { cartCell, cartItemCell, type CartData, type CartLineValue } from "./cart-cells.ts"
+import { cartCell, type CartData, type CartLineValue } from "./cart-cells.ts"
 import { CartLineControls } from "./cart-line-controls.tsx"
-
-/** View aggregate derived from the raw cart cell value (app-space — the
- *  cell stores the raw query result, the view reduces it). */
-type CartView = { itemUids: string[]; grandTotal: number; currency: string }
-
-type CartShape = {
-  items?: ReadonlyArray<{ uid: string } | null> | null
-  prices?: {
-    grand_total?: { value?: number | null; currency?: string | null } | null
-  } | null
-}
-
-function cartAggregate(cart: CartShape | null | undefined): CartView | null {
-  if (!cart) return null
-  const items = (cart.items ?? []).filter((i): i is { uid: string } => i != null)
-  return {
-    itemUids: items.map((i) => i.uid),
-    grandTotal: cart.prices?.grand_total?.value ?? 0,
-    currency: cart.prices?.grand_total?.currency ?? "USD",
-  }
-}
 
 const CartLine = parton(
   function CartLineRender({
@@ -94,25 +73,30 @@ const CartContents = parton(
     cart,
     parent,
   }: { cart: ResolvedCell<CartData | null> } & RenderArgs) {
-    const v = cartAggregate(cart.value?.cart)
-    if (!v || v.itemUids.length === 0) {
+    const c = cart.value?.cart
+    // `items` are per-line BoundCells (the query result→cells rewrite) —
+    // forward each straight to <CartLine>, no manual `.with({uid})`.
+    const lines = (c?.items ?? []).filter((l): l is NonNullable<typeof l> => l != null)
+    if (lines.length === 0) {
       return (
         <div data-testid="cart-empty" className="rounded border p-6 text-center text-muted-foreground">
           Your cart is empty.
         </div>
       )
     }
+    const currency = c?.prices?.grand_total?.currency ?? "USD"
+    const grandTotal = c?.prices?.grand_total?.value ?? 0
     return (
       <div className="space-y-4">
         <div className="space-y-3" data-testid="cart-lines">
-          {v.itemUids.map((uid) => (
-            <CartLine key={uid} parent={parent} item={cartItemCell.with({ uid })} />
+          {lines.map((line) => (
+            <CartLine key={String(line.args.uid)} parent={parent} item={line} />
           ))}
         </div>
         <Card className="flex items-center justify-between p-4" data-testid="cart-totals">
           <span className="font-medium">Grand total</span>
           <span className="font-mono tabular-nums" data-testid="cart-grand-total">
-            {v.currency} {v.grandTotal.toFixed(2)}
+            {currency} {grandTotal.toFixed(2)}
           </span>
         </Card>
       </div>

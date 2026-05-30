@@ -81,6 +81,7 @@ export {
   type FragmentCell,
   type FragmentCellOpts,
   type FragmentOf,
+  type RewriteSpreads,
 } from "./cell-gql.ts"
 
 export {

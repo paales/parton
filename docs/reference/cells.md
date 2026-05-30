@@ -288,6 +288,27 @@ Three ways a fragment cell gets populated:
 > name; author the fragment with `@_unmask` so its query/mutation spread
 > sites stay readable.
 
+### Result → cells
+
+When a query composes a fragment cell, its result is **rewritten so each
+spread location holds that cell's `BoundCell`** — the loader hydrates each
+matching node into its keyed partition AND replaces it in-place with the
+bound cell. The consumer forwards those cells straight to children; there
+is no manual `.with({ uid })` re-keying:
+
+```tsx
+function CartContents({ cart }: { cart: ResolvedCell<CartData> } & RenderArgs) {
+  // cart.value.cart.items is BoundCell<CartLineValue>[] — forward directly:
+  return cart.value.cart.items.map((line) => <CartLine item={line} parent={parent} />)
+}
+```
+
+The cell's value type reflects this via `RewriteSpreads<ResultOf<doc>,
+cells>`: spread sites become `BoundCell<V>`, everything else (scalars,
+non-fragment objects like `prices`) is untouched. Because the rewritten
+value isn't the raw result, **mutations refresh such a cell with
+`.invalidate()`** (re-run the loader + rewrite), not `.set(raw)`.
+
 ### Auto-hydration via `runQuery`
 
 A custom loader (e.g. a `localCell` that computes an aggregate) gets
