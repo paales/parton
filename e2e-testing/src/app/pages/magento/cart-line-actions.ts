@@ -19,7 +19,7 @@ import { hydrateFragmentsFromResult, readCookie } from "@parton/framework"
 import { client } from "../../magento-data.ts"
 import { graphql } from "../../magento-graphql.ts"
 import { cartBadgeCell } from "./cart-badge-cell.ts"
-import { cartCell, cartItemCell, CartLineFragment } from "./cart-cells.ts"
+import { cartCell, cartItemCell } from "./cart-cells.ts"
 
 const UpdateCartItemsMutation = graphql(
   `
@@ -43,7 +43,7 @@ const UpdateCartItemsMutation = graphql(
       }
     }
   `,
-  [CartLineFragment],
+  [cartItemCell.fragment],
 )
 
 const RemoveCartItemMutation = graphql(
@@ -67,7 +67,7 @@ const RemoveCartItemMutation = graphql(
       }
     }
   `,
-  [CartLineFragment],
+  [cartItemCell.fragment],
 )
 
 export async function updateLineQty(uid: string, quantity: number): Promise<void> {

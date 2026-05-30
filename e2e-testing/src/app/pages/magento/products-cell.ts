@@ -1,27 +1,22 @@
 /**
  * Magento products-grid cell.
  *
- * Replaces the inline `client.request(ProductsQuery, ...)` +
- * `cache: {maxAge: 12}` pattern. Storage caches per pageSize args;
- * refresh is explicit via `magentoProductsCell.with({pageSize}).
- * invalidate()` (e.g. from a "Refresh products" button) rather than
- * a TTL on the parton.
+ * Storage caches per pageSize args; refresh is explicit via
+ * `magentoProductsCell.with({pageSize}).invalidate()` (e.g. from a
+ * "Refresh products" button) rather than a TTL on the parton.
  *
- * Trade-off: data won't auto-refresh, but for a product grid where
- * prices/availability change on Magento's schedule, explicit refresh
- * triggers via the existing RefreshAllPricesButton are clearer than
- * an invisible 12s TTL.
- *
- * Built via the doc-mode `gqlCell(client, doc)` primitive (rather than
- * a query-string builder) because `ProductsResult` is exported and
- * needs the document around for the type.
+ * Built via the per-backend `magento` constructor — the raw `graphql()`
+ * call is hidden; `ProductsResult` is derived from the cell's value type.
  */
 
-import { gqlCell } from "@parton/framework"
+import { gqlCellBuilder } from "@parton/framework"
 import { client } from "../../magento-data.ts"
-import { graphql, type ResultOf } from "../../magento-graphql.ts"
+import { graphql } from "../../magento-graphql.ts"
 
-const ProductsQuery = graphql(`
+const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
+
+// id auto-derives to "magento.products" (operation name + prefix).
+export const magentoProductsCell = magento.query(`
   query Products($pageSize: Int!) {
     products(filter: {}, pageSize: $pageSize) {
       items {
@@ -45,7 +40,4 @@ const ProductsQuery = graphql(`
   }
 `)
 
-export type ProductsResult = ResultOf<typeof ProductsQuery>
-
-// id auto-derives to "magento.products" (operation name + prefix).
-export const magentoProductsCell = gqlCell(client, ProductsQuery, { prefix: "magento" })
+export type ProductsResult = NonNullable<typeof magentoProductsCell.defaultValue>

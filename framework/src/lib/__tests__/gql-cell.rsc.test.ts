@@ -76,19 +76,19 @@ describe("gqlCellBuilder — per-backend constructor", () => {
       graphql: graphql as never,
       prefix: "magento",
     })
-    const cell = make(`query CartWithItems($cartId: String!) { foo }`)
+    const cell = make.query(`query CartWithItems($cartId: String!) { foo }`)
     expect(cell.id).toBe("magento.cart-with-items")
   })
 
   it("builds un-prefixed ids when no prefix is given", () => {
     const make = gqlCellBuilder({ client: fakeClient(null), graphql: graphql as never })
-    const cell = make(`query PokemonList($limit: Int!) { foo }`)
+    const cell = make.query(`query PokemonList($limit: Int!) { foo }`)
     expect(cell.id).toBe("pokemon-list")
   })
 
   it("a built cell binds args into a partitioned BoundCell", () => {
     const make = gqlCellBuilder({ client: fakeClient(null), graphql: graphql as never })
-    const cell = make(`query PokemonHero($id: Int!) { foo }`)
+    const cell = make.query(`query PokemonHero($id: Int!) { foo }`)
     const bound = cell.with({ id: 25 } as never)
     expect(bound.__boundCell).toBe(true)
     expect(bound.cellId).toBe("pokemon-hero")

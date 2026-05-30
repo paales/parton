@@ -186,49 +186,77 @@ type SchemaLike = {
 }
 type ConfigLike = { isMaskingDisabled: boolean }
 
+/** A query's composition arg: a raw fragment document OR a `fragmentCell`
+ *  (whose `.fragment` doc is extracted) — so call sites pass the *cell*,
+ *  not the raw fragment, and never touch `graphql()` directly. */
+type FragmentInput = TadaDocumentNode<any, any, any> | FragmentCell<any, any>
+type FragDocOf<I> = I extends FragmentCell<any, infer F> ? F : I
+
+function isFragmentCellInput(x: unknown): x is FragmentCell<unknown> {
+  return typeof x === "object" && x !== null && "__cell" in x && "fragment" in x
+}
+
+/** Options for the bundle's `fragment(...)`. `key`'s `data` is `any` here
+ *  (the doc is created internally, so its `ResultOf` can't be referenced
+ *  at the parameter position); the cell's *value* type is still inferred.
+ *  Use `fragmentCell(graphql(...), {key})` if you want a typed `key`. */
+interface BundleFragmentOpts {
+  id?: string
+  key?: (data: any) => CellArgs
+  initial?: unknown
+}
+
 /**
  * Per-backend cell constructor — the gqlCell analogue of the gql.tada
  * `graphql()` tag. Bind the client + tag (and an optional id `prefix`)
- * once; the returned function builds typed cells from query strings.
+ * once; the returned `{ query, fragment }` build typed cells from
+ * strings, with the raw `graphql()` call hidden at every call site.
  *
- *     // pokemon-cells.ts
- *     const pokemonQuery = gqlCellBuilder({ client, graphql })
- *     export const heroCell = pokemonQuery(`
- *       query PokemonHero($id: Int!) { pokemon_v2_pokemon(...) { id name } }
- *     `)                                            // id: "pokemon-hero"
+ *     const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
  *
- *     // magento — namespaced ids
- *     const magentoQuery = gqlCellBuilder({ client, graphql, prefix: "magento" })
- *     export const productsCell = magentoQuery(`query Products(...) {...}`)
- *                                                   // id: "magento.products"
- *
- * `.with(args)` on the returned cell is typed from the query's
- * variables. Shared fragments compose exactly as with `graphql()` —
- * pass them as the second argument.
+ *     export const cartLine = magento.fragment(
+ *       `fragment CartLine on CartItemInterface { uid quantity }`,
+ *       { key: (d) => ({ uid: d.uid }) },
+ *     )
+ *     export const cart = magento.query(
+ *       `query Cart($cartId: String!) { cart(cart_id: $cartId) { items { uid ...CartLine } } }`,
+ *       [cartLine],   // pass the CELL, not the raw fragment doc
+ *     )                // id "magento.cart"; .with({ cartId }) typed
  */
 export function gqlCellBuilder<Schema extends SchemaLike, Config extends ConfigLike>(config: {
   client: GqlClient
   graphql: GraphQLTadaAPI<Schema, Config>
   prefix?: string
 }) {
-  type Tag = GraphQLTadaAPI<Schema, Config>
-  type Fragments = NonNullable<Parameters<Tag>[1]>
-
-  // Return type is INFERRED (not annotated) so gql.tada re-runs its
-  // generic inference on the literal query string — see the scratch
-  // proof in the design conversation. Annotating it would erase the
+  // Return types are INFERRED (not annotated) so gql.tada re-runs its
+  // generic inference on the literal string — annotating would erase the
   // per-call document type.
-  return function query<const In extends string, const F extends Fragments>(
+  function query<const In extends string, const Items extends readonly FragmentInput[]>(
     input: In,
-    fragments?: F,
-    opts?: GqlCellOpts<ResultOf<ReturnType<Tag>>>,
+    items?: Items,
+    opts?: { id?: string },
   ) {
-    const doc = config.graphql(input, fragments)
+    // Extract each item's fragment document (cells → `.fragment`, raw
+    // docs → themselves) for gql.tada composition.
+    const frags = (items ?? []).map((i) => (isFragmentCellInput(i) ? i.fragment : i)) as {
+      [K in keyof Items]: FragDocOf<Items[K]>
+    }
+    const doc = config.graphql(input, frags)
     return gqlCell(config.client, doc, { id: opts?.id, prefix: config.prefix }) as GqlCell<
       ResultOf<typeof doc>,
       VariablesOf<typeof doc>
     >
   }
+
+  function fragment<const In extends string>(source: In, opts?: BundleFragmentOpts) {
+    const doc = config.graphql(source)
+    return fragmentCell(
+      doc,
+      opts as FragmentCellOpts<ResultOf<typeof doc>, ResultOf<typeof doc>>,
+    )
+  }
+
+  return { query, fragment }
 }
 
 // ─── fragmentCell ─────────────────────────────────────────────────────
@@ -241,9 +269,14 @@ export function gqlCellBuilder<Schema extends SchemaLike, Config extends ConfigL
  * id (kebab of the fragment name), and lets the framework match the
  * fragment's spreads in queries for auto-hydration.
  */
-export interface FragmentCell<V> extends Cell<V | null> {
-  /** The fragment document this cell is typed by. */
-  readonly fragment: TadaDocumentNode<any, any, any>
+export interface FragmentCell<
+  V,
+  F extends TadaDocumentNode<any, any, any> = TadaDocumentNode<any, any, any>,
+> extends Cell<V | null> {
+  /** The fragment document this cell is typed by. Carries the precise
+   *  doc type so a query built with `q.query(str, [cell])` can extract +
+   *  compose it (the raw `graphql()` call stays hidden at the call site). */
+  readonly fragment: F
 }
 
 // The cell value is the fragment's UNMASKED result (`ResultOf<F>`), not
@@ -290,7 +323,7 @@ export interface FragmentCellOpts<R, V> {
 export function fragmentCell<F extends TadaDocumentNode<any, any, any>, V = ResultOf<F>>(
   doc: F,
   opts?: FragmentCellOpts<ResultOf<F>, V>,
-): FragmentCell<V> {
+): FragmentCell<V, F> {
   const fragName = fragmentNameOf(doc)
   if (!fragName) {
     throw new Error(
@@ -329,7 +362,7 @@ export function fragmentCell<F extends TadaDocumentNode<any, any, any>, V = Resu
   const handle = buildEphemeralCell<V | null>(id, opts?.initial ?? null, undefined, keyOf)
   Object.assign(handle, { fragment: doc })
   registerFragmentCell(fragName, handle as unknown as FragmentCell<unknown>)
-  return handle as unknown as FragmentCell<V>
+  return handle as unknown as FragmentCell<V, F>
 }
 
 // ─── fragment registry + auto-hydration ───────────────────────────────

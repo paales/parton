@@ -1,67 +1,60 @@
 /**
- * Cart cells — both built on the new cell surface:
+ * Cart cells — both built via the per-backend `magento` constructor, with
+ * the raw `graphql()` call hidden at every site:
  *
- *   cartCell      — gqlCell from the `magentoQuery` builder. Loaded per
- *                   `.with({ cartId })` (input params flow through `.with`,
- *                   like the pokemon cells); its loader auto-hydrates the
- *                   per-line cells from the `...CartLine` spread. Stores
- *                   the RAW query result — the view derives its aggregate
- *                   (uid list + totals) in `cart-page.tsx`.
+ *   cartItemCell — `magento.fragment(...)`. Typed by + keyed off the
+ *                  `CartLine` fragment; value type inferred. Hydrated by
+ *                  the cart query's `...CartLine` spread (auto-hydration)
+ *                  and written per-partition by `cartItemCell.set(line)`
+ *                  (keyed by uid). Magento's CartItemInterface has no
+ *                  `id`, so `key` reads `uid`.
  *
- *   cartItemCell  — fragmentCell typed by + keyed off `CartLineFragment`.
- *                   Populated by auto-hydration and value-keyed
- *                   `cartItemCell.set(line)`. Keyed by `uid` — Magento's
- *                   CartItem has no `id`.
+ *   cartCell     — `magento.query(..., [cartItemCell])`. Loaded per
+ *                  `.with({ cartId })`; composes `...CartLine` by passing
+ *                  the CELL (not a raw fragment doc). Stores the raw query
+ *                  result; the view derives its aggregate (cart-page.tsx).
  *
- * Neither cell touches disk (gqlCell / fragmentCell are request-scoped).
+ * Mutations still spread `...CartLine` via `cartItemCell.fragment` (the
+ * GraphQL mutations themselves migrate later).
  */
 
-import { gqlCellBuilder, fragmentCell } from "@parton/framework"
+import { gqlCellBuilder } from "@parton/framework"
 import { client } from "../../magento-data.ts"
-import { graphql, type ResultOf } from "../../magento-graphql.ts"
+import { graphql } from "../../magento-graphql.ts"
 
-const magentoQuery = gqlCellBuilder({ client, graphql, prefix: "magento" })
+const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
 
-/** The per-line shape. `@_unmask` keeps gql.tada from masking the spread
- *  (so query/mutation result items carry the fields directly, and resolve
- *  cleanly even though `CartItemInterface` is abstract). Spread into the
- *  cart query AND every cart mutation so one upstream call hydrates the
- *  line cells. */
-export const CartLineFragment = graphql(`
-  fragment CartLine on CartItemInterface @_unmask {
-    uid
-    quantity
-    product {
-      name
-      sku
-    }
-    prices {
-      row_total {
-        value
-        currency
+/** Per-line fragment cell. `@_unmask` keeps the query/mutation spread
+ *  sites readable (CartItemInterface is abstract). Value type inferred. */
+export const cartItemCell = magento.fragment(
+  `
+    fragment CartLine on CartItemInterface @_unmask {
+      uid
+      quantity
+      product {
+        name
+        sku
+      }
+      prices {
+        row_total {
+          value
+          currency
+        }
       }
     }
-  }
-`)
+  `,
+  { key: (d) => ({ uid: d.uid }) },
+)
 
-/** The line value the cell stores — inferred from the fragment. */
-export type CartLineValue = ResultOf<typeof CartLineFragment>
-
-/** Per-line fragment cell — value type + `key` param both inferred from
- *  `CartLineFragment`. Hydrated by the cart query's `...CartLine` spread
- *  (auto-hydration) and written per-partition by mutations via
- *  `cartItemCell.set(line)` (keyed by uid). */
-export const cartItemCell = fragmentCell(CartLineFragment, {
-  key: (d) => ({ uid: d.uid }),
-})
+/** The per-line value — inferred from the cell. */
+export type CartLineValue = NonNullable<typeof cartItemCell.defaultValue>
 
 /**
- * The cart query — built via the `magentoQuery` builder, partitioned by
- * `.with({ cartId })`. Its loader auto-hydrates the per-line `cartItemCell`
- * partitions from the `...CartLine` spread. id auto-derives to
- * `magento.cart`.
+ * The cart query — composes `...CartLine` by passing the cell, loaded per
+ * `.with({ cartId })`. Its loader auto-hydrates the per-line cells from
+ * the spread. id auto-derives to `magento.cart`.
  */
-export const cartCell = magentoQuery(
+export const cartCell = magento.query(
   `
     query Cart($cartId: String!) {
       cart(cart_id: $cartId) {
@@ -78,7 +71,7 @@ export const cartCell = magentoQuery(
       }
     }
   `,
-  [CartLineFragment],
+  [cartItemCell],
 )
 
 /** The raw cart query result the cell stores. The view derives its

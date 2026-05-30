@@ -11,13 +11,14 @@ Three constructors today, each backed by a different storage tier:
 | Constructor | Storage | Loader | Use case |
 |---|---|---|---|
 | `localCell({...})` | **Persistent** — disk-backed (`cms/data/cells.json`). Survives process restart. | Optional. | User preferences, editor toggles, form drafts. State you actually want to keep. |
-| `gqlCellBuilder({client, graphql})` → `q(\`query …\`)` | **Ephemeral, request-scoped** — fresh in-memory storage per request, discarded on request finish. | Always (typed GraphQL query). | Upstream-loaded entity reads — cart, product details, user data. |
-| `fragmentCell(doc, {key?})` | **Ephemeral, request-scoped** — same as gqlCell. | Never. | Identity-keyed sub-entities populated by auto-hydration (a query that spreads the fragment) or value-keyed `.set()` — cart-line is hydrated by the cart query. |
+| `gqlCellBuilder({client, graphql})` → `q.query(\`query …\`)` | **Ephemeral, request-scoped** — fresh in-memory storage per request, discarded on request finish. | Always (typed GraphQL query). | Upstream-loaded entity reads — cart, product details, user data. |
+| `q.fragment(\`fragment …\`, {key?})` | **Ephemeral, request-scoped** — same as gqlCell. | Never. | Identity-keyed sub-entities populated by auto-hydration (a query that composes the fragment) or value-keyed `.set()`. |
 
-`gqlCellBuilder` mirrors the gql.tada `graphql()` tag (bind the
-client + tag once, then build cells from query strings); `gqlCell(client,
-doc)` is the lower-level doc-mode form. Both auto-derive the wire id from
-the operation name.
+`gqlCellBuilder` mirrors the gql.tada `graphql()` tag — bind the client +
+tag once, then `q.query(\`…\`)` / `q.fragment(\`…\`)` build cells from
+strings (the raw `graphql()` call stays hidden). `gqlCell(client, doc)` is
+the lower-level doc-mode form. All auto-derive the wire id from the
+operation/fragment name.
 
 All three implement the same `Cell<T>` interface — Render code
 doesn't know which backend produced the value.
@@ -201,84 +202,78 @@ const cardName = localCell({
 | `load` | Optional async `(args) => T`. Runs on cold-start (storage miss) — result is validated, written to storage, then returned. Storage stays the source of truth thereafter. |
 | `write` | Optional `(T) => T`. Server-side canonicalisation. Runs after `validate` and before storage on every write. |
 
-## Surface — `gqlCellBuilder` / `gqlCell`
+## Surface — `gqlCellBuilder`
 
 `gqlCellBuilder` is the per-backend constructor — the gqlCell analogue
 of the `graphql()` tag. Bind the client + tag once (plus an optional id
-`prefix`), then build cells straight from query strings:
+`prefix`); it returns `{ query, fragment }`, which build cells straight
+from strings — the raw `graphql()` call is hidden at every site.
 
 ```ts
 import { gqlCellBuilder } from "@parton/framework"
 import { client } from "../data.ts"
 import { graphql } from "../pokeapi-graphql.ts"
 
-const pokemonQuery = gqlCellBuilder({ client, graphql })
+const pokemon = gqlCellBuilder({ client, graphql })
 
-export const heroCell = pokemonQuery(`
+export const heroCell = pokemon.query(`
   query PokemonHero($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) { id name }
   }
 `)                                     // wire id auto-derives → "pokemon-hero"
 
 // Namespaced ids for a second backend:
-const magentoQuery = gqlCellBuilder({ client, graphql, prefix: "magento" })
-export const productsCell = magentoQuery(`query Products($pageSize: Int!) {…}`)
+const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
+export const productsCell = magento.query(`query Products($pageSize: Int!) {…}`)
                                           // wire id → "magento.products"
 ```
 
 The **wire id auto-derives from the operation name** (kebab-cased,
 optionally `prefix`-namespaced); pass `{ id }` to override, or name the
 operation (anonymous operations throw). `.with(args)` is typed from the
-query's variables, and the result type flows to `ResolvedCell<T>`. Shared
-fragments compose exactly as with `graphql()` — pass them as the second
-argument: `pokemonQuery(\`query …{ …Frag }\`, [Frag])`.
+query's variables, and the result type flows to `ResolvedCell<T>`.
 
 When you already hold a typed document (e.g. to also export its
 `ResultOf` type), use the doc-mode primitive `gqlCell(client, doc, {id?,
 prefix?})` — same auto-id + typed handle.
 
-Cold-start runs the query (auto-hydrating any fragment-cell children — see
-below); subsequent reads return from storage. Mutations write the cell
-explicitly:
+## Surface — `q.fragment`
+
+`q.fragment(source, { key })` builds a fragment cell from a fragment
+string (the `graphql()` call is hidden). It's typed by — and **keyed
+off** — the fragment: the value type is inferred, the wire id derives
+from the fragment name, and the framework matches the fragment's spreads
+in queries for **auto-hydration**.
 
 ```ts
-"use server"
-async function updateLineQty(uid: string, qty: number) {
-  const r = await client.request(UpdateCartItemMutation, { uid, qty })
-  await cartItemCell.set(r.updateCartItems.cart.items.find((i) => i.uid === uid))
-}
+const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
+
+export const cartItemCell = magento.fragment(
+  `fragment CartLine on CartItemInterface { uid quantity product { sku } }`,
+  { key: (d) => ({ uid: d.uid }) },   // CartItemInterface has no `id`
+)                                      // wire id → "magento.cart-line"
 ```
 
-## Surface — `fragmentCell`
-
-A `fragmentCell` is typed by — and **keyed off** — a GraphQL fragment.
-The document is load-bearing three ways: it carries the value type,
-derives the wire id (kebab of the fragment name), and lets the framework
-match the fragment's spreads in queries for **auto-hydration**.
+A **query composes a fragment by passing its cell** — never the raw doc:
 
 ```ts
-import { fragmentCell } from "@parton/framework"
-
-const CartLineFragment = graphql(`
-  fragment CartLine on CartItemInterface { uid quantity product { sku } }
-`)
-
-export const cartItemCell = fragmentCell(CartLineFragment, {
-  key: (d) => ({ uid: d.uid }),   // CartItem has no `id`
-})                                 // wire id → "cart-line"
+export const cartCell = magento.query(
+  `query Cart($cartId: String!) { cart(cart_id: $cartId) { items { uid ...CartLine } … } }`,
+  [cartItemCell],   // the CELL; q.query extracts its .fragment for composition
+)
 ```
 
 | Option | Notes |
 |---|---|
-| `key` | Identity extractor `(data) => CellArgs`. **Defaults to `(d) => ({ id: d.id })`** when the fragment selects `id`; the cell throws at construction if no `id` is selected and no `key` is given. The same key drives `.with(...)` placement AND value-keyed `.set(value)`. |
+| `key` | Identity extractor `(data) => CellArgs`. **Defaults to `(d) => ({ id: d.id })`** when the fragment selects `id`; the cell throws at construction if no `id` is selected and no `key` is given. The same key drives `.with(...)` placement AND value-keyed `.set(value)`. (`data` is typed via the standalone `fragmentCell(graphql(...), {key})`; `any` in the `q.fragment` string form.) |
 | `id` | Override the auto-derived id. |
 | `initial` | Value before any hydration (default `null`). |
 
 Three ways a fragment cell gets populated:
 
-1. **Auto-hydration** — when a `gqlCell` query (or a custom loader using
-   `runQuery`) spreads this fragment, every matching result node is
-   hydrated into its keyed partition automatically. No manual loop.
+1. **Auto-hydration** — when a query composes this fragment's cell (or a
+   custom loader uses `runQuery`), every matching result node is hydrated
+   into its keyed partition automatically. No manual loop.
 2. **Value-keyed `.set(value)`** — `cartItemCell.set(line)` reads the
    partition straight off the value via `key`, so a mutation that
    colocates `...CartLine` writes the right line with no restated id, and
@@ -290,9 +285,8 @@ Three ways a fragment cell gets populated:
 > type condition against the schema — a wrong type (`on CartItem` instead
 > of `on CartItemInterface`) passes `tsc` but fails at runtime, and
 > collapses `ResultOf`/`FragmentOf` to `never`. Use the exact interface
-> name. For abstract (interface/union) targets, supply an explicit value
-> type and author the fragment with `@_unmask` so spread sites stay
-> readable: `fragmentCell<typeof Frag, MyValue>(Frag, { key })`.
+> name; author the fragment with `@_unmask` so its query/mutation spread
+> sites stay readable.
 
 ### Auto-hydration via `runQuery`
 

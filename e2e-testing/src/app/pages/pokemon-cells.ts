@@ -1,26 +1,22 @@
 /**
- * Pokemon cells — every PokeAPI read flows through a gqlCell built by
- * the per-backend `pokemonQuery` constructor. Storage caches per args;
- * effectively-immutable data so no TTL. Each cell's wire id auto-derives
- * from its operation name (`query PokemonHero` → `pokemon-hero`).
+ * Pokemon cells — every PokeAPI read flows through the per-backend
+ * `pokemon` constructor (`gqlCellBuilder`). The raw `graphql()` call is
+ * hidden: cells are built straight from query strings. Each cell's wire
+ * id auto-derives from its operation name (`query PokemonHero` →
+ * `pokemon-hero`). Storage caches per args; immutable data, no TTL.
  *
- * `pokemonHero / Stats / Species` — placement-bound per id from
- * the detail page.
- *
- * `pokemonList` — placement-bound per page (limit/offset). One
- * cell instance, 10 partitions for the 10 list pages.
- *
+ * `pokemonHero / Stats / Species` — placement-bound per id.
+ * `pokemonList` — placement-bound per page (limit/offset).
  * `pokemonSearch` — placement-bound per (pattern, offset, limit).
- * Each search Stage binds different offsets.
  */
 
 import { gqlCellBuilder } from "@parton/framework"
 import { client } from "../data.ts"
 import { graphql } from "../pokeapi-graphql.ts"
 
-const pokemonQuery = gqlCellBuilder({ client, graphql })
+const pokemon = gqlCellBuilder({ client, graphql })
 
-export const pokemonHeroCell = pokemonQuery(`
+export const pokemonHeroCell = pokemon.query(`
   query PokemonHero($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       id
@@ -40,7 +36,7 @@ export const pokemonHeroCell = pokemonQuery(`
   }
 `)
 
-export const pokemonStatsCell = pokemonQuery(`
+export const pokemonStatsCell = pokemon.query(`
   query PokemonStats($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       pokemon_v2_pokemonstats {
@@ -53,7 +49,7 @@ export const pokemonStatsCell = pokemonQuery(`
   }
 `)
 
-export const pokemonSpeciesCell = pokemonQuery(`
+export const pokemonSpeciesCell = pokemon.query(`
   query PokemonSpecies($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       pokemon_v2_pokemonspecy {
@@ -76,6 +72,9 @@ export const pokemonSpeciesCell = pokemonQuery(`
 
 // ─── List + search cells (shared with pokemon.tsx) ─────────────────────
 
+// A composition-only fragment (read via `readFragment` in pokemon.tsx),
+// not an entity cell — so it stays a plain `graphql()` doc and is passed
+// to the queries that spread it.
 export const PokemonListFields = graphql(`
   fragment PokemonListFields on pokemon_v2_pokemon {
     id
@@ -91,7 +90,7 @@ export const PokemonListFields = graphql(`
   }
 `)
 
-export const pokemonListCell = pokemonQuery(
+export const pokemonListCell = pokemon.query(
   `
     query PokemonList($limit: Int!, $offset: Int!) {
       pokemon_v2_pokemon(limit: $limit, offset: $offset, order_by: { id: asc }) {
@@ -102,7 +101,7 @@ export const pokemonListCell = pokemonQuery(
   [PokemonListFields],
 )
 
-export const pokemonSearchCell = pokemonQuery(
+export const pokemonSearchCell = pokemon.query(
   `
     query PokemonSearch($pattern: String!, $offset: Int!, $limit: Int!) {
       pokemon_v2_pokemon(

@@ -4,7 +4,7 @@ import { client } from "../../magento-data.ts"
 import { graphql } from "../../magento-graphql.ts"
 import { hydrateFragmentsFromResult, readCookie, setCookie } from "@parton/framework"
 import { cartBadgeCell } from "./cart-badge-cell.ts"
-import { cartCell, CartLineFragment } from "./cart-cells.ts"
+import { cartCell, cartItemCell } from "./cart-cells.ts"
 
 const CreateEmptyCart = graphql(`
   mutation CreateEmptyCart {
@@ -44,7 +44,7 @@ const AddToCart = graphql(
       }
     }
   `,
-  [CartLineFragment],
+  [cartItemCell.fragment],
 )
 
 export async function getOrCreateCart(): Promise<string> {
