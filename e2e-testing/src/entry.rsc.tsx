@@ -24,6 +24,7 @@ import {
 } from "@parton/framework/lib/fp-trailer.ts"
 import { driveSegmentedResponse } from "@parton/framework/lib/segmented-response.ts"
 import { runInvalidationTransaction } from "@parton/framework/runtime/invalidation-registry.ts"
+import { reportServerRenderError } from "@parton/framework/runtime/errors.ts"
 
 export type RscPayload = {
   root: React.ReactNode
@@ -38,7 +39,7 @@ export default { fetch: handler }
 const remoteHandler = createRemoteHandler({
   name: "e2e-testing",
   renderToFlightStream: (element) =>
-    renderToReadableStream(element, { onError: silenceClientDisconnect }),
+    renderToReadableStream(element, { onError: onRscRenderError }),
 })
 
 async function handler(request: Request): Promise<Response> {
@@ -170,7 +171,7 @@ async function handleRequest(
   const renderOnce = (): ReadableStream<Uint8Array> => {
     const stream = renderToReadableStream<RscPayload>(buildRscPayload(), {
       temporaryReferences,
-      onError: silenceClientDisconnect,
+      onError: onRscRenderError,
     })
     // Action POSTs skip the trailer — Flight stops reading once the
     // root row resolves on the action-result path, and a splitter
@@ -233,7 +234,7 @@ async function handleRequest(
   )
   const ssrRscStream = renderToReadableStream<RscPayload>(buildRscPayload(), {
     temporaryReferences,
-    onError: silenceClientDisconnect,
+    onError: onRscRenderError,
   })
   const ssrResult = await ssrEntryModule.renderHTML(
     wrapStreamWithCommitOnly(ssrRscStream, commit),
@@ -259,7 +260,7 @@ async function handleRequest(
     }
     const notFoundStream = renderToReadableStream<RscPayload>(notFoundPayload, {
       temporaryReferences: createTemporaryReferenceSet(),
-      onError: silenceClientDisconnect,
+      onError: onRscRenderError,
     })
     const notFoundSsr = await ssrEntryModule.renderHTML(notFoundStream, {
       formState,
@@ -277,19 +278,12 @@ async function handleRequest(
   })
 }
 
-function silenceClientDisconnect(error: unknown): string | undefined {
-  if (error instanceof Error) {
-    if (
-      error.name === "AbortError" ||
-      error.name === "NotFoundError" ||
-      error.name === "RedirectError" ||
-      error.message === "The render was aborted by the server without a reason."
-    ) {
-      return undefined
-    }
-  }
-  console.error(error)
-  return undefined
+// Production strips the message off a render error and ships only a
+// digest to the client. `reportServerRenderError` mints that digest,
+// logs it next to the real stack on the server, and returns it for
+// React to serialize — so a client digest traces back to a server log.
+function onRscRenderError(error: unknown): string | undefined {
+  return reportServerRenderError("rsc", error)
 }
 
 if (import.meta.hot) {

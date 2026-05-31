@@ -3,6 +3,7 @@ import React from "react"
 import type { ReactFormState } from "react-dom/client"
 import { renderToReadableStream } from "react-dom/server.edge"
 import { injectRSCPayload } from "rsc-html-stream/server"
+import { reportServerRenderError } from "@parton/framework/runtime/errors.ts"
 import type { RscPayload } from "./entry.rsc"
 
 export async function renderHTML(
@@ -30,7 +31,7 @@ export async function renderHTML(
       bootstrapScriptContent: options?.debugNojs ? undefined : bootstrapScriptContent,
       nonce: options?.nonce,
       formState: options?.formState,
-      onError: silenceClientDisconnect,
+      onError: onSsrRenderError,
     })
   } catch {
     status = 500
@@ -43,7 +44,7 @@ export async function renderHTML(
       {
         bootstrapScriptContent: `self.__NO_HYDRATE=1;${options?.debugNojs ? "" : bootstrapScriptContent}`,
         nonce: options?.nonce,
-        onError: silenceClientDisconnect,
+        onError: onSsrRenderError,
       },
     )
   }
@@ -58,23 +59,14 @@ export async function renderHTML(
   return { stream: responseStream, status }
 }
 
-// Mirrors entry.rsc.tsx — swallow client-disconnect noise and framework
-// sentinels. srvx cancels the reader with no argument on disconnect; the
-// upstream signal aborts surface as AbortError. `notFound()` / `redirect()`
-// also throw through here when surfaced via deep-async Flight chunks, but
-// the framework-control channel already routed the response, so the stack
-// trace is just noise.
-function silenceClientDisconnect(error: unknown): string | undefined {
-  if (error instanceof Error) {
-    if (
-      error.name === "AbortError" ||
-      error.name === "NotFoundError" ||
-      error.name === "RedirectError" ||
-      error.message === "The render was aborted by the server without a reason."
-    ) {
-      return undefined
-    }
-  }
-  console.error(error)
-  return undefined
+// Mirrors entry.rsc.tsx. Production strips the message off an SSR render
+// error and ships only a digest to the client; `reportServerRenderError`
+// mints that digest, logs it with the real stack server-side, and
+// returns it for React to serialize — so the client digest traces back
+// to a server log line. Expected signals return undefined (no log, no
+// digest): srvx cancels the reader on disconnect (AbortError), and
+// `notFound()` / `redirect()` route via the framework-control channel,
+// so their stacks are just noise here.
+function onSsrRenderError(error: unknown): string | undefined {
+  return reportServerRenderError("ssr", error)
 }
