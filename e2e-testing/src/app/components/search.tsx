@@ -102,7 +102,23 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
 
 /**
  * Dialog wrapper for the search overlay. Uses the native <dialog>
- * element with showModal() for focus trap + backdrop + Escape.
+ * element.
+ *
+ * The `open` attribute is rendered into the SSR markup so the overlay
+ * is visible from the first paint — `showModal()` only runs in a client
+ * effect, so a `showModal`-only dialog would stay `display:none` until
+ * hydration and the content would appear to "pop in". On hydration the
+ * effect upgrades the already-open dialog to modal (backdrop + Escape +
+ * top layer). `showModal()` throws on an already-`open` dialog, so the
+ * upgrade closes first, then re-opens modally.
+ *
+ * The close-navigation is driven by `onCancel` (Escape / dismiss) and a
+ * backdrop click — NOT `onClose`. `close` fires on every `.close()`,
+ * including the programmatic upgrade close below; routing the
+ * navigation through it would fire a spurious "remove ?search" nav on
+ * hydration, which aborts the in-flight render and tears the page down.
+ * `cancel` fires only on user dismissal, so the programmatic upgrade
+ * stays silent.
  */
 export function SearchDialog({ open, children }: { open: boolean; children: ReactNode }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -112,14 +128,20 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
   useEffect(() => {
     const dialog = dialogRef.current
     if (!dialog) return
-    if (open && !dialog.open) {
-      dialog.showModal()
-    } else if (!open && dialog.open) {
+    if (open) {
+      // Upgrade to a modal dialog. If it's already open (SSR rendered
+      // the `open` attribute, or a prior effect opened it non-modally),
+      // close first — `showModal()` throws InvalidStateError on an
+      // open dialog. This `.close()` is silent: the close-navigation
+      // hangs off `onCancel`, not `onClose`.
+      if (dialog.open && !dialog.matches(":modal")) dialog.close()
+      if (!dialog.open) dialog.showModal()
+    } else if (dialog.open) {
       dialog.close()
     }
   }, [open])
 
-  function handleClose() {
+  function requestClose() {
     navigate(
       (url) => {
         url.searchParams.delete("search")
@@ -136,9 +158,15 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
   return (
     <dialog
       ref={dialogRef}
-      onClose={handleClose}
+      open={open}
+      onCancel={(e) => {
+        // Escape: keep the dialog in the DOM (React owns open/close via
+        // the `open` prop) and run the close-navigation instead.
+        e.preventDefault()
+        requestClose()
+      }}
       onClick={(e) => {
-        if (e.target === dialogRef.current) handleClose()
+        if (e.target === dialogRef.current) requestClose()
       }}
       className="top-[15vh] max-h-[80vh] w-[calc(100vw-2em)] max-w-[720px] justify-self-center overflow-auto rounded-xl border bg-card p-5 text-card-foreground backdrop:bg-black/60"
     >
