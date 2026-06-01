@@ -49,11 +49,13 @@ const Intro = parton(
   },
 )
 
-// `flavor` flows from the wrapper's `vary` as a JSX call-site prop.
-// On a partial-refetch (`?partials=slow`) the wrapper is bypassed —
-// `<CacheControls>`'s Toggle button explicitly forwards the new
-// flavor via `nav.navigate(..., { props: { slow: { flavor } } })`,
-// which the server splices in on top of the snapshot-replayed props.
+// `Slow` self-sources `flavor` from the URL via its own `vary`, so a
+// targeted `#slow` refetch (`?partials=slow`) re-derives it against the
+// current request — no parent-passed prop, no refetch-time override.
+// The cache keys on the spec's fingerprint, which folds in `vary`, so
+// each flavor is a distinct cache entry. (Contrast `Intro`, which takes
+// `flavor` as a plain wrapper prop — fine for a child that only ever
+// re-renders with its parent, never on its own refetch.)
 const Slow = parton(
   async function CacheDemoSlowRender({ flavor }: { flavor: string } & RenderArgs) {
     const slowRenderCount = bumpSlowRender()
@@ -78,6 +80,7 @@ const Slow = parton(
   {
     selector: "#slow",
     cache: { maxAge: 60 },
+    vary: ({ search: { flavor = "vanilla" } }) => ({ flavor }),
     fallback: <div data-testid="slow-fallback">Loading slow…</div>,
   },
 )
@@ -119,7 +122,7 @@ export const CacheDemoPage = parton(
     return (
       <>
         <Intro parent={parent} flavor={flavor} />
-        <Slow parent={parent} flavor={flavor} />
+        <Slow parent={parent} />
         <Clock parent={parent} />
         <Footer parent={parent} />
       </>

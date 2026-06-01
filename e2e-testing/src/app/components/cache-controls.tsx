@@ -45,15 +45,12 @@ export function CacheControls() {
           const current = url.searchParams.get("flavor") ?? "vanilla"
           const next = current === "vanilla" ? "chocolate" : "vanilla"
           url.searchParams.set("flavor", next)
-          // Targeted refetch of `#slow` with the new flavor sent
-          // alongside as a JSX-style prop. The wrapper isn't
-          // re-evaluated in cache mode, so partial-refetch needs
-          // the prop wired explicitly — same mechanism
-          // `<WhenStored>` uses.
+          // Push the new `?flavor=` and refetch just `#slow`. Slow reads
+          // `flavor` from the URL via its own `vary`, so the refetch
+          // re-derives it against the updated URL — no prop override.
           void navigate(url.toString(), {
             history: "push",
             selector: "#slow",
-            props: { slow: { flavor: next } },
           })
         }}
         data-testid="toggle-flavor"

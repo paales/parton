@@ -1,14 +1,14 @@
 import { expect, request, test } from "./fixtures"
 
 /**
- * End-to-end verification of auto-tracked cache keys.
+ * End-to-end verification of cache keying off the spec's vary.
  *
- * The cache-demo `SlowContent` calls `getSearchParam("flavor")`. That
- * accessor participates in the `<Partial cache>`'s access manifest,
- * so different flavor values should produce different cache entries
- * without the Partial declaring a `vary` object. Same flavor twice ⇒
- * cache hit (renderCount unchanged); different flavor ⇒ miss (render
- * count increments).
+ * The cache-demo `Slow` declares `vary: ({search:{flavor}}) => ({flavor})`.
+ * The `<Cache>` wrapper keys on the spec's fingerprint, which folds in
+ * `vary`, so different flavor values produce different cache entries
+ * with no hand-written cache key. Same flavor twice ⇒ cache hit
+ * (renderCount unchanged); different flavor ⇒ miss (render count
+ * increments).
  */
 test.beforeEach(async ({ baseURL }) => {
   const ctx = await request.newContext()
