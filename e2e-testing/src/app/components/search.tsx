@@ -23,13 +23,17 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   const frameEntryUrl = frameNav.currentEntry?.url
   const frameOpen = frameEntryUrl ? new URL(frameEntryUrl).searchParams.has("search") : false
 
+  // Open/close refetch BOTH the search-page region AND the header: the
+  // header's `SearchToggle` flips on `?search`, so excluding it left the
+  // toggle a step behind (overlay open but button still says "Search",
+  // or closed but still "Close"). `#header` is the HeaderPartial.
   function openUrl() {
     pageNavigate(
       (url) => {
         url.searchParams.set("search", "1")
         return url
       },
-      { history: "push", selector: "#search-page" },
+      { history: "push", selector: ["#search-page", "#header"] },
     )
   }
 
@@ -40,7 +44,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
         url.searchParams.delete("q")
         return url
       },
-      { history: "push", selector: "#search-page" },
+      { history: "push", selector: ["#search-page", "#header"] },
     )
   }
 
@@ -150,7 +154,10 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
       },
       {
         history: "push",
-        selector: nav.name === null ? "#search-page" : undefined,
+        // Page scope: refetch the search region AND the header so the
+        // toggle flips back to "Search" (see SearchToggle). Frame scope:
+        // a frame nav refetches the whole frame subtree, no selector.
+        selector: nav.name === null ? ["#search-page", "#header"] : undefined,
       },
     )
   }
@@ -178,14 +185,12 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
 /**
  * Search input with live partial refetch — scope-agnostic.
  *
- * Fires `navigate({selector})` on every keystroke. The framework's
- * per-selector in-flight queue tracks all outstanding fires for the
- * ".search-results" key — when a newer fire's `streaming` milestone
- * lands (first segment back, new rows about to paint), the queue
- * aborts every older fire. Until that moment the older fetches keep
- * filling their Suspense boundaries, so the user sees the previous
- * query's results gradually being replaced rather than vanishing
- * mid-type.
+ * Fires `navigate({selector})` on every keystroke. Each keystroke is
+ * an independent refetch of the ".search-results" section; superseded
+ * fires are NOT aborted — they drain and commit harmlessly, and
+ * React's last render wins, so the section converges on the latest
+ * query. (Aborting a superseded fire would tear its in-flight Flight
+ * document mid-decode and crash the page through the error boundary.)
  *
  * `progress.committed && !progress.streaming` is the spinner predicate:
  * "asked, no rows back yet" — it clears the moment the first row
@@ -211,9 +216,9 @@ export function SearchInput({ query }: { query: string }) {
         selector: ".search-results",
       },
     )
-    // Supersede via abort is the lifecycle, not an error. Swallow
-    // AbortError here so the bubbler doesn't see it and consumers
-    // of `.finished` don't have to wrap.
+    // Superseded keystroke fires aren't aborted, so this normally just
+    // resolves. Keep the AbortError guard anyway: an AbortError is a
+    // lifecycle signal, not an error to surface to the bubbler.
     milestones.finished.catch((err) => {
       if (err instanceof Error && err.name === "AbortError") return
       throw err

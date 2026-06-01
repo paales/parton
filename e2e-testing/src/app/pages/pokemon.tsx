@@ -26,42 +26,13 @@ import { PartialControls } from "../components/partial-controls.tsx"
 import { SearchToggle, SearchInput, SearchDialog } from "../components/search.tsx"
 import { pokemonCardCell, pokemonListCell, pokemonSearchCell } from "./pokemon-cells.ts"
 
-type SpriteJson = {
-  front_default?: string | null
-  other?: { "official-artwork"?: { front_default?: string | null } | null } | null
-} | null
-
 export function extractSprite(sprites: unknown): string | null {
-  const s = sprites as SpriteJson
+  const s = sprites as {
+    front_default?: string | null
+    other?: { "official-artwork"?: { front_default?: string | null } | null } | null
+  } | null
   return s?.other?.["official-artwork"]?.front_default ?? s?.front_default ?? null
 }
-
-const TYPE_COLORS: Record<string, string> = {
-  grass: "bg-emerald-900/60 text-emerald-200",
-  fire: "bg-red-900/60 text-red-200",
-  water: "bg-blue-900/60 text-blue-200",
-  electric: "bg-amber-900/60 text-amber-100",
-  normal: "bg-slate-800 text-slate-200",
-  poison: "bg-purple-900/60 text-purple-200",
-  bug: "bg-lime-900/60 text-lime-200",
-  flying: "bg-indigo-900/60 text-indigo-200",
-}
-
-function TypeBadge({ type, className }: { type: string; className?: string }) {
-  const color = TYPE_COLORS[type] ?? "bg-slate-800 text-slate-200"
-  return (
-    <Badge
-      variant="secondary"
-      className={cn("rounded-full px-2.5 py-0.5 text-[0.7rem] font-semibold", color, className)}
-    >
-      {type}
-    </Badge>
-  )
-}
-
-const POKEMON_GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"
-
-// ─── Header ─────────────────────────────────────────────────────────────
 
 export const HeaderPartial = parton(
   function HeaderRender({
@@ -118,7 +89,24 @@ const PokemonCard = parton(function PokemonCardRender({
       </h2>
       <div className="mt-1 flex flex-wrap gap-1">
         {types.map((t) => (
-          <TypeBadge key={t} type={t || "default"} />
+          <Badge
+            variant="secondary"
+            className={cn(
+              "rounded-full px-2.5 py-0.5 text-[0.7rem] font-semibold",
+              {
+                grass: "bg-emerald-900/60 text-emerald-200",
+                fire: "bg-red-900/60 text-red-200",
+                water: "bg-blue-900/60 text-blue-200",
+                electric: "bg-amber-900/60 text-amber-100",
+                normal: "bg-slate-800 text-slate-200",
+                poison: "bg-purple-900/60 text-purple-200",
+                bug: "bg-lime-900/60 text-lime-200",
+                flying: "bg-indigo-900/60 text-indigo-200",
+              }[t] ?? "bg-slate-800 text-slate-200",
+            )}
+          >
+            {t}
+          </Badge>
         ))}
       </div>
     </a>
@@ -139,7 +127,7 @@ function PokemonCardGrid({
 }) {
   if (items.length === 0) return null
   const grid = (
-    <div className={POKEMON_GRID}>
+    <div className={"grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"}>
       {items.map((item) => (
         <PokemonCard key={String(item.args.id)} parent={parent} item={item} compact={compact} />
       ))}
@@ -152,17 +140,34 @@ function makeSearchArea(scope: "page" | "frame") {
   const Stage1 = parton(
     function Stage1Render({
       results,
+      q,
       parent,
-    }: { results: ResolvedCell<CellValue<typeof pokemonSearchCell>> } & RenderArgs) {
+    }: { results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string } & RenderArgs) {
       const list = results.value?.pokemon_v2_pokemon ?? []
+      // `data-q` records the query this committed tree was rendered
+      // against; `data-count` the row count. A test reads them to prove
+      // the committed stage matches the latest keystroke (a stale fire
+      // clobbering a fresh one shows up as a `data-q` mismatch).
       if (list.length === 0) {
-        return <p className="mt-4 text-sm text-muted-foreground">Start typing to search...</p>
+        // Empty box → prompt; a typed query that matched nothing → "No
+        // results" (an empty list with a non-empty `q` is a real
+        // zero-match, not the initial state).
+        return (
+          <p
+            data-testid="stage-1"
+            data-q={q}
+            data-count={0}
+            className="mt-4 text-sm text-muted-foreground"
+          >
+            {q ? "No results" : "Start typing to search..."}
+          </p>
+        )
       }
       return (
-        <>
+        <div data-testid="stage-1" data-q={q} data-count={list.length}>
           <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant</h3>
           <PokemonCardGrid items={list} parent={parent} compact testId="stage-1-content" />
-        </>
+        </div>
       )
     },
     { selector: `#${scope}-stage-1`, cache: {} },
@@ -180,7 +185,7 @@ function makeSearchArea(scope: "page" | "frame") {
       await delay(1000)
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
-        <div>
+        <div data-testid="stage-2" data-q={q} data-count={list.length}>
           <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay</h3>
           <PokemonCardGrid items={list} parent={parent} compact testId="stage-2-content" />
         </div>
@@ -207,7 +212,7 @@ function makeSearchArea(scope: "page" | "frame") {
       await delay(2000)
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
-        <div>
+        <div data-testid="stage-3" data-q={q} data-count={list.length}>
           <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay</h3>
           <PokemonCardGrid items={list} parent={parent} compact testId="stage-3-content" />
         </div>
@@ -233,9 +238,11 @@ function makeSearchArea(scope: "page" | "frame") {
     const pattern = `%${q}%`
     return (
       <SearchDialog open>
+        <div data-testid="search-body" data-search-q={q} hidden />
         <SearchInput query={q} />
         <Stage1
           parent={parent}
+          q={q}
           results={pokemonSearchCell.with({ pattern, offset: 0, limit: 6 })}
         />
         <Stage2
