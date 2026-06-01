@@ -17,6 +17,7 @@ import {
   type BoundCell,
   type CellValue,
   type PartialCtx,
+  type PartonProps,
 } from "@parton/framework"
 import { Frame } from "@parton/framework/lib/frame.tsx"
 import { Badge } from "@parton/copies/components/ui/badge"
@@ -137,6 +138,31 @@ function PokemonCardGrid({
 }
 
 function makeSearchArea(scope: "page" | "frame") {
+  // The three stages deliberately demonstrate the THREE ways a parton
+  // can receive its query-dependent data — and that none of them grows
+  // `?cached=` unbounded (the client commit prunes both client maps to
+  // the live/parked tree on every refetch, so superseded entries the
+  // client can no longer restore stop being advertised):
+  //
+  //   Stage 1 — CALL-SITE PROPS. The wrapper passes `results`/`q` as
+  //     JSX props. Props hash into the effective React id
+  //     (`*-stage-1:<hash>`), so each query is a fresh instance id; the
+  //     prior id unmounts and is pruned. (Per-query remount — fine for
+  //     ephemeral results.)
+  //   Stage 2 — vary + cell via SCHEMA. `vary` reads `q` from request
+  //     scope; `schema` binds the cell. Stable id; `q` moves the
+  //     fingerprint within one identity (fp-cap bounds it).
+  //   Stage 3 — MATCH on the query. `match` names `?q=` so each query is
+  //     a distinct matchKey of a stable id. `keepalive: false` so a
+  //     superseded query's variant is NOT parked (an ephemeral search
+  //     result isn't worth restoring) — it leaves the tree and is
+  //     pruned, keeping matchKeys bounded.
+  const offsets = { 1: 0, 2: 6, 3: 12 } as const
+  const limits = { 1: 6, 2: 6, 3: 8 } as const
+  const stageCell = (n: 1 | 2 | 3, q: string) =>
+    pokemonSearchCell.with({ pattern: `%${q}%`, offset: offsets[n], limit: limits[n] })
+
+  // Stage 1 — call-site props.
   const Stage1 = parton(
     function Stage1Render({
       results,
@@ -165,7 +191,7 @@ function makeSearchArea(scope: "page" | "frame") {
       }
       return (
         <div data-testid="stage-1" data-q={q} data-count={list.length}>
-          <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant</h3>
+          <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant (props)</h3>
           <PokemonCardGrid items={list} parent={parent} compact testId="stage-1-content" />
         </div>
       )
@@ -178,7 +204,7 @@ function makeSearchArea(scope: "page" | "frame") {
       results,
       q,
       parent,
-    }: { results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string } & RenderArgs) {
+    }: PartonProps<{ results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string }>) {
       if (!q) return null
       // Artificial delay — preserves the streaming-UX demo. Real
       // loads run instantly when storage is warm.
@@ -186,7 +212,7 @@ function makeSearchArea(scope: "page" | "frame") {
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
         <div data-testid="stage-2" data-q={q} data-count={list.length}>
-          <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay</h3>
+          <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay (vary + cell)</h3>
           <PokemonCardGrid items={list} parent={parent} compact testId="stage-2-content" />
         </div>
       )
@@ -194,6 +220,8 @@ function makeSearchArea(scope: "page" | "frame") {
     {
       selector: `#${scope}-stage-2`,
       cache: {},
+      vary: ({ search: { q = "" } }) => ({ q }),
+      schema: (_f, vary) => ({ results: stageCell(2, (vary as { q: string }).q) }),
       fallback: (
         <div data-testid="stage-2-fallback" className="p-2 text-muted-foreground">
           Loading stage 2...
@@ -202,18 +230,24 @@ function makeSearchArea(scope: "page" | "frame") {
     },
   )
 
+  // Stage 3 — match on the query for VARIANT IDENTITY. `match` names
+  // `?q=` so each query is a distinct matchKey of the stable
+  // `*-stage-3` id; `keepalive: false` means a superseded query's
+  // variant leaves the tree (not parked) and is pruned, keeping
+  // matchKeys bounded. `vary` reads `q` to bind the cell + label the
+  // render (the matched param drives identity, vary drives data).
   const Stage3 = parton(
     async function Stage3Render({
       results,
       q,
       parent,
-    }: { results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string } & RenderArgs) {
+    }: PartonProps<{ results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string }>) {
       if (!q) return null
       await delay(2000)
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
         <div data-testid="stage-3" data-q={q} data-count={list.length}>
-          <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay</h3>
+          <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay (match)</h3>
           <PokemonCardGrid items={list} parent={parent} compact testId="stage-3-content" />
         </div>
       )
@@ -221,6 +255,18 @@ function makeSearchArea(scope: "page" | "frame") {
     {
       selector: `#${scope}-stage-3`,
       cache: {},
+      keepalive: false,
+      // `match` runs against the PAGE url only. At page scope, name `q`
+      // for a per-query matchKey (URLPattern search matching is
+      // positional over the whole query string, so the leading `*`
+      // tolerates `?search=…&q=…`; `q` is last so greedy `:query`
+      // captures it; absent `q` → no match → parks out). In a FRAME the
+      // query lives on the frame url, which `match` can't see, so the
+      // page-search `match` is omitted there and identity falls back to
+      // the stable id (data still flows via `vary`/`schema` below).
+      ...(scope === "page" ? { match: { search: "*q=:query" } } : {}),
+      vary: ({ search: { q = "" } }) => ({ q }),
+      schema: (_f, vary) => ({ results: stageCell(3, (vary as { q: string }).q) }),
       fallback: (
         <div data-testid="stage-3-fallback" className="p-2 text-muted-foreground">
           Loading stage 3...
@@ -235,26 +281,17 @@ function makeSearchArea(scope: "page" | "frame") {
     parent,
   }: { search: string | undefined; q: string } & RenderArgs) {
     if (search == null) return null
-    const pattern = `%${q}%`
+    // Three data-passing methods, one per stage (see definitions above):
+    //   Stage 1 — call-site props: pass `results`/`q` here.
+    //   Stage 2 — vary + cell: self-sources `q`, no query props.
+    //   Stage 3 — match: self-sources `q`, no query props.
     return (
       <SearchDialog open>
         <div data-testid="search-body" data-search-q={q} hidden />
         <SearchInput query={q} />
-        <Stage1
-          parent={parent}
-          q={q}
-          results={pokemonSearchCell.with({ pattern, offset: 0, limit: 6 })}
-        />
-        <Stage2
-          parent={parent}
-          q={q}
-          results={pokemonSearchCell.with({ pattern, offset: 6, limit: 6 })}
-        />
-        <Stage3
-          parent={parent}
-          q={q}
-          results={pokemonSearchCell.with({ pattern, offset: 12, limit: 8 })}
-        />
+        <Stage1 parent={parent} q={q} results={stageCell(1, q)} />
+        <Stage2 parent={parent} />
+        <Stage3 parent={parent} />
       </SearchDialog>
     )
   }
