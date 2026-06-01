@@ -45,10 +45,13 @@ export interface Segment {
  * piping each `seg.body` through `createFromReadableStream` and
  * awaiting `seg.trailers` for metadata.
  */
-export function splitSegments(source: ReadableStream<Uint8Array>): AsyncIterable<Segment> {
+export function splitSegments(
+  source: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncIterable<Segment> {
   return {
     [Symbol.asyncIterator]() {
-      return new SegmentIterator(source)
+      return new SegmentIterator(source, signal)
     },
   }
 }
@@ -119,9 +122,11 @@ class SegmentIterator implements AsyncIterator<Segment> {
   private sourceClosed = false
   private exhausted = false
   private currentDrive: Promise<void> | null = null
+  private signal?: AbortSignal
 
-  constructor(source: ReadableStream<Uint8Array>) {
+  constructor(source: ReadableStream<Uint8Array>, signal?: AbortSignal) {
     this.reader = source.getReader()
+    this.signal = signal
   }
 
   async next(): Promise<IteratorResult<Segment>> {
@@ -132,6 +137,23 @@ class SegmentIterator implements AsyncIterator<Segment> {
       this.currentDrive = null
     }
     if (this.exhausted) return { value: undefined, done: true }
+
+    // Cooperative abort at the SEGMENT BOUNDARY. A supersede (newer
+    // nav, heartbeat teardown on navigate) aborts the signal, but we
+    // never interrupt a segment whose body is mid-flight — that would
+    // error the response body and tear the partially-committed tree
+    // (the `BodyStreamBuffer was aborted` crash). Instead the in-flight
+    // segment above finished draining via `currentDrive`; now, before
+    // producing the NEXT segment, honor the abort and end iteration
+    // cleanly. The reader is cancelled so the server connection (e.g.
+    // an infinite heartbeat / chat segment-loop) is released.
+    if (this.signal?.aborted) {
+      try {
+        await this.reader.cancel()
+      } catch {}
+      this.exhausted = true
+      return { value: undefined, done: true }
+    }
 
     const active = new ActiveSegment()
     const segment: Segment = {

@@ -94,6 +94,21 @@ async function main() {
     )
   }
 
+  // Identity of a page URL for staleness checks — pathname + search
+  // with framework-internal refetch params stripped (`partials`,
+  // `cached`, `streaming`, `partialProps`, `__frame*`). Those describe
+  // HOW a refetch was dispatched, not WHICH page it represents, so a
+  // targeted refetch's key equals the page it targets; only real
+  // navigation (pathname / `?search` / `?q` / …) changes it. Defaults
+  // to the live `window.location`.
+  function pageUrlKey(href: string = window.location.href): string {
+    const u = new URL(href, window.location.origin)
+    for (const k of ["partials", "cached", "streaming", "partialProps", "__frame", "__frameUrl"]) {
+      u.searchParams.delete(k)
+    }
+    return u.pathname + u.search
+  }
+
   /**
    * Returns synchronously with `{streaming, finished}` promises so
    * navigation-handle callers can branch off the first-segment moment
@@ -122,6 +137,19 @@ async function main() {
     // unhandledrejection — `streaming` rejecting always implies
     // `finished` will reject too, where the caller is listening.
     streaming.catch(() => {})
+
+    // The page URL this fetch is being issued for. Every refetch
+    // produces ONE whole-root Flight payload built against the URL
+    // current at issue time; if the user navigates away before it
+    // commits (escape-closes the search overlay, types a newer query,
+    // clicks a link), that payload is stale and must NOT paint — it
+    // would clobber the newer page (e.g. re-open a closed dialog).
+    // Captured here, re-checked before each commit. Same-URL refetches
+    // (cart badge, price, heartbeat) keep committing — only a commit
+    // whose page URL is no longer current is dropped, so independent
+    // sections still update concurrently. Keyed off the URL this fetch
+    // is FOR (`overrideUrl` for a full-page nav, else the live page).
+    const issuedForPageUrl = pageUrlKey(overrideUrl)
 
     void (async () => {
       let streamingResolved = false
@@ -160,15 +188,17 @@ async function main() {
         // string matching. AbortError stays untouched — it's a normal
         // lifecycle signal, not a failure.
         //
-        // `signal` (from `NavigateEvent.signal` or per-selector
-        // supersede abort) cancels the in-flight fetch + segment-loop
-        // consumption when a newer navigation supersedes — without
-        // this, a long-lived RSC GET (e.g. the chat's segment-loop
-        // connection) keeps emitting segments and racing with the new
-        // navigation's response.
+        // NOTE: `signal` is deliberately NOT passed to `fetch`. Aborting
+        // the fetch errors `response.body` mid-read, which tears a
+        // partially-committed Flight tree and throws
+        // `BodyStreamBuffer was aborted` into the error boundary. Instead
+        // the signal goes to `splitSegments` below, which aborts
+        // cooperatively at a SEGMENT BOUNDARY — the in-flight segment
+        // finishes, then iteration stops and the reader is cancelled
+        // (releasing a long-lived RSC GET like the chat's segment loop).
         let response: Response
         try {
-          response = await fetch(renderRequest, { signal })
+          response = await fetch(renderRequest)
         } catch (err) {
           if (err instanceof Error && err.name === "AbortError") throw err
           throw new NavigationError({
@@ -194,8 +224,15 @@ async function main() {
         // Single-segment responses (no `next` marker) loop once — same
         // wire shape and behavior as the legacy fp-trailer flow.
         try {
-          for await (const segment of splitSegments(response.body)) {
+          for await (const segment of splitSegments(response.body, signal)) {
             const payload = await createFromReadableStream<RscPayload>(segment.body)
+            // Drop a stale whole-root commit: if the page URL moved on
+            // since this fetch was issued, painting its payload would
+            // clobber the newer page (re-open a closed overlay, restore
+            // a superseded query). Skip the commit AND its trailers
+            // (which would otherwise register fingerprints for the
+            // stale tree). Keep draining so the stream closes cleanly.
+            if (pageUrlKey() !== issuedForPageUrl) continue
             segment.trailers.then(applyStandardTrailers).catch(() => {})
             if (streamingMode) {
               setPayloadRaw(payload)

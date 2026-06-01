@@ -1173,18 +1173,26 @@ function enqueueRefetch(
   return { streaming, finished }
 }
 
-// ─── Per-selector in-flight queue + deferred abort ────────────────
+// ─── In-flight queue + deferred abort (frame long-polls only) ─────
 //
-// A new fire for a selector that's already in flight supersedes the
-// older one(s). To avoid yanking the previously-committed tree off
-// the screen, abort is DEFERRED: the older fire keeps streaming
-// bytes into its Suspense boundaries until the newer fire's first
-// segment lands. At that moment the newer fire calls
-// `abortPredecessors` to cancel the older fetches in one shot.
+// SCOPE: this machinery now serves ONLY frame navigation, whose
+// segment-loop fetch can be an unbounded long-poll (the chat overlay
+// streams tick updates for the lifetime of `?chat=open`). A newer
+// frame nav must cancel the older infinite stream or it streams
+// forever and races the newer commit — so here, deferred abort is
+// correct and necessary.
 //
-// Selector identity is the sorted, comma-joined label set. Multiple
-// callers with the same selector key share one stack; their fires
-// race and the newest always wins.
+// Window-scoped targeted refetches (`navigate({selector})` /
+// `reload({selector})`) do NOT use this. They are finite documents;
+// aborting one mid-decode rejects the whole Flight document and
+// crashes the page through the nearest error boundary. They drain and
+// commit harmlessly on supersede (React's last render wins), and are
+// cancelled only by the caller's own `options.signal`.
+//
+// Abort is DEFERRED: the older fire keeps streaming into its Suspense
+// boundaries until the newer fire's first segment lands, then
+// `abortPredecessors` cancels the older fetches. Selector identity is
+// the sorted, comma-joined label set.
 
 interface InFlightEntry {
   controller: AbortController
@@ -1534,7 +1542,28 @@ function resolveFrameTarget(target: NavigateTarget, frameName: string): string {
  * be read.
  */
 async function awaitCommitted(result: NavigationResult): Promise<void> {
+  // The browser's NavigationResult exposes BOTH `committed` and
+  // `finished`. When a newer `history:"replace"` navigation supersedes
+  // this one (rapid search keystrokes), the browser rejects BOTH with
+  // AbortError. If we await only `committed`, the `finished` rejection
+  // is an orphaned promise → "Uncaught (in promise) AbortError:
+  // BodyStreamBuffer was aborted" in the console. Consume `finished`
+  // with a no-op so the supersede stays silent; callers that need the
+  // finished milestone await it themselves via `awaitFinished`.
+  silenceNavResultRejections(result)
   if (result.committed) await result.committed
+}
+
+/**
+ * Attach no-op rejection handlers to a NavigationResult's `committed`
+ * and `finished` promises so a browser-driven supersede (AbortError on
+ * both) never surfaces as an unhandled rejection. The handlers don't
+ * consume the rejection for real consumers — a later `await
+ * result.committed` / `awaitFinished(result)` still observes it.
+ */
+function silenceNavResultRejections(result: NavigationResult): void {
+  result.committed?.catch(() => {})
+  result.finished?.catch(() => {})
 }
 
 /**
@@ -1841,11 +1870,6 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
         state: options?.state ?? null,
         info: makeSilentInfo("window"),
       })
-      const key = filtered ? inFlightKey(parsed.labels) : null
-      const controller = key ? new AbortController() : undefined
-      const inFlightEntry: InFlightEntry | null =
-        key && controller ? { controller } : null
-      if (key && inFlightEntry) registerInFlight(key, inFlightEntry)
 
       void (async () => {
         try {
@@ -1856,17 +1880,20 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
             m.finished.resolve(nav.currentEntry!)
             return
           }
+          // Targeted refetches are NEVER aborted on supersede. A
+          // refetch is one Flight document feeding the whole root;
+          // aborting it mid-decode rejects the entire document (not
+          // just the superseded section) and crashes the page through
+          // the nearest error boundary. Superseded fires drain and
+          // commit harmlessly — they're small once fp-skipped, and
+          // React's last render wins. `navigate` has no caller signal
+          // (unlike `reload`), so nothing cancels a window-nav fire.
           const refetch = enqueueRefetch({
             labels: parsed.labels,
             streaming: options?.streaming ?? false,
             props: options?.props,
-            signal: controller?.signal,
           })
           await refetch.streaming
-          // Newer fire's first segment landed — kill any older fires
-          // for the same selector so they stop chewing through the
-          // server's response.
-          if (key && inFlightEntry) abortPredecessors(key, inFlightEntry)
           m.streaming.resolve()
           await refetch.finished
           m.finished.resolve(nav.currentEntry!)
@@ -1874,8 +1901,6 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
           m.committed.reject(err)
           m.streaming.reject(err)
           m.finished.reject(err)
-        } finally {
-          if (key && inFlightEntry) unregisterInFlight(key, inFlightEntry)
         }
       })()
       return {
@@ -1936,39 +1961,26 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
     // command and IS supposed to do a real browser reload.
     const wantsInPlace = parsed.labels.length > 0 || options?.streaming === true
     if (wantsInPlace) {
-      const key = parsed.labels.length > 0 ? inFlightKey(parsed.labels) : null
-      const controller = new AbortController()
-      const inFlightEntry: InFlightEntry | null = key ? { controller } : null
-      if (key && inFlightEntry) registerInFlight(key, inFlightEntry)
-      // Forward the caller's abort signal to the internal controller
-      // (so unmount-on-nav-away cancels the in-flight refetch). The
-      // internal controller still drives the predecessor-abort path
-      // for newer fires of the same selector; we just bridge a
-      // second signal source.
-      if (options?.signal) {
-        if (options.signal.aborted) controller.abort()
-        else options.signal.addEventListener("abort", () => controller.abort(), { once: true })
-      }
-
       m.committed.resolve(nav.currentEntry!)
       void (async () => {
         try {
+          // Targeted refetches are NEVER aborted on supersede — see the
+          // note in `windowNavigate`. Only the caller's own
+          // `options.signal` cancels a fire; the heartbeat passes one so
+          // its long-poll connection tears down on nav-away.
           const refetch = enqueueRefetch({
             labels: parsed.labels,
             streaming: options?.streaming ?? false,
             props: options?.props,
-            signal: controller.signal,
+            signal: options?.signal,
           })
           await refetch.streaming
-          if (key && inFlightEntry) abortPredecessors(key, inFlightEntry)
           m.streaming.resolve()
           await refetch.finished
           m.finished.resolve(nav.currentEntry!)
         } catch (err) {
           m.streaming.reject(err)
           m.finished.reject(err)
-        } finally {
-          if (key && inFlightEntry) unregisterInFlight(key, inFlightEntry)
         }
       })()
       return {
