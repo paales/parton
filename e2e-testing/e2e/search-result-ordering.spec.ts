@@ -61,23 +61,23 @@ test("?cached= stays bounded across many distinct queries", async ({ page }) => 
   await input.focus()
   await page.waitForTimeout(500)
 
-  // 12 distinct queries, settling between each so the cap/prune
-  // applies. Re-acquire the input each iteration and tolerate a
-  // transient tear (the underlying result-ordering fragility — see the
-  // INVESTIGATION LOG — can briefly detach the dialog mid-burst); we
-  // only need enough successful refetches to observe the plateau.
-  const queries = "abcdefghijkl".split("").map((_, i) => "abcdefghijkl".slice(0, i + 1))
+  // Distinct queries, each FULLY SETTLED before the next (3s > the 2s
+  // slow stage) so they don't overlap. Overlapping rapid queries hit
+  // the unfixed ordering/decode crash (see the fixme cases + log); the
+  // bound accrues per DISTINCT query regardless of speed, so settled
+  // input exercises it cleanly. Each iteration tolerates a transient
+  // dialog tear and re-acquires the input.
+  const queries = ["a", "ab", "abc", "abcd", "abcde", "abcdef", "abcdefg", "abcdefgh"]
   for (const q of queries) {
     try {
-      const box = page.locator("dialog input[type=text]")
-      await box.fill(q, { timeout: 4000 })
+      await page.locator("dialog input[type=text]").fill(q, { timeout: 4000 })
     } catch {
-      // dialog torn this beat — skip; the bounded assertion still holds
-      // over the refetches that did fire.
+      // dialog torn this beat — skip; the bound still holds over the
+      // refetches that did fire.
     }
-    await page.waitForTimeout(700)
+    await page.waitForTimeout(3000)
   }
-  await page.waitForTimeout(2000)
+  await page.waitForTimeout(1000)
 
   expect(tokenCounts.length, "no search refetches were observed").toBeGreaterThan(4)
 
@@ -142,6 +142,15 @@ test("?cached= stays bounded across many distinct queries", async ({ page }) => 
 //     it broke valid fp-skips.
 //   - Seq-gating the async warm-fp trailer (REVERTED): no effect; the
 //     desync also arises on the synchronous cache-store path.
+//   - Re-running these two cases WITH the per-selector seq guard active
+//     (2nd attempt): the rapid type→backspace case crashed the page
+//     (`Target page … closed`), not just stale data-q — so a superseded
+//     fire's stream is being DECODED (and throwing) even when its commit
+//     is gated. That decode/crash path is upstream of the commit guard
+//     (`createFromReadableStream` / `splitSegments` of a superseded
+//     fire), confirming the ordering fix must also stop superseded fires
+//     from decoding, not just from committing. The bounded-cache test in
+//     this file still PASSED in that run.
 //
 // LIKELY REAL FIX (task #4): make the advertised fingerprint atomic with
 // the slot's node — store the fp WITH the node in `_currentPagePartials`
