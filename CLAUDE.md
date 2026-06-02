@@ -161,6 +161,29 @@ rule below ("latest state only, no progression"): a comment that only
 makes sense if you know what the code replaced is transient — move it
 to the commit.
 
+## Working in a worktree
+
+Prefer running a task in a fresh git worktree over editing the main
+checkout directly — it keeps the author's tree free and lets the work
+be committed and merged as a unit.
+
+When you do:
+
+1. **Remap the e2e port first.** Change the `5179` references in
+   `e2e-testing/playwright.config.ts` (the `use.baseURL`, the
+   `webServer.command` `--port`, and `webServer.url`) to a random-ish
+   free port (a `53xx`/`54xx` value). Playwright's `webServer` runs with
+   `reuseExistingServer: true`, so on the default port it silently
+   reuses a dev server the author already has open — your specs then run
+   against THEIR code, not the worktree's. A distinct port forces a
+   fresh server on your changes. This remap is worktree-local
+   scaffolding: **leave it out of your commits** (revert it before
+   committing) so master keeps the canonical `5179`.
+
+2. **When everything is done and both test tiers are green, commit and
+   merge back to master, then remove the worktree.** See the
+   done-workflow below for the commit bar.
+
 ## Workflow — after a task is done
 
 When a non-trivial task reaches a clean end state (feature landed,
