@@ -520,3 +520,116 @@ function renumberBody(bodyBytes: Uint8Array, seamId: string, allocId: () => stri
     return serializeRow({ ...row, id: remap(row.id), data: newData })
   })
 }
+
+// ─── Streaming marker splice (the universal boundary's hot path) ────────
+//
+// `spliceMarkers` above buffers — fine for a stored cache body, fatal for
+// the live response: a parton's body resolves a marker for each inner
+// parton, so buffering every body before emit serializes the whole tree
+// and kills progressive streaming. `spliceMarkerStream` instead reads the
+// root document row-by-row and, the moment a marker resolves, splices its
+// body stream in place — concurrently, recursively — so each parton's
+// Suspense streams through as its bytes arrive. This is `spliceHoles`'
+// concurrent-passthrough model generalised to markers discovered in the
+// stream rather than a known hole list.
+
+/** Read `stream` as Flight rows, invoking `handle` synchronously per row
+ *  (no await between rows, so a handler's enqueue ordering is stable). */
+async function readRows(
+  stream: ReadableStream<Uint8Array>,
+  handle: (row: FlightRow) => void,
+): Promise<void> {
+  const reader = stream.getReader()
+  let buffer = ""
+  const flush = (line: string): void => {
+    if (line.length > 0) handle(parseRow(line))
+  }
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += DECODER.decode(value, { stream: true })
+    let nl: number
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      flush(buffer.slice(0, nl))
+      buffer = buffer.slice(nl + 1)
+    }
+  }
+  if (buffer.length > 0) flush(buffer)
+}
+
+/** Emit one row, remapping its id + every ref in its data via `remap`. */
+function emitRemapped(
+  row: FlightRow,
+  remap: (id: string) => string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+): void {
+  const data = tryParse(row.data)
+  const newData = data === undefined ? row.data : JSON.stringify(remapRefs(data, remap))
+  controller.enqueue(ENCODER.encode(serializeRow({ ...row, id: remap(row.id), data: newData }) + "\n"))
+}
+
+/**
+ * Reassemble a parton tree from per-boundary body *streams*, streaming.
+ *
+ * `resolve(boundaryId)` returns a boundary's body stream (its own Flight
+ * doc rooted at `0`), or null to leave the marker inert. Reads the root
+ * doc; a normal row passes through (ids/refs remapped to the active
+ * frame); a resolvable marker is dropped and its body spliced onto the
+ * marker's seam id — recursively, since a body carries markers for its
+ * own inner partons. Body splices run concurrently with continued
+ * reading and share one controller (JS is single-threaded, so the
+ * interleaved enqueues are safe and rows may legitimately arrive in any
+ * order — Flight resolves them by id).
+ */
+export function spliceMarkerStream(
+  root: ReadableStream<Uint8Array>,
+  resolve: (boundaryId: string) => ReadableStream<Uint8Array> | null,
+): ReadableStream<Uint8Array> {
+  // Each body owns a private 0x100000-wide id range — far above any real
+  // root-doc id count, so the root's own ids (0..K) never collide.
+  let nextBlock = ID_BLOCK
+  const allocBlock = (): number => {
+    const b = nextBlock
+    nextBlock += ID_BLOCK
+    return b
+  }
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      await spliceFrame(root, (id) => id, controller, resolve, allocBlock)
+      controller.close()
+    },
+  })
+}
+
+/** Splice one Flight doc (`stream`) into `controller`, remapping every
+ *  row id + ref via `remap`, recursing at each resolvable marker. */
+async function spliceFrame(
+  stream: ReadableStream<Uint8Array>,
+  remap: (id: string) => string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  resolve: (bid: string) => ReadableStream<Uint8Array> | null,
+  allocBlock: () => number,
+): Promise<void> {
+  const childSplices: Array<Promise<void>> = []
+  await readRows(stream, (row) => {
+    const bid = markerOf(row)
+    if (bid != null) {
+      const body = resolve(bid)
+      if (body != null) {
+        // Drop the marker; splice its body onto the marker's (remapped)
+        // seam id so the parent's `$L<seam>` resolves to the body root.
+        // Other body rows renumber into a fresh private block. Kicked
+        // off here and awaited below — it streams concurrently.
+        const seam = remap(row.id)
+        const block = allocBlock()
+        const childRemap = (id: string): string =>
+          id === "0" ? seam : toHex(block + parseInt(id, 16))
+        childSplices.push(spliceFrame(body, childRemap, controller, resolve, allocBlock))
+        return
+      }
+      // Unresolved marker → leave inert (emit it, remapped).
+    }
+    emitRemapped(row, remap, controller)
+  })
+  await Promise.all(childSplices)
+}
