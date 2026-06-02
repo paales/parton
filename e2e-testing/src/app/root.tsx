@@ -32,7 +32,12 @@ import { ChatNotesPage } from "./pages/chat-notes.tsx"
 import { MagentoPage } from "./pages/magento/product-list.tsx"
 import { MagentoCartPage } from "./pages/magento/cart-page.tsx"
 import { NotFoundFallback } from "./pages/not-found-fallback.tsx"
-import { InspectBasePage, InspectDrawer1, InspectDrawer2 } from "./pages/inspect-stack.tsx"
+import {
+  InspectBasePage,
+  InspectDrawer1,
+  InspectDrawer2,
+  InspectDrawer3,
+} from "./pages/inspect-stack.tsx"
 
 export function Root() {
   try {
@@ -70,6 +75,7 @@ export function Root() {
               <InspectBasePage parent={ROOT} />
               <InspectDrawer1 parent={ROOT} />
               <InspectDrawer2 parent={ROOT} />
+              <InspectDrawer3 parent={ROOT} />
               <NotFoundFallback parent={ROOT} />
             </div>
             <EditorShell parent={ROOT} />

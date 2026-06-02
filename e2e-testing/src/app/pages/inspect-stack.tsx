@@ -17,7 +17,6 @@
  * traverseTo-or-replace logic.
  */
 
-import { ViewTransition } from "react"
 import { parton, type RenderArgs } from "@parton/framework"
 import { client } from "../data.ts"
 import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts"
@@ -431,69 +430,64 @@ const MoveDetailContent = parton(
 )
 
 export const InspectDrawer2 = parton(
-  function InspectDrawer2Render({
-    id,
-    moveId,
-    parent,
-  }: { id: string; moveId?: string } & RenderArgs) {
-    // Renders for the moves list (`/moves`) and a move's detail
-    // (`/moves/:moveId`); the body swaps between the two. Each is its
-    // own parked variant.
-    const closeUrl = `/inspect/p/${id}`
-    const title = moveId ? `Move #${moveId}` : `Moves of #${id}`
-    const description = moveId
-      ? "Drawer 2 · move detail · /inspect/p/:id/moves/:moveId"
-      : "Drawer 2 · slides from right · /inspect/p/:id/moves"
+  function InspectDrawer2Render({ id, parent }: { id: string } & RenderArgs) {
+    // Moves list — its own overlay. `match "{/*}?"` keeps it mounted
+    // while the move-detail overlay stacks on top at `/moves/:moveId`.
     return (
       <StackedDrawer
         level={2}
         direction="right"
         open
-        closeUrl={closeUrl}
-        title={title}
-        description={description}
+        closeUrl={`/inspect/p/${id}`}
+        title={`Moves of #${id}`}
+        description="Drawer 2 · slides from right · /inspect/p/:id/moves"
       >
-        <ViewTransition name="drawer-2-page">
-          {/* Two responsibilities on this wrapper:
-           *   1. `flex-1 min-h-0 overflow-hidden` so the snapshot is
-           *      bounded to the drawer body's visible height — without
-           *      it, the view-transition pseudo captures all overflow
-           *      content (full moves list at 2000+ px) and bleeds past
-           *      the drawer's bottom during the slide.
-           *   2. `bg-popover` so the snapshot is opaque. Vaul's
-           *      drawer body sets the popover bg, but the wrapper is
-           *      transparent by default; combined with the default
-           *      `mix-blend-mode: plus-lighter` on `::view-transition-old/new`,
-           *      a transparent shorter snapshot lets the taller
-           *      sibling bleed through. Solid bg blocks that. */}
-          <div
-            className="flex-1 min-h-0 overflow-hidden bg-popover"
-            data-drawer-page={moveId ? "detail" : "list"}
-          >
-            {/* Distinct scroll keys per page so the moves list and
-             * the move detail keep independent scroll positions on
-             * back/forward. The framework reads/writes the position
-             * onto the Navigation entry state. */}
-            <DrawerScrollArea scrollKey={moveId ? `drawer-2-detail-${moveId}` : "drawer-2-list"}>
-              {moveId ? (
-                <MoveDetailContent parent={parent} id={id} moveId={moveId} />
-              ) : (
-                <PokemonMovesContent parent={parent} id={id} />
-              )}
-            </DrawerScrollArea>
-          </div>
-        </ViewTransition>
-        {moveId ? (
-          <title>Inspect — Move #{moveId}</title>
-        ) : (
-          <title>Inspect — Moves of #{id}</title>
-        )}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <DrawerScrollArea scrollKey={`drawer-2-list-${id}`}>
+            <PokemonMovesContent parent={parent} id={id} />
+          </DrawerScrollArea>
+        </div>
+        <title>Inspect — Moves of #{id}</title>
       </StackedDrawer>
     )
   },
   {
     selector: "#drawer-2",
-    match: "/inspect/p/:id/moves{/:moveId}?",
+    match: "/inspect/p/:id/moves{/*}?",
+  },
+)
+
+// ─── Drawer 3 — move detail (own overlay, stacked on the list) ──────────
+
+export const InspectDrawer3 = parton(
+  function InspectDrawer3Render({
+    id,
+    moveId,
+    parent,
+  }: { id: string; moveId: string } & RenderArgs) {
+    // Move detail — its own overlay above the moves list. Closing
+    // navigates back to `/moves`, which unmatches and parks it.
+    return (
+      <StackedDrawer
+        level={3}
+        direction="right"
+        open
+        closeUrl={`/inspect/p/${id}/moves`}
+        title={`Move #${moveId}`}
+        description="Drawer 3 · move detail · /inspect/p/:id/moves/:moveId"
+      >
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <DrawerScrollArea scrollKey={`drawer-3-detail-${moveId}`}>
+            <MoveDetailContent parent={parent} id={id} moveId={moveId} />
+          </DrawerScrollArea>
+        </div>
+        <title>Inspect — Move #{moveId}</title>
+      </StackedDrawer>
+    )
+  },
+  {
+    selector: "#drawer-3",
+    match: "/inspect/p/:id/moves/:moveId",
   },
 )
 
