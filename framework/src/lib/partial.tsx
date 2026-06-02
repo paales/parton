@@ -1286,15 +1286,24 @@ function createSpecComponent<V>(
     // active ↔ parked transitions — mode flips, fiber stays.
     const keepalive = opts.keepalive !== false
     const requestState = getPartialState()
+    // ── Frame phase ──
+    // Specs inherit the frame chain from their parent (a `<Frame>`
+    // ancestor extends it). The spec itself never opens a new frame.
+    // Both `match` and `vary` resolve against this (frame-resolved)
+    // request: a framed spec routes and keys on its frame's URL, not
+    // the page's.
+    const ourFrameChain = parent.frameChain
+    const ourRequest = ourFrameChain.length > 0 ? resolveFrameRequest(ourFrameChain) : getRequest()
+
     // ── Match phase ──
-    // `match` runs against the PAGE URL — it's a page-level "should
-    // this spec render on this route" gate. The frame URL is
-    // internal state, not a page-level concern. `vary` (below) sees
-    // the frame-resolved URL when the spec is framed; `match` does
-    // not.
+    // `match` gates rendering against the (frame-resolved) request URL.
+    // For an unframed spec that's the page URL; inside a `<Frame>` it's
+    // the frame's URL — so a spec with `match: "/cart/open"` placed in a
+    // cart frame routes on the frame, consistent with how `vary` already
+    // sees the frame URL.
     let params: Record<string, string> = {}
     if (spec.matchPattern) {
-      const result = spec.matchPattern.exec(getRequest().url)
+      const result = spec.matchPattern.exec(ourRequest.url)
       if (result === null) return emitParkedKeepalive(id, keepalive, requestState)
       params = extractNamedParams(result)
     }
@@ -1304,10 +1313,10 @@ function createSpecComponent<V>(
     //     `/pokemon/1` and `/pokemon/2` get distinct keys.
     //   - A spec WITHOUT named match params walks parent.path to
     //     find the closest ancestor whose matchPattern has named
-    //     params on the current URL, and inherits that hash — so
-    //     descendants of `/pokemon/:id` (Hero, Stats, …) share the
-    //     URL-derived variant identity even though their own bodies
-    //     have no match.
+    //     params on the current (frame-resolved) URL, and inherits
+    //     that hash — so descendants of `/pokemon/:id` (Hero, Stats,
+    //     …) share the URL-derived variant identity even though their
+    //     own bodies have no match.
     //   - No match-bearing ancestor on the current URL → a constant
     //     key (`/cache-demo?flavor=A` ↔ `?flavor=B` share a slot;
     //     content updates in place via vary/fp).
@@ -1316,13 +1325,7 @@ function createSpecComponent<V>(
     // `parent.matchKey` through PartialCtx) keeps partial-refetch
     // working: the catalog lookup uses `parent.path` from the
     // reconstructed snapshot, no extra state to thread.
-    const matchKey = deriveMatchKey(spec.matchPattern, params, parent.path)
-
-    // ── Frame phase ──
-    // Specs inherit the frame chain from their parent (a `<Frame>`
-    // ancestor extends it). The spec itself never opens a new frame.
-    const ourFrameChain = parent.frameChain
-    const ourRequest = ourFrameChain.length > 0 ? resolveFrameRequest(ourFrameChain) : getRequest()
+    const matchKey = deriveMatchKey(spec.matchPattern, params, parent.path, ourRequest.url)
 
     // ── Vary phase ──
     // `vary` is request-dimensions only.

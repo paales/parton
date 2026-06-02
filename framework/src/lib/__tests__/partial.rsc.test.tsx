@@ -59,6 +59,34 @@ describe("parton — match + skip", () => {
     const on = await flightAt("http://t/x?on=1", <Page parent={ROOT} />)
     expect(on).toContain("vary-null-target")
   })
+
+  it("a framed spec's match gates on the frame URL, not the page URL", async () => {
+    // `match` resolves against the frame-resolved request (like `vary`),
+    // so a spec inside a <Frame> routes on the frame's URL. Before this
+    // fix `match` used the page URL and a framed match could never hit.
+    const Sub = parton(
+      function FramedMatchRender({}: RenderArgs) {
+        return <span data-testid="framed-open">open</span>
+      },
+      { match: "/sub/open", selector: "#framed-match" },
+    )
+    // Same page URL in both; only the frame URL differs.
+    const open = await flightAt(
+      "http://t/page",
+      <Frame name="bug1-open" initialUrl="/sub/open" parent={ROOT}>
+        {(p) => <Sub parent={p} />}
+      </Frame>,
+    )
+    expect(open).toContain("framed-open")
+
+    const closed = await flightAt(
+      "http://t/page",
+      <Frame name="bug1-closed" initialUrl="/sub/closed" parent={ROOT}>
+        {(p) => <Sub parent={p} />}
+      </Frame>,
+    )
+    expect(closed).not.toContain("framed-open")
+  })
 })
 
 describe("parton — vary + render", () => {
