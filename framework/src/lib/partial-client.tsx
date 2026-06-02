@@ -1254,6 +1254,42 @@ export const FrameNameContext = createContext<readonly string[]>(
  */
 export const PartialIdContext = createContext<string | null>(null)
 
+/**
+ * The current page URL, threaded from the server render through Flight
+ * so client components resolve it on the initial (SSR) paint — before
+ * the browser Navigation API exists. The app seeds it once at the root
+ * (`<PageUrlProvider url={getServerNavigation().currentUrl}>`); after
+ * hydration `useNavigation()` reads the live browser URL instead, so
+ * this value is consulted only while `window.navigation` is absent
+ * (SSR / pre-hydration). This is what makes `useNavigation()`
+ * isomorphic: server-correct on first paint, browser-driven after.
+ */
+export const PageUrlContext = createContext<string | null>(null)
+
+/**
+ * Provide the page URL to descendant client components. Rendered by a
+ * server component at the app root with the request URL, so the value
+ * crosses Flight and is present during SSR. Pairs with the SSR branch
+ * of `buildWindowNavigationHandle`.
+ */
+export function PageUrlProvider({
+  url,
+  children,
+}: {
+  url: string
+  children: ReactNode
+}) {
+  return <PageUrlContext value={url}>{children}</PageUrlContext>
+}
+
+/** Per-frame URL map (frame key → resolved URL), accumulated down the
+ *  tree by `FrameNameProvider`. SSR / pre-hydration counterpart to the
+ *  module-level `_frameUrls`: a framed `useNavigation(name)` reads it so
+ *  `currentEntry.url` is correct on the first server paint, before the
+ *  browser Navigation API exists. The live handle supersedes it after
+ *  hydration. */
+const FrameUrlContext = createContext<ReadonlyMap<string, string>>(new Map<string, string>())
+
 /** Dotted canonical name for a frame path. */
 function joinFramePath(path: readonly string[]): string {
   return path.join(".")
@@ -1400,6 +1436,16 @@ export function FrameNameProvider({
   children: ReactNode
 }) {
   const key = joinFramePath(path)
+  const parentFrameUrls = useContext(FrameUrlContext)
+  // Thread this frame's server-resolved URL down via context so SSR can
+  // resolve a framed `currentEntry.url` — the `useEffect` below seeds
+  // the client-only `_frameUrls`, which never runs during SSR. Nested
+  // frames accumulate into one map.
+  const frameUrls = useMemo(() => {
+    const next = new Map(parentFrameUrls)
+    next.set(key, initialUrl)
+    return next
+  }, [parentFrameUrls, key, initialUrl])
   useEffect(() => {
     // Client cache: so `useNavigation(path).currentEntry.url` is
     // non-null on cold load.
@@ -1422,7 +1468,11 @@ export function FrameNameProvider({
       })
     }
   }, [key, initialUrl])
-  return <FrameNameContext value={path}>{children}</FrameNameContext>
+  return (
+    <FrameUrlContext value={frameUrls}>
+      <FrameNameContext value={path}>{children}</FrameNameContext>
+    </FrameUrlContext>
+  )
 }
 
 /**
@@ -1723,8 +1773,31 @@ function projectEntryForFrame(
 // undefined. Return a stub that type-checks with no-op behavior — any
 // actual invocation only happens on the client after hydration.
 
-function nullImperativeNavigation(name: string | null): ImperativeNavigation {
+function nullImperativeNavigation(
+  name: string | null,
+  url?: string | null,
+): ImperativeNavigation {
   const stubEntry = null as unknown as NavigationHistoryEntry
+  // On the server (and pre-hydration) there is no browser Navigation
+  // API, but a Flight-borne URL still lets `currentEntry.url` resolve
+  // correctly for the first paint. Synthesize a minimal entry carrying
+  // just that URL; everything else stays inert until the live browser
+  // handle takes over after hydration.
+  const ssrEntry =
+    url == null
+      ? null
+      : ({
+          url,
+          key: "",
+          id: "",
+          index: 0,
+          sameDocument: true,
+          getState: () => null,
+          ondispose: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          dispatchEvent: () => false,
+        } as unknown as NavigationHistoryEntry)
   const stubMilestones = (): NavigationMilestones => ({
     committed: Promise.resolve(stubEntry),
     streaming: Promise.resolve(),
@@ -1736,7 +1809,7 @@ function nullImperativeNavigation(name: string | null): ImperativeNavigation {
   } as unknown as NavigationResult
   return {
     name,
-    currentEntry: null,
+    currentEntry: ssrEntry,
     canGoBack: false,
     canGoForward: false,
     transition: null,
@@ -1803,9 +1876,12 @@ function applyClientCookies(cookies: Record<string, string> | undefined): void {
   }
 }
 
-function buildWindowNavigationHandle(): ImperativeNavigation {
+function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeNavigation {
   const nav = getNavigation()
-  if (!nav) return nullImperativeNavigation(null)
+  // No browser Navigation API → SSR or pre-hydration. Fall back to the
+  // Flight-borne page URL so `currentEntry.url` is correct on first
+  // paint; the live handle takes over once `window.navigation` exists.
+  if (!nav) return nullImperativeNavigation(null, ssrUrl ?? null)
 
   const windowNavigate = (
     target: NavigateTarget,
@@ -2002,10 +2078,14 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
  * project the frame URL and state; `updateCurrentEntry` merges user
  * state under `__frameState[name]`.
  */
-function buildFrameHandle(path: readonly string[]): ImperativeNavigation {
+function buildFrameHandle(path: readonly string[], ssrUrl?: string | null): ImperativeNavigation {
   const nav = getNavigation()
   const key = joinFramePath(path)
-  if (!nav) return nullImperativeNavigation(key)
+  // No browser Navigation API → SSR / pre-hydration. Resolve
+  // `currentEntry.url` from the Flight-borne frame URL so a framed
+  // `useNavigation()` is correct on first paint; the live handle takes
+  // over once `window.navigation` exists.
+  if (!nav) return nullImperativeNavigation(key, ssrUrl ?? null)
   if (path.length === 0) {
     throw new Error("buildFrameHandle: path must be non-empty")
   }
@@ -2579,6 +2659,12 @@ function wrapWithHooks(imperative: ImperativeNavigation): FrameworkNavigation {
  */
 export function useNavigation(name?: string): FrameworkNavigation {
   const ambient = useContext(FrameNameContext)
+  // Flight-borne page URL — the SSR / pre-hydration fallback for the
+  // window scope, so `currentEntry.url` is correct on first paint
+  // before `window.navigation` exists. Ignored once the live browser
+  // handle is available.
+  const ssrPageUrl = useContext(PageUrlContext)
+  const ssrFrameUrls = useContext(FrameUrlContext)
   const resolvedPath: readonly string[] = name != null ? splitFramePath(name) : ambient
   // Stable key for memoization — names may be dotted, ambients may be
   // distinct arrays that encode the same path across renders.
@@ -2607,12 +2693,23 @@ export function useNavigation(name?: string): FrameworkNavigation {
   // fresh hooks per render (that's the point), but the wrapper's
   // identity stays stable until the bound name changes.
   const imperative = useMemo(
-    () =>
-      resolvedPath.length > 0 ? buildFrameHandle(resolvedPath) : buildWindowNavigationHandle(),
+    () => {
+      if (resolvedPath.length === 0) return buildWindowNavigationHandle(ssrPageUrl)
+      // Resolve the frame's SSR URL against the page origin so its
+      // pathname matches the client (which absolutizes via
+      // `projectEntryForFrame`), avoiding a hydration mismatch. An empty
+      // frame URL → no SSR entry; the live handle fills it in.
+      const frameUrl = ssrFrameUrls.get(resolvedKey)
+      const ssrFrameUrl =
+        frameUrl != null && frameUrl !== ""
+          ? new URL(frameUrl, ssrPageUrl ?? "http://_").href
+          : null
+      return buildFrameHandle(resolvedPath, ssrFrameUrl)
+    },
     // resolvedKey captures any change to the path — resolvedPath is a
     // fresh array each render, so we can't use it as a dep directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [resolvedKey],
+    [resolvedKey, ssrPageUrl, ssrFrameUrls],
   )
   return useMemo(() => wrapWithHooks(imperative), [imperative])
 }

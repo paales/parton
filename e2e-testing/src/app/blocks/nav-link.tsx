@@ -9,6 +9,7 @@
 import { block, type RenderArgs } from "@parton/framework"
 import { EditorOpenNavLink } from "@parton/cms"
 import { buttonVariants } from "@parton/copies/components/ui/button"
+import { NavLinkActive } from "../components/nav-link-active.tsx"
 
 const OPEN_EDITOR_HREF = /[?&]editor=1(?:&|$)/
 
@@ -22,11 +23,7 @@ export const NavLinkBlock = block(
         </EditorOpenNavLink>
       )
     }
-    return (
-      <a href={href} className={className}>
-        {label}
-      </a>
-    )
+    return <NavLinkActive href={href} label={label} className={className} />
   },
   {
     selector: ".nav-item",

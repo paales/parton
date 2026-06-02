@@ -32,7 +32,7 @@ import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
-import { PartialsClient } from "./partial-client.tsx"
+import { PageUrlProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
 import type { CacheOptions } from "./cache-options.ts"
 import { RemoteFrame } from "./remote-frame.tsx"
@@ -949,7 +949,7 @@ function patternSignature(pattern: URLPattern): string {
     pattern.pathname,
     pattern.search,
     pattern.hash,
-  ].join(" ")
+  ].join("\u0000")
 }
 
 /**
@@ -2272,7 +2272,16 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
       isPartialRefetch: false,
     }
     enterPartialState(streamState)
-    return <PartialsClient mode="streaming">{children}</PartialsClient>
+    // Seed the page URL for descendant client components so
+    // `useNavigation()` resolves it on the SSR paint (no browser
+    // Navigation API yet) — making the hook isomorphic with zero
+    // app-side wiring. Ignored after hydration, when the live browser
+    // handle takes over. Frame scope gets the equivalent from `<Frame>`.
+    return (
+      <PageUrlProvider url={getRequest().url}>
+        <PartialsClient mode="streaming">{children}</PartialsClient>
+      </PageUrlProvider>
+    )
   }
 
   // Already in cache-mode ctx from the pre-enter above.

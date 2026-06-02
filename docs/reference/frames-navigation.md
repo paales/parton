@@ -78,6 +78,16 @@ call them once during render to bind a tuple of
 `{ committed, streaming, finished }` triple of booleans, monotonic
 within a single fire and reset to `false` on the next.
 
+The handle's read getters are **isomorphic**:
+`useNavigation().currentEntry.url` resolves on the server render too,
+not just the client. SSR has no browser Navigation API, so the window
+scope reads the page URL seeded by `PartialRoot` and a frame scope reads
+its `<Frame initialUrl>` (both cross Flight as context); after hydration
+the live browser handle takes over. This is what lets a URL-derived view
+— an active link, a breadcrumb — render correctly on the first paint
+with no hydration flash, while its host partial keeps fp-skipping (the
+URL never enters a `vary`).
+
 ```tsx
 const nav = useNavigation()                       // window scope
 const [reload, { committed, finished }] = nav.reload()

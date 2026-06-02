@@ -122,6 +122,8 @@ interface VaryScope {
   headers: Partial<Record<string, string>>  // lowercase keys
   params: Record<string, string>            // from `match`
   session: SessionReadSurface               // per-key session reads
+  time: TimeScope                           // wall-clock boundaries (TTL / live ticks)
+  instanceId: string                        // rendered effective placement id
 }
 ```
 
@@ -139,6 +141,15 @@ selector: "cart" })` sees the new value in its vary scope (consistent
 with `readCookie`). `Max-Age=0` follows browser deletion semantics and
 removes the cookie from the overlay; a non-zero `Max-Age` with an
 empty value sets the cookie to the empty string.
+
+`time` exposes wall-clock boundary fields (`time.nextSecond`,
+`time.nextMinute`, …) plus `time.in(ms)`, for deriving an `expiresAt` /
+`staleUntil` on vary's return — live-tick / TTL wake hints the framework
+strips before the fingerprint, so they never make every millisecond move
+the fp. `instanceId` is the rendered effective placement id (a slot
+entry's id, or `spec.id` plus a props hash); most vary callbacks ignore
+it — it's the hook the CMS block wrapper uses to fold per-placement
+content into the fingerprint.
 
 ## `Render` props
 
@@ -335,7 +346,12 @@ A spec emits in one of four shapes, in priority order:
    </Suspense></Activity>`, plus a hidden Activity sibling for each
    other cached matchKey, and streams it.
 
-`matchKey` is the variant identity. A spec with its OWN `match`
+**Mental model: `match` chooses *which instance*, `vary` chooses *what
+that instance shows*.** A new `match` param value mints a new variant —
+a separate, independently-parked subtree, like a React `key`; a new
+`vary` value transitions the *same* instance in place, like props.
+
+`matchKey` is that variant identity. A spec with its OWN `match`
 having named params hashes those (`hash(stableStringify(params))`).
 A spec WITHOUT named match params walks `parent.path` and inherits
 the closest ancestor's matchKey — so a `<Hero>` inside `/pokemon/:id`
@@ -553,6 +569,15 @@ discard the map on throw without partial commits leaking through.
   request-dimensions (URL / cookies / headers / session). To bind a
   partial's content to the CMS, use `block` with `schema`
   — that's where `cms.text(...)`, `cms.blocks(slot)`, etc. live.
+- **Presentational URL-derived state is client, not `match`/`vary`.**
+  An active nav highlight, a "you are here" marker — anything derived
+  purely from the current URL with no server data — reads the URL on
+  the client via `useNavigation().currentEntry.url`, rather than gating
+  a `match` (which would mint a parked variant per route) or moving a
+  `vary` (which would re-render the spec on every navigation instead of
+  letting it fp-skip). `useNavigation()` is isomorphic, so the value is
+  correct on the first server paint too — see
+  [`frames-navigation.md`](./frames-navigation.md#navigation).
 - **`closest` / ancestor `provides`.** Punted. Specs that need
   ancestor data should accept it as a render prop (manual threading
   from a parent spec's `vary`).
