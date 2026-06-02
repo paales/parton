@@ -1347,15 +1347,12 @@ function createSpecComponent<V>(
       })
       if (v === null) return emitParkedKeepalive(id, keepalive, requestState)
       varyResult = v
-    } else if (Object.keys(extraProps).length > 0) {
-      // No `vary` declared, but the call site supplied JSX props.
-      // The spec is a nested child whose identity is its props +
-      // match params; URL reactivity flows through the props.
-      varyResult = { ...params }
     } else {
-      // No `vary`, no call-site props — fold match params alone.
-      // The page-URL fingerprint contribution is added below so
-      // every spec re-renders on URL changes by default.
+      // No `vary` declared — fold the match params alone. Call-site
+      // JSX props are a separate fp axis (their hash is in the
+      // effective id and `propsKey`), so they don't need to enter
+      // `varyResult`; the with-props and no-props cases reduce to the
+      // same surface.
       varyResult = { ...params }
     }
 
