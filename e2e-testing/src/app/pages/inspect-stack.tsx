@@ -167,24 +167,7 @@ const InspectMoveDetailQuery = graphql(`
   }
 `)
 
-// ─── URL parsing helpers ────────────────────────────────────────────────
-
 const INSPECT_PREFIX = "/inspect"
-
-function parsePokemonId(pathname: string): string | null {
-  const m = pathname.match(/^\/inspect\/p\/([^/]+)/)
-  return m ? m[1] : null
-}
-
-function parseMovesOpen(pathname: string): string | null {
-  const m = pathname.match(/^\/inspect\/p\/([^/]+)\/moves(?:$|\/)/)
-  return m ? m[1] : null
-}
-
-function parseMoveId(pathname: string): { id: string; moveId: string } | null {
-  const m = pathname.match(/^\/inspect\/p\/([^/]+)\/moves\/([^/]+)/)
-  return m ? { id: m[1], moveId: m[2] } : null
-}
 
 // ─── Base page (always under the drawers) ───────────────────────────────
 
@@ -311,34 +294,30 @@ const PokemonOverviewContent = parton(
 )
 
 export const InspectDrawer1 = parton(
-  function InspectDrawer1Render({
-    id,
-    parent,
-  }: { id: string | null } & RenderArgs) {
+  function InspectDrawer1Render({ id, parent }: { id: string } & RenderArgs) {
+    // `match` only renders this once an `:id` is on the URL, so the
+    // drawer is always "open" while mounted and each pokemon is its own
+    // parked variant (matchKey = hash(id)). Dismissing navigates to
+    // `/inspect`, which unmatches and parks it.
     return (
       <StackedDrawer
         level={1}
         direction="left"
-        open={id != null}
+        open
         closeUrl={INSPECT_PREFIX}
-        title={id ? `Pokémon #${id}` : "Pokémon"}
+        title={`Pokémon #${id}`}
         description="Drawer 1 · slides from left · /inspect/p/:id"
       >
-        {id != null ? (
-          <div className="flex-1 overflow-y-auto px-4 py-3">
-            <PokemonOverviewContent parent={parent} id={id} />
-          </div>
-        ) : null}
-        {id != null ? <title>Inspect — Pokémon #{id}</title> : null}
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          <PokemonOverviewContent parent={parent} id={id} />
+        </div>
+        <title>Inspect — Pokémon #{id}</title>
       </StackedDrawer>
     )
   },
   {
     selector: "#drawer-1",
-    vary: ({ pathname }) => {
-      if (!pathname.startsWith(INSPECT_PREFIX)) return null
-      return { id: parsePokemonId(pathname) }
-    },
+    match: "/inspect/p/:id{/*}?",
   },
 )
 
@@ -456,14 +435,12 @@ export const InspectDrawer2 = parton(
     id,
     moveId,
     parent,
-  }: { id: string | null; moveId: string | null } & RenderArgs) {
-    const open = id != null
-    const closeUrl = id ? `/inspect/p/${id}` : INSPECT_PREFIX
-    const title = !open
-      ? "Moves"
-      : moveId
-        ? `Move #${moveId}`
-        : `Moves of #${id}`
+  }: { id: string; moveId?: string } & RenderArgs) {
+    // Renders for the moves list (`/moves`) and a move's detail
+    // (`/moves/:moveId`); the body swaps between the two. Each is its
+    // own parked variant.
+    const closeUrl = `/inspect/p/${id}`
+    const title = moveId ? `Move #${moveId}` : `Moves of #${id}`
     const description = moveId
       ? "Drawer 2 · move detail · /inspect/p/:id/moves/:moveId"
       : "Drawer 2 · slides from right · /inspect/p/:id/moves"
@@ -471,58 +448,52 @@ export const InspectDrawer2 = parton(
       <StackedDrawer
         level={2}
         direction="right"
-        open={open}
+        open
         closeUrl={closeUrl}
         title={title}
         description={description}
       >
-        {open ? (
-          <ViewTransition name="drawer-2-page">
-            {/* Two responsibilities on this wrapper:
-             *   1. `flex-1 min-h-0 overflow-hidden` so the snapshot is
-             *      bounded to the drawer body's visible height — without
-             *      it, the view-transition pseudo captures all overflow
-             *      content (full moves list at 2000+ px) and bleeds past
-             *      the drawer's bottom during the slide.
-             *   2. `bg-popover` so the snapshot is opaque. Vaul's
-             *      drawer body sets the popover bg, but the wrapper is
-             *      transparent by default; combined with the default
-             *      `mix-blend-mode: plus-lighter` on `::view-transition-old/new`,
-             *      a transparent shorter snapshot lets the taller
-             *      sibling bleed through. Solid bg blocks that. */}
-            <div
-              className="flex-1 min-h-0 overflow-hidden bg-popover"
-              data-drawer-page={moveId ? "detail" : "list"}
-            >
-              {/* Distinct scroll keys per page so the moves list and
-               * the move detail keep independent scroll positions on
-               * back/forward. The framework reads/writes the position
-               * onto the Navigation entry state. */}
-              <DrawerScrollArea
-                scrollKey={moveId ? `drawer-2-detail-${moveId}` : "drawer-2-list"}
-              >
-                {moveId ? (
-                  <MoveDetailContent parent={parent} id={id!} moveId={moveId} />
-                ) : (
-                  <PokemonMovesContent parent={parent} id={id!} />
-                )}
-              </DrawerScrollArea>
-            </div>
-          </ViewTransition>
-        ) : null}
-        {open && moveId ? <title>Inspect — Move #{moveId}</title> : null}
-        {open && !moveId ? <title>Inspect — Moves of #{id}</title> : null}
+        <ViewTransition name="drawer-2-page">
+          {/* Two responsibilities on this wrapper:
+           *   1. `flex-1 min-h-0 overflow-hidden` so the snapshot is
+           *      bounded to the drawer body's visible height — without
+           *      it, the view-transition pseudo captures all overflow
+           *      content (full moves list at 2000+ px) and bleeds past
+           *      the drawer's bottom during the slide.
+           *   2. `bg-popover` so the snapshot is opaque. Vaul's
+           *      drawer body sets the popover bg, but the wrapper is
+           *      transparent by default; combined with the default
+           *      `mix-blend-mode: plus-lighter` on `::view-transition-old/new`,
+           *      a transparent shorter snapshot lets the taller
+           *      sibling bleed through. Solid bg blocks that. */}
+          <div
+            className="flex-1 min-h-0 overflow-hidden bg-popover"
+            data-drawer-page={moveId ? "detail" : "list"}
+          >
+            {/* Distinct scroll keys per page so the moves list and
+             * the move detail keep independent scroll positions on
+             * back/forward. The framework reads/writes the position
+             * onto the Navigation entry state. */}
+            <DrawerScrollArea scrollKey={moveId ? `drawer-2-detail-${moveId}` : "drawer-2-list"}>
+              {moveId ? (
+                <MoveDetailContent parent={parent} id={id} moveId={moveId} />
+              ) : (
+                <PokemonMovesContent parent={parent} id={id} />
+              )}
+            </DrawerScrollArea>
+          </div>
+        </ViewTransition>
+        {moveId ? (
+          <title>Inspect — Move #{moveId}</title>
+        ) : (
+          <title>Inspect — Moves of #{id}</title>
+        )}
       </StackedDrawer>
     )
   },
   {
     selector: "#drawer-2",
-    vary: ({ pathname }) => {
-      if (!pathname.startsWith(INSPECT_PREFIX)) return null
-      const m = parseMoveId(pathname)
-      if (m) return { id: m.id, moveId: m.moveId }
-      return { id: parseMovesOpen(pathname), moveId: null }
-    },
+    match: "/inspect/p/:id/moves{/:moveId}?",
   },
 )
 
