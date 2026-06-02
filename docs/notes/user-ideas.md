@@ -41,4 +41,6 @@ return (
 
 - [ ] "Can you investigate the codebase deeply and after that I'd like to talk about tensions of multi frameworks that a shopify uses (liquid+react checkout/account), hyva alpine catalogs + checkout. Magento Luma server rendered + client side layered + layout checkout variable. admin html xml componetns, etc. All projects seem to abandon their base frameworks to go with a more advanced frameworks."
 
-- [ ]
+- [ ] If we can stream cache, we have a clear ALS boundary location that can we can use to pass 'context' down? That would mean we could automatically pass the parent={} down without the manual wiring? That would effectively let parton always use the same code path as the cache path?
+
+- [ ] The /cache-page uses the refetch with props but let us consider if this feature shouldn't just be replaced by using a correctly scoped cell?
