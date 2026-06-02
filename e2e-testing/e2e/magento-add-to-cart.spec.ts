@@ -8,8 +8,7 @@ import { test, expect } from "./fixtures"
  *   1. Page renders with cart quantity = N (likely 0 on fresh context).
  *   2. Click "Add to Cart" on a product that succeeds server-side
  *      (no user_errors from Magento).
- *   3. Server action calls `invalidateByTags(["cart"])` (purge
- *      cached GraphQL response) + `getServerNavigation().reload({
+ *   3. Server action calls `getServerNavigation().reload({
  *      selector: "cart" })` (bump the invalidation registry).
  *   4. The action's response render computes a fresh fp for the
  *      cart partial; CartPartial runs, re-queries total_quantity,

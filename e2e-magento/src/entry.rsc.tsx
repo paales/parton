@@ -47,13 +47,11 @@ async function handler(request: Request): Promise<Response> {
     if (url.pathname === "/__test/clear-caches") {
       const [
         { _clearCache },
-        { clearCache },
         { clearRegistry },
         { _clearAllSessions },
         { _clearCmsDraft },
       ] = await Promise.all([
         import("@parton/framework/lib/cache.tsx"),
-        import("@parton/framework/lib/partial-cache.ts"),
         import("@parton/framework/lib/partial-registry.ts"),
         import("@parton/framework/runtime/session.ts"),
         import("@parton/framework/runtime/cms-runtime.ts"),
@@ -61,13 +59,11 @@ async function handler(request: Request): Promise<Response> {
       const all = url.searchParams.get("all") === "1"
       if (all) {
         await _clearCache("all")
-        clearCache("all")
         clearRegistry("all")
         _clearAllSessions("all")
       } else {
         const scope = request.headers.get("x-test-scope") ?? "default"
         await _clearCache(scope)
-        clearCache(scope)
         clearRegistry(scope)
         _clearAllSessions(scope)
       }

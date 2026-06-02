@@ -123,5 +123,4 @@ export type {
 export { NavigationError, type NavigationErrorKind } from "../runtime/navigation-error.ts"
 
 export { PartialErrorBoundary } from "./partial-error-boundary.tsx"
-export { invalidateByTags, clearCache, getCacheStats } from "./partial-cache.ts"
 export { RemoteFrame, remote, type RemoteFrameProps } from "./remote-frame.tsx"

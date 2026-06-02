@@ -135,8 +135,7 @@ Three axes:
    "cart price"})` and the framework bumps the invalidation registry
    so every spec whose id or label list contains "cart" or "price"
    sees a fresh fingerprint on the next render — bypassing their
-   cache. Pair with `invalidateByTags(["cart","price"])` to also
-   purge the upstream GraphQL response cache (independent axis).
+   cache.
 
    > **Scope per-user state.** A bare selector like `"cart"` has no
    > constraints and matches every cart-tagged parton across every

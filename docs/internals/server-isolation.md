@@ -1,13 +1,12 @@
 # Server isolation
 
-The framework holds five module-global maps that need bucketing so
+The framework holds four module-global maps that need bucketing so
 parallel test workers don't contend on the same state:
 
 | State | Module |
 |---|---|
 | `<Cache>` render-output store | `framework/src/lib/cache.tsx` |
 | Partial registry (variant store + per-route hint LRU) | `framework/src/lib/partial-registry.ts` |
-| GraphQL response cache | `framework/src/lib/partial-cache.ts` |
 | Session store (frame URLs) | `framework/src/runtime/session.ts` |
 | Chat log producer | `e2e-testing/src/app/chat/log.ts` |
 
