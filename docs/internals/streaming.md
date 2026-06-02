@@ -73,8 +73,18 @@ on their URL). Their bodies call `refreshSelector` / `cell.set` /
 `getServerNavigation().reload({selector})`, which bumps the
 **already-open** heartbeat stream. The segment driver wakes, the
 next segment renders, the changed partial's fp moves, the bytes
-ship. There's never more than one streaming connection per page
-lifetime.
+ship. The heartbeat is the one connection actions ever need.
+
+A frame refetch, though, CAN open a second connection: the chat
+overlay's frame nav renders a `markConnectionLive` sentinel, so that
+targeted (cache-mode) refetch holds open and streams alongside the
+heartbeat's `?streaming=1` (streaming-mode) connection. Two live
+connections then commit onto the same React root in different modes.
+That's safe only because every payload — cache or streaming — carries
+the identical `<PageUrlProvider><PartialsClient>` root; otherwise the
+alternating commits would remount the whole page on each seam. See
+[`render-pipeline.md`](./render-pipeline.md) ("Both modes share one
+payload root").
 
 ## The heartbeat is opt-in
 

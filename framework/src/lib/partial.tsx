@@ -2296,7 +2296,21 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     })
     .filter((x): x is NonNullable<typeof x> => x != null)
 
-  return React.createElement(PartialsClient, { mode: "cache" }, ...wrappedChildren)
+  // Wrap in `<PageUrlProvider>` exactly like the streaming branch above.
+  // The payload's ROOT element type must be identical across modes: when a
+  // page holds two live connections (the chat overlay's frame long-poll
+  // commits in cache mode while the heartbeat's `?streaming=1` commits in
+  // streaming mode), their segments land on the same React root as
+  // alternating `BrowserRoot` payloads. If one root were `<PageUrlProvider>`
+  // and the other a bare `<PartialsClient>`, React would unmount and
+  // remount the whole subtree on every seam — `page-shell` and everything
+  // under it torn down and recreated ~60×/s (the inspect-overlay flicker).
+  // Matching wrappers lets React reconcile the two payloads in place.
+  return (
+    <PageUrlProvider url={getRequest().url}>
+      {React.createElement(PartialsClient, { mode: "cache" }, ...wrappedChildren)}
+    </PageUrlProvider>
+  )
 }
 
 export function getSpecComponentById(

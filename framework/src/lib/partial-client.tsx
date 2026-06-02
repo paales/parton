@@ -2972,18 +2972,34 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
     const stats: LazyWalkStats = { pending: 0 }
     cacheFromStreamingChildren(children, cache, seen, stats)
     if (stats.pending > 0) {
-      // At least one Flight chunk hadn't arrived when we walked the
-      // children tree, so the cache walk is incomplete — any wrapper
-      // inside a pending lazy was missed. Substituting from this
-      // incomplete cache would emit bare `<i hidden>` placeholders
-      // for those partials, which is exactly the
-      // streaming-demo-schema-hydration regression. Mirror the SSR
-      // shape instead: return children directly so React resolves the
-      // lazies through native Suspense. When a parent re-renders this
-      // component (next nav, segment commit, or cache-mode refetch),
-      // the cache walk runs again against the now-resolved children
-      // and the gaps fill in.
-      return renderChildren([children])
+      // A Flight chunk hadn't arrived when we walked the children tree,
+      // so the cache walk is incomplete — a wrapper inside a pending lazy
+      // was missed. Deriving a fresh template and substituting from the
+      // incomplete cache would emit bare `<i hidden>` placeholders for
+      // those partials (the streaming-demo-schema-hydration regression).
+      // Two ways out, picked by whether a complete template already exists:
+      //
+      //   - No template yet (`_template == null`): the first client
+      //     render, hydrating against SSR HTML. The SSR branch returns raw
+      //     `children`, so we must too — same tree shape keeps useId
+      //     positions aligned and React resolves the lazies natively.
+      //
+      //   - A template exists (steady-state streaming segment — e.g. the
+      //     chat's `<ChunkSlot>` is suspended): render through the SAME
+      //     `_template` + cache path a cache-mode refetch takes. A page
+      //     with two live connections commits cache-mode (the chat
+      //     overlay's frame long-poll) AND streaming-mode (the heartbeat)
+      //     segments onto one root; if this branch returned a raw shape
+      //     instead, every partial inside the page would remount on each
+      //     seam (the nav, the grid — the inspect-overlay flicker).
+      //     Matching the cache path lets React reconcile in place. Nothing
+      //     blanks: the cache already holds each wrapper (the pending lazy
+      //     rides inside, resolved natively) and `substituteNested` pulls
+      //     current content from the cache, not the stale template.
+      //     `_template` is left untouched — the walk is incomplete, so the
+      //     next fully-resolved render is what refreshes it.
+      if (_template == null) return renderChildren([children])
+      return renderChildren(renderTemplate(_template, cache))
     }
     const derived = deriveTemplate(children)
     _template = derived

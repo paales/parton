@@ -41,6 +41,35 @@ ids the route's hint table knows about.
 4. On commit, the routeKey's hint is patched (not replaced) — ids
    that didn't refetch keep their existing variant pointers.
 
+## Both modes share one payload root
+
+Whatever the mode, `PartialRoot` returns the SAME outer shape:
+`<PageUrlProvider url={request.url}><PartialsClient mode=…>…`. The
+root element type must match across modes, because a single page can
+hold two live connections that commit onto the same React root as
+alternating `BrowserRoot` payloads:
+
+- the chat overlay's frame refetch becomes a `markConnectionLive`
+  long-poll and commits in **cache mode**;
+- the page heartbeat holds a `?streaming=1` connection that also
+  renders the open chat and commits in **streaming mode**.
+
+If one payload's root were `<PageUrlProvider>` and the other a bare
+`<PartialsClient>`, React would see a different element type at the
+root on every segment seam and unmount + remount the whole subtree —
+`page-shell` and everything under it torn down and recreated many
+times a second (a full-page flicker). Identical roots let React
+reconcile the two payloads in place.
+
+`PartialsClient` carries the same requirement one level down: while a
+Flight chunk is still in flight (the chat's `<ChunkSlot>` suspended),
+the streaming-mode commit renders through the persisted `_template` +
+cache — the exact path a cache-mode commit takes — rather than
+returning raw children. Matching shapes there keep the partials
+*inside* the page (e.g. the nav) reconciling too. See
+[`streaming.md`](./streaming.md) and `PartialsClient` in
+`partial-client.tsx`.
+
 ## Snapshot shape
 
 ```ts

@@ -58,6 +58,7 @@ async function handler(request: Request): Promise<Response> {
         { getCellStorage },
         { _clearInvalidationRegistry },
         { _clearScheduledTasks },
+        { _clearLogs },
       ] = await Promise.all([
         import("@parton/framework/lib/cache.tsx"),
         import("@parton/framework/lib/partial-registry.ts"),
@@ -66,6 +67,7 @@ async function handler(request: Request): Promise<Response> {
         import("@parton/framework/runtime/cell-storage.ts"),
         import("@parton/framework/runtime/invalidation-registry.ts"),
         import("@parton/framework/runtime/context.ts"),
+        import("./app/chat/log.ts"),
       ])
       const all = url.searchParams.get("all") === "1"
       if (all) {
@@ -75,6 +77,7 @@ async function handler(request: Request): Promise<Response> {
         getCellStorage().clear("all")
         _clearInvalidationRegistry()
         _clearScheduledTasks("all")
+        _clearLogs("all")
       } else {
         const scope = request.headers.get("x-test-scope") ?? "default"
         await _clearCache(scope)
@@ -82,6 +85,7 @@ async function handler(request: Request): Promise<Response> {
         _clearAllSessions(scope)
         getCellStorage().clear(scope)
         _clearScheduledTasks(scope)
+        _clearLogs(scope)
       }
       // CMS draft is process-global file-system state shared across
       // every test scope. Only wipe it when explicitly requested via
