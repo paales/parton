@@ -738,6 +738,27 @@ const _currentPageFingerprints = new Map<string, Map<string, Set<string>>>()
 let _template: ReactNode = null
 
 /**
+ * The page `_template` was derived for — the pathname only. The
+ * structural skeleton is decided by which specs `match` (a path
+ * concern), so a same-page change — a query/state param like
+ * `?chat=open` or `?q=…`, a refetch's `?cached=`/`?streaming=`, a frame
+ * URL — keeps the same structure and reuses the template, while a
+ * different page re-derives. Gates the streaming-mode pending-lazy
+ * fallback (see `PartialsClient`): without it, a cross-page nav whose
+ * new page still has a Flight chunk in flight would re-render this STALE
+ * prior-page template — the page sticks on the one you just left.
+ */
+let _templateRoute: string | null = null
+
+/** Page key for `_template`: the pathname. Same-page query/state changes
+ *  reuse the template (the `match`-driven structure is unchanged); only a
+ *  pathname change re-derives. Client-only (reads `window.location`);
+ *  callers are past the SSR `typeof document` guard. */
+function templateRouteKey(): string {
+  return new URL(window.location.href).pathname
+}
+
+/**
  * Register a partial's fingerprint from the client side.
  *
  * Called by `<PartialErrorBoundary>` during its render, which is how
@@ -914,6 +935,27 @@ export function getCachedPartialIds(): string[] {
     }
   }
   return out
+}
+
+/**
+ * Warm the client partial cache from a decoded preload payload WITHOUT
+ * committing it to the React root. Walks the tree exactly like the
+ * streaming-mode commit's cache step (`cacheFromStreamingChildren`):
+ * each partial wrapper's subtree lands in `_currentPagePartials` and
+ * its fingerprint in `_currentPageFingerprints`, while placeholders
+ * (the server's fp-skips for partials the client already holds) are
+ * left untouched. The destination's partials are now cached, so a later
+ * navigation to it fp-skips them and `renderTemplate` substitutes them
+ * from cache on the first commit. Nothing mounts and `_template` is
+ * untouched — the current page keeps rendering until the user actually
+ * navigates.
+ *
+ * Called by the browser entry's preload transport
+ * (`window.__rsc_partial_preload`), once per decoded segment. Pairs
+ * with `useNavigation().preload(target)`.
+ */
+export function _warmCacheFromPayload(node: ReactNode): void {
+  cacheFromStreamingChildren(node, _currentPagePartials)
 }
 
 // ─── Framework-internal navigation info ───────────────────────────
@@ -2595,12 +2637,72 @@ function attachMilestoneWatchers(
   milestones.finished.then(onSuccess("finished"), onRejection)
 }
 
+// ─── Preload (warm-only fetch, no commit) ─────────────────────────
+//
+// `useNavigation().preload(target)` warms a destination's partials into
+// the client cache without navigating. The browser entry's
+// `__rsc_partial_preload` transport fetches `target` as a read-only
+// render and walks the response into `_currentPagePartials` /
+// `_currentPageFingerprints` (via `_warmCacheFromPayload`), with NO
+// `setPayload`. Nothing mounts, no effects run, the URL is untouched.
+// A later navigation to `target` then fp-skips the warmed partials and
+// `renderTemplate` substitutes them from cache on the first commit
+// while the fresh render revalidates in the background.
+
+/** At most one preload is in flight at a time. A newer `preload()`
+ *  aborts the prior one so a pointer sweeping across a nav bar doesn't
+ *  leave a trail of live warm-fetches. Immediate abort is safe — a
+ *  preload never commits to the React root, so cancelling mid-decode
+ *  just stops the warm and discards partial bytes. */
+let _preloadController: AbortController | null = null
+
+function doPreload(target: NavigateTarget, frameName: string | null): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve()
+  const handler = (
+    window as Window & {
+      __rsc_partial_preload?: (url: string, signal?: AbortSignal) => Promise<void>
+    }
+  ).__rsc_partial_preload
+  if (!handler) return Promise.resolve()
+  // Window-scoped only today: a frame handle's preload is a no-op.
+  // Warming a frame's destination would need the `?__frame=&__frameUrl=`
+  // round-trip; deferred until a caller needs it. preload is a
+  // best-effort hint, so an unsupported scope degrades silently rather
+  // than throwing into an event handler.
+  if (frameName !== null) return Promise.resolve()
+  let url: string
+  try {
+    url = resolveWindowTarget(target)
+  } catch {
+    return Promise.resolve()
+  }
+  // Coalesce: a newer preload supersedes any still in flight, so a
+  // pointer sweeping across a nav bar doesn't pile up live fetches.
+  // Immediate abort is safe — a preload never commits to the React
+  // root; cancelling mid-decode just discards partial bytes. The warm
+  // walk is per-partial atomic (each wrapper's `cacheStore` +
+  // `registerClientPartial` run together), so a navigation reading the
+  // maps concurrently always sees whole entries, never a torn one —
+  // hover-then-immediately-click stays correct without special-casing.
+  if (_preloadController) _preloadController.abort()
+  const controller = new AbortController()
+  _preloadController = controller
+  return handler(url, controller.signal)
+    .catch(() => {
+      // preload is a hint — failures (network / decode / supersede) are
+      // swallowed; the next navigation just pays full freight.
+    })
+    .finally(() => {
+      if (_preloadController === controller) _preloadController = null
+    })
+}
+
 /**
  * Wrap an imperative handle so its `reload` / `navigate` properties
- * are hooks returning the `[fire, progress]` tuple. Every other
- * property passes straight through to the imperative handle (which
- * itself is a Proxy over `window.navigation` — see
- * `buildWindowNavigationHandle`).
+ * are hooks returning the `[fire, progress]` tuple, and `preload` is a
+ * plain imperative method. Every other property passes straight through
+ * to the imperative handle (which itself is a Proxy over
+ * `window.navigation` — see `buildWindowNavigationHandle`).
  *
  * The returned wrapper is itself a Proxy; `useNavigation()` memoizes
  * one of these per resolved frame path so effects with the handle in
@@ -2617,6 +2719,15 @@ function wrapWithHooks(imperative: ImperativeNavigation): FrameworkNavigation {
       if (prop === "navigate") {
         return function navigate(): NavigateStatus {
           return useNavigateHook(target as ImperativeNavigation)
+        }
+      }
+      if (prop === "preload") {
+        // `preload` is NOT a hook — it returns the imperative warm fn
+        // directly, callable from an event handler. Scope (window vs
+        // frame) comes off the underlying handle's `name`.
+        const frameName = (target as ImperativeNavigation).name
+        return function preload(navTarget: NavigateTarget): Promise<void> {
+          return doPreload(navTarget, frameName)
         }
       }
       return Reflect.get(target, prop, receiver)
@@ -2971,20 +3082,18 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
     const seen = new Map<string, Set<string>>()
     const stats: LazyWalkStats = { pending: 0 }
     cacheFromStreamingChildren(children, cache, seen, stats)
+    // Route this payload renders for — keys the template reuse below so a
+    // cross-route nav never reuses the prior route's `_template`.
+    const route = templateRouteKey()
     if (stats.pending > 0) {
       // A Flight chunk hadn't arrived when we walked the children tree,
       // so the cache walk is incomplete — a wrapper inside a pending lazy
       // was missed. Deriving a fresh template and substituting from the
       // incomplete cache would emit bare `<i hidden>` placeholders for
       // those partials (the streaming-demo-schema-hydration regression).
-      // Two ways out, picked by whether a complete template already exists:
+      // The choice turns on whether a template for THIS route exists:
       //
-      //   - No template yet (`_template == null`): the first client
-      //     render, hydrating against SSR HTML. The SSR branch returns raw
-      //     `children`, so we must too — same tree shape keeps useId
-      //     positions aligned and React resolves the lazies natively.
-      //
-      //   - A template exists (steady-state streaming segment — e.g. the
+      //   - Same-route template (steady-state streaming segment — e.g. the
       //     chat's `<ChunkSlot>` is suspended): render through the SAME
       //     `_template` + cache path a cache-mode refetch takes. A page
       //     with two live connections commits cache-mode (the chat
@@ -2996,13 +3105,22 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
       //     blanks: the cache already holds each wrapper (the pending lazy
       //     rides inside, resolved natively) and `substituteNested` pulls
       //     current content from the cache, not the stale template.
-      //     `_template` is left untouched — the walk is incomplete, so the
-      //     next fully-resolved render is what refreshes it.
-      if (_template == null) return renderChildren([children])
+      //
+      //   - No template yet (`_template == null`, first render hydrating
+      //     against SSR HTML) OR a DIFFERENT route (`route !==
+      //     _templateRoute`, a cross-route nav whose new route still has a
+      //     chunk in flight): return raw `children`. Same tree shape as the
+      //     SSR branch keeps useId aligned, and React resolves the lazies
+      //     natively for the NEW route. Reusing a prior route's template
+      //     here would re-render the page just navigated away from — the
+      //     `/magento → /` "stuck on the old page" regression. `_template`
+      //     is left untouched; the next fully-resolved render refreshes it.
+      if (_template == null || route !== _templateRoute) return renderChildren([children])
       return renderChildren(renderTemplate(_template, cache))
     }
     const derived = deriveTemplate(children)
     _template = derived
+    _templateRoute = route
 
     // Expand `seen` with nested (id, matchKey) pairs reachable through
     // cached wrappers. When the server fp-skips an OUTER partial (e.g.
