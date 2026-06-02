@@ -738,6 +738,27 @@ const _currentPageFingerprints = new Map<string, Map<string, Set<string>>>()
 let _template: ReactNode = null
 
 /**
+ * The page `_template` was derived for — the pathname only. The
+ * structural skeleton is decided by which specs `match` (a path
+ * concern), so a same-page change — a query/state param like
+ * `?chat=open` or `?q=…`, a refetch's `?cached=`/`?streaming=`, a frame
+ * URL — keeps the same structure and reuses the template, while a
+ * different page re-derives. Gates the streaming-mode pending-lazy
+ * fallback (see `PartialsClient`): without it, a cross-page nav whose
+ * new page still has a Flight chunk in flight would re-render this STALE
+ * prior-page template — the page sticks on the one you just left.
+ */
+let _templateRoute: string | null = null
+
+/** Page key for `_template`: the pathname. Same-page query/state changes
+ *  reuse the template (the `match`-driven structure is unchanged); only a
+ *  pathname change re-derives. Client-only (reads `window.location`);
+ *  callers are past the SSR `typeof document` guard. */
+function templateRouteKey(): string {
+  return new URL(window.location.href).pathname
+}
+
+/**
  * Register a partial's fingerprint from the client side.
  *
  * Called by `<PartialErrorBoundary>` during its render, which is how
@@ -3061,20 +3082,18 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
     const seen = new Map<string, Set<string>>()
     const stats: LazyWalkStats = { pending: 0 }
     cacheFromStreamingChildren(children, cache, seen, stats)
+    // Route this payload renders for — keys the template reuse below so a
+    // cross-route nav never reuses the prior route's `_template`.
+    const route = templateRouteKey()
     if (stats.pending > 0) {
       // A Flight chunk hadn't arrived when we walked the children tree,
       // so the cache walk is incomplete — a wrapper inside a pending lazy
       // was missed. Deriving a fresh template and substituting from the
       // incomplete cache would emit bare `<i hidden>` placeholders for
       // those partials (the streaming-demo-schema-hydration regression).
-      // Two ways out, picked by whether a complete template already exists:
+      // The choice turns on whether a template for THIS route exists:
       //
-      //   - No template yet (`_template == null`): the first client
-      //     render, hydrating against SSR HTML. The SSR branch returns raw
-      //     `children`, so we must too — same tree shape keeps useId
-      //     positions aligned and React resolves the lazies natively.
-      //
-      //   - A template exists (steady-state streaming segment — e.g. the
+      //   - Same-route template (steady-state streaming segment — e.g. the
       //     chat's `<ChunkSlot>` is suspended): render through the SAME
       //     `_template` + cache path a cache-mode refetch takes. A page
       //     with two live connections commits cache-mode (the chat
@@ -3086,13 +3105,22 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
       //     blanks: the cache already holds each wrapper (the pending lazy
       //     rides inside, resolved natively) and `substituteNested` pulls
       //     current content from the cache, not the stale template.
-      //     `_template` is left untouched — the walk is incomplete, so the
-      //     next fully-resolved render is what refreshes it.
-      if (_template == null) return renderChildren([children])
+      //
+      //   - No template yet (`_template == null`, first render hydrating
+      //     against SSR HTML) OR a DIFFERENT route (`route !==
+      //     _templateRoute`, a cross-route nav whose new route still has a
+      //     chunk in flight): return raw `children`. Same tree shape as the
+      //     SSR branch keeps useId aligned, and React resolves the lazies
+      //     natively for the NEW route. Reusing a prior route's template
+      //     here would re-render the page just navigated away from — the
+      //     `/magento → /` "stuck on the old page" regression. `_template`
+      //     is left untouched; the next fully-resolved render refreshes it.
+      if (_template == null || route !== _templateRoute) return renderChildren([children])
       return renderChildren(renderTemplate(_template, cache))
     }
     const derived = deriveTemplate(children)
     _template = derived
+    _templateRoute = route
 
     // Expand `seen` with nested (id, matchKey) pairs reachable through
     // cached wrappers. When the server fp-skips an OUTER partial (e.g.

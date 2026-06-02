@@ -66,7 +66,17 @@ Flight chunk is still in flight (the chat's `<ChunkSlot>` suspended),
 the streaming-mode commit renders through the persisted `_template` +
 cache — the exact path a cache-mode commit takes — rather than
 returning raw children. Matching shapes there keep the partials
-*inside* the page (e.g. the nav) reconciling too. See
+*inside* the page (e.g. the nav) reconciling too.
+
+This reuse is scoped to the **same page**. `_template` records the
+pathname it was derived for (`_templateRoute`); the pending-lazy
+fallback reuses it only when the current pathname matches. A
+cross-page nav (e.g. `/magento → /`) whose new page still has a chunk
+in flight falls back to raw `children`, so React resolves the new page
+via Suspense instead of re-rendering the prior page's template — which
+would otherwise leave the page stuck on the one just navigated away
+from. Same-page query / state changes (`?chat=open`, `?q=…`) keep the
+same `match`-driven structure, so they reuse the template. See
 [`streaming.md`](./streaming.md) and `PartialsClient` in
 `partial-client.tsx`.
 
