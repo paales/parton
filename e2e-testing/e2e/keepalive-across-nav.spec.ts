@@ -20,25 +20,18 @@ test.beforeEach(async ({ baseURL }) => {
   await ctx.dispose()
 })
 
-test.skip("ClickCounter state inside a partial survives nav away and back", async ({ page }) => {
-  // Pending: cross-route keepalive isn't fully wired. When navigating
-  // /cache-demo → /defer-demo, the new page's streaming render
-  // doesn't touch the Slow spec, so its `_currentPagePartials` entry
-  // is pruned (per the seen-set prune in `PartialsClient`'s streaming
-  // branch). The Activity wrapper React still has in the fiber tree
-  // sticks at `mode="hidden"` (DOM kept with `display: none`).
-  // Navigating back to /cache-demo emits `Activity mode="visible"`
-  // around a `<i hidden>` placeholder, but the cache lookup misses
-  // (entry was pruned), so `renderTemplate` substitutes nothing and
-  // React doesn't reconcile the new Activity's children against the
-  // hidden subtree — display:none stays.
-  //
-  // The fix needs server-side logic in `PartialRoot` (streaming
-  // mode) to walk every (id, matchKey) the client has cached, and
-  // emit a hidden Activity wrapper for any that this page's render
-  // didn't touch — so the client's `seen` harvest covers them and
-  // the prune preserves the cache entry. That's an architectural
-  // addition the navigation-milestones refactor doesn't include.
+test("ClickCounter state inside a partial survives nav away and back", async ({ page }) => {
+  // Cross-route keepalive: `Slow` is nested inside `CacheDemoPage`, which
+  // is a permanent `root.tsx` sibling gated by `match`. Navigating
+  // /cache-demo → /defer-demo, `CacheDemoPage`'s match misses, so it emits
+  // a parked `<Activity mode="hidden">` placeholder and never re-runs its
+  // body — `Slow` isn't in this render's `seenIds`. What keeps `Slow`'s
+  // cache entry alive is the client's BFS `seen`-expansion (`PartialsClient`
+  // streaming branch): the parked parent's placeholder IS in `seen`, so the
+  // walk follows the cached `CacheDemoPage` wrapper, harvests its nested
+  // `Slow` id, and the prune spares it. Navigating back, `CacheDemoPage`
+  // matches, its Activity flips visible, and `substituteNested` restores the
+  // still-cached `Slow` subtree with its `useState` intact.
   await page.goto("/cache-demo")
   const counter = page.getByTestId("click-counter")
   await expect(counter).toBeVisible({ timeout: 10000 })
