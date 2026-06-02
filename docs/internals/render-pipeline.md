@@ -62,11 +62,9 @@ Snapshots store no JSX. They DO capture two derived bits:
 - `props` — the call-site JSX props the spec was last rendered with.
   Cache-mode replays them so a child rendered via a parent wrapper
   still receives `id={...}` / `flavor={...}` etc. when the framework
-  re-invokes it without going through the wrapper. A client-supplied
-  `partialProps` overlay (see `?partialProps=` below) wins over the
-  snapshot replay so deep refetches can change the prop. Per-scope
-  state — concurrent requests from the same scope with different
-  prop values for the same id could race.
+  re-invokes it without going through the wrapper. Request-dependent
+  inputs flow through `vary` / `match` / cells, which re-resolve on
+  the refetch.
 - `varyKey` — hash of the spec's `varyResult` on its most-recent
   render. Feeds the descendant-fp fold so an ancestor's fingerprint
   reflects every descendant's deps. Without it, a wrapper whose own
@@ -77,8 +75,7 @@ The `varyResult` itself is NOT stored — `vary` is recomputed on the
 current request inside the spec component. Cache-mode reconstruction
 looks up the spec component by id (or by `type` for slot blocks)
 and renders it with `{parent: {path: snap.parentPath, frameChain:
-snap.parentFrameChain}}`, plus the snapshot props (overlaid by any
-client-sent `partialProps` overlay).
+snap.parentFrameChain}}`, plus the snapshot props.
 
 For storage details — variant deduplication, hint table, LRU
 bounds — see [`registry-internals.md`](./registry-internals.md).
@@ -91,7 +88,6 @@ Wire params:
 |---|---|
 | `partials` | Selector labels (cosmetic `#`/`.` stripped). Resolves against snapshot `labels` AND `id` for fan-out targeting. |
 | `cached` | `id:matchKey:fp,…` — fingerprints the client has |
-| `partialProps` | JSON `{"<id>":{<propName>:<value>}}` — call-site prop overlay; overrides snapshot-replayed `props` |
 | `__frame=...&__frameUrl=...` | session-write a frame URL before render |
 
 After a server action commits, refetch routing is driven entirely by

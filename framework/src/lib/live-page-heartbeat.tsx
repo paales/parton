@@ -42,7 +42,7 @@ interface Props {
  *
  * Behaviour:
  *   - Mount → fire one `reload({streaming: true})`. Batches with
- *     any in-tick client-side activator fires (when-stored,
+ *     any in-tick client-side activator fires (when-mounted,
  *     when-visible) via `enqueueRefetch`'s per-microtask coalescer.
  *   - Every `intervalMs` (default 5s), re-fires IF no stream is
  *     currently open. While a stream is open the tick is a no-op.

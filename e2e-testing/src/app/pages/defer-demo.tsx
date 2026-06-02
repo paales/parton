@@ -9,9 +9,8 @@
 
 import { parton, type RenderArgs } from "@parton/framework"
 import { WhenVisible } from "../components/when-visible.tsx"
-import { WhenStored } from "../components/when-stored.tsx"
 import { WhenMounted } from "../components/when-mounted.tsx"
-import { ActivateButton, StorageKeyEditor } from "../components/defer-demo-controls.tsx"
+import { ActivateButton } from "../components/defer-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 
 function InlineCode({ children }: { children: React.ReactNode }) {
@@ -55,47 +54,24 @@ export const ManualPartial = parton(
   },
 )
 
-export const StoredPartial = parton(
-  function StoredRender({ stored }: { stored?: string } & RenderArgs) {
-    return (
-      <div data-testid="stored-content">
-        <Timestamp prefix="activated at" /> — value:{" "}
-        <InlineCode>
-          <span data-testid="stored-value">{stored ?? "(none)"}</span>
-        </InlineCode>
-      </div>
-    )
-  },
-  {
-    selector: "#stored",
-    defer: <WhenStored storageKey="demo-stored" />,
-    fallback: (
-      <DormantFallback testId="stored-fallback">
-        dormant — set localStorage["demo-stored"] to activate
-      </DormantFallback>
-    ),
-  },
-)
-
+// Batched activation: two partials that each activate on mount fire in
+// the same tick, so `enqueueRefetch`'s microtask coalescer folds them
+// into ONE refetch (`?partials=batch-a,batch-b`).
 function makeBatch(label: string) {
-  const key = `${label}-key`
   return parton(
-    async function BatchRender({ stored }: { stored?: string } & RenderArgs) {
+    async function BatchRender({}: RenderArgs) {
       return (
         <div data-testid={`${label}-content`}>
-          <Timestamp prefix="activated at" /> — value:{" "}
-          <InlineCode>
-            <span data-testid={`${label}-value`}>{stored ?? "(none)"}</span>
-          </InlineCode>
+          <Timestamp prefix="activated at" />
         </div>
       )
     },
     {
       selector: `#${label}`,
-      defer: <WhenStored storageKey={key} />,
+      defer: <WhenMounted />,
       fallback: (
         <DormantFallback testId={`${label}-fallback`}>
-          dormant — set localStorage["{key}"] before loading to activate
+          dormant — activates on mount, batched with its sibling
         </DormantFallback>
       ),
     },
@@ -211,35 +187,19 @@ export const DeferDemoPage = parton(
           </CardContent>
         </Card>
 
-        <Card data-testid="section-stored" className="mb-8 p-5">
-          <CardHeader className="px-0">
-            <CardTitle className="text-base">
-              2. <InlineCode>&lt;WhenStored&gt;</InlineCode>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 px-0">
-            <StoredPartial parent={parent} />
-            <StorageKeyEditor storageKey="demo-stored" testId="demo-stored" />
-          </CardContent>
-        </Card>
-
         <Card data-testid="section-batch" className="mb-8 p-5">
           <CardHeader className="px-0">
-            <CardTitle className="text-base">4. Batched activation</CardTitle>
+            <CardTitle className="text-base">2. Batched activation</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
             <BatchAPartial parent={parent} />
             <BatchBPartial parent={parent} />
-            <div className="flex flex-wrap gap-2">
-              <StorageKeyEditor storageKey="batch-a-key" testId="batch-a-key" />
-              <StorageKeyEditor storageKey="batch-b-key" testId="batch-b-key" />
-            </div>
           </CardContent>
         </Card>
 
         <Card data-testid="section-race" className="mb-8 p-5">
           <CardHeader className="px-0">
-            <CardTitle className="text-base">5. Streaming + defer race</CardTitle>
+            <CardTitle className="text-base">3. Streaming + defer race</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
             <SlowStreamPartial parent={parent} />
@@ -249,7 +209,7 @@ export const DeferDemoPage = parton(
 
         <Card data-testid="section-concurrent" className="mb-8 p-5">
           <CardHeader className="px-0">
-            <CardTitle className="text-base">6. Concurrent refetches</CardTitle>
+            <CardTitle className="text-base">4. Concurrent refetches</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
             <ConcurrentAPartial parent={parent} />
@@ -281,7 +241,7 @@ export const DeferDemoPage = parton(
         <Card data-testid="section-any" className="mb-8 p-5">
           <CardHeader className="px-0">
             <CardTitle className="text-base">
-              3. <InlineCode>&lt;WhenVisible&gt;</InlineCode>
+              5. <InlineCode>&lt;WhenVisible&gt;</InlineCode>
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">

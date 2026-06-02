@@ -300,9 +300,10 @@ export function registerPartial(id: string, snapshot: PartialSnapshot): void {
     // can see this partial before our commit fires. Without this, an
     // activator-driven refetch that lands while the initial page's
     // RSC stream is still flushing falls into `registryMiss` territory
-    // and the server returns a streaming-mode response that ignores
-    // `partialProps` — the activator's payload is dropped and the
-    // fallback persists in the DOM. The atomic-prune at commit time
+    // and the server returns a streaming-mode (full-render) response
+    // instead of resolving the targeted partial from its snapshot — the
+    // activation doesn't land and the fallback persists in the DOM. The
+    // atomic-prune at commit time
     // (in `commitRequestRegistry`) still owns the FINAL hint shape;
     // the eager publish is purely additive ("this id is live for this
     // routeKey, with this variantKey") so concurrent reads succeed.

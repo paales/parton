@@ -247,7 +247,7 @@ the action's in-body `reload({ selector: "cart" })` lands.
 - [`../reference/partial.md`](../reference/partial.md) — the
   `parton` constructor surface.
 - [`../reference/frames-navigation.md`](../reference/frames-navigation.md)
-  — `useNavigation().reload({ selector, props })` (client-side
+  — `useNavigation().reload({ selector })` (client-side
   refetch; symmetric to the server-side
   `getServerNavigation().reload(...)` used by actions).
 - [`../internals/render-pipeline.md`](../internals/render-pipeline.md)

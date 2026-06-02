@@ -70,7 +70,6 @@ afterEach(() => {
 
 interface FireOpts {
   selector?: string | string[]
-  props?: Record<string, Record<string, unknown>>
 }
 
 interface Capture {
@@ -274,22 +273,6 @@ describe('"@self" token resolution', () => {
     ).split(",")
     expect(labels).toContain("card:xyz")
     expect(labels).toContain("price")
-  })
-
-  it('rekeys props["@self"] to the ambient partial id', async () => {
-    const cap = newCapture()
-    await render(cap, "slow:1")
-
-    await act(async () => {
-      await cap.fire!({
-        selector: "@self",
-        props: { "@self": { flavor: "vanilla" } },
-      })
-    })
-
-    const url = new URL(refetchSpy.mock.calls[0]?.[0] as string)
-    const props = JSON.parse(url.searchParams.get("partialProps") ?? "{}")
-    expect(props).toEqual({ "slow:1": { flavor: "vanilla" } })
   })
 
   it("throws a NavigationError to the boundary when @self is used outside a partial", async () => {

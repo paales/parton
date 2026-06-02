@@ -2120,11 +2120,7 @@ function resolveSelectorToIds(partialsParam: string | null): Set<string> | null 
   return ids.size > 0 ? ids : null
 }
 
-function partialFromSnapshot(
-  id: string,
-  snap: PartialSnapshot,
-  overrideProps: Record<string, unknown> | undefined,
-): ReactNode {
+function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
   const parent: PartialCtx = {
     path: snap.parentPath,
     frameChain: snap.parentFrameChain,
@@ -2167,13 +2163,11 @@ function partialFromSnapshot(
     }
   }
   if (!Component) return null
-  // Replay any call-site props captured during the streaming render
-  // (e.g. `<Slow flavor={…}>`). On top of those, overlay per-request
-  // props the client sent via `?partialProps=` — that's how the
-  // `<WhenStored>` activator delivers a stored value as a prop
-  // without writing it into the URL.
-  const replayProps = (snap.props ?? {}) as Record<string, unknown>
-  const props = overrideProps ? { ...replayProps, ...overrideProps } : replayProps
+  // Replay the call-site props captured during the streaming render
+  // (e.g. `<Slow flavor={…}>`). Request-dependent inputs flow through
+  // `vary` / `match` / cells, which re-resolve when this snapshot's
+  // spec re-renders here.
+  const props = (snap.props ?? {}) as Record<string, unknown>
   // ALWAYS pass the snapshot's id as `__instanceId`. createSpecComponent
   // will use it to set effectiveInstanceId, suppressing the auto-derive
   // step that would otherwise re-hash extraProps and shift the rendered
@@ -2187,19 +2181,6 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
   const partialsParam = requestUrl.searchParams.get("partials")
   const cachedParam = requestUrl.searchParams.get("cached")
   const populateCache = requestUrl.searchParams.has("__populateCache")
-  const partialPropsParam = requestUrl.searchParams.get("partialProps")
-  const partialProps: Record<string, Record<string, unknown>> = (() => {
-    if (!partialPropsParam) return {}
-    try {
-      const parsed = JSON.parse(partialPropsParam) as unknown
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, Record<string, unknown>>
-      }
-    } catch {
-      // Malformed JSON — ignore. Fall through with empty props.
-    }
-    return {}
-  })()
 
   const frameNames = requestUrl.searchParams.getAll("__frame")
   const frameUrls = requestUrl.searchParams.getAll("__frameUrl")
@@ -2302,25 +2283,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     .map((id) => {
       const snap = lookupPartial(id)
       if (!snap) return null
-      // Match override props by effective id first (the @self path
-      // already resolves `"@self"` to the per-instance id on the
-      // client), then fall back to any of the snapshot's selector
-      // labels — a regular `selector: "#slow"` refetch sends
-      // `partialProps: {slow: {...}}` keyed by the bare label
-      // because the client doesn't know the `slow:<hash>` instance
-      // id that the snapshot is stored under. Fan-out is fine: every
-      // matching snapshot under the same label gets the same prop
-      // payload.
-      let override = partialProps[id]
-      if (!override) {
-        for (const label of snap.labels) {
-          if (partialProps[label]) {
-            override = partialProps[label]
-            break
-          }
-        }
-      }
-      return partialFromSnapshot(id, snap, override)
+      return partialFromSnapshot(id, snap)
     })
     .filter((x): x is NonNullable<typeof x> => x != null)
 

@@ -47,7 +47,7 @@ export function CacheControls() {
           url.searchParams.set("flavor", next)
           // Push the new `?flavor=` and refetch just `#slow`. Slow reads
           // `flavor` from the URL via its own `vary`, so the refetch
-          // re-derives it against the updated URL — no prop override.
+          // re-derives it against the updated URL.
           void navigate(url.toString(), {
             history: "push",
             selector: "#slow",

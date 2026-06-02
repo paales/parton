@@ -50,9 +50,9 @@ test("client-side nav from /pokemon/1 to /defer-demo keeps parked ids in ?cached
   )
 
   // Capture the RSC refetch URL when we activate the "manual" partial.
-  // Match specifically on `partials=manual` — activators like WhenVisible
-  // / WhenStored on other defer-demo sections can race into `_.rsc` on
-  // slow parallel runs, and a generic `_.rsc` match would grab theirs.
+  // Match specifically on `partials=manual` — mount/visible activators on
+  // other defer-demo sections can race into `_.rsc` on slow parallel
+  // runs, and a generic `_.rsc` match would grab theirs.
   const rscRequest = page.waitForRequest(
     (req) =>
       req.url().includes("_.rsc") && new URL(req.url()).searchParams.get("partials") === "manual",
@@ -78,15 +78,17 @@ test("client-side nav from /pokemon/1 to /defer-demo keeps parked ids in ?cached
     expect(cachedIds, `expected keepalive id "${id}" to be parked in ?cached=`).toContain(id)
   }
 
-  // Current-page ids SHOULD be present too. `stored` and `any` are
+  // Current-page ids SHOULD be present too. `batch-a` and `any` are
   // unique to /defer-demo, and both sit inside `<body>` where they
-  // register quickly. (`head` is intentionally NOT asserted here — it
-  // lives directly under `<html>` and its `<PartialErrorBoundary>`
-  // commits on a separate reconciliation tick from the body subtree;
-  // the activate-manual click routinely wins that race, so the
-  // assertion would be flaky.) `manual` is the refetch target and is
-  // excluded from `?cached=` by design.
-  expect(cachedIds).toContain("stored")
+  // register quickly (each registers its fingerprint via the wrapper's
+  // `<PartialErrorBoundary>` on first render, dormant or not). (`head`
+  // is intentionally NOT asserted here — it lives directly under
+  // `<html>` and its `<PartialErrorBoundary>` commits on a separate
+  // reconciliation tick from the body subtree; the activate-manual
+  // click routinely wins that race, so the assertion would be flaky.)
+  // `manual` is the refetch target and is excluded from `?cached=` by
+  // design.
+  expect(cachedIds).toContain("batch-a")
   expect(cachedIds).toContain("any")
   expect(cachedIds).not.toContain("manual")
 })

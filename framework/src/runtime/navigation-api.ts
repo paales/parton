@@ -148,21 +148,6 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    */
   silent?: boolean
   /**
-   * Per-partial JSX-style props to send with the refetch. Keyed by
-   * partial id (selector token without the leading `#`). On the
-   * server, these override the snapshot-replayed props in
-   * `partialFromSnapshot` so a deep partial-refetch can carry fresh
-   * call-site values without re-running the parent wrapper.
-   *
-   *   navigate(url, {
-   *     selector: "#slow",
-   *     props: { slow: { flavor: "chocolate" } },
-   *   })
-   *
-   * `<WhenStored>` uses the same wire format under the hood.
-   */
-  props?: Record<string, Record<string, unknown>>
-  /**
    * Cookies to write client-side BEFORE the refetch fetch is issued.
    * Each key is set via `document.cookie = "name=value; path=/; …"`,
    * so the new value travels with the upcoming request and any
@@ -202,8 +187,6 @@ export interface FrameworkReloadOptions extends NavigationReloadOptions {
   selector?: string | string[]
   /** See `FrameworkNavigateOptions.streaming`. */
   streaming?: boolean
-  /** See `FrameworkNavigateOptions.props`. */
-  props?: Record<string, Record<string, unknown>>
   /** Caller-supplied abort signal. Aborting before the reload
    *  completes cancels the in-flight fetch on the client and the
    *  long-poll stream on the server. Components that fire a

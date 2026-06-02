@@ -20,9 +20,9 @@
  * `navigate(url, opts)` / `reload(opts)` methods drive every
  * refetch on the page. Targeted refetches are expressed through the
  * `selector` option (CSS-style `#id` / `.class` tokens) — see
- * {@link FrameworkNavigateOptions}. There is no `usePartial` or
- * `__inputs`: state must land in a URL (page URL or frame URL), and
- * the client never sends prop overrides.
+ * {@link FrameworkNavigateOptions}. State lives in a URL (the page URL
+ * or a frame URL); a spec's request-dependent inputs reach it through
+ * `vary` / `match` / cells, which re-resolve on each refetch.
  */
 
 import React, {
@@ -1008,11 +1008,6 @@ interface RefetchBatchEntry {
    *  Suspense fallbacks. Mirrors the `streaming` option on
    *  `FrameworkNavigateOptions` / `FrameworkReloadOptions`. */
   streaming: boolean
-  /** Per-id props map merged into the wire as `?partialProps=<JSON>`.
-   *  Server reads it in `PartialRoot` and forwards to the spec via
-   *  `partialFromSnapshot` so `<WhenStored>` and similar activators
-   *  can pass values without writing them into the URL. */
-  props?: Record<string, Record<string, unknown>>
   /** Abort signal for the in-flight HTTP fetch on this entry. Per-
    *  selector supersede sets this to a fresh `AbortController`'s signal
    *  and aborts predecessors when the newer fire's `streaming`
@@ -1051,16 +1046,10 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
   }
 
   const labelSet = new Set<string>()
-  const mergedProps: Record<string, Record<string, unknown>> = {}
   let streamingMode = false
   for (const entry of batch) {
     for (const l of entry.labels) labelSet.add(l)
     if (entry.streaming) streamingMode = true
-    if (entry.props) {
-      for (const [id, p] of Object.entries(entry.props)) {
-        mergedProps[id] = { ...(mergedProps[id] ?? {}), ...p }
-      }
-    }
   }
 
   // Combine per-entry signals so the batched fetch aborts when any
@@ -1081,9 +1070,6 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
   const url = new URL(window.location.href)
   if (labelSet.size > 0) url.searchParams.set("partials", [...labelSet].join(","))
   if (streamingMode) url.searchParams.set("streaming", "1")
-  if (Object.keys(mergedProps).length > 0) {
-    url.searchParams.set("partialProps", JSON.stringify(mergedProps))
-  }
 
   // Send cached fingerprints so the server can fp-skip unchanged
   // partials. With a selector, strip cached tokens whose id prefix
@@ -1639,7 +1625,6 @@ function parseOptionsSelector(
  *   - `selector: "@self"`             — single token
  *   - `selector: ["@self", ".price"]` — array form, mixed freely
  *   - `selector: "@self .price"`      — space-separated string
- *   - `props: { "@self": {...} }`     — same resolution on the key
  *
  * If `@self` appears but the call site is outside any partial
  * (ambient id is null), throws a clear error rather than silently
@@ -1654,11 +1639,6 @@ function containsSelfInSelector(s: string | string[] | undefined): boolean {
   return s.split(/\s+/).some((t) => t === SELF_TOKEN)
 }
 
-function containsSelfInProps(p: Record<string, unknown> | undefined): boolean {
-  if (p == null) return false
-  return Object.prototype.hasOwnProperty.call(p, SELF_TOKEN)
-}
-
 function replaceSelfInSelector(
   s: string | string[],
   id: string,
@@ -1670,34 +1650,18 @@ function replaceSelfInSelector(
     .join(" ")
 }
 
-function replaceSelfInProps<V>(p: Record<string, V>, id: string): Record<string, V> {
-  if (!containsSelfInProps(p)) return p
-  const out: Record<string, V> = {}
-  for (const [k, v] of Object.entries(p)) out[k === SELF_TOKEN ? id : k] = v
-  return out
-}
-
 function resolveSelfInReloadOptions(
   options: FrameworkReloadOptions | undefined,
   ambientId: string | null,
 ): FrameworkReloadOptions | undefined {
   if (!options) return options
-  const inSelector = containsSelfInSelector(options.selector)
-  const inProps = containsSelfInProps(options.props)
-  if (!inSelector && !inProps) return options
+  if (!containsSelfInSelector(options.selector)) return options
   if (!ambientId) {
     throw new Error(
       `"${SELF_TOKEN}" used outside a partial — no enclosing partial id is available`,
     )
   }
-  const next: FrameworkReloadOptions = { ...options }
-  if (inSelector && options.selector !== undefined) {
-    next.selector = replaceSelfInSelector(options.selector, ambientId)
-  }
-  if (inProps && options.props !== undefined) {
-    next.props = replaceSelfInProps(options.props, ambientId)
-  }
-  return next
+  return { ...options, selector: replaceSelfInSelector(options.selector!, ambientId) }
 }
 
 function resolveSelfInNavigateOptions(
@@ -1705,22 +1669,13 @@ function resolveSelfInNavigateOptions(
   ambientId: string | null,
 ): FrameworkNavigateOptions | undefined {
   if (!options) return options
-  const inSelector = containsSelfInSelector(options.selector)
-  const inProps = containsSelfInProps(options.props)
-  if (!inSelector && !inProps) return options
+  if (!containsSelfInSelector(options.selector)) return options
   if (!ambientId) {
     throw new Error(
       `"${SELF_TOKEN}" used outside a partial — no enclosing partial id is available`,
     )
   }
-  const next: FrameworkNavigateOptions = { ...options }
-  if (inSelector && options.selector !== undefined) {
-    next.selector = replaceSelfInSelector(options.selector, ambientId)
-  }
-  if (inProps && options.props !== undefined) {
-    next.props = replaceSelfInProps(options.props, ambientId)
-  }
-  return next
+  return { ...options, selector: replaceSelfInSelector(options.selector!, ambientId) }
 }
 
 // ─── Frame entry projection ───────────────────────────────────────
@@ -1894,7 +1849,6 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
           const refetch = enqueueRefetch({
             labels: parsed.labels,
             streaming: options?.streaming ?? false,
-            props: options?.props,
           })
           await refetch.streaming
           m.streaming.resolve()
@@ -1974,7 +1928,6 @@ function buildWindowNavigationHandle(): ImperativeNavigation {
           const refetch = enqueueRefetch({
             labels: parsed.labels,
             streaming: options?.streaming ?? false,
-            props: options?.props,
             signal: options?.signal,
           })
           await refetch.streaming
@@ -2692,17 +2645,16 @@ export function useNavigation(name?: string): FrameworkNavigation {
  * re-subscribe on prop changes, remount the activator by setting a
  * `key` that changes with those props.
  *
- * Note: activators do not pass prop overrides to the Partial.
- * If the activated content needs dynamic data, the activator should
- * write that data to a URL (page URL via `useNavigation().navigate`
- * or a frame URL via `useNavigation("name").navigate`) so the server reads
- * it via tracked accessors on re-render.
+ * Note: activators are triggers. If the activated content needs
+ * dynamic data, the activator writes that data to a scope the spec
+ * reads via `vary` — the page URL via `useNavigation().navigate`, a
+ * frame URL via `useNavigation("name").navigate`, or a cookie — so the
+ * server re-resolves it on the refetch.
  */
-/** Fire signature: optionally pass a `props` payload that the server
- *  forwards to the activated spec as JSX-like props (the `<WhenStored>`
- *  and similar activators use this so values flow without writing
- *  to the URL). */
-export type ActivatorFire = (payload?: { props?: Record<string, unknown> }) => void
+/** Fire signature: an activation trigger. Request-dependent inputs
+ *  reach the activated spec through `vary` / `match` / cells, which
+ *  re-resolve on the refetch. */
+export type ActivatorFire = () => void
 
 export function useActivate(
   partialId: string,
@@ -2723,21 +2675,17 @@ export function useActivate(
   framePathRef.current = framePath
 
   useEffect(() => {
-    const cleanup = subscribeRef.current((payload) => {
+    const cleanup = subscribeRef.current(() => {
       if (once && firedRef.current) return
       firedRef.current = true
       // Funnel activator-driven refetches through the same imperative
-      // `reload` surface that `<CacheControls>` etc. use — one path
-      // for "refetch this partial with these props", batched by the
-      // same microtask coalescer. AbortError / NavigationError
-      // surface via the public hook layer; an activator-internal
-      // fire is fire-and-forget so we don't await.
+      // `reload` surface other triggers use — one path, batched by the
+      // same microtask coalescer. AbortError / NavigationError surface
+      // via the public hook layer; an activator-internal fire is
+      // fire-and-forget so we don't await.
       const handle =
         framePathRef.current.length > 0 ? _frame(framePathRef.current) : _windowNav()
-      void handle.reload({
-        selector: [`#${partialId}`],
-        props: payload?.props ? { [partialId]: payload.props } : undefined,
-      })
+      void handle.reload({ selector: [`#${partialId}`] })
     })
     return () => {
       if (typeof cleanup === "function") cleanup()

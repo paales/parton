@@ -207,11 +207,10 @@ return (
 )
 ```
 
-Works in `selector` (string or array, mixed with other labels) and
-as a `props` key:
+Works in `selector`, as a string or an array mixed with other labels:
 
 ```tsx
-reload({ selector: ["@self", ".price"], props: { "@self": { warm: true } } })
+reload({ selector: ["@self", ".price"] })
 ```
 
 Used outside any partial, `@self` rejects every milestone with a
@@ -250,34 +249,18 @@ signal, not a failure — `finished` flips true, `error` stays
 unsurfaced, nothing bubbles. Inline `.catch` handlers should treat
 `err.name === "AbortError"` as a no-op.
 
-### Targeted refetch with explicit props
+### Driving a refetch with fresh data
 
-Both `navigate` and `reload` accept an optional `props` bag that
-threads JSX-style call-site props into the targeted refetch:
-
-```tsx
-const [navigate] = useNavigation().navigate()
-navigate(url, {
-  selector: "slow",
-  props: { slow: { flavor: "chocolate" } },
-})
-```
-
-Keys are partial ids (the same string you'd pass as a selector).
-On the server, these props override the snapshot-replayed call-site
-props in `partialFromSnapshot`, so a deep partial-refetch can carry
-fresh values without re-running the parent wrapper. The values land
-in `Render`'s prop bag alongside any vary-derived keys (vary still
-wins on collision). Cached specs that should react to a prop change
-need to read the same value from the URL in their own `vary` — a
-cache-mode refetch derives its key from `vary`'s output, not from
-the threaded prop.
-
-The wire format is `?partialProps={"<id>":{<propName>:<value>}}`.
-`<WhenStored>` and the other activators all funnel through this
-same surface — `useActivate(...).fire({ props })` calls the
-imperative reload path internally with `{ selector, props }`, so
-there's exactly one refetch path.
+A targeted refetch carries a *signal* — the `selector` — and the
+re-rendered spec sources its request-dependent inputs through `vary` /
+`match` / cells, which re-resolve against the current request. To drive
+a refetch with a fresh value, write it where the spec reads it: the
+page URL (`navigate(url, { selector })`), a frame URL, or a cookie
+(`navigate(url, { cookies, selector })`). A cache-mode refetch derives
+its fingerprint from `vary`'s output, so an input moves the result when
+it flows through one of those scopes. Activators (`useActivate` —
+`<WhenVisible>`, `<WhenMounted>`, manual buttons) are triggers that
+fire `reload({ selector })`.
 
 ### Other commit knobs
 

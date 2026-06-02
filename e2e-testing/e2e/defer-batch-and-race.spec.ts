@@ -1,12 +1,12 @@
 import { test, expect, request } from "./fixtures"
 
 /**
- * /defer-demo § 4-5 — dispatch behavior under concurrent activations.
+ * /defer-demo § 2,5 — dispatch behavior under concurrent activations.
  *
- *   § 4 Batched activation: two <WhenStored> Partials with pre-set
- *       keys activate in the same commit pass. The microtask-batched
- *       dispatch should coalesce them into ONE RSC request listing
- *       both ids in ?partials=.
+ *   § 2 Batched activation: two <WhenMounted> Partials activate in the
+ *       same commit pass. The microtask-batched dispatch should
+ *       coalesce them into ONE RSC request listing both ids in
+ *       ?partials=.
  *
  *   § 5 Streaming + defer race: a slow async Partial suspends on
  *       initial render; a neighboring deferred Partial activates
@@ -21,18 +21,9 @@ test.beforeEach(async ({ baseURL }) => {
 })
 
 test.describe("defer batching + race", () => {
-  test("two <WhenStored> pre-set keys coalesce into one RSC request", async ({ page }) => {
-    // Pre-set both keys BEFORE navigation so each activator's useEffect
-    // calls `fire()` synchronously in the same commit pass.
-    await page.addInitScript(() => {
-      try {
-        localStorage.setItem("batch-a-key", "hello-a")
-        localStorage.setItem("batch-b-key", "hello-b")
-      } catch {
-        /* ignore */
-      }
-    })
-
+  test("two <WhenMounted> partials coalesce into one RSC request", async ({ page }) => {
+    // Both batch partials activate on mount, so each activator's
+    // useEffect calls `fire()` in the same commit pass.
     const rscCalls: Array<{ partials: string | null; url: string }> = []
     page.on("request", (req) => {
       const url = req.url()

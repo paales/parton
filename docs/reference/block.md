@@ -37,7 +37,7 @@ refetch path. Differences:
 - **Singleton CMS binding falls out of the spec's id.** A spec like
   `selector: "#app-nav"` (or just `selector: "app-nav"`) has id
   `"app-nav"` — also the CMS storage row it reads from. Placed once
-  via JSX without any prop override.
+  via JSX; the framework binds its CMS content by id.
 
 ## Options
 
