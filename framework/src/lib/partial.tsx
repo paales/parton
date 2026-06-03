@@ -61,6 +61,10 @@ import {
   getRequest,
   parseCookies,
 } from "../runtime/context.ts"
+import {
+  HEADER_RSC_RENDER,
+  stripFrameworkParams,
+} from "../runtime/request.tsx"
 import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
 import {
   createSessionReadSurface,
@@ -169,10 +173,17 @@ function searchParamsToRecord(sp: URLSearchParams): Record<string, string> {
   return out
 }
 
-/** Lowercase + flatten a `Headers` instance into a plain record. */
+/** Lowercase + flatten a `Headers` instance into a plain record.
+ *  Framework-internal `x-parton-*` headers (e.g. the RSC-render marker)
+ *  are dropped so they never reach a spec's `vary` header surface or
+ *  fold into its fingerprint. */
 function headersToRecord(h: Headers): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [k, v] of h) out[k.toLowerCase()] = v
+  for (const [k, v] of h) {
+    const lk = k.toLowerCase()
+    if (lk.startsWith("x-parton-")) continue
+    out[lk] = v
+  }
   return out
 }
 
@@ -2191,6 +2202,19 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     }
   }
 
+  // Page URL seeded into the payload for descendant client components'
+  // SSR / pre-hydration paint (see `PageUrlContext`). Two economies:
+  //   - On a client-driven `.rsc` refetch the value is never read — the
+  //     live Navigation API is the source of truth once `window.navigation`
+  //     exists, which it always does on any path that issued the refetch.
+  //     So omit it (`null`) and save the whole row.
+  //   - On an SSR document, strip framework-internal params first. They're
+  //     already consumed above (`partials`/`cached`/`__frame`/…) and must
+  //     never echo back into the payload — the `?cached=` list alone runs
+  //     to kilobytes and grows with the page.
+  const isRscRender = getRequest().headers.get(HEADER_RSC_RENDER) === "1"
+  const pageUrl = isRscRender ? null : stripFrameworkParams(getRequest().url)
+
   const routeKey = computeRouteKey(getRequest().url)
 
   // Pre-enter the registry context so the lookups below
@@ -2278,7 +2302,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     // app-side wiring. Ignored after hydration, when the live browser
     // handle takes over. Frame scope gets the equivalent from `<Frame>`.
     return (
-      <PageUrlProvider url={getRequest().url}>
+      <PageUrlProvider url={pageUrl}>
         <PartialsClient mode="streaming">{children}</PartialsClient>
       </PageUrlProvider>
     )
@@ -2307,7 +2331,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
   // under it torn down and recreated ~60×/s (the inspect-overlay flicker).
   // Matching wrappers lets React reconcile the two payloads in place.
   return (
-    <PageUrlProvider url={getRequest().url}>
+    <PageUrlProvider url={pageUrl}>
       {React.createElement(PartialsClient, { mode: "cache" }, ...wrappedChildren)}
     </PageUrlProvider>
   )

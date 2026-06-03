@@ -44,10 +44,23 @@ ids the route's hint table knows about.
 ## Both modes share one payload root
 
 Whatever the mode, `PartialRoot` returns the SAME outer shape:
-`<PageUrlProvider url={request.url}><PartialsClient mode=…>…`. The
+`<PageUrlProvider url={pageUrl}><PartialsClient mode=…>…`. The
 root element type must match across modes, because a single page can
 hold two live connections that commit onto the same React root as
 alternating `BrowserRoot` payloads:
+
+The `url` prop is the SSR / pre-hydration seed for descendant client
+components' `useNavigation()` (see `PageUrlContext`) — consulted only
+while `window.navigation` is absent. So `PartialRoot` only serializes it
+on the **SSR document** render (where it strips framework-internal params
+like `?cached=` first — those are consumed off the raw request and must
+not echo back). On a client-driven `.rsc` refetch the value is never read
+(the live Navigation API supersedes it), so `pageUrl` is `null` and the
+whole row drops — the `?cached=` token list alone would otherwise run to
+kilobytes echoed back on every navigation. The element type stays
+`PageUrlProvider` either way, so the cross-mode reconciliation below holds.
+`PartialRoot` distinguishes the two via the `x-parton-render` header that
+`parseRenderRequest` stamps on `.rsc` requests.
 
 - the chat overlay's frame refetch becomes a `markConnectionLive`
   long-poll and commits in **cache mode**;

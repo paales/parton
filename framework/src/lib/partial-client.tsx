@@ -1299,12 +1299,17 @@ export const PartialIdContext = createContext<string | null>(null)
 /**
  * The current page URL, threaded from the server render through Flight
  * so client components resolve it on the initial (SSR) paint — before
- * the browser Navigation API exists. The app seeds it once at the root
- * (`<PageUrlProvider url={getServerNavigation().currentUrl}>`); after
- * hydration `useNavigation()` reads the live browser URL instead, so
- * this value is consulted only while `window.navigation` is absent
- * (SSR / pre-hydration). This is what makes `useNavigation()`
- * isomorphic: server-correct on first paint, browser-driven after.
+ * the browser Navigation API exists. `PartialRoot` seeds it at the root;
+ * after hydration `useNavigation()` reads the live browser URL instead,
+ * so this value is consulted only while `window.navigation` is absent
+ * (SSR / pre-hydration). This is what makes `useNavigation()` isomorphic:
+ * server-correct on first paint, browser-driven after.
+ *
+ * Because it's never read on a client-driven `.rsc` refetch (the live
+ * Navigation API is present there), `PartialRoot` seeds it as `null` on
+ * those — serializing the URL would echo the framework-internal `?cached=`
+ * query (kilobytes) back into every payload for nothing. It carries a
+ * real (framework-param-stripped) string only on the SSR document render.
  */
 export const PageUrlContext = createContext<string | null>(null)
 
@@ -1318,7 +1323,10 @@ export function PageUrlProvider({
   url,
   children,
 }: {
-  url: string
+  /** `null` on a client-driven `.rsc` refetch — the live Navigation API
+   *  supersedes this seed there, so the server omits it (see
+   *  `PartialRoot`). A string only on the SSR document paint. */
+  url: string | null
   children: ReactNode
 }) {
   return <PageUrlContext value={url}>{children}</PageUrlContext>
