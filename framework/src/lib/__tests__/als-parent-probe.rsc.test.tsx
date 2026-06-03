@@ -1,13 +1,18 @@
 /**
- * PROBE — does `als.run(ctx, () => renderToReadableStream(tree))` carry
- * `ctx` into an ASYNC descendant, and can a nested boundary give its
- * subtree a different ctx while the outer ctx is unaffected?
+ * Regression documenting why a parton's `parent` rides server context
+ * (React's Flight task graph — see [[server-context]]) rather than an
+ * `AsyncLocalStorage`:
  *
- * This is the load-bearing question for runtime `parent` removal: if it
- * holds, every parton can read its `parent` from an ALS context set by
- * the boundary that renders it, instead of taking it as a prop.
+ *  - `als.run(ctx, () => renderToReadableStream(tree))` DOES carry `ctx`
+ *    into async descendants — but only across a dedicated per-parton
+ *    `renderToReadableStream` boundary, which we don't want (extra
+ *    serialization, and the incremental SSR decode of deeply-nested
+ *    bodies breaks).
+ *  - `als.enterWith(ctx)` (the cheap, no-boundary alternative)
+ *    cross-contaminates sibling partons under React's breadth-first
+ *    async traversal — the disqualifying failure.
  *
- * Delete once the mechanism is built (or kept as a regression).
+ * So neither ALS strategy works in-place; the task-graph patch does.
  */
 
 import { describe, expect, it } from "vitest"
