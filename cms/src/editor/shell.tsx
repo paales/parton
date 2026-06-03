@@ -1329,12 +1329,23 @@ export const EditorShell = parton(
       // there's no URL-param sync side-effect. Tests set the cookie
       // directly via `context.addCookies` before navigating.
       const editor = cookies[EDITOR_COOKIE] === "1"
-      const isPreviewFrameRefetch = url.searchParams.getAll("__frame").includes("preview")
+      // When the editor is off — every non-authoring visit, the common
+      // case — the Render returns `null`, so feed the fingerprint STABLE
+      // values rather than the live URL. That keeps editor-shell's fp
+      // constant across navigation: after the first (null-body) render it
+      // fp-skips to a bare placeholder instead of re-emitting its
+      // error-boundary and drifting on `currentUrl` every single nav.
+      // Editor on: the real URL drives the chrome and its (legitimate)
+      // per-page fingerprint. Parking via a `null` vary is wrong here —
+      // keepalive would leave the prior chrome hidden in the DOM, so the
+      // close button couldn't clear it.
+      const isPreviewFrameRefetch =
+        editor && url.searchParams.getAll("__frame").includes("preview")
       return {
         editor,
-        selected: selectedParam,
-        currentUrl: url.toString(),
-        previewUrl: derivePreviewUrl(url),
+        selected: editor ? selectedParam : null,
+        currentUrl: editor ? url.toString() : "",
+        previewUrl: editor ? derivePreviewUrl(url) : "",
         isPreviewFrameRefetch,
       }
     },
