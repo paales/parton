@@ -120,12 +120,12 @@ const FooterBar = parton(function FooterBarRender() {
 })
 
 export const CacheStreamingDemoPage = parton(
-  function CacheStreamingDemoRender({ parent }: RenderArgs) {
+  function CacheStreamingDemoRender() {
     return (
       <>
-        <HeaderBar parent={parent} />
-        <CachedRegion parent={parent} />
-        <FooterBar parent={parent} />
+        <HeaderBar />
+        <CachedRegion />
+        <FooterBar />
       </>
     )
   },

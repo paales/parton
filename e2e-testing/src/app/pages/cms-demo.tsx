@@ -24,10 +24,10 @@ export const CmsDemoRootBlock = block(
 )
 
 export const CmsDemoPage = parton(
-  function CmsDemoExplainerRender({ parent }) {
+  function CmsDemoExplainerRender() {
     return (
       <>
-        <CmsDemoRootBlock parent={parent} />
+        <CmsDemoRootBlock />
 
         <Card className="mt-8 p-5">
           <CardContent className="px-0 text-sm text-muted-foreground">

@@ -293,7 +293,7 @@ const PokemonOverviewContent = parton(
 )
 
 export const InspectDrawer1 = parton(
-  function InspectDrawer1Render({ id, parent }: { id: string } & RenderArgs) {
+  function InspectDrawer1Render({ id }: { id: string } & RenderArgs) {
     // `match` only renders this once an `:id` is on the URL, so the
     // drawer is always "open" while mounted and each pokemon is its own
     // parked variant (matchKey = hash(id)). Dismissing navigates to
@@ -308,7 +308,7 @@ export const InspectDrawer1 = parton(
         description="Drawer 1 · slides from left · /inspect/p/:id"
       >
         <div className="flex-1 overflow-y-auto px-4 py-3">
-          <PokemonOverviewContent parent={parent} id={id} />
+          <PokemonOverviewContent id={id} />
         </div>
         <title>Inspect — Pokémon #{id}</title>
       </StackedDrawer>
@@ -430,7 +430,7 @@ const MoveDetailContent = parton(
 )
 
 export const InspectDrawer2 = parton(
-  function InspectDrawer2Render({ id, parent }: { id: string } & RenderArgs) {
+  function InspectDrawer2Render({ id }: { id: string } & RenderArgs) {
     // Moves list — its own overlay. `match "{/*}?"` keeps it mounted
     // while the move-detail overlay stacks on top at `/moves/:moveId`.
     return (
@@ -444,7 +444,7 @@ export const InspectDrawer2 = parton(
       >
         <div className="flex-1 min-h-0 overflow-hidden">
           <DrawerScrollArea scrollKey={`drawer-2-list-${id}`}>
-            <PokemonMovesContent parent={parent} id={id} />
+            <PokemonMovesContent id={id} />
           </DrawerScrollArea>
         </div>
         <title>Inspect — Moves of #{id}</title>
@@ -463,7 +463,6 @@ export const InspectDrawer3 = parton(
   function InspectDrawer3Render({
     id,
     moveId,
-    parent,
   }: { id: string; moveId: string } & RenderArgs) {
     // Move detail — its own overlay above the moves list. Closing
     // navigates back to `/moves`, which unmatches and parks it.
@@ -478,7 +477,7 @@ export const InspectDrawer3 = parton(
       >
         <div className="flex-1 min-h-0 overflow-hidden">
           <DrawerScrollArea scrollKey={`drawer-3-detail-${moveId}`}>
-            <MoveDetailContent parent={parent} id={id} moveId={moveId} />
+            <MoveDetailContent id={id} moveId={moveId} />
           </DrawerScrollArea>
         </div>
         <title>Inspect — Move #{moveId}</title>

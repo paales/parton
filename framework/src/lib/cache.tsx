@@ -29,6 +29,8 @@ import { spliceHoles, stripHoles, type HoleRef, type SpliceMeta } from "./flight
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { partialFromSnapshot } from "./partial.tsx"
+import { captureCurrentTask, getAmbientParent, setTaskChildContext } from "./server-context.ts"
+import { type PartialCtx } from "./partial-context.ts"
 import { getScope } from "../runtime/context.ts"
 import { lookupPartial, registerPartial, type PartialSnapshot } from "./partial-registry.ts"
 import type { CacheOptions } from "./cache-options.ts"
@@ -235,6 +237,16 @@ interface CacheProps {
   children: ReactNode
 }
 
+/** Seeds the ambient parent for an isolated cache render: the cached
+ *  body renders through its own `renderToReadableStream` (a fresh task
+ *  tree), so its inner partons would otherwise read `ROOT`. This sets the
+ *  root task's child context to the cached parton's context, so the body's
+ *  partons inherit the same parent they'd have inline. */
+function SeedContext({ parent, children }: { parent: PartialCtx; children: ReactNode }): ReactNode {
+  setTaskChildContext(captureCurrentTask(), parent)
+  return children
+}
+
 export async function Cache({
   id,
   fingerprint,
@@ -242,7 +254,12 @@ export async function Cache({
   varyResult,
   children,
 }: CacheProps): Promise<ReactNode> {
-  return cacheImpl(id, fingerprint, options, varyResult, children)
+  // Capture the cached parton's context synchronously here (the `<Cache>`
+  // element is rendered inside the parton's body, so its ambient parent IS
+  // the parton's child context). The isolated body renders are seeded with
+  // it so their partons thread correctly.
+  const bodyParent = getAmbientParent()
+  return cacheImpl(id, fingerprint, options, varyResult, children, bodyParent)
 }
 
 async function cacheImpl(
@@ -251,6 +268,7 @@ async function cacheImpl(
   options: CacheOptions,
   varyResult: unknown,
   children: ReactNode,
+  bodyParent: PartialCtx,
 ): Promise<ReactNode> {
   const { store, refreshing, inFlightMiss } = state()
 
@@ -266,7 +284,7 @@ async function cacheImpl(
   if (existing && (existing.expiresAt > now || existing.staleUntil > now)) {
     if (existing.expiresAt <= now && !refreshing.has(key)) {
       refreshing.add(key)
-      void refreshEntry(key, children, options)
+      void refreshEntry(key, children, options, bodyParent)
         .catch((err) => console.error(`[cache] SWR refresh failed for ${key}:`, err))
         .finally(() => refreshing.delete(key))
     }
@@ -276,7 +294,7 @@ async function cacheImpl(
   // ── Miss path ──
   let pending = inFlightMiss.get(baseKey)
   if (!pending) {
-    pending = renderMissAndStore(key, children, options).finally(() =>
+    pending = renderMissAndStore(key, children, options, bodyParent).finally(() =>
       inFlightMiss.delete(baseKey),
     )
     inFlightMiss.set(baseKey, pending)
@@ -289,9 +307,10 @@ async function renderMissAndStore(
   key: string,
   children: ReactNode,
   options: CacheOptions,
+  bodyParent: PartialCtx,
 ): Promise<{ liveTree: ReactNode }> {
   const { store } = state()
-  const stream = renderToReadableStream(children)
+  const stream = renderToReadableStream(<SeedContext parent={bodyParent}>{children}</SeedContext>)
   const [userBranch, storageBranch] = stream.tee()
 
   // Storage: buffer the rendered bytes, strip holes, capture snapshots.
@@ -315,9 +334,16 @@ async function renderMissAndStore(
   return { liveTree }
 }
 
-async function refreshEntry(key: string, children: ReactNode, options: CacheOptions): Promise<void> {
+async function refreshEntry(
+  key: string,
+  children: ReactNode,
+  options: CacheOptions,
+  bodyParent: PartialCtx,
+): Promise<void> {
   const { store } = state()
-  const rawBytes = await readAll(renderToReadableStream(children))
+  const rawBytes = await readAll(
+    renderToReadableStream(<SeedContext parent={bodyParent}>{children}</SeedContext>),
+  )
   const { bytes, holes, meta } = stripHoles(rawBytes)
   await store.set(
     key,

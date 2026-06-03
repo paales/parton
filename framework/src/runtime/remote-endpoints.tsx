@@ -181,7 +181,7 @@ export function createRemoteHandler(
       const { result: stream } = await runWithRequestAsync(request, async () => {
         enterRequestRegistry("__remote", "streaming")
         return runWithCapability(capability, () => {
-          const flightStream = opts.renderToFlightStream(<Component parent={ROOT} />)
+          const flightStream = opts.renderToFlightStream(<Component />)
           return wrapStreamWithSnapshotTrailer(flightStream, () => {
             const reg = getActiveRegistry()
             return reg ? reg.pendingWrites : new Map()

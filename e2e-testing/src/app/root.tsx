@@ -55,35 +55,35 @@ export function Root() {
             {/* Site content lives in a centered, max-width column. */}
             <div className="mx-auto min-h-screen max-w-225 p-8" data-testid="page-shell">
               <AppNav />
-              <PokemonOverviewPage parent={ROOT} />
-              <PokemonDetailPage parent={ROOT} />
-              <CacheDemoPage parent={ROOT} />
-              <CacheStreamingDemoPage parent={ROOT} />
-              <RemoteFrameDemoPage parent={ROOT} />
-              <RemoteFrameCrossOriginDemoPage parent={ROOT} />
-              <CmsDemoPage parent={ROOT} />
-              <DeferDemoPage parent={ROOT} />
-              <SelectorDemoPage parent={ROOT} />
-              <SentinelsDemoPage parent={ROOT} />
-              <NotFoundDemoPage parent={ROOT} />
-              <RedirectDemoPage parent={ROOT} />
-              <StreamingDemoPage parent={ROOT} />
-              <DeferredDemoPage parent={ROOT} />
-              <CursorsPage parent={ROOT} />
-              <FormsDemoPage parent={ROOT} />
-              <FramesDemoPage parent={ROOT} />
-              <BarePage parent={ROOT} />
-              <ChatNotesPage parent={ROOT} />
-              <MagentoPage parent={ROOT} />
-              <MagentoCartPage parent={ROOT} />
-              <InspectBasePage parent={ROOT} />
-              <InspectDrawer1 parent={ROOT} />
-              <InspectDrawer2 parent={ROOT} />
-              <InspectDrawer3 parent={ROOT} />
-              <NotFoundFallback parent={ROOT} />
+              <PokemonOverviewPage />
+              <PokemonDetailPage />
+              <CacheDemoPage />
+              <CacheStreamingDemoPage />
+              <RemoteFrameDemoPage />
+              <RemoteFrameCrossOriginDemoPage />
+              <CmsDemoPage />
+              <DeferDemoPage />
+              <SelectorDemoPage />
+              <SentinelsDemoPage />
+              <NotFoundDemoPage />
+              <RedirectDemoPage />
+              <StreamingDemoPage />
+              <DeferredDemoPage />
+              <CursorsPage />
+              <FormsDemoPage />
+              <FramesDemoPage />
+              <BarePage />
+              <ChatNotesPage />
+              <MagentoPage />
+              <MagentoCartPage />
+              <InspectBasePage />
+              <InspectDrawer1 />
+              <InspectDrawer2 />
+              <InspectDrawer3 />
+              <NotFoundFallback />
             </div>
-            <EditorShell parent={ROOT} />
-            <ChatOverlay parent={ROOT} />
+            <EditorShell />
+            <ChatOverlay />
           </body>
         </html>
       </PartialRoot>

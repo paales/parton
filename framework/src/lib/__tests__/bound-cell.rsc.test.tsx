@@ -75,7 +75,7 @@ describe("cell.with(args) — bound cells", () => {
 
     const out = await flightAt(
       "http://t/cart",
-      <Line parent={ROOT} item={cartItem.with({ itemId: "A" })} />,
+      <Line item={cartItem.with({ itemId: "A" })} />,
     )
     expect(out).toContain('"children":3')
   })
@@ -100,13 +100,13 @@ describe("cell.with(args) — bound cells", () => {
     )
     const out = await flightAt(
       "http://t/r",
-      <Page parent={ROOT} data={remote.with({ id: "42" })} />,
+      <Page data={remote.with({ id: "42" })} />,
     )
     expect(out).toContain('"children":"loaded-42"')
     expect(loadCalls).toBe(1)
 
     // Subsequent read with same args: storage warm, loader skipped.
-    await flightAt("http://t/r", <Page parent={ROOT} data={remote.with({ id: "42" })} />)
+    await flightAt("http://t/r", <Page data={remote.with({ id: "42" })} />)
     expect(loadCalls).toBe(1)
   })
 })
@@ -130,11 +130,11 @@ describe("partition-scoped invalidation", () => {
 
     const aBefore = await flightAt(
       "http://t/c",
-      <Line parent={ROOT} item={cartItem.with({ itemId: "A" })} />,
+      <Line item={cartItem.with({ itemId: "A" })} />,
     )
     const bBefore = await flightAt(
       "http://t/c",
-      <Line parent={ROOT} item={cartItem.with({ itemId: "B" })} />,
+      <Line item={cartItem.with({ itemId: "B" })} />,
     )
     const fpABefore = aBefore.match(/partialFingerprint":"([0-9a-f]+)/)![1]
     const fpBBefore = bBefore.match(/partialFingerprint":"([0-9a-f]+)/)![1]
@@ -144,11 +144,11 @@ describe("partition-scoped invalidation", () => {
 
     const aAfter = await flightAt(
       "http://t/c",
-      <Line parent={ROOT} item={cartItem.with({ itemId: "A" })} />,
+      <Line item={cartItem.with({ itemId: "A" })} />,
     )
     const bAfter = await flightAt(
       "http://t/c",
-      <Line parent={ROOT} item={cartItem.with({ itemId: "B" })} />,
+      <Line item={cartItem.with({ itemId: "B" })} />,
     )
     const fpAAfter = aAfter.match(/partialFingerprint":"([0-9a-f]+)/)![1]
     const fpBAfter = bAfter.match(/partialFingerprint":"([0-9a-f]+)/)![1]
@@ -173,7 +173,7 @@ describe("partition-scoped invalidation", () => {
     // Initial render — A is empty, returns default null.
     const before = await flightAt(
       "http://t/c",
-      <Line parent={ROOT} item={cartItem.with({ itemId: "A" })} />,
+      <Line item={cartItem.with({ itemId: "A" })} />,
     )
     expect(before).toContain('"children":"—"')
 
@@ -187,7 +187,7 @@ describe("partition-scoped invalidation", () => {
     // Next render reads it back.
     const after = await flightAt(
       "http://t/c",
-      <Line parent={ROOT} item={cartItem.with({ itemId: "A" })} />,
+      <Line item={cartItem.with({ itemId: "A" })} />,
     )
     expect(after).toContain('"children":7')
 
@@ -226,7 +226,7 @@ describe("constraint surface merges vary + bound args", () => {
     // because vary's catId is in the constraint surface.
     const a = await flightAt(
       "http://t/m/1",
-      <Mixed parent={ROOT} item={item.with({ itemId: "A" })} />,
+      <Mixed item={item.with({ itemId: "A" })} />,
     )
     const fpA = a.match(/partialFingerprint":"([0-9a-f]+)/)![1]
 
@@ -235,7 +235,7 @@ describe("constraint surface merges vary + bound args", () => {
     refreshSelector("cell:test.constraints.item?itemId=A")
     const aAfter = await flightAt(
       "http://t/m/1",
-      <Mixed parent={ROOT} item={item.with({ itemId: "A" })} />,
+      <Mixed item={item.with({ itemId: "A" })} />,
     )
     const fpAAfter = aAfter.match(/partialFingerprint":"([0-9a-f]+)/)![1]
     expect(fpAAfter).not.toEqual(fpA)
@@ -258,7 +258,7 @@ describe("BoundCell.hydrate — write storage without firing signal", () => {
 
     const before = await flightAt(
       "http://t/h",
-      <Line parent={ROOT} item={item.with({ id: "A" })} />,
+      <Line item={item.with({ id: "A" })} />,
     )
     const fpBefore = before.match(/partialFingerprint":"([0-9a-f]+)/)![1]
 
@@ -273,7 +273,7 @@ describe("BoundCell.hydrate — write storage without firing signal", () => {
     // bound cell.
     const after = await flightAt(
       "http://t/h",
-      <Line parent={ROOT} item={item.with({ id: "A" })} />,
+      <Line item={item.with({ id: "A" })} />,
     )
     expect(after).toContain('"children":5')
     const fpAfter = after.match(/partialFingerprint":"([0-9a-f]+)/)![1]
@@ -364,14 +364,13 @@ describe("merged cart granularity — parent re-renders, only the touched line f
     const Cart = parton(
       function GranCartRender({
         cart,
-        parent,
       }: { cart: ResolvedCell<{ total: number; uids: string[] } | null> } & RenderArgs) {
         const uids = cart.value?.uids ?? []
         return (
           <main>
             <span data-testid="total">{`total ${cart.value?.total ?? 0}`}</span>
             {uids.map((uid) => (
-              <Line key={uid} parent={parent} item={line.with({ uid })} />
+              <Line key={uid} item={line.with({ uid })} />
             ))}
           </main>
         )
@@ -386,7 +385,7 @@ describe("merged cart granularity — parent re-renders, only the touched line f
 
     const tree = (
       <PartialRoot>
-        <Cart parent={ROOT} />
+        <Cart />
       </PartialRoot>
     )
 

@@ -59,10 +59,10 @@ describe("addressable gate — wire fp emission", () => {
     // Addressable parent: explicit `selector` AND `match`. The
     // parent IS reachable for refetch and SHOULD emit an fp.
     const Parent = parton(
-      function GateParentRender({ parent }: RenderArgs) {
+      function GateParentRender() {
         return (
           <div data-testid="gate-parent-body">
-            <Child parent={parent} />
+            <Child />
           </div>
         )
       },
@@ -71,7 +71,7 @@ describe("addressable gate — wire fp emission", () => {
 
     const tree = (
       <PartialRoot>
-        <Parent parent={ROOT} />
+        <Parent />
       </PartialRoot>
     )
 
@@ -106,10 +106,10 @@ describe("addressable gate — wire fp emission", () => {
     )
 
     const Parent = parton(
-      function SelectorOptInParentRender({ parent }: RenderArgs) {
+      function SelectorOptInParentRender() {
         return (
           <div>
-            <Child parent={parent} />
+            <Child />
           </div>
         )
       },
@@ -119,7 +119,7 @@ describe("addressable gate — wire fp emission", () => {
     const out = await flightAt(
       "http://t/opt-in",
       <PartialRoot>
-        <Parent parent={ROOT} />
+        <Parent />
       </PartialRoot>,
     )
     const fps = fingerprintsByPartialId(out)
@@ -138,10 +138,10 @@ describe("addressable gate — wire fp emission", () => {
     )
 
     const Parent = parton(
-      function VaryOptInParentRender({ parent }: RenderArgs) {
+      function VaryOptInParentRender() {
         return (
           <div>
-            <VaryChild parent={parent} />
+            <VaryChild />
           </div>
         )
       },
@@ -151,7 +151,7 @@ describe("addressable gate — wire fp emission", () => {
     const out = await flightAt(
       "http://t/vary-opt-in",
       <PartialRoot>
-        <Parent parent={ROOT} />
+        <Parent />
       </PartialRoot>,
     )
     const fps = fingerprintsByPartialId(out)
@@ -177,10 +177,10 @@ describe("addressable gate — wire fp emission", () => {
     )
 
     const Parent = parton(
-      function FoldParentRender({ parent }: RenderArgs) {
+      function FoldParentRender() {
         return (
           <div>
-            <FoldChild parent={parent} />
+            <FoldChild />
           </div>
         )
       },
@@ -189,7 +189,7 @@ describe("addressable gate — wire fp emission", () => {
 
     const tree = (
       <PartialRoot>
-        <Parent parent={ROOT} />
+        <Parent />
       </PartialRoot>
     )
 

@@ -157,7 +157,7 @@ function RemoteFallback({ label, testid }: { label: string; testid: string }) {
 // ─── Host page ──────────────────────────────────────────────────────────
 
 export const RemoteFrameDemoPage = parton(
-  function RemoteFrameDemoRender({ parent }: RenderArgs) {
+  function RemoteFrameDemoRender() {
     return (
       <>
         <header className="mb-4" data-testid="rfd-header">
@@ -177,23 +177,23 @@ export const RemoteFrameDemoPage = parton(
         </div>
 
         <Suspense fallback={<RemoteFallback label="fast" testid="remote-fast" />}>
-          <RemoteFrame url="/__remote/remote-fast" parent={parent} />
+          <RemoteFrame url="/__remote/remote-fast" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="mid" testid="remote-mid" />}>
-          <RemoteFrame url="/__remote/remote-mid" parent={parent} />
+          <RemoteFrame url="/__remote/remote-mid" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="slow" testid="remote-slow" />}>
-          <RemoteFrame url="/__remote/remote-slow" parent={parent} />
+          <RemoteFrame url="/__remote/remote-slow" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="counter" testid="remote-counter" />}>
-          <RemoteFrame url="/__remote/remote-counter" parent={parent} />
+          <RemoteFrame url="/__remote/remote-counter" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="cached" testid="remote-cached" />}>
-          <RemoteFrame url="/__remote/remote-cached" parent={parent} />
+          <RemoteFrame url="/__remote/remote-cached" />
         </Suspense>
 
         <footer className="mt-4 text-xs text-muted-foreground" data-testid="rfd-footer">

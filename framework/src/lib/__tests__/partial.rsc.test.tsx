@@ -26,7 +26,7 @@ describe("parton — match + skip", () => {
       },
       { match: "/pokemon/:id", selector: "#param-page" },
     )
-    const out = await flightAt("http://t/pokemon/42", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/pokemon/42", <Page />)
     // Flight serializes JSX children as an array `["id=", "42"]`.
     expect(out).toContain('"id=","42"')
     expect(out).toContain("param-out")
@@ -39,7 +39,7 @@ describe("parton — match + skip", () => {
       },
       { match: "/pokemon/:id", selector: "#match-miss-test" },
     )
-    const out = await flightAt("http://t/cache-demo", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/cache-demo", <Page />)
     expect(out).not.toContain("should-not-appear")
   })
 
@@ -54,9 +54,9 @@ describe("parton — match + skip", () => {
         vary: ({ search: { on } }) => (on === "1" ? {} : null),
       },
     )
-    const off = await flightAt("http://t/x", <Page parent={ROOT} />)
+    const off = await flightAt("http://t/x", <Page />)
     expect(off).not.toContain("vary-null-target")
-    const on = await flightAt("http://t/x?on=1", <Page parent={ROOT} />)
+    const on = await flightAt("http://t/x?on=1", <Page />)
     expect(on).toContain("vary-null-target")
   })
 
@@ -73,16 +73,16 @@ describe("parton — match + skip", () => {
     // Same page URL in both; only the frame URL differs.
     const open = await flightAt(
       "http://t/page",
-      <Frame name="bug1-open" initialUrl="/sub/open" parent={ROOT}>
-        {(p) => <Sub parent={p} />}
+      <Frame name="bug1-open" initialUrl="/sub/open">
+        <Sub />
       </Frame>,
     )
     expect(open).toContain("framed-open")
 
     const closed = await flightAt(
       "http://t/page",
-      <Frame name="bug1-closed" initialUrl="/sub/closed" parent={ROOT}>
-        {(p) => <Sub parent={p} />}
+      <Frame name="bug1-closed" initialUrl="/sub/closed">
+        <Sub />
       </Frame>,
     )
     expect(closed).not.toContain("framed-open")
@@ -101,9 +101,9 @@ describe("parton — vary + render", () => {
         vary: ({ search: { flavor = "vanilla" } }) => ({ flavor }),
       },
     )
-    const v = await flightAt("http://t/flavors?flavor=chocolate", <Page parent={ROOT} />)
+    const v = await flightAt("http://t/flavors?flavor=chocolate", <Page />)
     expect(v).toContain("chocolate")
-    const dflt = await flightAt("http://t/flavors", <Page parent={ROOT} />)
+    const dflt = await flightAt("http://t/flavors", <Page />)
     expect(dflt).toContain("vanilla")
   })
 
@@ -114,7 +114,7 @@ describe("parton — vary + render", () => {
       },
       { match: "/p/:slug", selector: "#match-only-spec" },
     )
-    const out = await flightAt("http://t/p/hello-world", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/p/hello-world", <Page />)
     expect(out).toContain("hello-world")
   })
 
@@ -142,7 +142,7 @@ describe("parton — vary + render", () => {
         }),
       },
     )
-    const out = await flightAt("http://t/p/x?page=3", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/p/x?page=3", <Page />)
     // Flight serializes JSX children as an array `["x", "/", 3]` —
     // assert on the array form rather than the rendered text.
     expect(out).toContain('"x","/",3')
@@ -155,7 +155,7 @@ describe("parton — selector & id derivation", () => {
       return <i data-testid="auto-selector-output">ok</i>
     }
     const Page = parton(MyAutoSelectedRender, { match: "/auto-selector-test" })
-    const out = await flightAt("http://t/auto-selector-test", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/auto-selector-test", <Page />)
     expect(out).toContain("auto-selector-output")
   })
 
@@ -168,7 +168,7 @@ describe("parton — selector & id derivation", () => {
     // but we can verify the rendered partial wrapper carries the
     // expected id by reaching into the Flight payload.
     const Page = parton(MyHeaderPage, { match: "/strip-suffix-test" })
-    const out = await flightAt("http://t/strip-suffix-test", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/strip-suffix-test", <Page />)
     expect(out).toContain("auto-header-id")
   })
 })
@@ -188,7 +188,7 @@ describe("parton — children passthrough", () => {
     )
     const out = await flightAt(
       "http://t/wrapper-test",
-      <Wrapper parent={ROOT}>
+      <Wrapper>
         <span data-testid="inner-content">inner</span>
       </Wrapper>,
     )
@@ -222,8 +222,8 @@ describe("parton — call-site prop pass-through", () => {
     // prop to Inner. Inner gets `flavor` from its own vary and
     // `pokemonId` from the call-site prop.
     const Outer = parton(
-      function PassthroughOuterRender({ pokemonId, parent }: { pokemonId: number } & RenderArgs) {
-        return <Inner parent={parent} pokemonId={pokemonId} />
+      function PassthroughOuterRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
+        return <Inner pokemonId={pokemonId} />
       },
       {
         match: "/p/:id",
@@ -231,7 +231,7 @@ describe("parton — call-site prop pass-through", () => {
         vary: ({ params }) => ({ pokemonId: Number(params.id) }),
       },
     )
-    const out = await flightAt("http://t/p/9?flavor=mint", <Outer parent={ROOT} />)
+    const out = await flightAt("http://t/p/9?flavor=mint", <Outer />)
     expect(out).toContain("passthrough-out")
     // Flight serializes children as `[9, "/", "mint"]`.
     expect(out).toContain('9,"/","mint"')
@@ -247,8 +247,8 @@ describe("parton — call-site prop pass-through", () => {
       { selector: "#no-vary-inner" },
     )
     const Outer = parton(
-      function NoVaryOuterRender({ pokemonId, parent }: { pokemonId: number } & RenderArgs) {
-        return <Inner parent={parent} pokemonId={pokemonId} />
+      function NoVaryOuterRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
+        return <Inner pokemonId={pokemonId} />
       },
       {
         match: "/no-vary/:id",
@@ -256,7 +256,7 @@ describe("parton — call-site prop pass-through", () => {
         vary: ({ params }) => ({ pokemonId: Number(params.id) }),
       },
     )
-    const out = await flightAt("http://t/no-vary/77", <Outer parent={ROOT} />)
+    const out = await flightAt("http://t/no-vary/77", <Outer />)
     expect(out).toContain("no-vary-inner")
     expect(out).toContain('"id-",77')
   })
@@ -273,7 +273,7 @@ describe("parton — two-step builder", () => {
       return <span data-testid="two-step-out">{p.slug}</span>
     }
     const Page = Builder(BuilderRender)
-    const out = await flightAt("http://t/builder/hello", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/builder/hello", <Page />)
     expect(out).toContain("two-step-out")
     expect(out).toContain("hello")
   })
@@ -297,7 +297,7 @@ describe("parton — two-step builder", () => {
     const Page = Builder(BuilderVaryRender)
     const out = await flightAt(
       "http://t/builder/foo?variant=mint",
-      <Page parent={ROOT} />,
+      <Page />,
     )
     expect(out).toContain('"foo",":","mint"')
   })
@@ -318,9 +318,9 @@ describe("parton — match grammar inference", () => {
       },
       { match: "/opt/:slug{/:page}?", selector: "#opt-spec" },
     )
-    const withPage = await flightAt("http://t/opt/x/2", <Page parent={ROOT} />)
+    const withPage = await flightAt("http://t/opt/x/2", <Page />)
     expect(withPage).toContain('"x","/","2"')
-    const withoutPage = await flightAt("http://t/opt/x", <Page parent={ROOT} />)
+    const withoutPage = await flightAt("http://t/opt/x", <Page />)
     expect(withoutPage).toContain('"x","/","none"')
   })
 })
@@ -341,8 +341,8 @@ describe("<Frame> — scope opener", () => {
     )
     const out = await flightAt(
       "http://t/frame-host",
-      <Frame name="drawer-test" initialUrl="/drawer/initial" parent={ROOT}>
-        {(p) => <Inner parent={p} />}
+      <Frame name="drawer-test" initialUrl="/drawer/initial">
+        <Inner />
       </Frame>,
     )
     expect(out).toContain("/drawer/initial")
@@ -376,7 +376,7 @@ describe("parton — vary sees mid-request setCookie writes", () => {
     const out = await flightAt(
       "http://t/",
       <CookiePreloader>
-        <CartBadge parent={ROOT} />
+        <CartBadge />
       </CookiePreloader>,
     )
     // Flight serializes JSX children as an array `["cart=", "fresh-cart-123"]`.
@@ -401,7 +401,7 @@ describe("parton — vary sees mid-request setCookie writes", () => {
     const { stream } = await renderWithRequest(
       "http://t/",
       <ThemeFlipper>
-        <Themed parent={ROOT} />
+        <Themed />
       </ThemeFlipper>,
       { headers: { cookie: "theme=light" } },
     )
@@ -427,7 +427,7 @@ describe("multi-variant pool", () => {
     )
     const tree = (
       <PartialRoot>
-        <Page parent={ROOT} />
+        <Page />
       </PartialRoot>
     )
 
@@ -462,7 +462,7 @@ describe("multi-variant pool", () => {
     )
     const tree = (
       <PartialRoot>
-        <Page parent={ROOT} />
+        <Page />
       </PartialRoot>
     )
     const mk = hash(stableStringify({ id: "1" }))
@@ -503,15 +503,14 @@ describe("multi-variant pool", () => {
     const Outer = parton(
       function InheritedMatchKeyOuterRender({
         id,
-        parent,
       }: { id: string } & RenderArgs) {
-        return <Inner parent={parent} id={id} />
+        return <Inner id={id} />
       },
       { match: "/pokemon/:id", selector: "#inherited-match-key-outer" },
     )
     const tree = (
       <PartialRoot>
-        <Outer parent={ROOT} />
+        <Outer />
       </PartialRoot>
     )
     const flight1 = await new Response(
@@ -552,7 +551,7 @@ describe("multi-variant pool", () => {
     )
     const tree = (
       <PartialRoot>
-        <Page parent={ROOT} />
+        <Page />
       </PartialRoot>
     )
     const mk1 = hash(stableStringify({ id: "1" }))

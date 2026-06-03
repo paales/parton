@@ -118,13 +118,13 @@ const Footer = parton(
 // ─── Outer wrapper — matches /cache-demo, threads flavor down ─────────
 
 export const CacheDemoPage = parton(
-  function CacheDemoRender({ flavor, parent }: { flavor: string } & RenderArgs) {
+  function CacheDemoRender({ flavor }: { flavor: string } & RenderArgs) {
     return (
       <>
-        <Intro parent={parent} flavor={flavor} />
-        <Slow parent={parent} />
-        <Clock parent={parent} />
-        <Footer parent={parent} />
+        <Intro flavor={flavor} />
+        <Slow />
+        <Clock />
+        <Footer />
       </>
     )
   },

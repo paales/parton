@@ -39,15 +39,15 @@ const Price = parton(
   { selector: ".price" },
 )
 
-function Grid({ parent }: RenderArgs) {
+function Grid() {
   return (
     <div data-testid="grid" className="grid">
       <h1>Store</h1>
       <Suspense fallback={<span>loading aaa</span>}>
-        <Price parent={parent} sku="aaa" />
+        <Price sku="aaa" />
       </Suspense>
       <Suspense fallback={<span>loading bbb</span>}>
-        <Price parent={parent} sku="bbb" />
+        <Price sku="bbb" />
       </Suspense>
     </div>
   )
@@ -55,7 +55,7 @@ function Grid({ parent }: RenderArgs) {
 
 describe("flight-graph stripHoles (real payload)", () => {
   it("replaces each parton boundary with a placeholder and GCs its content", async () => {
-    const { stream } = await renderWithRequest("http://t/x", <Grid parent={ROOT} />)
+    const { stream } = await renderWithRequest("http://t/x", <Grid />)
     const bytes = await toBytes(stream)
     const before = DEC.decode(bytes)
     // Sanity: the real render has the price content + boundaries.

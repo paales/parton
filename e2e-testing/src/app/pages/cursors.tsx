@@ -26,7 +26,7 @@ const CursorPresence = parton(
 )
 
 export const CursorsPage = parton(
-  function CursorsRender({ parent }: RenderArgs) {
+  function CursorsRender() {
     return (
       <main className="py-4 space-y-4">
         <title>Multiplayer cursors</title>
@@ -37,7 +37,7 @@ export const CursorsPage = parton(
           back down to every other viewer over the open heartbeat stream.
           Open this page in a second tab to see it.
         </p>
-        <CursorPresence parent={parent} />
+        <CursorPresence />
       </main>
     )
   },

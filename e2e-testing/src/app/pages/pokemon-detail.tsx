@@ -200,20 +200,20 @@ const Trivia = parton(
 // ─── Outer wrapper — matches /pokemon/:id, threads bound cells to children ─
 
 export const PokemonDetailPage = parton(
-  function PokemonDetailRender({ id, parent }: { id: string } & RenderArgs) {
+  function PokemonDetailRender({ id }: { id: string } & RenderArgs) {
     const pokemonId = Number(id)
     return (
       <>
-        <HeaderPartial parent={parent} showControls={true} />
-        <SearchAreaPage parent={parent} />
-        <Frame name="search" initialUrl="/" parent={parent}>
-          {(p) => <SearchAreaFrame parent={p} />}
+        <HeaderPartial showControls={true} />
+        <SearchAreaPage />
+        <Frame name="search" initialUrl="/">
+          <SearchAreaFrame />
         </Frame>
-        <Hero parent={parent} hero={pokemonHeroCell.with({ id: pokemonId })} />
-        <Stats parent={parent} stats={pokemonStatsCell.with({ id: pokemonId })} />
-        <Species parent={parent} species={pokemonSpeciesCell.with({ id: pokemonId })} />
-        <LazySpacer parent={parent} />
-        <Trivia parent={parent} id={id} />
+        <Hero hero={pokemonHeroCell.with({ id: pokemonId })} />
+        <Stats stats={pokemonStatsCell.with({ id: pokemonId })} />
+        <Species species={pokemonSpeciesCell.with({ id: pokemonId })} />
+        <LazySpacer />
+        <Trivia id={id} />
       </>
     )
   },

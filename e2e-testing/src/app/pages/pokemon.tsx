@@ -117,12 +117,10 @@ const PokemonCard = parton(function PokemonCardRender({
 // Forward a list of per-card BoundCells to PokemonCard partons.
 function PokemonCardGrid({
   items,
-  parent,
   compact,
   testId,
 }: {
   items: ReadonlyArray<BoundCell<CellValue<typeof pokemonCardCell>>>
-  parent: PartialCtx
   compact?: boolean
   testId?: string
 }) {
@@ -130,7 +128,7 @@ function PokemonCardGrid({
   const grid = (
     <div className={"grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"}>
       {items.map((item) => (
-        <PokemonCard key={String(item.args.id)} parent={parent} item={item} compact={compact} />
+        <PokemonCard key={String(item.args.id)} item={item} compact={compact} />
       ))}
     </div>
   )
@@ -167,7 +165,6 @@ function makeSearchArea(scope: "page" | "frame") {
     function Stage1Render({
       results,
       q,
-      parent,
     }: { results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string } & RenderArgs) {
       const list = results.value?.pokemon_v2_pokemon ?? []
       // `data-q` records the query this committed tree was rendered
@@ -192,7 +189,7 @@ function makeSearchArea(scope: "page" | "frame") {
       return (
         <div data-testid="stage-1" data-q={q} data-count={list.length}>
           <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant (props)</h3>
-          <PokemonCardGrid items={list} parent={parent} compact testId="stage-1-content" />
+          <PokemonCardGrid items={list} compact testId="stage-1-content" />
         </div>
       )
     },
@@ -203,7 +200,6 @@ function makeSearchArea(scope: "page" | "frame") {
     async function Stage2Render({
       results,
       q,
-      parent,
     }: PartonProps<{ results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string }>) {
       if (!q) return null
       // Artificial delay — preserves the streaming-UX demo. Real
@@ -213,7 +209,7 @@ function makeSearchArea(scope: "page" | "frame") {
       return (
         <div data-testid="stage-2" data-q={q} data-count={list.length}>
           <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay (vary + cell)</h3>
-          <PokemonCardGrid items={list} parent={parent} compact testId="stage-2-content" />
+          <PokemonCardGrid items={list} compact testId="stage-2-content" />
         </div>
       )
     },
@@ -240,7 +236,6 @@ function makeSearchArea(scope: "page" | "frame") {
     async function Stage3Render({
       results,
       q,
-      parent,
     }: PartonProps<{ results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string }>) {
       if (!q) return null
       await delay(2000)
@@ -248,7 +243,7 @@ function makeSearchArea(scope: "page" | "frame") {
       return (
         <div data-testid="stage-3" data-q={q} data-count={list.length}>
           <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay (match)</h3>
-          <PokemonCardGrid items={list} parent={parent} compact testId="stage-3-content" />
+          <PokemonCardGrid items={list} compact testId="stage-3-content" />
         </div>
       )
     },
@@ -278,7 +273,6 @@ function makeSearchArea(scope: "page" | "frame") {
   function SearchBodyRender({
     search,
     q,
-    parent,
   }: { search: string | undefined; q: string } & RenderArgs) {
     if (search == null) return null
     // Three data-passing methods, one per stage (see definitions above):
@@ -289,9 +283,9 @@ function makeSearchArea(scope: "page" | "frame") {
       <SearchDialog open>
         <div data-testid="search-body" data-search-q={q} hidden />
         <SearchInput query={q} />
-        <Stage1 parent={parent} q={q} results={stageCell(1, q)} />
-        <Stage2 parent={parent} />
-        <Stage3 parent={parent} />
+        <Stage1 q={q} results={stageCell(1, q)} />
+        <Stage2 />
+        <Stage3 />
       </SearchDialog>
     )
   }
@@ -313,7 +307,6 @@ function makeListPagePartial(page: number) {
       page,
       isFirst,
       results,
-      parent,
     }: {
       page: number
       isFirst: boolean
@@ -332,7 +325,7 @@ function makeListPagePartial(page: number) {
               </p>
             </>
           )}
-          <PokemonCardGrid items={list} parent={parent} />
+          <PokemonCardGrid items={list} />
         </div>
       )
     },
@@ -366,13 +359,13 @@ const LoadMorePartial = parton(
 // ─── Outer wrapper — matches /, composes the overview ─────────────────
 
 export const PokemonOverviewPage = parton(
-  function PokemonOverviewRender({ parent }: RenderArgs) {
+  function PokemonOverviewRender() {
     return (
       <>
-        <HeaderPartial parent={parent} showControls={false} />
-        <SearchAreaPage parent={parent} />
-        <Frame name="search" initialUrl="/" parent={parent}>
-          {(p) => <SearchAreaFrame parent={p} />}
+        <HeaderPartial showControls={false} />
+        <SearchAreaPage />
+        <Frame name="search" initialUrl="/">
+          <SearchAreaFrame />
         </Frame>
         {ListPagePartials.map((P, i) => {
           const page = i + 1
@@ -380,12 +373,11 @@ export const PokemonOverviewPage = parton(
           return (
             <P
               key={`list-page-${page}`}
-              parent={parent}
               results={pokemonListCell.with({ limit: 24, offset })}
             />
           )
         })}
-        <LoadMorePartial parent={parent} />
+        <LoadMorePartial />
       </>
     )
   },

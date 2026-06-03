@@ -48,7 +48,7 @@ export const PriceCPartial = parton(
 )
 
 export const SelectorDemoPage = parton(
-  function SelectorDemoRender({ parent }: RenderArgs) {
+  function SelectorDemoRender() {
     return (
       <main className="py-4">
         <title>Selector Demo</title>
@@ -65,7 +65,7 @@ export const SelectorDemoPage = parton(
             </CardTitle>
           </CardHeader>
           <CardContent className="px-0">
-            <ProductAnonymousPartial parent={parent} />
+            <ProductAnonymousPartial />
           </CardContent>
         </Card>
 
@@ -76,9 +76,9 @@ export const SelectorDemoPage = parton(
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 px-0">
-            <PriceAPartial parent={parent} />
-            <PriceBPartial parent={parent} />
-            <PriceCPartial parent={parent} />
+            <PriceAPartial />
+            <PriceBPartial />
+            <PriceCPartial />
           </CardContent>
         </Card>
 

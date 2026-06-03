@@ -164,7 +164,7 @@ export const VisibilityDeferPartial = parton(
 // ─── Static chrome ──────────────────────────────────────────────────────
 
 export const DeferDemoPage = parton(
-  function DeferDemoRender({ parent }: RenderArgs) {
+  function DeferDemoRender() {
     return (
       <main className="py-4">
         <title>Defer Demo</title>
@@ -180,7 +180,7 @@ export const DeferDemoPage = parton(
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
-            <ManualPartial parent={parent} />
+            <ManualPartial />
             <div>
               <ActivateButton partialId="manual" label="Activate manually" />
             </div>
@@ -192,8 +192,8 @@ export const DeferDemoPage = parton(
             <CardTitle className="text-base">2. Batched activation</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
-            <BatchAPartial parent={parent} />
-            <BatchBPartial parent={parent} />
+            <BatchAPartial />
+            <BatchBPartial />
           </CardContent>
         </Card>
 
@@ -202,8 +202,8 @@ export const DeferDemoPage = parton(
             <CardTitle className="text-base">3. Streaming + defer race</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
-            <SlowStreamPartial parent={parent} />
-            <RaceDeferPartial parent={parent} />
+            <SlowStreamPartial />
+            <RaceDeferPartial />
           </CardContent>
         </Card>
 
@@ -212,9 +212,9 @@ export const DeferDemoPage = parton(
             <CardTitle className="text-base">4. Concurrent refetches</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
-            <ConcurrentAPartial parent={parent} />
-            <ConcurrentBPartial parent={parent} />
-            <ConcurrentCPartial parent={parent} />
+            <ConcurrentAPartial />
+            <ConcurrentBPartial />
+            <ConcurrentCPartial />
             <div className="flex flex-wrap gap-2">
               <ActivateButton
                 partialId="concurrent-a"
@@ -246,7 +246,7 @@ export const DeferDemoPage = parton(
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
             <div data-testid="any-spacer" className="h-[90vh]" aria-hidden="true" />
-            <VisibilityDeferPartial parent={parent} />
+            <VisibilityDeferPartial />
           </CardContent>
         </Card>
       </main>

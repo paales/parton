@@ -174,7 +174,6 @@ function buildHandlerScope(
 ): Record<string, unknown> {
   const scope: Record<string, unknown> = {
     ...partonVary,
-    parent: ROOT as PartialCtx,
   }
   for (const [key, resolvedVal] of Object.entries(resolved)) {
     const cell = cellsByKey.get(key)

@@ -127,7 +127,7 @@ const CardFormPartial = parton(
 // ── Page ──────────────────────────────────────────────────────────────
 
 export const StreamingDemoPage = parton(
-  function StreamingDemoRender({ parent }: RenderArgs) {
+  function StreamingDemoRender() {
     return (
       <main className="py-4 space-y-4">
         <title>Streaming primitives demo</title>
@@ -152,7 +152,7 @@ export const StreamingDemoPage = parton(
               driver wakes at each second boundary and re-renders,
               shipping the next tick as a new segment.
             </p>
-            <LiveTick parent={parent} />
+            <LiveTick />
           </CardContent>
         </Card>
 
@@ -170,7 +170,7 @@ export const StreamingDemoPage = parton(
               <code>cell:demo.bumps</code>, which the cell layer
               auto-stamps onto this parton's labels.
             </p>
-            <BumpCounter parent={parent} />
+            <BumpCounter />
           </CardContent>
         </Card>
 
@@ -222,7 +222,7 @@ export const StreamingDemoPage = parton(
               (<code>vary: () =&gt; ({"{}"})</code>), broadcast rides
               the open heartbeat stream.
             </p>
-            <CardFormPartial parent={parent} />
+            <CardFormPartial />
           </CardContent>
         </Card>
 

@@ -555,7 +555,6 @@ const EMPTY_IMAGE = Object.freeze({ src: "", alt: "" })
 export function createCmsReadSurface(
   id: string | undefined,
   request: Request,
-  host?: import("../lib/partial-context.ts").PartialCtx,
 ): CmsReadSurface {
   let resolved: Record<string, unknown> | null | undefined
   const resolve = (): Record<string, unknown> | null => {
@@ -605,21 +604,21 @@ export function createCmsReadSurface(
       return null
     },
     block(slot, selector) {
-      if (id == null || host == null) return null
+      if (id == null) return null
       const node = lookupCmsNode(id, request)
       const entries = node?.slots?.[slot] ?? []
       const matched = filterEntriesBySelector(entries, selector)
       const first = matched[0]
       if (!first) return null
-      return renderSlotEntry(first, host)
+      return renderSlotEntry(first)
     },
     blocks(slot, selector) {
-      if (id == null || host == null) return null
+      if (id == null) return null
       const node = lookupCmsNode(id, request)
       const entries = node?.slots?.[slot] ?? []
       const matched = filterEntriesBySelector(entries, selector)
       if (matched.length === 0) return null
-      return matched.map((entry) => renderSlotEntry(entry, host))
+      return matched.map((entry) => renderSlotEntry(entry))
     },
   }
 }
@@ -648,10 +647,7 @@ function filterEntriesBySelector(
   })
 }
 
-function renderSlotEntry(
-  entry: CmsNode,
-  host: import("../lib/partial-context.ts").PartialCtx,
-): React.ReactElement | null {
+function renderSlotEntry(entry: CmsNode): React.ReactElement | null {
   const type = entry.type
   if (!type) return null
   const spec = getSpecById(type)
@@ -668,13 +664,11 @@ function renderSlotEntry(
   // `__instanceId` channel — it becomes this placement's effective
   // render id AND (interpreted by the CMS block wrapper) the CMS row
   // the schema reads from.
-  const Component = spec.Component as React.FC<{
-    parent: import("../lib/partial-context.ts").PartialCtx
-    __instanceId?: string
-  }>
+  // The slot block renders as a task-child of the host parton, so it
+  // inherits the host's context via server context — no `parent` to pass.
+  const Component = spec.Component as React.FC<{ __instanceId?: string }>
   return React.createElement(Component, {
     key: entry.id,
-    parent: host,
     __instanceId: entry.id,
   })
 }

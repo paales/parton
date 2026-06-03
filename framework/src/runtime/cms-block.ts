@@ -120,7 +120,6 @@ export function block<
     const {
       __instanceId,
       __cmsFp: _cmsFp,
-      parent,
       children,
       ...rest
     } = props as V &
@@ -130,7 +129,7 @@ export function block<
       } & Record<string, unknown>
     void _cmsFp
     const contentKey = __instanceId ?? specId
-    const cms = createCmsReadSurface(contentKey, getRequest(), parent)
+    const cms = createCmsReadSurface(contentKey, getRequest())
     let schemaResult: S | object = {}
     if (opts.schema) {
       try {
@@ -142,7 +141,6 @@ export function block<
     return (Render as (p: V & S & RenderArgs) => ReactNode)({
       ...(rest as unknown as V),
       ...(schemaResult as S),
-      parent,
       children,
     })
   }

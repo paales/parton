@@ -87,7 +87,6 @@ const CartLine = parton(
 export const MagentoCartPage = parton(
   function MagentoCartRender({
     cart,
-    parent,
   }: PartonProps<{ cart: ResolvedCell<CellValue<typeof cartCell>> }>) {
     const c = cart.value?.cart
     // `items` are per-line BoundCells (the query result→cells rewrite) —
@@ -114,7 +113,7 @@ export const MagentoCartPage = parton(
           <div className="space-y-4">
             <div className="space-y-3" data-testid="cart-lines">
               {lines.map((line) => (
-                <CartLine key={String(line.args.uid)} parent={parent} item={line} />
+                <CartLine key={String(line.args.uid)} item={line} />
               ))}
             </div>
             <Card className="flex items-center justify-between p-4" data-testid="cart-totals">

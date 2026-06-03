@@ -63,8 +63,8 @@ describe("wildcard match — fingerprint stability", () => {
 
     const tree = (
       <PartialRoot>
-        <Exact parent={ROOT} />
-        <Strict parent={ROOT} />
+        <Exact />
+        <Strict />
       </PartialRoot>
     )
 
@@ -88,7 +88,7 @@ describe("wildcard match — fingerprint stability", () => {
 
     const tree = (
       <PartialRoot>
-        <Base parent={ROOT} />
+        <Base />
       </PartialRoot>
     )
 
@@ -119,7 +119,7 @@ describe("wildcard match — fingerprint stability", () => {
 
     const tree = (
       <PartialRoot>
-        <Base parent={ROOT} />
+        <Base />
       </PartialRoot>
     )
 
@@ -145,7 +145,7 @@ describe("wildcard match — fingerprint stability", () => {
 
     const tree = (
       <PartialRoot>
-        <Detail parent={ROOT} />
+        <Detail />
       </PartialRoot>
     )
 
@@ -171,7 +171,7 @@ describe("wildcard match — fingerprint stability", () => {
 
     const tree = (
       <PartialRoot>
-        <Base parent={ROOT} />
+        <Base />
       </PartialRoot>
     )
 

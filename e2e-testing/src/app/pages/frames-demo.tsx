@@ -110,7 +110,6 @@ function NestedFrameShell({ label, children }: { label: string; children: React.
 export const CartFramePartial = parton(
   function CartFrameRender({
     state,
-    parent,
   }: {
     state: "closed" | "open" | "checkout" | "unknown"
   } & RenderArgs) {
@@ -146,8 +145,8 @@ export const CartFramePartial = parton(
               />
             </div>
             <NestedFrameShell label="cart.tab">
-              <Frame name="tab" initialUrl="/items" parent={parent}>
-                {(p) => <CartTabPartial parent={p} />}
+              <Frame name="tab" initialUrl="/items">
+                <CartTabPartial />
               </Frame>
             </NestedFrameShell>
           </div>
@@ -242,7 +241,6 @@ export const MenuSlowInnerPartial = parton(
 export const MenuFramePartial = parton(
   function MenuFrameRender({
     state,
-    parent,
   }: {
     state: "closed" | "about" | "settings" | "slow" | "unknown"
   } & RenderArgs) {
@@ -270,8 +268,8 @@ export const MenuFramePartial = parton(
             <p className="mb-3">Demo of the Frame primitive.</p>
             <FrameNavigateButton url="/menu/closed" label="Close" testId="menu-close-btn" />
             <NestedFrameShell label="menu.tab">
-              <Frame name="tab" initialUrl="/general" parent={parent}>
-                {(p) => <MenuTabPartial parent={p} />}
+              <Frame name="tab" initialUrl="/general">
+                <MenuTabPartial />
               </Frame>
             </NestedFrameShell>
           </div>
@@ -292,7 +290,7 @@ export const MenuFramePartial = parton(
         return (
           <div data-testid="menu-slow" className="rounded-lg border bg-card p-4">
             <h3 className="mb-2 text-base font-semibold">Slow menu view (streaming)</h3>
-            <MenuSlowInnerPartial parent={parent} />
+            <MenuSlowInnerPartial />
             <div className="mt-3">
               <FrameNavigateButton
                 url="/menu/closed"
@@ -327,7 +325,7 @@ export const MenuFramePartial = parton(
 // ─── Chrome ─────────────────────────────────────────────────────────────
 
 export const FramesDemoPage = parton(
-  function FramesDemoRender({ parent }: RenderArgs) {
+  function FramesDemoRender() {
     return (
       <main className="py-4">
         <title>Frames Demo</title>
@@ -337,7 +335,7 @@ export const FramesDemoPage = parton(
             <CardTitle className="text-base">Main listing (page-scoped)</CardTitle>
           </CardHeader>
           <CardContent className="px-0">
-            <FramesMainListPartial parent={parent} />
+            <FramesMainListPartial />
           </CardContent>
         </Card>
         <Card className="mb-4 p-5">
@@ -345,8 +343,8 @@ export const FramesDemoPage = parton(
             <CardTitle className="text-base">Cart frame</CardTitle>
           </CardHeader>
           <CardContent className="px-0">
-            <Frame name="cart" initialUrl="/cart/closed" parent={parent}>
-              {(p) => <CartFramePartial parent={p} />}
+            <Frame name="cart" initialUrl="/cart/closed">
+              <CartFramePartial />
             </Frame>
           </CardContent>
         </Card>
@@ -355,8 +353,8 @@ export const FramesDemoPage = parton(
             <CardTitle className="text-base">Menu frame</CardTitle>
           </CardHeader>
           <CardContent className="px-0">
-            <Frame name="menu" initialUrl="/menu/closed" parent={parent}>
-              {(p) => <MenuFramePartial parent={p} />}
+            <Frame name="menu" initialUrl="/menu/closed">
+              <MenuFramePartial />
             </Frame>
           </CardContent>
         </Card>

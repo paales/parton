@@ -65,7 +65,7 @@ describe("cell — schema resolution", () => {
       },
       { match: "/flag", schema: () => ({ flag }) },
     )
-    const out = await flightAt("http://t/flag", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/flag", <Page />)
     // Flight serializes JSX children as an array `["value=", "false"]`.
     expect(out).toContain('"value=","false"')
   })
@@ -87,7 +87,7 @@ describe("cell — schema resolution", () => {
       },
       { match: "/palette", schema: () => ({ palette }) },
     )
-    const out = await flightAt("http://t/palette", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/palette", <Page />)
     // Single text child serializes as `"children":"dark"` in Flight.
     expect(out).toContain('"children":"dark"')
   })
@@ -109,7 +109,7 @@ describe("cell — schema resolution", () => {
     )
 
     // Render once — fp baked in.
-    const first = await flightAt("http://t/counter", <Page parent={ROOT} />)
+    const first = await flightAt("http://t/counter", <Page />)
     const fpMatch = first.match(/partialFingerprint":"([0-9a-f]+)/)
     expect(fpMatch).not.toBeNull()
     const initialFp = fpMatch![1]
@@ -118,7 +118,7 @@ describe("cell — schema resolution", () => {
     // though the cell value is still 0 (the invalidation timestamp
     // contributes via `queryMatchingTs`).
     refreshSelector("cell:test.counter")
-    const second = await flightAt("http://t/counter", <Page parent={ROOT} />)
+    const second = await flightAt("http://t/counter", <Page />)
     const secondFp = second.match(/partialFingerprint":"([0-9a-f]+)/)![1]
     expect(secondFp).not.toEqual(initialFp)
   })
@@ -141,9 +141,9 @@ describe("cell — schema resolution", () => {
       },
       { match: "/product/:id", schema: () => ({ notes }) },
     )
-    const at42 = await flightAt("http://t/product/42", <Page parent={ROOT} />)
+    const at42 = await flightAt("http://t/product/42", <Page />)
     expect(at42).toContain('"children":"notes for 42"')
-    const at99 = await flightAt("http://t/product/99", <Page parent={ROOT} />)
+    const at99 = await flightAt("http://t/product/99", <Page />)
     expect(at99).toContain('"children":"notes for 99"')
   })
 })
@@ -189,8 +189,8 @@ describe("cell — fp transitive on partition change", () => {
       },
       { match: "/p/:id", schema: () => ({ notes }) },
     )
-    const a = await flightAt("http://t/p/A", <Page parent={ROOT} />)
-    const b = await flightAt("http://t/p/B", <Page parent={ROOT} />)
+    const a = await flightAt("http://t/p/A", <Page />)
+    const b = await flightAt("http://t/p/B", <Page />)
     const fpA = a.match(/partialFingerprint":"([0-9a-f]+)/)![1]
     const fpB = b.match(/partialFingerprint":"([0-9a-f]+)/)![1]
     expect(fpA).not.toEqual(fpB)

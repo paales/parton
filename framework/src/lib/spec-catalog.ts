@@ -40,7 +40,6 @@ export type SpecCatalogVary = (scope: {
 
 /** Minimal framework-internal props every spec component accepts. */
 export interface SpecComponentProps {
-  parent: PartialCtx
   /** Per-instance render-id override. Slot wiring (and any other
    *  caller that needs per-placement identity) sets this; the value
    *  becomes the rendered effective id. Framework-internal — author

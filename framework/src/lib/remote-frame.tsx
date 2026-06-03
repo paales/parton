@@ -57,11 +57,6 @@ import {
 export interface RemoteFrameProps {
   /** Absolute URL or same-origin path of the remote Flight endpoint. */
   url: string
-  /** Host `PartialCtx`. Threaded through normal placement; the
-   *  remote's render happens in its own process scope so this isn't
-   *  forwarded over the wire, but the prop keeps the JSX call site
-   *  consistent with other partons. */
-  parent: PartialCtx
   /** Host-declared scope the remote can read. Flat record of
    *  JSON-serializable values; serialized as the
    *  `x-parton-capability` header. The remote endpoint reads it
@@ -122,7 +117,6 @@ function applyNamespace(snap: PartialSnapshot, namespace: string | undefined): P
 
 export async function RemoteFrame({
   url,
-  parent: _parent,
   capability,
   namespace,
 }: RemoteFrameProps): Promise<ReactNode> {
@@ -242,7 +236,6 @@ export function remote<Cap = void>(opts: {
   namespace?: string
 }): (
   props: {
-    parent: PartialCtx
     /** Optional URL search params appended to the remote's endpoint
      *  URL. Useful when the remote spec varies on its own
      *  `?step=…` etc. and the host wants to drive that variant from
@@ -258,7 +251,6 @@ export function remote<Cap = void>(opts: {
         : baseUrl
     return await RemoteFrame({
       url,
-      parent: props.parent,
       capability: (props as { capability?: Capability }).capability,
       namespace: opts.namespace,
     })

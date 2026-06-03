@@ -89,7 +89,7 @@ describe("scoped cell — schema resolution in a parton", () => {
         schema: ({ localCell }) => ({ notes: localCell({ shape: "string", initial: "" }) }),
       },
     )
-    const out = await flightAt("http://t/page", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/page", <Page />)
     expect(out).toContain('"children":"(default)"')
   })
 
@@ -111,9 +111,9 @@ describe("scoped cell — schema resolution in a parton", () => {
     seedCell("scoped-default-partition/notes", { productId: "A" }, "A-notes")
     seedCell("scoped-default-partition/notes", { productId: "B" }, "B-notes")
 
-    const a = await flightAt("http://t/p/A", <Page parent={ROOT} />)
+    const a = await flightAt("http://t/p/A", <Page />)
     expect(a).toContain('"children":"A-notes"')
-    const b = await flightAt("http://t/p/B", <Page parent={ROOT} />)
+    const b = await flightAt("http://t/p/B", <Page />)
     expect(b).toContain('"children":"B-notes"')
   })
 
@@ -151,9 +151,9 @@ describe("scoped cell — schema resolution in a parton", () => {
     // read it.
     seedCell("scoped-narrow/sharedNotes", { productId: "A" }, "shared-A")
 
-    const en = await flightAt("http://t/p/A?lang=en", <Page parent={ROOT} />)
+    const en = await flightAt("http://t/p/A?lang=en", <Page />)
     expect(en).toContain('"children":"shared-A"')
-    const fr = await flightAt("http://t/p/A?lang=fr", <Page parent={ROOT} />)
+    const fr = await flightAt("http://t/p/A?lang=fr", <Page />)
     expect(fr).toContain('"children":"shared-A"')
   })
 
@@ -194,7 +194,7 @@ describe("scoped cell — schema resolution in a parton", () => {
     seedCell("test.coexist.palette", {}, "dark")
     seedCell("scoped-coexist/notes", {}, "scoped note")
 
-    const out = await flightAt("http://t/mixed", <Page parent={ROOT} />)
+    const out = await flightAt("http://t/mixed", <Page />)
     expect(out).toContain("dark")
     expect(out).toContain("scoped note")
   })
@@ -215,7 +215,7 @@ describe("scoped cell — schema resolution in a parton", () => {
         schema: ({ localCell }) => ({ notes: localCell({ shape: "string", initial: "" }) }),
       },
     )
-    await flightAt("http://t/p/42", <Page parent={ROOT} />)
+    await flightAt("http://t/p/42", <Page />)
     expect(capturedPartition).toEqual({ productId: "42" })
   })
 })

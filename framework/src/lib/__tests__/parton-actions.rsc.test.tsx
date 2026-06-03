@@ -72,7 +72,7 @@ describe("parton actions — Render-prop injection", () => {
         },
       },
     )
-    await flightAt("http://t/x", <Page parent={ROOT} />)
+    await flightAt("http://t/x", <Page />)
     expect(capturedSave).toBeDefined()
     expect((capturedSave as { __partonAction?: boolean }).__partonAction).toBe(true)
     expect(typeof (capturedSave as { ref?: unknown }).ref).toBe("function")
@@ -99,7 +99,7 @@ describe("parton actions — dispatch + auto-write", () => {
     )
 
     // Force registration by rendering once
-    await flightAt("http://t/x", <Page parent={ROOT} />)
+    await flightAt("http://t/x", <Page />)
 
     // Invoke the action against the bound partition (empty — no vary)
     const req = new Request("http://t/x")
@@ -135,7 +135,7 @@ describe("parton actions — dispatch + auto-write", () => {
         },
       },
     )
-    await flightAt("http://t/x", <Page parent={ROOT} />)
+    await flightAt("http://t/x", <Page />)
     seedCell("action-handler-write/saves", {}, 4)
 
     const req = new Request("http://t/x")
@@ -173,7 +173,7 @@ describe("parton actions — dispatch + auto-write", () => {
         },
       },
     )
-    await flightAt("http://t/x", <Page parent={ROOT} />)
+    await flightAt("http://t/x", <Page />)
     seedCell("action-rollback/name", {}, "prior")
     seedCell("action-rollback/saves", {}, 7)
 
@@ -211,7 +211,7 @@ describe("parton actions — dispatch + auto-write", () => {
         },
       },
     )
-    await flightAt("http://t/x", <Page parent={ROOT} />)
+    await flightAt("http://t/x", <Page />)
     seedCell("action-overlay/name", {}, "stored")
 
     const req = new Request("http://t/x")

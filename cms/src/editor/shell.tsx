@@ -1165,7 +1165,6 @@ function CanvasChrome({
 export const EditorShell = parton(
   function EditorShellRender({
     editor,
-    parent,
     leftTab: leftTabCell,
     treeStyle: treeStyleCell,
     selected,
@@ -1279,9 +1278,9 @@ export const EditorShell = parton(
             />
             <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
               {leftTab === "layers" ? (
-                <EditorTreePartial parent={parent} />
+                <EditorTreePartial />
               ) : (
-                <EditorSettingsPartial parent={parent} />
+                <EditorSettingsPartial />
               )}
             </div>
             <ResizeGrip />
@@ -1306,7 +1305,7 @@ export const EditorShell = parton(
                     }))
               }
             />
-            <EditorFieldPanelPartial parent={parent} />
+            <EditorFieldPanelPartial />
             <ResizeGrip />
           </aside>
 

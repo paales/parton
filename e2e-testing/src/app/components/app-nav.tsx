@@ -9,9 +9,8 @@
  * every page appears in every page's tree.
  */
 
-import { ROOT } from "@parton/framework"
 import { AppNavBlock } from "../blocks/nav-root.tsx"
 
 export function AppNav() {
-  return <AppNavBlock parent={ROOT} />
+  return <AppNavBlock />
 }

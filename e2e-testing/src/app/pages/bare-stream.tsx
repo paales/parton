@@ -61,7 +61,7 @@ const BareNext = parton(
 )
 
 export const BarePage = parton(
-  function BareRender({ end, parent }: { end: number } & RenderArgs) {
+  function BareRender({ end }: { end: number } & RenderArgs) {
     return (
       <>
         <title>Infinite Scroll Test</title>
@@ -75,9 +75,9 @@ export const BarePage = parton(
           <span data-testid="end-readout">end={end}</span>
         </p>
         {BarePagePartials.map((P, i) => (
-          <P key={`bare-page-${i + 1}`} parent={parent} />
+          <P key={`bare-page-${i + 1}`} />
         ))}
-        <BareNext parent={parent} />
+        <BareNext />
       </>
     )
   },

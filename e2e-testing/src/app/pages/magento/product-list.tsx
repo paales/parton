@@ -42,12 +42,12 @@ const MagentoCartBadge = parton(
 )
 
 const MagentoHeader = parton(
-  function MagentoHeaderRender({ parent, cartId }: { cartId: string } & RenderArgs) {
+  function MagentoHeaderRender({ cartId }: { cartId: string } & RenderArgs) {
     return (
       <header className="mb-4 flex items-center justify-between gap-4">
         <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
         {cartId ? (
-          <MagentoCartBadge parent={parent} cart={cartBadgeCell.with({ cartId })} />
+          <MagentoCartBadge cart={cartBadgeCell.with({ cartId })} />
         ) : (
           <CartBadge quantity={0} />
         )}
@@ -62,7 +62,6 @@ const MagentoHeader = parton(
 const MagentoProducts = parton(
   function MagentoProductsRender({
     q,
-    parent,
     products,
   }: { q: string; products: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
     const items = (products.value?.products?.items ?? []).filter(
@@ -82,7 +81,7 @@ const MagentoProducts = parton(
           className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4"
         >
           {items.map((product) => (
-            <ProductCard key={product.sku ?? product.id} product={product} parent={parent} />
+            <ProductCard key={product.sku ?? product.id} product={product} />
           ))}
         </div>
       </div>
@@ -99,7 +98,7 @@ const MagentoProducts = parton(
   },
 )
 
-function ProductCard({ product, parent }: { product: ProductItem; parent: PartialCtx }) {
+function ProductCard({ product }: { product: ProductItem }) {
   const { name, sku, id } = product
   const imageUrl = product.small_image?.url
   const imageLabel = product.small_image?.label
@@ -129,7 +128,6 @@ function ProductCard({ product, parent }: { product: ProductItem; parent: Partia
             fallback={<LivePriceFallback sku={sku} basePrice={price} currency={currency} />}
           >
             <LivePricePartial
-              parent={parent}
               sku={sku}
               basePrice={price}
               currency={currency}
@@ -143,11 +141,11 @@ function ProductCard({ product, parent }: { product: ProductItem; parent: Partia
 }
 
 export const MagentoPage = parton(
-  function MagentoRender({ parent }: RenderArgs) {
+  function MagentoRender() {
     return (
       <>
-        <MagentoHeader parent={parent} />
-        <MagentoProducts parent={parent} products={magentoProductsCell.with({ pageSize: 12 })} />
+        <MagentoHeader />
+        <MagentoProducts products={magentoProductsCell.with({ pageSize: 12 })} />
       </>
     )
   },

@@ -132,7 +132,7 @@ restart is rarely needed during dev.
 - Three constructors, one engine. Pick by role:
   - `parton(Render, '/path')` / `parton(Render, {match, vary, …})` — addressable subtree, request-dimensions only. The everything-else case.
   - `block(Render, {selector, schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is where CMS reads live.
-  - `<Frame name initialUrl parent>{(p) => …}</Frame>` — plain component, opens a per-name URL scope for descendants.
+  - `<Frame name initialUrl>{…}</Frame>` — plain component, opens a per-name URL scope for descendants (which inherit the frame chain via server context).
 - `vary` is sync and must be pure. It sees `{url, pathname, search, cookies, headers, params, session}` — **no `cms`**. CMS reads (`cms.text(...)`, `cms.enum(...)`, `cms.reference(...)`, `cms.blocks(...)`, `cms.block(...)`) live inside a block's `schema` callback. Async loaders run in `render`.
 - **Wrapper specs need a `vary` that captures their descendants'
   URL deps**, otherwise fp-skip on the wrapper blocks descendant
@@ -147,7 +147,7 @@ restart is rarely needed during dev.
   "/inspect/*"` means `/inspect/<rest>` and does NOT match bare
   `/inspect`. To match both, use `match: "/inspect{/*}?"`.
 - **Slot blocks** are constructed via `block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` is a flat list of refetch labels (`"page-block"` or `["page-block", "composed-hero"]`); leading `#`/`.` is cosmetic and stripped. The first label is the spec's catalog id — and for singleton blocks, also the CMS storage key. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / per-instance content keys; the framework wires it internally.
-- `parent: PartialCtx` is required on every spec call site. `Render` receives `{...vary, ...schema, parent, children}` — pass `parent` to descendant spec calls. There is no `id` prop on the JSX call site and no `id` in the Render prop bag; CMS content flows via `schema` reads bound by the framework.
+- **No `parent` prop.** A parton reads its `parent` (id path + frame chain) from server context — the ambient parton, threaded through React's Flight task graph (see [`docs/internals/server-context.md`](./docs/internals/server-context.md), backed by a `@vitejs/plugin-rsc` patch in `.yarn/patches/`). Place specs as `<Spec />`, never `<Spec parent={…} />`. `Render` receives `{...vary, ...schema, children}` — no `parent`, no `id`. CMS content flows via `schema` reads bound by the framework.
 
 ## Comments
 

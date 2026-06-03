@@ -31,6 +31,7 @@ import React, {
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
+import { captureCurrentTask, getAmbientParent, setTaskChildContext } from "./server-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 import { PageUrlProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
@@ -217,12 +218,10 @@ export function stripReservedVaryKeys(varyResult: unknown): {
 }
 
 export interface RenderArgs {
-  /** PartialCtx for THIS spec's descendants — pass to slot host props
-   *  and nested Spec components' `parent` prop. */
-  parent: PartialCtx
   /** Outer `children` passed to the spec component, when used as a
    *  JSX wrapper. `undefined` when the spec was placed without
-   *  children. */
+   *  children. A parton's descendants inherit their `parent` from
+   *  server context (the ambient parton) — Render receives no `parent`. */
   children?: ReactNode
 }
 
@@ -341,7 +340,11 @@ interface InternalSpecConfig<V> {
  * alongside `vary`'s output and contribute to the cache fingerprint.
  */
 export interface PartialComponentProps {
-  parent: PartialCtx
+  /** Internal: parent injected for an isolated render that's its own
+   *  render root (cache hole / `partialFromSnapshot` refetch), where there
+   *  is no ambient parton. Overrides the server-context parent. Authors
+   *  never pass this — a parton's `parent` flows via server context. */
+  __parent?: PartialCtx
   /** Pass-through children — surfaced to `Render` as `children` in
    *  its props bag. Lets specs act as JSX wrappers (e.g. opening a
    *  frame around author content). */
@@ -1251,14 +1254,25 @@ function createSpecComponent<V>(
   // practice.
   const Component: FC<PartialComponentProps & Record<string, unknown>> = async (props) => {
     const {
-      parent,
+      __parent: __injectedParent,
       __instanceId: instanceIdOverride,
       children: outerChildren,
       ...extraProps
     } = props as PartialComponentProps & {
       __instanceId?: string
+      __parent?: PartialCtx
       children?: ReactNode
     } & Record<string, unknown>
+    // Parent comes from server context (the ambient parton, threaded
+    // through React's task graph — see server-context.ts), NOT a prop.
+    // `__parent` overrides it for isolated renders that are their own
+    // render root: a cache hole, a `<RemoteFrame>`, an addressable
+    // refetch (`partialFromSnapshot`), where there is no ambient parton.
+    // Capture the task synchronously here; the child context is set on it
+    // below once `id` is known (the captured handle stays valid across
+    // the awaits in between).
+    const __task = captureCurrentTask()
+    const parent = __injectedParent ?? getAmbientParent()
     const opts = spec.options
     // Render-time identity (the `id` keying snapshots, wire, cache
     // lookup) is:
@@ -1661,6 +1675,9 @@ function createSpecComponent<V>(
     }
 
     const childCtx = _childContext(parent, id)
+    // Scope this parton's descendants: child tasks created while this
+    // parton's body renders inherit `childCtx` as their ambient parent.
+    setTaskChildContext(__task, childCtx)
     // Render receives: extra JSX-prop pass-through, vary result,
     // framework-managed (parent / children). vary wins on key
     // collision — vary's return is the canonical surface.
@@ -1676,7 +1693,6 @@ function createSpecComponent<V>(
       ...(varyResult as object),
       ...schemaResult,
       ...actionsResult,
-      parent: childCtx,
       children: outerChildren,
       ...(effectiveInstanceId !== undefined ? { __instanceId: effectiveInstanceId } : {}),
     } as V & RenderArgs
@@ -2154,7 +2170,6 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
     return (
       <RemoteFrame
         url={`${snap.source.origin}/__remote/${encodeURIComponent(snap.source.remoteId)}`}
-        parent={parent}
         capability={snap.source.capability as Capability | undefined}
         namespace={namespace}
       />
@@ -2170,7 +2185,7 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
     // and auto-derived multi-instance specs land here.
     const spec = getSpecById(snap.type)
     if (spec) {
-      Component = spec.Component as FC<PartialComponentProps & Record<string, unknown>>
+      Component = spec.Component as unknown as FC<PartialComponentProps & Record<string, unknown>>
     }
   }
   if (!Component) return null
@@ -2184,7 +2199,10 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
   // step that would otherwise re-hash extraProps and shift the rendered
   // id mid-flight (e.g. when activator-supplied props arrive after the
   // initial cold render).
-  return <Component parent={parent} __instanceId={id} {...props} />
+  // Isolated render (cache hole / refetch): there's no ambient parton,
+  // so inject the snapshot's parent via `__parent`. The task graph threads
+  // it onward to this parton's descendants.
+  return <Component __parent={parent} __instanceId={id} {...props} />
 }
 
 export async function PartialRoot({ children }: PartialRootProps): Promise<ReactNode> {

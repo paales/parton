@@ -144,7 +144,7 @@ export const MagentoPaymentSummary = parton(
  *  `data-tick=` so e2e tests can assert it strictly changes. */
 export const MagentoStockTicker = parton(
   async function MagentoStockTickerRender(
-    { tick, parent }: { tick: number } & RenderArgs,
+    { tick }: { tick: number } & RenderArgs,
   ) {
     await delay(700)
     const tickers = [
@@ -178,7 +178,7 @@ export const MagentoStockTicker = parton(
             ))}
           </tbody>
         </table>
-        <MagentoCartSummary parent={parent} />
+        <MagentoCartSummary />
       </div>
     )
   },

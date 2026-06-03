@@ -82,7 +82,7 @@ const MessagePartials = AVAILABLE_FILES.map((fileId) =>
 )
 
 export const ChatListPartial = parton(
-  function ChatListRender({ msgIds, parent }: { msgIds: string[] } & RenderArgs) {
+  function ChatListRender({ msgIds }: { msgIds: string[] } & RenderArgs) {
     return (
       <div data-testid="chat-list" className="min-h-30 flex-1 overflow-y-auto px-3 py-2">
         {msgIds.length === 0 ? (
@@ -94,7 +94,7 @@ export const ChatListPartial = parton(
             const idx = AVAILABLE_FILES.indexOf(fileId)
             if (idx < 0) return null
             const Spec = MessagePartials[idx]
-            return <Spec key={fileId} parent={parent} />
+            return <Spec key={fileId} />
           })
         )}
       </div>
@@ -110,7 +110,6 @@ export const ChatOverlayPartial = parton(
   function ChatOverlayRender({
     open,
     nextHref,
-    parent,
   }: {
     open: boolean
     nextHref: string | null
@@ -129,7 +128,7 @@ export const ChatOverlayPartial = parton(
           </div>
         </header>
         <AutoScrollToBottom containerTestId="chat-list" />
-        <ChatListPartial parent={parent} />
+        <ChatListPartial />
         <footer className="border-t px-3 py-2">
           <NewMessageLink nextHref={nextHref} />
         </footer>
@@ -145,10 +144,10 @@ export const ChatOverlayPartial = parton(
   },
 )
 
-export function ChatOverlay({ parent }: { parent: PartialCtx }) {
+export function ChatOverlay() {
   return (
-    <Frame name="chat-overlay" parent={parent}>
-      {(p) => <ChatOverlayPartial parent={p} />}
+    <Frame name="chat-overlay">
+      <ChatOverlayPartial />
     </Frame>
   )
 }

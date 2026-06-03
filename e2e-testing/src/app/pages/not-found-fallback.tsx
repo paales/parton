@@ -9,7 +9,7 @@
  * `notFound()` — `Root` catches it, sets HTTP 404, and emits the
  * default `<NotFoundPage>`.
  *
- * Place a single `<NotFoundFallback parent={ROOT} />` alongside the
+ * Place a single `<NotFoundFallback />` alongside the
  * other page wrappers; the gating is automatic.
  */
 

@@ -55,7 +55,7 @@ const DeferredBroadcast = parton(
 )
 
 export const DeferredDemoPage = parton(
-  function DeferredDemoRender({ parent }: RenderArgs) {
+  function DeferredDemoRender() {
     return (
       <main className="py-4 space-y-4">
         <title>Deferred cell writes</title>
@@ -80,7 +80,7 @@ export const DeferredDemoPage = parton(
               the value back. With the heartbeat off, <code>Pings:</code>{" "}
               freezes while <code>sent:</code> keeps climbing.
             </p>
-            <DeferredBroadcast parent={parent} />
+            <DeferredBroadcast />
           </CardContent>
         </Card>
 

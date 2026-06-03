@@ -36,7 +36,7 @@ import {
  *  vary is the bridge.
  */
 const RemoteCheckoutFrame = parton(
-  function RemoteCheckoutFrameRender({ step, parent }: { step: string } & RenderArgs) {
+  function RemoteCheckoutFrameRender({ step }: { step: string } & RenderArgs) {
     return (
       <Suspense
         fallback={
@@ -47,7 +47,7 @@ const RemoteCheckoutFrame = parton(
           </Card>
         }
       >
-        <MagentoCheckoutStep parent={parent} searchParams={{ step }} />
+        <MagentoCheckoutStep searchParams={{ step }} />
       </Suspense>
     )
   },
@@ -58,7 +58,7 @@ const RemoteCheckoutFrame = parton(
 )
 
 export const RemoteFrameCrossOriginDemoPage = parton(
-  function RemoteFrameCrossOriginDemoRender({ parent }: RenderArgs) {
+  function RemoteFrameCrossOriginDemoRender() {
     return (
       <>
         <header className="mb-4" data-testid="rfxd-header">
@@ -90,7 +90,7 @@ export const RemoteFrameCrossOriginDemoPage = parton(
             </Card>
           }
         >
-          <MagentoGreeting parent={parent} />
+          <MagentoGreeting />
         </Suspense>
 
         <Suspense
@@ -102,7 +102,7 @@ export const RemoteFrameCrossOriginDemoPage = parton(
             </Card>
           }
         >
-          <MagentoStocks parent={parent} />
+          <MagentoStocks />
         </Suspense>
 
         <Suspense
@@ -115,7 +115,6 @@ export const RemoteFrameCrossOriginDemoPage = parton(
           }
         >
           <MagentoPaymentSummary
-            parent={parent}
             capability={{
               cart_id: "demo-cart-7f3a9",
               currency: "EUR",
@@ -124,13 +123,9 @@ export const RemoteFrameCrossOriginDemoPage = parton(
           />
         </Suspense>
 
-        <Frame name="checkout" initialUrl="/?step=shipping" parent={parent}>
-          {(p) => (
-            <>
-              <CheckoutStepNav />
-              <RemoteCheckoutFrame parent={p} />
-            </>
-          )}
+        <Frame name="checkout" initialUrl="/?step=shipping">
+          <CheckoutStepNav />
+          <RemoteCheckoutFrame />
         </Frame>
 
         <footer className="mt-4 text-xs text-muted-foreground" data-testid="rfxd-footer">
