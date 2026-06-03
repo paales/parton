@@ -30,8 +30,14 @@ import React, {
 } from "react"
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
-import { _childContext, ROOT, type PartialCtx } from "./partial-context.ts"
-import { captureCurrentTask, getAmbientParent, setTaskChildContext } from "./server-context.ts"
+import {
+  _childContext,
+  ROOT,
+  captureCurrentTask,
+  getAmbientParent,
+  setTaskChildContext,
+  type PartialCtx,
+} from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 import { PageUrlProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"

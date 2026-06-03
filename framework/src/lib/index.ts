@@ -32,6 +32,15 @@ export {
   type SchemaScope,
 } from "../runtime/cms-block.ts"
 
+// Server context — `createServerContext(default)` returns a provider
+// component (`<Ctx value={…}>…</Ctx>`) plus the handle for
+// `getServerContext(Ctx)`, readable anywhere in a Server Component's render.
+export {
+  createServerContext,
+  getServerContext,
+  type ServerContext,
+} from "./server-context.ts"
+
 export {
   PartialsClient,
   getCachedPartialIds,

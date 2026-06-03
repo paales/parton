@@ -27,8 +27,12 @@
 
 import type { ReactNode } from "react"
 import { FrameNameProvider } from "./partial-client.tsx"
-import { type PartialCtx } from "./partial-context.ts"
-import { captureCurrentTask, getAmbientParent, setTaskChildContext } from "./server-context.ts"
+import {
+  captureCurrentTask,
+  getAmbientParent,
+  setTaskChildContext,
+  type PartialCtx,
+} from "./partial-context.ts"
 import { getSessionFrameUrl, setSessionFrameUrl } from "../runtime/session.ts"
 
 interface FrameProps {

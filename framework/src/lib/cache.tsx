@@ -29,8 +29,12 @@ import { spliceHoles, stripHoles, type HoleRef, type SpliceMeta } from "./flight
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { partialFromSnapshot } from "./partial.tsx"
-import { captureCurrentTask, getAmbientParent, setTaskChildContext } from "./server-context.ts"
-import { type PartialCtx } from "./partial-context.ts"
+import {
+  captureCurrentTask,
+  getAmbientParent,
+  setTaskChildContext,
+  type PartialCtx,
+} from "./partial-context.ts"
 import { getScope } from "../runtime/context.ts"
 import { lookupPartial, registerPartial, type PartialSnapshot } from "./partial-registry.ts"
 import type { CacheOptions } from "./cache-options.ts"
