@@ -62,7 +62,10 @@ import {
   parseCookies,
 } from "../runtime/context.ts"
 import { HEADER_RSC_RENDER, stripFrameworkParams } from "../runtime/request.tsx"
-import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
+import {
+  parseSelector as parseInvalidationSelector,
+  queryMatchingTs,
+} from "../runtime/invalidation-registry.ts"
 import {
   createSessionReadSurface,
   getSessionFrameUrl,
@@ -744,16 +747,34 @@ export function PartialBoundary({
   staleUntil,
   children,
 }: PartialBoundaryProps): ReactNode {
+  // Inline-cell deps are partition-scoped selectors (`cell:<id>?<part>`)
+  // riding in `deps` (they fold into the fp via store-and-reread). Surface
+  // them as refetch labels too — the bare `cell:<id>` name — and fold
+  // their partition into the constraint surface, so a partition-scoped
+  // write (`cell:<id>?sid=`) matches this parton. Schema cells get this in
+  // the schema phase; an inline cell is declared mid-Render, too late for
+  // `expandedLabels`, but its dep is recorded by the time the boundary
+  // registers — so fold it in here.
+  const cellDeps = deps ? [...deps].filter((d) => d.startsWith("cell:")) : []
+  let labelsWithCells = labels
+  let constraintsWithCells = constraintArgs
+  if (cellDeps.length > 0) {
+    const parsed = cellDeps.map(parseInvalidationSelector)
+    labelsWithCells = [...labels, ...parsed.map((p) => p.name)]
+    constraintsWithCells = { ...constraintArgs }
+    for (const p of parsed) Object.assign(constraintsWithCells, p.constraints)
+    if (Object.keys(constraintsWithCells).length === 0) constraintsWithCells = constraintArgs
+  }
   registerPartial(id, {
     type,
     fallback,
-    labels,
+    labels: labelsWithCells,
     framePath,
     parentFrameChain,
     parentPath,
     cache,
     props,
-    constraintArgs,
+    constraintArgs: constraintsWithCells,
     varyKey,
     deps,
     matchKey,

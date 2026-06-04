@@ -36,6 +36,7 @@ import {
 } from "../runtime/cell-actions.ts"
 import { getCurrentParton } from "./current-parton.ts"
 import { registerInlineCell } from "./parton-actions.ts"
+import { buildCellSelector } from "../runtime/invalidation-registry.ts"
 import {
   getCellStorage,
   getEphemeralCellStorage,
@@ -519,8 +520,14 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
 export interface InlineLocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
   shape: S
   initial: T
-  /** Storage partition. Defaults to a single slot (`{}`). Partition by a
-   *  request dimension (e.g. session) by passing it explicitly. */
+  /** Request-derived partition callback, e.g.
+   *  `vary: ({session}) => ({sid: session.id})`. Re-run at render AND in
+   *  the action's request — so a per-session cell resolves at the caller's
+   *  partition in the action too, never a stale recorded one. Mirrors the
+   *  module-cell `vary`; takes precedence over `partition`. */
+  vary?: (scope: CellVaryScope) => CellArgs
+  /** Fixed storage partition (placement-derived). Defaults to a single
+   *  slot (`{}`). Use `vary` instead for request-derived partitions. */
   partition?: CellArgs
   write?: (value: T) => T
   load?: (args: CellArgs) => Promise<T>
@@ -586,7 +593,12 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
     throw new Error(`localCell(${JSON.stringify(key)}, …): must be called inside a parton's Render`)
   }
   const id = `${cp.id}/${key}`
-  const partition: CellArgs = opts.partition ?? {}
+  // Partition: a `vary` callback (re-derivable — re-run in the action's
+  // request so a per-session cell resolves at the caller's partition there
+  // too) or a fixed value, default single-slot.
+  const partition: CellArgs = opts.vary
+    ? opts.vary(buildCellVaryScopeFromRequest())
+    : (opts.partition ?? {})
   const shape = shapeFromSpec(opts.shape)
   // The descriptor is the rebuild input: `finalizeScopedCell` turns it
   // into a handle (registered in the cell registry by id so the client
@@ -606,10 +618,12 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
     finalizeScopedCell(descriptor, cp.id, key)
   const value = await resolveCellValue(handle, partition)
   // Fold the cell's invalidation into the fp via the dep-record: the
-  // store-and-reread `cell:` branch in evalDepKeys re-reads its timestamp,
-  // so a write (`refreshSelector(cell:<id>)`) re-renders this parton on
-  // the next nav. Reuses the cookie()/searchParam() tracking machinery.
-  cp.deps.add(`cell:${id}`)
+  // `cell:` branch in evalDepKeys re-reads its timestamp (store-and-
+  // reread), so a write re-renders this parton on the next nav. The dep is
+  // the partition-scoped SELECTOR (`cell:<id>?<partition>`) — the exact
+  // string the write fires — so a partitioned write's bump is matched
+  // (queryMatchingTs needs the constraints, not just the name).
+  cp.deps.add(buildCellSelector(id, partition))
   // Record the cell in the module-global inline-cell registry so an
   // `actions` handler resolves it by key without a render (increment 2).
   // The per-request snapshot store isn't visible in the action's separate
@@ -617,6 +631,7 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
   registerInlineCell(cp.id, key, {
     partition,
     descriptor: descriptor as ScopedCellDescriptor<unknown>,
+    varyFn: opts.vary,
   })
   return buildResolvedCell(handle, value, partition)
 }
@@ -736,6 +751,11 @@ export interface ScopedCellDescriptor<T> {
 export interface InlineCellRecord {
   readonly partition: CellArgs
   readonly descriptor: ScopedCellDescriptor<unknown>
+  /** Request-derived partition callback, re-run in the action's request
+   *  so a per-session cell resolves at the caller's partition there. When
+   *  present, the action re-derives the partition rather than using the
+   *  recorded `partition` value. */
+  readonly varyFn?: (scope: CellVaryScope) => CellArgs
 }
 
 export function isScopedCellDescriptor(

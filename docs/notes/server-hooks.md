@@ -183,13 +183,29 @@ re-render).
   equals the spec id, and the action's bound id, for a singleton placement
   (forms-demo); consistent multi-instance keying waits on the partition
   rework below. Probe `inline-cell-action.rsc.test.tsx`.
-- **Partitioning.** Increment 1 is single-slot (`partition: {}` default); a
-  request-derived partition (forms-demo's per-session) wants an ambient
-  `session()` read passed as `partition` — also what makes an inline cell's
-  id consistent across render + action for multi-instance placements (key by
-  spec id + partition, not the effective id).
-- **Migration.** Move forms-demo's `schema` cells to inline `localCell` once
-  partitioning lands, then the broader §5 migration.
+- ✅ **Partitioning** (`session()` + a cell `vary`). An inline cell takes a
+  re-derivable `vary: ({session}) => ({sid: session.id})` partition (mirrors
+  the module-cell `vary`); the action re-runs it against its OWN request, so
+  a per-session cell resolves the caller's slot there, not the last render's
+  recorded one. `session()` (a server-hook) folds the session into the fp so
+  the parton re-renders on a session change. Crucially, the partition is
+  threaded through the inline cell's fp DEP — recorded as the
+  partition-scoped selector `cell:<id>?<partition>`, the exact string the
+  write fires — so the own-fp fold (`evalDepKeys` → `parseSelector` →
+  `queryMatchingTs` with the constraints), the refetch label (the bare
+  `cell:<id>` name), and the partition constraint all match a
+  partition-scoped write. A partitioned inline cell therefore LIVE-refetches,
+  not just persists across a reload. `buildCellSelector` /
+  `encodeArgsForSelector` moved to `invalidation-registry.ts` (alongside
+  `parseSelector`, their inverse) so the dep and the write share one
+  encoding. Probe `inline-cell-action.rsc.test.tsx` (per-session
+  re-derivation).
+- ✅ **Migration — forms-demo.** Its five `schema` cells became inline
+  `localCell("key", { vary: bySession })`; the two-step builder collapsed to
+  a single-step `parton(Render, { match, actions })`; `save` resolves the
+  inline cells by key (increment 2). e2e `forms-demo.spec.ts` — save commits
+  + records the snapshot, notes persist per-keystroke — green. The broader §5
+  migration (every spec off `vary`/`schema`) is still the final step.
 
 ### 4. `<Parton>` component (retire the constructor) — RESOLVED: constructor stays
 Decided (see Decision above): `parton()` remains a module-scope constructor, so

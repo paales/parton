@@ -22,7 +22,8 @@
 
 import { getCurrentParton } from "./current-parton.ts"
 import { parseCookies } from "../runtime/context.ts"
-import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
+import { getSessionId } from "../runtime/session.ts"
+import { parseSelector, queryMatchingTs } from "../runtime/invalidation-registry.ts"
 
 /** Read a cookie and record it as an fp dependency. */
 export function cookie(name: string): string | undefined {
@@ -49,6 +50,21 @@ export function searchParam(name: string): string | null {
  */
 export function param(name: string): string | undefined {
   return getCurrentParton()?.params[name]
+}
+
+/**
+ * Read the current session identity and record it as an fp dependency,
+ * so the parton re-renders when the session changes — the inline-tracking
+ * analogue of `vary: ({session}) => ({sid: session.id})`. The value is
+ * the `__frame_sid`-cookie-backed id, or `""` for an anon request with no
+ * session yet. Pair with a cell's `vary: ({session}) => ({sid})` to give
+ * each session its own partition.
+ */
+export function session(): { readonly id: string } {
+  const cp = getCurrentParton()
+  if (!cp) return { id: "" }
+  cp.deps.add("session:")
+  return { id: getSessionId() ?? "" }
 }
 
 // URLPattern helpers — mirror the parton `match` option's compilation
@@ -125,14 +141,19 @@ export function evalDepKeys(
       const pattern = name.startsWith("{") ? (JSON.parse(name) as URLPatternInit) : name
       const result = compilePattern(pattern).exec(url.href)
       value = result ? JSON.stringify(namedGroups(result)) : "nomatch"
+    } else if (kind === "session") {
+      value = getSessionId() ?? ""
     } else if (kind === "cell") {
       // An inline cell folds as its invalidation timestamp, not its
-      // value: a write fires `refreshSelector(cell:<id>)`, bumping the ts
-      // here so the parton re-renders on the next nav. The value itself
-      // isn't re-derivable later (it's loaded), so the tag drives
-      // freshness — see docs/notes/server-hooks.md "fold the tag, not the
-      // value". `key` is the whole `cell:<id>` label.
-      value = String(queryMatchingTs([key], null))
+      // value: a write fires `reload(cell:<id>?<partition>)`, bumping the
+      // ts so the parton re-renders next nav. The value isn't re-derivable
+      // later (it's loaded), so the tag drives freshness — see
+      // docs/notes/server-hooks.md "fold the tag, not the value". `key` is
+      // the partition-scoped selector; parse it and query with the
+      // partition so a partition-scoped bump is matched, not only a bare
+      // one.
+      const sel = parseSelector(key)
+      value = String(queryMatchingTs([sel.name], sel.constraints))
     } else value = undefined
     parts.push(`${key}=${value ?? ""}`)
   }

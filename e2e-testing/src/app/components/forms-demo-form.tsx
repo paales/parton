@@ -27,7 +27,7 @@
 
 import { useCell, usePartonAction } from "@parton/framework/lib/cell-client.tsx"
 import type { ResolvedAction, ResolvedCell } from "@parton/framework"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 interface SaveArgs {
   cardName?: string
@@ -72,6 +72,14 @@ export function FormsDemoForm({
 
   const [lastResult, setLastResult] = useState<"idle" | "pending" | "ok" | "failed">("idle")
   const [lastError, setLastError] = useState<string>("")
+
+  // Hydration signal for the e2e harness — Playwright waits for this
+  // before interacting, so a click doesn't land on the SSR DOM before
+  // hydrateRoot installs its delegated listener (a no-op otherwise).
+  // Mirrors StreamingDemoReady.
+  useEffect(() => {
+    document.body.setAttribute("data-forms-demo-ready", "1")
+  }, [])
 
   const inputClass =
     "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"

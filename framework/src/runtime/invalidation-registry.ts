@@ -102,6 +102,35 @@ export function parseSelectors(spec: string | string[]): ParsedSelector[] {
   return out
 }
 
+/**
+ * Encode an args object as a query-string fragment for partition-scoped
+ * selectors (`{itemId: "abc"}` → `itemId=abc`) — the inverse of
+ * `parseSelector`'s constraint parsing. Keys sorted (deterministic);
+ * values `String(v)`-stringified (constraint matching is string-equality,
+ * see `matchesConstraints`); URL-encoded so `&`/`=`/`?` in values don't
+ * break the parser. Absent values dropped; empty object → `""`.
+ */
+export function encodeArgsForSelector(args: Record<string, unknown>): string {
+  const keys = Object.keys(args).sort()
+  if (keys.length === 0) return ""
+  const parts: string[] = []
+  for (const k of keys) {
+    const v = args[k]
+    if (v === undefined || v === null) continue
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+  }
+  return parts.join("&")
+}
+
+/** Build the partition-scoped selector for a cell + args — bare
+ *  `cell:<id>` when args are empty. The exact string a cell write fires
+ *  (so a write's invalidation matches) and an inline cell records as its
+ *  fp dep (so the fp folds a partitioned write's bump). */
+export function buildCellSelector(cellId: string, args: Record<string, unknown>): string {
+  const encoded = encodeArgsForSelector(args)
+  return encoded ? `cell:${cellId}?${encoded}` : `cell:${cellId}`
+}
+
 // ─── Mutations ────────────────────────────────────────────────────────
 
 /**

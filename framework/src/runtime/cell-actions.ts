@@ -38,7 +38,7 @@ import { getRegisteredMatchPatterns } from "../lib/partial.tsx"
 import { buildTimeScope } from "../lib/time.ts"
 import { createSessionReadSurface } from "./session.ts"
 import { _recordCellWrite, getRequest, getScope, parseCookies } from "./context.ts"
-import { runInvalidationTransaction } from "./invalidation-registry.ts"
+import { buildCellSelector, runInvalidationTransaction } from "./invalidation-registry.ts"
 import { getServerNavigation } from "./server-navigation.ts"
 import { _getCellWriteDelay } from "./cell-write-delay.ts"
 
@@ -178,38 +178,9 @@ export async function __cellWriteBatch(
   })
 }
 
-/**
- * Encode args object as a query-string fragment for partition-scoped
- * selectors: `{itemId: "abc"}` → `itemId=abc`. Empty args → empty
- * string (bare selector). Used to emit `cell:<id>?<args>` from the
- * write/invalidate path so only partons whose constraint surface
- * includes the same args refetch.
- *
- * Encoding rules:
- *   - Keys sorted (deterministic across same args object).
- *   - Values stringified via `String(v)`; constraint matching is
- *     string-equality (see `matchesConstraints` in
- *     invalidation-registry.ts).
- *   - URL-encoded so `&`, `=`, `?` in values don't break the parser.
- */
-function encodeArgsForSelector(args: Record<string, unknown>): string {
-  const keys = Object.keys(args).sort()
-  if (keys.length === 0) return ""
-  const parts: string[] = []
-  for (const k of keys) {
-    const v = args[k]
-    if (v === undefined || v === null) continue
-    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-  }
-  return parts.join("&")
-}
-
-/** Build the partition-scoped selector string for a cell + args.
- *  Returns bare `cell:<id>` when args are empty. */
-function buildCellSelector(cellId: string, args: Record<string, unknown>): string {
-  const encoded = encodeArgsForSelector(args)
-  return encoded ? `cell:${cellId}?${encoded}` : `cell:${cellId}`
-}
+// `buildCellSelector` (+ `encodeArgsForSelector`) live in
+// invalidation-registry.ts so the inline-cell fp dep can be the exact
+// same partition-scoped string this write fires.
 
 /** Shared write implementation. Caller is responsible for wrapping in
  *  a `runInvalidationTransaction` so the resulting `refreshSelector`

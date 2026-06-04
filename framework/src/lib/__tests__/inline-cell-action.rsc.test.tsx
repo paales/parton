@@ -142,4 +142,49 @@ describe("inline-cell action enumeration (increment 2)", () => {
     // Staged write discarded on throw — storage untouched.
     expect(readCell("inline-action-rollback/saves", {})).toBe(7)
   })
+
+  it("re-derives a vary-partitioned inline cell per-session in the action", async () => {
+    const Page = parton(
+      async function Render(_: RenderArgs) {
+        const draft = await localCell("draft", {
+          shape: "string",
+          initial: "",
+          vary: ({ session }) => ({ sid: session.id }),
+        })
+        return <span>{draft.value}</span>
+      },
+      {
+        selector: "inline-session-cell",
+        match: "/x",
+        actions: {
+          save: async ({ draft }: { draft: ResolvedCell<string> }, args: { text?: string }) => {
+            await draft.set(args.text ?? "")
+          },
+        },
+      },
+    )
+    // One render records the cell + its vary callback (the recorded
+    // partition is this anon render's, {sid: ""}).
+    await flightAt("http://t/x", <Page />)
+
+    // Two actions from two different sessions. Each must resolve the cell
+    // at ITS OWN session — re-derived from the action's request, not the
+    // single recorded partition.
+    await runWithRequestAsync(
+      new Request("http://t/x", { headers: { cookie: "__frame_sid=alice" } }),
+      async () => {
+        await __partonAction("inline-session-cell/save", {}, { text: "alice-draft" })
+      },
+    )
+    await runWithRequestAsync(
+      new Request("http://t/x", { headers: { cookie: "__frame_sid=bob" } }),
+      async () => {
+        await __partonAction("inline-session-cell/save", {}, { text: "bob-draft" })
+      },
+    )
+
+    // Separate partitions — no clobber.
+    expect(readCell("inline-session-cell/draft", { sid: "alice" })).toBe("alice-draft")
+    expect(readCell("inline-session-cell/draft", { sid: "bob" })).toBe("bob-draft")
+  })
 })

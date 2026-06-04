@@ -138,13 +138,18 @@ function resolveSchemaForAction(
   // without a render. Schema wins if a key is somehow declared both ways.
   const inlineCells = getInlineCellsForParton(partonId)
   if (inlineCells) {
+    const inlineScope = buildCellVaryScope()
     for (const [key, rec] of inlineCells) {
       if (cellsByKey.has(key)) continue
       const cell = finalizeScopedCell(rec.descriptor, partonId, key)
-      const partitionKey = computePartitionKeyFromArgs(rec.partition)
+      // Re-derive a `vary`-partitioned cell against THIS request (the
+      // action's session), so a per-session cell resolves at the caller's
+      // partition — not the last render's recorded one.
+      const partition = rec.varyFn ? rec.varyFn(inlineScope) : rec.partition
+      const partitionKey = computePartitionKeyFromArgs(partition)
       const stored = cell.storage().read(getScope(), cell.id, partitionKey)
       const value = stored === undefined ? cell.defaultValue : stored
-      const resolvedCell = buildResolvedCell(cell, value, rec.partition)
+      const resolvedCell = buildResolvedCell(cell, value, partition)
       resolved[key] = resolvedCell
       cellsByKey.set(key, resolvedCell)
     }
