@@ -8,10 +8,10 @@ framework implements it as a small patch to the vendored Flight server.
 **One channel, every consumer.** A single immutable map flows down the task
 graph. Each context is one keyed entry — every `createServerContext` value,
 and the framework's own parton parent (`PartialCtx` — ancestor id path + frame
-chain), which rides the same channel under a reserved key. The generic
-primitive is `framework/src/lib/server-context.ts`; the parton-parent consumer
-(`getAmbientParent` / `setTaskChildContext`) lives in `partial-context.ts`; the
-patch is `.yarn/patches/@vitejs-plugin-rsc-*.patch`, authored reproducibly by
+chain), which rides the same channel under a reserved key, `ParentContext`. The
+generic primitive is `framework/src/lib/server-context.ts`; the parton-parent
+consumer (`ParentContext`) lives in `partial-context.ts`; the patch is
+`.yarn/patches/@vitejs-plugin-rsc-*.patch`, authored reproducibly by
 `scripts/patch-plugin-rsc-server-context.mjs`.
 
 ## The two parts: a carrier and a reader
@@ -71,15 +71,13 @@ present; the patch prefers it and falls back to `require("node:async_hooks")`
 for the vitest harness (which skips that transform). On a true edge runtime
 with no `async_hooks` the `require` throws at load — loud, not silent.
 
-## The shim + the public API
+## The public API
 
-`server-context.ts` reads `ReactSharedInternalsServer.__partonStorage`:
+`server-context.ts` exposes two functions (reading
+`ReactSharedInternalsServer.__partonStorage` under the hood):
 
-- `captureCurrentTask()` → the rendering task handle.
-- `getServerContext(Ctx)` → the value for `Ctx` (its child map first, then its
-  inherited map — a provider's un-outlined direct child renders in the
-  provider's own task), or `Ctx`'s default.
-- `createServerContext(default)` → a provider component + handle:
+- `createServerContext(default)` → a value that is BOTH a provider component
+  and the handle for `getServerContext`:
 
 ```tsx
 const Theme = createServerContext<"light" | "dark">("light")
@@ -89,25 +87,28 @@ const Theme = createServerContext<"light" | "dark">("light")
 </Theme>
 ```
 
-- `provideOnTask(task, Ctx, value)` → imperative overlay for framework
-  consumers that capture their task and scope context mid-render (the parton
-  wrapper, after it derives its id post-`await`). App code uses the provider.
+- `getServerContext(Ctx)` → the value for `Ctx` (its child map first, then its
+  inherited map — a provider's un-outlined direct child renders in the
+  provider's own task), or `Ctx`'s default. Valid anywhere in a render — there
+  is no "sync-top rule".
 
-`partial-context.ts` is the first consumer: it makes the parton parent one
-reserved entry (`getAmbientParent` reads it, `setTaskChildContext` overlays
-it). Because a parton only overlays the parent key — copying the rest of the
-map — every user server context threads through a parton to its descendants
-for free.
+The provider yields once (`await null`) so it renders in its own task, then
+overlays its key onto that task's child map — siblings sharing the parent task
+never inherit it. The overlay copies the existing map, so every OTHER key
+flows through untouched.
 
-There is no "sync-top rule": reads are valid anywhere in a render. The wrapper
-still captures its task once and scopes children on that stable handle, but
-that's for setting the parent imperatively after its awaits, not a read
-constraint.
+`partial-context.ts` is the first consumer: the parton parent is one reserved
+entry, `ParentContext`. A parton reads its parent with
+`getServerContext(ParentContext)` and scopes its descendants by returning them
+inside `<ParentContext value={childCtx}>` (so does `<Frame>`, and the cache's
+isolated render). Because that overlays only the parent key, every user server
+context threads through a parton to its descendants for free.
 
 Isolated renders that are their own render root — a cache hole, a
 `<RemoteFrame>`, an addressable refetch — have no ambient parent task; those
-seed `parent` explicitly (cache `SeedContext` / the `__parent` prop), and the
-task graph threads it onward.
+seed `parent` explicitly (the cache renders its body inside
+`<ParentContext value={bodyParent}>`; refetch injects the `__parent` prop), and
+the task graph threads it onward.
 
 ## Maintaining the patch across upgrades
 

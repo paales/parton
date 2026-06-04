@@ -29,15 +29,11 @@ import { spliceHoles, stripHoles, type HoleRef, type SpliceMeta } from "./flight
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { partialFromSnapshot } from "./partial.tsx"
-import {
-  captureCurrentTask,
-  getAmbientParent,
-  setTaskChildContext,
-  type PartialCtx,
-} from "./partial-context.ts"
+import { ParentContext, type PartialCtx } from "./partial-context.ts"
 import { getScope } from "../runtime/context.ts"
 import { lookupPartial, registerPartial, type PartialSnapshot } from "./partial-registry.ts"
 import type { CacheOptions } from "./cache-options.ts"
+import { getServerContext } from "./server-context.ts"
 
 // ─── Store ─────────────────────────────────────────────────────────────
 
@@ -222,7 +218,11 @@ async function replayEntry(entry: Entry, options: CacheOptions): Promise<ReactNo
   for (const hole of entry.holes) registerPartial(hole.partialId, hole.snapshot)
 
   const feed = options.slowSource
-    ? slowBytesToStream(entry.bytes, options.slowSource.perChunkMs, options.slowSource.chunkBytes ?? 64)
+    ? slowBytesToStream(
+        entry.bytes,
+        options.slowSource.perChunkMs,
+        options.slowSource.chunkBytes ?? 64,
+      )
     : bytesToStream(entry.bytes)
   const spliced = spliceHoles(feed, entry.holes, entry.meta, renderHoleStream)
   return await createFromReadableStream<ReactNode>(spliced)
@@ -241,16 +241,6 @@ interface CacheProps {
   children: ReactNode
 }
 
-/** Seeds the ambient parent for an isolated cache render: the cached
- *  body renders through its own `renderToReadableStream` (a fresh task
- *  tree), so its inner partons would otherwise read `ROOT`. This sets the
- *  root task's child context to the cached parton's context, so the body's
- *  partons inherit the same parent they'd have inline. */
-function SeedContext({ parent, children }: { parent: PartialCtx; children: ReactNode }): ReactNode {
-  setTaskChildContext(captureCurrentTask(), parent)
-  return children
-}
-
 export async function Cache({
   id,
   fingerprint,
@@ -262,7 +252,7 @@ export async function Cache({
   // element is rendered inside the parton's body, so its ambient parent IS
   // the parton's child context). The isolated body renders are seeded with
   // it so their partons thread correctly.
-  const bodyParent = getAmbientParent()
+  const bodyParent = getServerContext(ParentContext)
   return cacheImpl(id, fingerprint, options, varyResult, children, bodyParent)
 }
 
@@ -314,7 +304,7 @@ async function renderMissAndStore(
   bodyParent: PartialCtx,
 ): Promise<{ liveTree: ReactNode }> {
   const { store } = state()
-  const stream = renderToReadableStream(<SeedContext parent={bodyParent}>{children}</SeedContext>)
+  const stream = renderToReadableStream(<ParentContext value={bodyParent}>{children}</ParentContext>)
   const [userBranch, storageBranch] = stream.tee()
 
   // Storage: buffer the rendered bytes, strip holes, capture snapshots.
@@ -324,7 +314,14 @@ async function renderMissAndStore(
     const { bytes, holes, meta } = stripHoles(rawBytes)
     await store.set(
       key,
-      freshEntry(bytes, enrichHoles(holes), meta, options.maxAge, options.staleWhileRevalidate, Date.now()),
+      freshEntry(
+        bytes,
+        enrichHoles(holes),
+        meta,
+        options.maxAge,
+        options.staleWhileRevalidate,
+        Date.now(),
+      ),
     )
   })()
   storagePromise.catch((err) => {
@@ -346,12 +343,19 @@ async function refreshEntry(
 ): Promise<void> {
   const { store } = state()
   const rawBytes = await readAll(
-    renderToReadableStream(<SeedContext parent={bodyParent}>{children}</SeedContext>),
+    renderToReadableStream(<ParentContext value={bodyParent}>{children}</ParentContext>),
   )
   const { bytes, holes, meta } = stripHoles(rawBytes)
   await store.set(
     key,
-    freshEntry(bytes, enrichHoles(holes), meta, options.maxAge, options.staleWhileRevalidate, Date.now()),
+    freshEntry(
+      bytes,
+      enrichHoles(holes),
+      meta,
+      options.maxAge,
+      options.staleWhileRevalidate,
+      Date.now(),
+    ),
   )
 }
 

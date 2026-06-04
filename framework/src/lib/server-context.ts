@@ -21,7 +21,7 @@ import type { ReactNode } from "react"
 
 /** A Flight Task, as far as server context cares: the inherited map and the
  *  map it scopes for its descendants. The patch threads both at `createTask`. */
-export interface ServerTask {
+interface ServerTask {
   /** Map inherited from the parent task — what this component reads. */
   serverContext?: ReadonlyMap<symbol, unknown>
   /** Map this task scopes for its descendants — what its children inherit. */
@@ -35,32 +35,6 @@ const sharedInternals = (
     }
   }
 ).__SERVER_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE
-
-const EMPTY: ReadonlyMap<symbol, unknown> = new Map()
-
-/**
- * The Flight Task currently rendering, read from the parton
- * `AsyncLocalStorage`. Valid throughout a component's render — before and
- * after its awaits — and isolated from sibling renders. `null` when the
- * patch isn't applied or no render is active.
- */
-export function captureCurrentTask(): ServerTask | null {
-  return sharedInternals?.__partonStorage?.getStore() ?? null
-}
-
-/**
- * Overlay `value` for `id` into a task's child map — what its descendants
- * inherit. Copies the current child-or-inherited map, so every OTHER entry
- * (other contexts, the parton parent) flows through untouched. `task` must
- * have been captured during this render; the object is stable across awaits.
- */
-function overlay(task: ServerTask | null, id: symbol, value: unknown): void {
-  if (!task) return
-  const base = task.serverChildContext ?? task.serverContext ?? EMPTY
-  const next = new Map(base)
-  next.set(id, value)
-  task.serverChildContext = next
-}
 
 /**
  * A server context handle. Created at module scope by `createServerContext`.
@@ -93,13 +67,17 @@ export function createServerContext<T>(defaultValue: T): ServerContext<T> {
     value: T
     children?: ReactNode
   }): Promise<ReactNode> => {
-    // Mirror the parton wrapper: capture the task at the SYNC top (the
-    // provider's own outlined task — being async gives it one, so a sibling
-    // sharing the parent task never inherits this overlay), then scope the
-    // map on that stable handle after the yield.
-    const task = captureCurrentTask()
+    // Yield once so this provider renders in its own (outlined) task before
+    // overlaying — a sibling sharing the parent task then never inherits the
+    // overlay. Copying the existing map threads every other context through
+    // untouched; the captured task object is stable across the yield.
+    const task = sharedInternals?.__partonStorage?.getStore()
     await null
-    overlay(task, id, value)
+    if (task) {
+      const next = new Map(task.serverChildContext ?? task.serverContext)
+      next.set(id, value)
+      task.serverChildContext = next
+    }
     return children
   }
   return Object.assign(Provider, { _id: id, _default: defaultValue })
@@ -113,21 +91,12 @@ export function createServerContext<T>(defaultValue: T): ServerContext<T> {
  * Reads the task's child map first, then its inherited map: a provider's
  * direct (un-outlined) child renders in the provider's OWN task, where the
  * scoped value lives on `serverChildContext`; an outlined descendant gets it
- * as its inherited `serverContext`. A component only ever reads BEFORE it
- * scopes its own children, so a reader never sees its own overlay.
+ * as its inherited `serverContext`. The only writer is a provider, which
+ * overlays then returns its children without reading — so a read never
+ * returns the reader's own overlay.
  */
 export function getServerContext<T>(context: ServerContext<T>): T {
-  const task = captureCurrentTask()
+  const task = sharedInternals?.__partonStorage?.getStore()
   const map = task?.serverChildContext ?? task?.serverContext
   return map && map.has(context._id) ? (map.get(context._id) as T) : context._default
-}
-
-/**
- * Scope `context = value` onto a specific captured task's descendants,
- * without a provider component. For framework consumers that capture their
- * task and set context imperatively (e.g. the parton wrapper threading its
- * parent). App code uses the `<Context value>` provider instead.
- */
-export function provideOnTask<T>(task: ServerTask | null, context: ServerContext<T>, value: T): void {
-  overlay(task, context._id, value)
 }

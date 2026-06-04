@@ -27,13 +27,9 @@
 
 import type { ReactNode } from "react"
 import { FrameNameProvider } from "./partial-client.tsx"
-import {
-  captureCurrentTask,
-  getAmbientParent,
-  setTaskChildContext,
-  type PartialCtx,
-} from "./partial-context.ts"
+import { ParentContext, type PartialCtx } from "./partial-context.ts"
 import { getSessionFrameUrl, setSessionFrameUrl } from "../runtime/session.ts"
+import { getServerContext } from "./server-context.ts"
 
 interface FrameProps {
   /** Local frame name. Joined with the ambient frame chain to form the
@@ -50,8 +46,7 @@ interface FrameProps {
 
 export function Frame({ name, initialUrl, children }: FrameProps): ReactNode {
   // Parent comes from server context (the ambient parton), not a prop.
-  const task = captureCurrentTask()
-  const parent = getAmbientParent()
+  const parent = getServerContext(ParentContext)
   const ourFrameChain = Object.freeze([...parent.frameChain, name]) as readonly string[]
 
   // Cold-session: write initialUrl so descendants' frame-resolution
@@ -68,13 +63,14 @@ export function Frame({ name, initialUrl, children }: FrameProps): ReactNode {
     path: parent.path,
     frameChain: ourFrameChain,
   }
-  // Scope descendants: partons rendered inside the frame inherit this
-  // frame-extended context as their ambient parent via the task graph.
-  setTaskChildContext(task, childCtx)
 
+  // Scope descendants: partons rendered inside the frame inherit this
+  // frame-extended context as their ambient parent.
   return (
-    <FrameNameProvider path={ourFrameChain} initialUrl={effectiveUrl}>
-      {children}
-    </FrameNameProvider>
+    <ParentContext value={childCtx}>
+      <FrameNameProvider path={ourFrameChain} initialUrl={effectiveUrl}>
+        {children}
+      </FrameNameProvider>
+    </ParentContext>
   )
 }

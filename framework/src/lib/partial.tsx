@@ -30,14 +30,7 @@ import React, {
 } from "react"
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
-import {
-  _childContext,
-  ROOT,
-  captureCurrentTask,
-  getAmbientParent,
-  setTaskChildContext,
-  type PartialCtx,
-} from "./partial-context.ts"
+import { _childContext, ParentContext, type PartialCtx } from "./partial-context.ts"
 import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 import { PageUrlProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
@@ -68,10 +61,7 @@ import {
   getRequest,
   parseCookies,
 } from "../runtime/context.ts"
-import {
-  HEADER_RSC_RENDER,
-  stripFrameworkParams,
-} from "../runtime/request.tsx"
+import { HEADER_RSC_RENDER, stripFrameworkParams } from "../runtime/request.tsx"
 import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
 import {
   createSessionReadSurface,
@@ -108,6 +98,7 @@ import { __partonAction } from "../runtime/parton-actions.ts"
 import { getCellStorage } from "../runtime/cell-storage.ts"
 import { getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
+import { getServerContext } from "./server-context.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -211,7 +202,11 @@ export function stripReservedVaryKeys(varyResult: unknown): {
   if (typeof r.expiresAt !== "number" && typeof r.staleUntil !== "number") {
     return { varyResult, expiresAt: undefined, staleUntil: undefined }
   }
-  const { expiresAt: e, staleUntil: s, ...rest } = r as {
+  const {
+    expiresAt: e,
+    staleUntil: s,
+    ...rest
+  } = r as {
     expiresAt?: number
     staleUntil?: number
     [k: string]: unknown
@@ -512,9 +507,7 @@ type InferActions<Opts> = Opts extends { actions: infer A }
     : object
   : object
 
-export type InferV<Opts> = Prettify<
-  InferVaryOrMatch<Opts> & InferSchema<Opts> & InferActions<Opts>
->
+export type InferV<Opts> = Prettify<InferVaryOrMatch<Opts> & InferSchema<Opts> & InferActions<Opts>>
 
 /** Flatten a `T1 & T2 & …` intersection into a single object literal
  *  shape so editor hovers display the merged keys, not a chain. */
@@ -831,8 +824,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
   // descendant's contribution and, through it, the outer wrapper's
   // fp. Without this the outer wrapper fp-skips and the cached tab
   // body persists across nested-frame moves.
-  const request =
-    snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath) : getRequest()
+  const request = snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath) : getRequest()
   let params: Record<string, string> = {}
   if (spec.matchPattern) {
     const result = spec.matchPattern.exec(request.url)
@@ -1166,7 +1158,9 @@ function emitParkedKeepalive(
   return (
     <>
       {[...matchKeys].map((mk) => (
-        <Activity key={mk} mode="hidden">{placeholderFor(id, mk)}</Activity>
+        <Activity key={mk} mode="hidden">
+          {placeholderFor(id, mk)}
+        </Activity>
       ))}
     </>
   )
@@ -1209,9 +1203,13 @@ function emitWithVariantSiblings(
   // Multi-variant: keys required for sibling reconciliation.
   return (
     <>
-      <Activity key={matchKey} mode="visible">{visibleBody}</Activity>
+      <Activity key={matchKey} mode="visible">
+        {visibleBody}
+      </Activity>
       {others.map((mk) => (
-        <Activity key={mk} mode="hidden">{placeholderFor(id, mk)}</Activity>
+        <Activity key={mk} mode="hidden">
+          {placeholderFor(id, mk)}
+        </Activity>
       ))}
     </>
   )
@@ -1274,11 +1272,7 @@ function createSpecComponent<V>(
     // `__parent` overrides it for isolated renders that are their own
     // render root: a cache hole, a `<RemoteFrame>`, an addressable
     // refetch (`partialFromSnapshot`), where there is no ambient parton.
-    // Capture the task synchronously here; the child context is set on it
-    // below once `id` is known (the captured handle stays valid across
-    // the awaits in between).
-    const __task = captureCurrentTask()
-    const parent = __injectedParent ?? getAmbientParent()
+    const parent = __injectedParent ?? getServerContext(ParentContext)
     const opts = spec.options
     // Render-time identity (the `id` keying snapshots, wire, cache
     // lookup) is:
@@ -1545,8 +1539,7 @@ function createSpecComponent<V>(
       resolutionParts.sort()
       schemaKeyHash = `|schema=${hash(resolutionParts.join("|"))}`
     }
-    const expandedLabels =
-      cellLabels.length > 0 ? [...parsed.labels, ...cellLabels] : parsed.labels
+    const expandedLabels = cellLabels.length > 0 ? [...parsed.labels, ...cellLabels] : parsed.labels
 
     // ── Actions phase ──
     // Each declared action becomes a `ResolvedAction` in Render's prop
@@ -1559,11 +1552,13 @@ function createSpecComponent<V>(
       const partonVaryForActions = (varyResult ?? {}) as Record<string, unknown>
       for (const actionName of Object.keys(opts.actions)) {
         const actionId = `${spec.id}/${actionName}`
-        const ref = (__partonAction as unknown as (
-          actionId: string,
-          partonVary: Record<string, unknown>,
-          args: unknown,
-        ) => Promise<unknown>).bind(null, actionId, partonVaryForActions)
+        const ref = (
+          __partonAction as unknown as (
+            actionId: string,
+            partonVary: Record<string, unknown>,
+            args: unknown,
+          ) => Promise<unknown>
+        ).bind(null, actionId, partonVaryForActions)
         actionsResult[actionName] = {
           __partonAction: true,
           ref: ref as ResolvedAction<unknown, unknown>["ref"],
@@ -1611,11 +1606,8 @@ function createSpecComponent<V>(
     const effectiveConstraints: Record<string, unknown> | null =
       varyResult == null && Object.keys(boundArgsMerged).length === 0
         ? null
-        : { ...(varyResult as Record<string, unknown> | null ?? {}), ...boundArgsMerged }
-    const invalidationTs = queryMatchingTs(
-      expandedLabels,
-      effectiveConstraints,
-    )
+        : { ...((varyResult as Record<string, unknown> | null) ?? {}), ...boundArgsMerged }
+    const invalidationTs = queryMatchingTs(expandedLabels, effectiveConstraints)
     const invalidationKey = invalidationTs > 0 ? `|inv=${invalidationTs}` : ""
     const ownStructuralFp = hash(
       `${id}|matchKey=${matchKey}|vary=${varyKey}${schemaKeyHash}${propsKey}${invalidationKey}`,
@@ -1680,10 +1672,10 @@ function createSpecComponent<V>(
       state.seenIds.add(id)
     }
 
+    // Scope this parton's descendants: the returned body is wrapped in
+    // `<ParentContext value={childCtx}>` (below), so child partons inherit
+    // `childCtx` as their ambient parent.
     const childCtx = _childContext(parent, id)
-    // Scope this parton's descendants: child tasks created while this
-    // parton's body renders inherit `childCtx` as their ambient parent.
-    setTaskChildContext(__task, childCtx)
     // Render receives: extra JSX-prop pass-through, vary result,
     // framework-managed (parent / children). vary wins on key
     // collision — vary's return is the canonical surface.
@@ -1731,9 +1723,7 @@ function createSpecComponent<V>(
           cache={opts.cache}
           fallback={fallback}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
-          constraintArgs={
-            Object.keys(boundArgsMerged).length > 0 ? boundArgsMerged : undefined
-          }
+          constraintArgs={Object.keys(boundArgsMerged).length > 0 ? boundArgsMerged : undefined}
           varyKey={varyKey}
           matchKey={matchKey}
           emittedFp={snapshotFp}
@@ -1754,12 +1744,7 @@ function createSpecComponent<V>(
             ? cloneElement(defer as ReactElement<ActivatorProps>, { partialId: id }, fallback)
             : fallback
       let deferBody: ReactNode = (
-        <PartialErrorBoundary
-          key={id}
-          partialId={id}
-          {...fpProp}
-          partialMatchKey={matchKey}
-        >
+        <PartialErrorBoundary key={id} partialId={id} {...fpProp} partialMatchKey={matchKey}>
           {dormant}
         </PartialErrorBoundary>
       )
@@ -1775,9 +1760,7 @@ function createSpecComponent<V>(
           cache={opts.cache}
           fallback={fallback}
           props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
-          constraintArgs={
-            Object.keys(boundArgsMerged).length > 0 ? boundArgsMerged : undefined
-          }
+          constraintArgs={Object.keys(boundArgsMerged).length > 0 ? boundArgsMerged : undefined}
           varyKey={varyKey}
           matchKey={matchKey}
           emittedFp={snapshotFp}
@@ -1807,20 +1790,12 @@ function createSpecComponent<V>(
         <Suspense
           key={id}
           fallback={
-            <PartialErrorBoundary
-              partialId={id}
-              {...fpProp}
-              partialMatchKey={matchKey}
-            >
+            <PartialErrorBoundary partialId={id} {...fpProp} partialMatchKey={matchKey}>
               {fallback}
             </PartialErrorBoundary>
           }
         >
-          <PartialErrorBoundary
-            partialId={id}
-            {...fpProp}
-            partialMatchKey={matchKey}
-          >
+          <PartialErrorBoundary partialId={id} {...fpProp} partialMatchKey={matchKey}>
             {body}
           </PartialErrorBoundary>
         </Suspense>
@@ -1830,12 +1805,7 @@ function createSpecComponent<V>(
       // so the client's `isPartialWrapper` walker (which checks
       // `node.key != null`) detects it.
       body = (
-        <PartialErrorBoundary
-          key={id}
-          partialId={id}
-          {...fpProp}
-          partialMatchKey={matchKey}
-        >
+        <PartialErrorBoundary key={id} partialId={id} {...fpProp} partialMatchKey={matchKey}>
           {body}
         </PartialErrorBoundary>
       )
@@ -1853,27 +1823,27 @@ function createSpecComponent<V>(
     if (keepalive) body = emitWithVariantSiblings(id, matchKey, body, state)
 
     return (
-      <PartialBoundary
-        id={id}
-        type={spec.type}
-        parentPath={parent.path}
-        labels={expandedLabels}
-        framePath={ourFrameChain}
-        parentFrameChain={parent.frameChain}
-        cache={opts.cache}
-        fallback={fallback}
-        props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
-        constraintArgs={
-          Object.keys(boundArgsMerged).length > 0 ? boundArgsMerged : undefined
-        }
-        varyKey={varyKey}
-        matchKey={matchKey}
-        emittedFp={snapshotFp}
-        expiresAt={expiresAt}
-        staleUntil={staleUntil}
-      >
-        {body}
-      </PartialBoundary>
+      <ParentContext value={childCtx}>
+        <PartialBoundary
+          id={id}
+          type={spec.type}
+          parentPath={parent.path}
+          labels={expandedLabels}
+          framePath={ourFrameChain}
+          parentFrameChain={parent.frameChain}
+          cache={opts.cache}
+          fallback={fallback}
+          props={Object.keys(extraProps).length > 0 ? extraProps : undefined}
+          constraintArgs={Object.keys(boundArgsMerged).length > 0 ? boundArgsMerged : undefined}
+          varyKey={varyKey}
+          matchKey={matchKey}
+          emittedFp={snapshotFp}
+          expiresAt={expiresAt}
+          staleUntil={staleUntil}
+        >
+          {body}
+        </PartialBoundary>
+      </ParentContext>
     )
   }
   Component.displayName = `Partial(${spec.id})`
@@ -1953,20 +1923,14 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   // server-side with the bound parton vary). Idempotent overwrite on
   // HMR — same semantics as the cell registry.
   if (options.schema) {
-    registerSchema(
-      id,
-      options.schema as unknown as Parameters<typeof registerSchema>[1],
-    )
+    registerSchema(id, options.schema as unknown as Parameters<typeof registerSchema>[1])
   }
 
   // Register each declared action handler under `<partonId>/<actionName>`.
   if (options.actions) {
     for (const actionName of Object.keys(options.actions)) {
       const handler = options.actions[actionName]
-      registerAction(
-        `${id}/${actionName}`,
-        handler as ActionHandler,
-      )
+      registerAction(`${id}/${actionName}`, handler as ActionHandler)
     }
   }
 
