@@ -99,6 +99,7 @@ import { getCellStorage } from "../runtime/cell-storage.ts"
 import { getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
 import { getServerContext } from "./server-context.ts"
+import { _setCurrentParton } from "./current-parton.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -1302,6 +1303,12 @@ function createSpecComponent<V>(
       spec as InternalSpec<unknown>,
       effectiveInstanceId,
     )
+    // Expose this parton's own identity to server-hooks called within its
+    // render (`getCurrentParton`) — the self-context analogue of the
+    // ambient PARENT. Rides the same per-component ALS as server context,
+    // so reads are valid anywhere in the body and siblings stay isolated.
+    // See current-parton.ts.
+    _setCurrentParton({ id })
     // Keepalive defaults to true. The flag governs both the active
     // emission (wrap body in `<Activity mode="visible">`) and the
     // parked emission on match-miss / vary-null (emit
