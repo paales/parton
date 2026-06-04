@@ -104,6 +104,14 @@ inside `<ParentContext value={childCtx}>` (so does `<Frame>`, and the cache's
 isolated render). Because that overlays only the parent key, every user server
 context threads through a parton to its descendants for free.
 
+The same ALS also backs the parton **self**-context: where `ParentContext`
+gives a parton its parent, `current-parton.ts` (`getCurrentParton`, `tag`)
+gives it its OWN identity — the basis for *server-hooks* (free functions that
+read/register against the rendering parton). It's read-your-own-value (a
+context provider deliberately never sees its own overlay), so it's a direct
+field on the rendering task rather than a context entry, and is not inherited
+by descendant tasks. See [`../notes/server-hooks.md`](../notes/server-hooks.md).
+
 Isolated renders that are their own render root — a cache hole, a
 `<RemoteFrame>`, an addressable refetch — have no ambient parent task; those
 seed `parent` explicitly (the cache renders its body inside
