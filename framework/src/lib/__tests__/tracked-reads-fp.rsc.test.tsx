@@ -16,7 +16,7 @@ import { describe, expect, it, beforeEach } from "vitest"
 import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
-import { searchParam } from "../server-hooks.ts"
+import { searchParam, match } from "../server-hooks.ts"
 
 function fpById(flight: string): Map<string, string> {
   const out = new Map<string, string>()
@@ -151,5 +151,43 @@ describe("descendant fold: tracked reads bubble into an ancestor's fp", () => {
     const fpB = await fpAt("http://t/x?q=B", tree, "plain-wrapper")
     expect(fpA).toBeDefined()
     expect(fpB).toBe(fpA) // no descendant tracked ?q → wrapper unaffected
+  })
+})
+
+// ── match(): folds only the captured params, not the whole pathname ──
+const MatchProbe = parton(
+  function MatchProbeRender({ m }: { m: Record<string, string> | null } & RenderArgs) {
+    return <span data-testid="match-probe">{m?.slug ?? "—"}</span>
+  },
+  // No `match` OPTION → renders at any URL; the `match()` HOOK reads the
+  // pattern inline in schema (folds into the current fp).
+  { selector: "#match-probe", schema: () => ({ m: match("/p/:slug") }) },
+)
+
+describe("match(): varies on the captured param, not on every URL", () => {
+  beforeEach(() => clearRegistry("all"))
+
+  it("a different captured :slug moves the fp", async () => {
+    const tree = (
+      <PartialRoot>
+        <MatchProbe />
+      </PartialRoot>
+    )
+    const fpA = await fpAt("http://t/p/a", tree, "match-probe")
+    const fpB = await fpAt("http://t/p/b", tree, "match-probe")
+    expect(fpA).toBeDefined()
+    expect(fpB).not.toBe(fpA) // :slug changed → fp moved
+  })
+
+  it("a query-string change with the SAME :slug does NOT move the fp", async () => {
+    const tree = (
+      <PartialRoot>
+        <MatchProbe />
+      </PartialRoot>
+    )
+    const fp1 = await fpAt("http://t/p/a?q=1", tree, "match-probe")
+    const fp2 = await fpAt("http://t/p/a?q=2", tree, "match-probe")
+    expect(fp1).toBeDefined()
+    expect(fp2).toBe(fp1) // only the captured :slug folds, not the whole URL
   })
 })

@@ -51,6 +51,48 @@ export function param(name: string): string | undefined {
   return getCurrentParton()?.params[name]
 }
 
+// URLPattern helpers — mirror the parton `match` option's compilation
+// (`compileMatchPattern` / `extractNamedParams` in partial.tsx),
+// duplicated here to avoid a partial.tsx ↔ server-hooks import cycle.
+// Compiled patterns are cached (compilation isn't free and the fold
+// re-runs them on every fp).
+const _patternCache = new Map<string, URLPattern>()
+function compilePattern(pattern: string | URLPatternInit): URLPattern {
+  const key = typeof pattern === "string" ? pattern : JSON.stringify(pattern)
+  let p = _patternCache.get(key)
+  if (!p) {
+    p = new URLPattern(typeof pattern === "string" ? { pathname: pattern } : pattern)
+    _patternCache.set(key, p)
+  }
+  return p
+}
+function namedGroups(result: URLPatternResult): Record<string, string> {
+  const groups = { ...result.pathname.groups, ...result.search.groups }
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(groups)) {
+    if (typeof v === "string" && !/^\d+$/.test(k)) out[k] = v
+  }
+  return out
+}
+
+/**
+ * Match the (frame-resolved) request URL against `pattern` — the SAME
+ * argument shape the parton `match` option takes (a pathname string or a
+ * `URLPatternInit`) — and return its named capture groups, or `null` on
+ * no match. Records a dependency keyed by the pattern, so the fp folds
+ * only the MATCHED PARAMS, not the whole pathname: the spec varies when
+ * its captured segment changes, never on every navigation.
+ *
+ *     const { slug } = match("/p/:slug") ?? {}
+ */
+export function match(pattern: string | URLPatternInit): Record<string, string> | null {
+  const cp = getCurrentParton()
+  if (!cp) return null
+  cp.deps.add(`match:${typeof pattern === "string" ? pattern : JSON.stringify(pattern)}`)
+  const result = compilePattern(pattern).exec(cp.request.url)
+  return result ? namedGroups(result) : null
+}
+
 /**
  * Re-evaluate recorded dependency keys against a request, producing a
  * stable `|deps=…` suffix for the fingerprint. The read side of
@@ -76,7 +118,14 @@ export function evalDepKeys(
     let value: string | null | undefined
     if (kind === "cookie") value = cookies[name]
     else if (kind === "search") value = url.searchParams.get(name)
-    else if (kind === "cell") {
+    else if (kind === "match") {
+      // `name` is the pattern (string) or its JSON (dict). Re-run it and
+      // fold the NAMED params only — so a spec varies when its captured
+      // segment changes, not on every pathname.
+      const pattern = name.startsWith("{") ? (JSON.parse(name) as URLPatternInit) : name
+      const result = compilePattern(pattern).exec(url.href)
+      value = result ? JSON.stringify(namedGroups(result)) : "nomatch"
+    } else if (kind === "cell") {
       // An inline cell folds as its invalidation timestamp, not its
       // value: a write fires `refreshSelector(cell:<id>)`, bumping the ts
       // here so the parton re-renders on the next nav. The value itself
