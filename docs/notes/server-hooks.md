@@ -116,10 +116,19 @@ via the dep-record + store-and-reread.
 - ✅ **Tracked-read hooks** (`cookie()`, `searchParam()`) — own-fp fold via
   store-and-reread (a render's recorded dep keys re-read at the next render's
   fp). A tracked read moves the fp like a `vary` axis; a spec that never tracks
-  is byte-identical. Probe `tracked-reads-fp.rsc.test.tsx`. Own fp only — the
-  descendant fold (§1), cells (§3), and the migration (§5) follow.
+  is byte-identical. Probe `tracked-reads-fp.rsc.test.tsx`.
+- ✅ **Descendant fold + trailer mirror** — `descendantContribution`
+  (`partial.tsx`) re-reads a descendant's stored deps, and the fp-trailer's warm
+  recompute (`recomputeFpWithFold` + its own fold, `fp-trailer.ts`) mirrors it —
+  so an ancestor's fp moves when a nested auto-tracked spec's reads change, and
+  the cold→warm drift ships the deps-bearing warm fp (the cold fp has no prior
+  deps, so without the mirror an auto-tracked spec could never fp-skip). Both
+  additive. Descendant-fold probe in `tracked-reads-fp.rsc.test.tsx`; e2e green.
 
-All kept internal (not in the public barrel) — no app consumer yet.
+With this, **auto-tracked request reads are a complete `vary` replacement** —
+own fp, ancestor fold, and warm-fp drift all handled. Cells (§3) and the
+migration (§5) remain. All kept internal (not in the public barrel) — no app
+consumer yet.
 
 ## Roadmap
 
@@ -127,16 +136,14 @@ All kept internal (not in the public barrel) — no app consumer yet.
 for specs that don't opt into the new hooks, so existing specs + e2e stay green
 throughout, and the `vary`/`schema` removal is the final migration step (§5).
 
-### 1. Descendant fold for tracked reads + render-phase `tag()` — NEXT
-Own-fp store-and-reread landed (the tracked-read hooks above; deps stored on the
-snapshot as a live Set, re-read at the next fp). Two pieces remain: **(a)
-descendant fold** — `descendantContribution` must re-evaluate a descendant's
-stored `deps` (additive: present → fold via `evalDepKeys`, absent → today's
-`vary` path), so an ancestor's fp reflects an auto-tracked descendant's reads.
-Until this lands, auto-tracked specs are correct standalone but not fold-covered
-*under a wrapper* (no in-tree caller yet). **(b) render-phase `tag()`** — `tag()`
-folds in the schema phase today (before the fp); a render-body tag rides the same
-dep-record store-and-reread. Both additive, both testable in isolation.
+### 1. Render-phase `tag()` — remaining
+The descendant fold + trailer mirror landed (above), so tracked *request reads*
+are complete. What's left from the original §1 is render-phase `tag()`: `tag()`
+folds in the schema phase today (before the fp); a render-body `tag()` lands
+after the fp and rides the same dep-record store-and-reread the tracked hooks
+now use (record on the live Set, fold the prior render's set at the next fp).
+Small, additive, and the same shape as `cookie()`/`searchParam()` — the entity
+tags a GraphQL response yields (`__typename:id`) would be recorded here.
 
 ### 2. Auto-tracked vary (`vary` becomes implicit)
 Reads via tracked hooks (`cookie()`, `session()`, `param()`, cells) accumulate

@@ -833,6 +833,13 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
   // fp. Without this the outer wrapper fp-skips and the cached tab
   // body persists across nested-frame moves.
   const request = snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath) : getRequest()
+  // Tracked-read deps the descendant recorded on its own render
+  // (`cookie()`/`searchParam()` via server-hooks), re-read against the
+  // current request — the store-and-reread fold that lets an ancestor's
+  // fp move when an auto-tracked descendant's request reads change, just
+  // like the `vary` re-run below does for declared vary. Empty for any
+  // descendant that records no tracked reads (additive).
+  const depsKey = evalDepKeys(snap.deps, request)
   let params: Record<string, string> = {}
   if (spec.matchPattern) {
     const result = spec.matchPattern.exec(request.url)
@@ -851,7 +858,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
     // `schema: () => ({cart: cartCell})`).
     const constraints = { ...params, ...(snap.constraintArgs ?? {}) }
     const inv = invalidationKeyFor(snap.labels, constraints)
-    return `${descId}:${stableStringify(params)}|${stableStringify(snap.props ?? null)}${inv}`
+    return `${descId}:${stableStringify(params)}|${stableStringify(snap.props ?? null)}${inv}${depsKey}`
   }
 
   // Resolve the descendant's `vary` against the current request,
@@ -888,7 +895,7 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
     ...(snap.constraintArgs ?? {}),
   }
   const inv = invalidationKeyFor(snap.labels, constraints)
-  return `${descId}:${stableStringify(cleanResult)}|${propsKey}${inv}`
+  return `${descId}:${stableStringify(cleanResult)}|${propsKey}${inv}${depsKey}`
 }
 
 /**

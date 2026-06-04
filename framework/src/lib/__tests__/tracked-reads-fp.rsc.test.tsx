@@ -83,3 +83,73 @@ describe("tracked reads fold into the fingerprint (vary becomes implicit)", () =
     expect(fpB).toBe(fpA) // no tracked read → ?q is invisible to the fp
   })
 })
+
+// ── descendant fold: an ancestor's fp reflects a nested spec's tracked read ──
+const TrackedChild = parton(
+  function TrackedChildRender(_: RenderArgs) {
+    return <span data-testid="desc-child">{searchParam("q") ?? "—"}</span>
+  },
+  { selector: "#desc-child" },
+)
+const WrapperOfTracked = parton(
+  function WrapperOfTrackedRender(_: RenderArgs) {
+    return (
+      <div>
+        <TrackedChild />
+      </div>
+    )
+  },
+  { selector: "#desc-wrapper" },
+)
+
+const PlainChild = parton(
+  function PlainChildRender(_: RenderArgs) {
+    return <span data-testid="plain-child" />
+  },
+  { selector: "#plain-child" },
+)
+const WrapperOfPlain = parton(
+  function WrapperOfPlainRender(_: RenderArgs) {
+    return (
+      <div>
+        <PlainChild />
+      </div>
+    )
+  },
+  { selector: "#plain-wrapper" },
+)
+
+describe("descendant fold: tracked reads bubble into an ancestor's fp", () => {
+  beforeEach(() => clearRegistry("all"))
+
+  it("a wrapper's fp moves when its auto-tracked descendant's ?q changes", async () => {
+    const tree = (
+      <PartialRoot>
+        <WrapperOfTracked />
+      </PartialRoot>
+    )
+    // Warm: the child must register its deps snapshot (r1), so the
+    // wrapper's descendant fold can re-read them on the next render.
+    await fpAt("http://t/x?q=A", tree, "desc-wrapper")
+    const fpA = await fpAt("http://t/x?q=A", tree, "desc-wrapper")
+    const fpB = await fpAt("http://t/x?q=B", tree, "desc-wrapper")
+    const fpA2 = await fpAt("http://t/x?q=A", tree, "desc-wrapper")
+
+    expect(fpA).toBeDefined()
+    expect(fpB).not.toBe(fpA) // descendant's tracked read folded into the wrapper
+    expect(fpA2).toBe(fpA) // and stable when ?q returns — fp-skip stays honest
+  })
+
+  it("a wrapper whose descendant tracks nothing is stable across ?q", async () => {
+    const tree = (
+      <PartialRoot>
+        <WrapperOfPlain />
+      </PartialRoot>
+    )
+    await fpAt("http://t/x?q=A", tree, "plain-wrapper")
+    const fpA = await fpAt("http://t/x?q=A", tree, "plain-wrapper")
+    const fpB = await fpAt("http://t/x?q=B", tree, "plain-wrapper")
+    expect(fpA).toBeDefined()
+    expect(fpB).toBe(fpA) // no descendant tracked ?q → wrapper unaffected
+  })
+})

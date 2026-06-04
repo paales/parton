@@ -32,6 +32,7 @@ import {
   type PartialSnapshot,
 } from "./partial-registry.ts"
 import { computeRouteKey } from "./partial.tsx"
+import { evalDepKeys } from "./server-hooks.ts"
 import { _consumePendingUrlUpdate, getRequest, getScope } from "../runtime/context.ts"
 import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
 import { getSessionFrameUrl } from "../runtime/session.ts"
@@ -73,6 +74,7 @@ function computeFpUpdates(
     parsedVaryInputs: Record<string, unknown> | null
     contribution: string
     selfRequest: Request
+    depsKey: string
   }
   const sideById = new Map<string, SideData>()
   for (const [id, snap] of snapshots) {
@@ -81,8 +83,15 @@ function computeFpUpdates(
       snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath, request) : request
     const ts = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
     const invKey = ts > 0 ? `|inv=${ts}` : ""
-    const contribution = `${id}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}${invKey}`
-    sideById.set(id, { parsedVaryInputs, contribution, selfRequest })
+    // Tracked-read deps re-read at this request — mirrors the live
+    // descendantContribution / own-fp fold in partial.tsx so the warm fp
+    // the trailer ships matches what the next visit computes. The cold fp
+    // omits deps (first render has no prior set); the warm one folds them,
+    // which is exactly the drift this trailer ships. Empty (additive) for
+    // any spec that records no tracked reads.
+    const depsKey = evalDepKeys(snap.deps, selfRequest)
+    const contribution = `${id}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}${invKey}${depsKey}`
+    sideById.set(id, { parsedVaryInputs, contribution, selfRequest, depsKey })
   }
 
   // Build the fold map in one pass. Each descendant contributes its
@@ -118,6 +127,7 @@ function computeFpUpdates(
       side.parsedVaryInputs,
       folds.get(id) ?? "",
       side.selfRequest.url,
+      side.depsKey,
     )
     if (recomputed !== snap.emittedFp) {
       // `from` is the cold fp the body emitted; `to` the recomputed warm
@@ -181,6 +191,7 @@ function recomputeFpWithFold(
   parsedVaryInputs: Record<string, unknown> | null,
   fold: string,
   frameRequestUrl: string,
+  depsKey: string,
 ): string {
   const ambientFrameKey =
     snap.framePath.length > 0
@@ -198,7 +209,7 @@ function recomputeFpWithFold(
   const invalidationTs = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
   const invalidationKey = invalidationTs > 0 ? `|inv=${invalidationTs}` : ""
   const ownStructuralFp = hash(
-    `${id}|matchKey=${matchKey}|vary=${varyKey}${propsKey}${invalidationKey}`,
+    `${id}|matchKey=${matchKey}|vary=${varyKey}${propsKey}${invalidationKey}${depsKey}`,
   )
   return hash(`${ownStructuralFp}${ambientFrameKey}${fold}`)
 }
