@@ -1654,7 +1654,17 @@ function createSpecComponent<V>(
     // cold (no fp-skip relies on it), and the keys it records make every
     // subsequent render fp-accurate.
     const priorSnap = lookupPartial(id)
-    const depsKey = evalDepKeys(priorSnap?.deps, ourRequest)
+    // Fold this render's dep keys, re-read at the current request. Tracked
+    // reads done in the SCHEMA phase are already in `selfDeps` (schema runs
+    // before this fp) → they fold into the CURRENT fp with no cold-lag,
+    // which is what lets a `cache:`+tracked spec key its byte-cache
+    // correctly from render 1. Render-BODY reads land in `selfDeps` only
+    // after this fp, so they ride the PRIOR snapshot's set (store-and-
+    // reread). The union covers both; a spec with no tracked reads has an
+    // empty set → "" (byte-identical).
+    const foldDeps = new Set<string>(selfDeps)
+    if (priorSnap?.deps) for (const k of priorSnap.deps) foldDeps.add(k)
+    const depsKey = evalDepKeys(foldDeps, ourRequest)
     const ownStructuralFp = hash(
       `${id}|matchKey=${matchKey}|vary=${varyKey}${schemaKeyHash}${propsKey}${invalidationKey}${depsKey}`,
     )

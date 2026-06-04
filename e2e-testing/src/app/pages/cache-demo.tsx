@@ -5,7 +5,7 @@
  * {maxAge: 60}`) and varies by `flavor`; `Clock` stays uncached.
  */
 
-import { parton, getScope, type RenderArgs } from "@parton/framework"
+import { parton, getScope, searchParam, type RenderArgs } from "@parton/framework"
 // `_cacheStats` is a framework-internal diagnostic surface — kept on
 // the deep path because the demo intentionally peeks at internals.
 import { _cacheStats } from "@parton/framework/lib/cache.tsx"
@@ -80,7 +80,10 @@ const Slow = parton(
   {
     selector: "#slow",
     cache: { maxAge: 60 },
-    vary: ({ search: { flavor = "vanilla" } }) => ({ flavor }),
+    // Tracked in `schema` (runs before the fp), so `flavor` folds into the
+    // byte-cache key from render 1 — `searchParam` is the inline-tracking
+    // replacement for the old `vary`.
+    schema: () => ({ flavor: searchParam("flavor") ?? "vanilla" }),
     fallback: <div data-testid="slow-fallback">Loading slow…</div>,
   },
 )
@@ -99,21 +102,20 @@ const Clock = parton(
   { selector: "#clock", fallback: <div>Loading clock…</div> },
 )
 
-const Footer = parton(
-  function CacheDemoFooterRender({ tick: _tick }: { tick: number } & RenderArgs) {
-    return (
-      <div className="mt-8 text-xs text-muted-foreground">
-        Server <Code>slowRenderCount</Code>:{" "}
-        <span data-testid="server-render-count">{slowRenderCounts.get(getScope()) ?? 0}</span>
-        <br />
-        Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
-      </div>
-    )
-  },
-  {
-    vary: () => ({ tick: Date.now() }),
-  },
-)
+// Non-addressable (no selector/match/tracked reads) — re-renders inline
+// with its parent, which is enough to show the live render count. (It used
+// a `vary: () => ({tick: Date.now()})` to force a fresh fp every render;
+// inline, "always render" is just "be non-addressable".)
+const Footer = parton(function CacheDemoFooterRender() {
+  return (
+    <div className="mt-8 text-xs text-muted-foreground">
+      Server <Code>slowRenderCount</Code>:{" "}
+      <span data-testid="server-render-count">{slowRenderCounts.get(getScope()) ?? 0}</span>
+      <br />
+      Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
+    </div>
+  )
+})
 
 // ─── Outer wrapper — matches /cache-demo, threads flavor down ─────────
 
@@ -130,6 +132,6 @@ export const CacheDemoPage = parton(
   },
   {
     match: "/cache-demo",
-    vary: ({ search: { flavor = "vanilla" } }) => ({ flavor }),
+    schema: () => ({ flavor: searchParam("flavor") ?? "vanilla" }),
   },
 )
