@@ -34,6 +34,7 @@ import {
   __cellWrite as _cellWriteAction,
   __scopedCellWrite as _scopedCellWriteAction,
 } from "../runtime/cell-actions.ts"
+import { getCurrentParton } from "./current-parton.ts"
 import {
   getCellStorage,
   getEphemeralCellStorage,
@@ -512,9 +513,43 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
  * `fragmentCell`. Both default to ephemeral in-memory storage so
  * disk doesn't accumulate stale cache entries.
  */
+/** Options for the inline `localCell("key", {...})` form — declared
+ *  inside a parton's `Render`, bound to the calling parton. */
+export interface InlineLocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
+  shape: S
+  initial: T
+  /** Storage partition. Defaults to a single slot (`{}`). Partition by a
+   *  request dimension (e.g. session) by passing it explicitly. */
+  partition?: CellArgs
+  write?: (value: T) => T
+  load?: (args: CellArgs) => Promise<T>
+}
+
+/**
+ * Inline form — called inside a parton's `Render`:
+ * `const notes = await localCell("notes", { shape: "string", initial: "" })`.
+ * Resolves against the CALLING parton (id `<partonId>/<key>`, via the
+ * self-context), folds the cell's invalidation into the fp through the
+ * dep-record (store-and-reread), and returns a `ResolvedCell` whose `.set`
+ * writes the bound partition. The auto-tracked replacement for a `schema`
+ * cell — declared where it's used, no factory threading.
+ */
+export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
+  key: string,
+  opts: InlineLocalCellOpts<S, T>,
+): Promise<ResolvedCell<T>>
+/** Module-scope form — a standalone persistent cell handle. */
 export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
   opts: LocalCellOpts<S, T>,
-): LocalCell<T> {
+): LocalCell<T>
+export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
+  keyOrOpts: string | LocalCellOpts<S, T>,
+  inlineOpts?: InlineLocalCellOpts<S, T>,
+): Promise<ResolvedCell<T>> | LocalCell<T> {
+  if (typeof keyOrOpts === "string") {
+    return resolveInlineLocalCell<S, T>(keyOrOpts, inlineOpts as InlineLocalCellOpts<S, T>)
+  }
+  const opts = keyOrOpts
   const shape = shapeFromSpec(opts.shape)
   const validate = makeValidator<T>(opts.id, shape)
   const varyFn = opts.vary ?? constantVary
@@ -539,6 +574,42 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
     deferred: opts.deferred,
   }
   return registerCell(handle)
+}
+
+async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
+  key: string,
+  opts: InlineLocalCellOpts<S, T>,
+): Promise<ResolvedCell<T>> {
+  const cp = getCurrentParton()
+  if (!cp) {
+    throw new Error(`localCell(${JSON.stringify(key)}, …): must be called inside a parton's Render`)
+  }
+  const id = `${cp.id}/${key}`
+  const partition: CellArgs = opts.partition ?? {}
+  // Reuse the handle across this parton's renders — `finalizeScopedCell`
+  // registers it in the cell registry (keyed by id) so the client write
+  // action and a future server-action enumeration find it by id.
+  let handle = getCellById(id) as CellInterface<T> | undefined
+  if (!handle) {
+    const shape = shapeFromSpec(opts.shape)
+    const descriptor: ScopedCellDescriptor<T> = {
+      __scopedCellDescriptor: true,
+      shape,
+      defaultValue: opts.initial,
+      varyFn: undefined,
+      write: opts.write,
+      load: opts.load,
+      validate: makeValidator<T>(id, shape),
+    }
+    handle = finalizeScopedCell(descriptor, cp.id, key)
+  }
+  const value = await resolveCellValue(handle, partition)
+  // Fold the cell's invalidation into the fp via the dep-record: the
+  // store-and-reread `cell:` branch in evalDepKeys re-reads its timestamp,
+  // so a write (`refreshSelector(cell:<id>)`) re-renders this parton on
+  // the next nav. Reuses the cookie()/searchParam() tracking machinery.
+  cp.deps.add(`cell:${id}`)
+  return buildResolvedCell(handle, value, partition)
 }
 
 // ─── Ephemeral-cell builder (shared by gqlCell + fragmentCell) ────────

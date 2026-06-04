@@ -158,17 +158,27 @@ render), never stale, so it's a perf cost not a correctness one. **Decided:**
 re-renders.
 
 ### 3. Inline `localCell` (server-hook cells)
-Inline `const x = localCell('k', …)` in Render removes the `schema` callback —
-but the schema callback is the **replayable shape** the action dispatcher
-re-runs WITHOUT a render (`resolveSchemaForAction`, `parton-actions.ts`) to
-resolve a parton's cells. Since the constructor stays (§4 resolved), the action
-has the Component in the catalog and can **re-render the parton to enumerate its
-cells**, OR inline cells **register a `(key, partition, shape)` record into the
-snapshot** at render-time that the action reads back. **Decision:**
-re-render-to-enumerate vs snapshot cell-record (the latter avoids a render but
-adds a durable record). The partition source moves to an ambient
-`session()`-style read. forms-demo is the migration target once this lands (its
-`save` action is exactly the enumeration consumer).
+**Increment 1 landed** (read + client-write): `const v = await localCell("k",
+{…})` in Render resolves against the calling parton (id `<partonId>/<key>`, via
+the self-context), folds its invalidation into the fp through the dep-record (a
+`cell:` branch in `evalDepKeys` — the cell's timestamp is its "value", reusing
+the `cookie()`/`searchParam()` store-and-reread), and returns a `ResolvedCell`
+whose `.set` writes from the client. Added as an overload of `localCell` (string
+first arg → inline; object → the existing module form). Additive — the
+schema-callback cell path is untouched. Probe `inline-localcell.rsc.test.tsx`.
+
+Fork decided: **(b) snapshot cell-record** (the action reads a record, not a
+re-render). Remaining:
+- **Increment 2 — action enumeration.** Record `(id, partition)` on the
+  snapshot at render; `resolveSchemaForAction` (`parton-actions.ts`) reads that
+  record (alongside the schema callback) so an `actions` handler resolves an
+  inline cell without a render. Needed before an action-bound inline cell
+  (forms-demo's `save`).
+- **Partitioning.** Increment 1 is single-slot (`partition: {}` default); a
+  request-derived partition (forms-demo's per-session) wants an ambient
+  `session()` read passed as `partition`.
+- **Migration.** Move forms-demo's `schema` cells to inline `localCell` once
+  increment 2 + partitioning land, then the broader §5 migration.
 
 ### 4. `<Parton>` component (retire the constructor) — RESOLVED: constructor stays
 Decided (see Decision above): `parton()` remains a module-scope constructor, so

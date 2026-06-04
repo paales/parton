@@ -22,6 +22,7 @@
 
 import { getCurrentParton } from "./current-parton.ts"
 import { parseCookies } from "../runtime/context.ts"
+import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
 
 /** Read a cookie and record it as an fp dependency. */
 export function cookie(name: string): string | undefined {
@@ -64,7 +65,15 @@ export function evalDepKeys(
     let value: string | null | undefined
     if (kind === "cookie") value = cookies[name]
     else if (kind === "search") value = url.searchParams.get(name)
-    else value = undefined
+    else if (kind === "cell") {
+      // An inline cell folds as its invalidation timestamp, not its
+      // value: a write fires `refreshSelector(cell:<id>)`, bumping the ts
+      // here so the parton re-renders on the next nav. The value itself
+      // isn't re-derivable later (it's loaded), so the tag drives
+      // freshness — see docs/notes/server-hooks.md "fold the tag, not the
+      // value". `key` is the whole `cell:<id>` label.
+      value = String(queryMatchingTs([key], null))
+    } else value = undefined
     parts.push(`${key}=${value ?? ""}`)
   }
   return `|deps=${parts.join("&")}`
