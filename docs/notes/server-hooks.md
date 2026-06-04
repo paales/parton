@@ -167,18 +167,29 @@ whose `.set` writes from the client. Added as an overload of `localCell` (string
 first arg → inline; object → the existing module form). Additive — the
 schema-callback cell path is untouched. Probe `inline-localcell.rsc.test.tsx`.
 
-Fork decided: **(b) snapshot cell-record** (the action reads a record, not a
-re-render). Remaining:
-- **Increment 2 — action enumeration.** Record `(id, partition)` on the
-  snapshot at render; `resolveSchemaForAction` (`parton-actions.ts`) reads that
-  record (alongside the schema callback) so an `actions` handler resolves an
-  inline cell without a render. Needed before an action-bound inline cell
-  (forms-demo's `save`).
+Fork decided: **(b) cell-record** (the action reads a record, not a
+re-render).
+
+- ✅ **Increment 2 — action enumeration.** At render, `localCell("key", …)`
+  records `(key, descriptor, partition)` via `registerInlineCell`
+  (`lib/parton-actions.ts`), and `resolveSchemaForAction` reads it
+  (`getInlineCellsForParton`, alongside the schema callback) so an `actions`
+  handler resolves the cell by key without a render — auto-write, explicit
+  handler write, and transactional rollback all behave as they do for a
+  `schema` cell. The record lives in a MODULE-GLOBAL registry, **not** the
+  per-request snapshot store: the dispatcher runs in a SEPARATE request where
+  the render's snapshot isn't visible (the same reason the schema callback is
+  registered module-globally). Keyed by the parton's effective id — which
+  equals the spec id, and the action's bound id, for a singleton placement
+  (forms-demo); consistent multi-instance keying waits on the partition
+  rework below. Probe `inline-cell-action.rsc.test.tsx`.
 - **Partitioning.** Increment 1 is single-slot (`partition: {}` default); a
   request-derived partition (forms-demo's per-session) wants an ambient
-  `session()` read passed as `partition`.
+  `session()` read passed as `partition` — also what makes an inline cell's
+  id consistent across render + action for multi-instance placements (key by
+  spec id + partition, not the effective id).
 - **Migration.** Move forms-demo's `schema` cells to inline `localCell` once
-  increment 2 + partitioning land, then the broader §5 migration.
+  partitioning lands, then the broader §5 migration.
 
 ### 4. `<Parton>` component (retire the constructor) — RESOLVED: constructor stays
 Decided (see Decision above): `parton()` remains a module-scope constructor, so

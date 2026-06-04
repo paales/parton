@@ -35,6 +35,7 @@ import {
   __scopedCellWrite as _scopedCellWriteAction,
 } from "../runtime/cell-actions.ts"
 import { getCurrentParton } from "./current-parton.ts"
+import { registerInlineCell } from "./parton-actions.ts"
 import {
   getCellStorage,
   getEphemeralCellStorage,
@@ -586,29 +587,37 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
   }
   const id = `${cp.id}/${key}`
   const partition: CellArgs = opts.partition ?? {}
-  // Reuse the handle across this parton's renders — `finalizeScopedCell`
-  // registers it in the cell registry (keyed by id) so the client write
-  // action and a future server-action enumeration find it by id.
-  let handle = getCellById(id) as CellInterface<T> | undefined
-  if (!handle) {
-    const shape = shapeFromSpec(opts.shape)
-    const descriptor: ScopedCellDescriptor<T> = {
-      __scopedCellDescriptor: true,
-      shape,
-      defaultValue: opts.initial,
-      varyFn: undefined,
-      write: opts.write,
-      load: opts.load,
-      validate: makeValidator<T>(id, shape),
-    }
-    handle = finalizeScopedCell(descriptor, cp.id, key)
+  const shape = shapeFromSpec(opts.shape)
+  // The descriptor is the rebuild input: `finalizeScopedCell` turns it
+  // into a handle (registered in the cell registry by id so the client
+  // write action finds it), and it's recorded on the snapshot so an
+  // action can rebuild + resolve this cell without a render.
+  const descriptor: ScopedCellDescriptor<T> = {
+    __scopedCellDescriptor: true,
+    shape,
+    defaultValue: opts.initial,
+    varyFn: undefined,
+    write: opts.write,
+    load: opts.load,
+    validate: makeValidator<T>(id, shape),
   }
+  const handle =
+    (getCellById(id) as CellInterface<T> | undefined) ??
+    finalizeScopedCell(descriptor, cp.id, key)
   const value = await resolveCellValue(handle, partition)
   // Fold the cell's invalidation into the fp via the dep-record: the
   // store-and-reread `cell:` branch in evalDepKeys re-reads its timestamp,
   // so a write (`refreshSelector(cell:<id>)`) re-renders this parton on
   // the next nav. Reuses the cookie()/searchParam() tracking machinery.
   cp.deps.add(`cell:${id}`)
+  // Record the cell in the module-global inline-cell registry so an
+  // `actions` handler resolves it by key without a render (increment 2).
+  // The per-request snapshot store isn't visible in the action's separate
+  // request, so this mirrors the module-global schema registry.
+  registerInlineCell(cp.id, key, {
+    partition,
+    descriptor: descriptor as ScopedCellDescriptor<unknown>,
+  })
   return buildResolvedCell(handle, value, partition)
 }
 
@@ -715,6 +724,18 @@ export interface ScopedCellDescriptor<T> {
   readonly write?: (value: T) => T
   readonly load?: (args: CellArgs) => Promise<T>
   readonly validate: (value: unknown) => T
+}
+
+/**
+ * What an inline `localCell("key", …)` records on its parton's snapshot
+ * so an `actions` handler can resolve the cell WITHOUT a render
+ * (increment 2). The descriptor is the rebuild input
+ * (`finalizeScopedCell(descriptor, partonId, key)`); the partition is the
+ * slot the render resolved against. Read by `resolveSchemaForAction`.
+ */
+export interface InlineCellRecord {
+  readonly partition: CellArgs
+  readonly descriptor: ScopedCellDescriptor<unknown>
 }
 
 export function isScopedCellDescriptor(

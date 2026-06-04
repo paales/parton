@@ -67,6 +67,7 @@ export function registerAction(id: string, handler: ActionHandler): void {
 export function _clearActionRegistry(): void {
   actionRegistry.clear()
   schemaRegistry.clear()
+  inlineCellRegistry.clear()
 }
 
 // ─── Schema callback registry ─────────────────────────────────────────
@@ -98,6 +99,39 @@ export function getSchemaForParton(partonId: string): SchemaCallback | undefined
 
 export function registerSchema(partonId: string, schema: SchemaCallback): void {
   schemaRegistry.set(partonId, schema)
+}
+
+// ─── Inline-cell registry ─────────────────────────────────────────────
+//
+// Inline `localCell("key", …)` cells are discovered at RENDER (declared in
+// the body), not at construction like the schema callback. The action
+// dispatcher runs in a SEPARATE request, where the render's per-request
+// snapshot store isn't visible — so the discovery is recorded here, in a
+// module-global registry keyed by parton id, exactly like `schemaRegistry`.
+// `resolveSchemaForAction` reads it so an `actions` handler resolves an
+// inline cell by key without a render. Keyed by the parton's effective id
+// (== the spec id for a singleton placement, which is what the action's
+// bound id carries).
+
+const inlineCellRegistry = new Map<string, Map<string, import("./cell.ts").InlineCellRecord>>()
+
+export function registerInlineCell(
+  partonId: string,
+  key: string,
+  record: import("./cell.ts").InlineCellRecord,
+): void {
+  let m = inlineCellRegistry.get(partonId)
+  if (!m) {
+    m = new Map()
+    inlineCellRegistry.set(partonId, m)
+  }
+  m.set(key, record)
+}
+
+export function getInlineCellsForParton(
+  partonId: string,
+): ReadonlyMap<string, import("./cell.ts").InlineCellRecord> | undefined {
+  return inlineCellRegistry.get(partonId)
 }
 
 /**

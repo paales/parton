@@ -36,10 +36,11 @@
  * view falls back to its prior server-authoritative shape.
  */
 
-import { getActionById, getSchemaForParton } from "../lib/parton-actions.ts"
+import { getActionById, getInlineCellsForParton, getSchemaForParton } from "../lib/parton-actions.ts"
 import {
   buildResolvedCell,
   computeCellPartitionKey,
+  computePartitionKeyFromArgs,
   computeScopedCellPartitionKey,
   finalizeScopedCell,
   isModuleCell,
@@ -100,12 +101,10 @@ function resolveSchemaForAction(
   resolved: Record<string, unknown>
   cellsByKey: Map<string, ResolvedCell<unknown>>
 } {
-  const schemaCb = getSchemaForParton(partonId)
   const resolved: Record<string, unknown> = {}
   const cellsByKey = new Map<string, ResolvedCell<unknown>>()
-  if (!schemaCb) return { resolved, cellsByKey }
-  const factories = makeScopedCellFactories<unknown>()
-  const raw = schemaCb(factories)
+  const schemaCb = getSchemaForParton(partonId)
+  const raw = schemaCb ? schemaCb(makeScopedCellFactories<unknown>()) : {}
   for (const key of Object.keys(raw)) {
     const val = raw[key]
     if (isScopedCellDescriptor(val)) {
@@ -131,6 +130,23 @@ function resolveSchemaForAction(
       cellsByKey.set(key, resolvedCell)
     } else {
       resolved[key] = val
+    }
+  }
+  // Inline cells (`localCell("key", …)` in Render) aren't in the schema
+  // callback — they were recorded on the parton's snapshot at render
+  // (increment 2). Rebuild + resolve each so the handler gets it by key
+  // without a render. Schema wins if a key is somehow declared both ways.
+  const inlineCells = getInlineCellsForParton(partonId)
+  if (inlineCells) {
+    for (const [key, rec] of inlineCells) {
+      if (cellsByKey.has(key)) continue
+      const cell = finalizeScopedCell(rec.descriptor, partonId, key)
+      const partitionKey = computePartitionKeyFromArgs(rec.partition)
+      const stored = cell.storage().read(getScope(), cell.id, partitionKey)
+      const value = stored === undefined ? cell.defaultValue : stored
+      const resolvedCell = buildResolvedCell(cell, value, rec.partition)
+      resolved[key] = resolvedCell
+      cellsByKey.set(key, resolvedCell)
     }
   }
   return { resolved, cellsByKey }
