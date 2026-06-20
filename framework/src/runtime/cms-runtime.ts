@@ -106,7 +106,13 @@ let draftSlot: CacheSlot | null = null
 function buildIndex(store: CmsStore): Map<string, CmsNode> {
   const index = new Map<string, CmsNode>()
   for (const node of Object.values(store.partials)) index.set(node.id, node)
+  // A slot can reference an ancestor's id (a hand-edited / malformed
+  // store), forming a cycle. Track visited ids so the walk terminates
+  // instead of recursing until the stack overflows.
+  const visited = new Set<string>()
   const walk = (node: CmsNode): void => {
+    if (visited.has(node.id)) return
+    visited.add(node.id)
     if (!node.slots) return
     for (const entries of Object.values(node.slots)) {
       for (const child of entries) {
@@ -218,8 +224,12 @@ export function buildCmsTreeEntries(
   const merged: Record<string, CmsNode> = { ...published }
   for (const [id, node] of Object.entries(draft)) merged[id] = node
 
+  // A slot can reference an ancestor's id, forming a cycle. The
+  // `publishedIds` set doubles as the visited guard here — re-entering
+  // an already-collected id terminates the walk.
   const publishedIds = new Set<string>()
   const collectPublishedIds = (node: CmsNode): void => {
+    if (publishedIds.has(node.id)) return
     publishedIds.add(node.id)
     if (!node.slots) return
     for (const children of Object.values(node.slots)) {
@@ -229,7 +239,10 @@ export function buildCmsTreeEntries(
   for (const node of Object.values(published)) collectPublishedIds(node)
 
   const slotChildIds = new Set<string>()
+  const visitedForSlots = new Set<string>()
   const collectSlotChildren = (node: CmsNode): void => {
+    if (visitedForSlots.has(node.id)) return
+    visitedForSlots.add(node.id)
     if (!node.slots) return
     for (const children of Object.values(node.slots)) {
       for (const child of children) {
@@ -241,11 +254,15 @@ export function buildCmsTreeEntries(
   for (const node of Object.values(merged)) collectSlotChildren(node)
 
   const entries: CmsTreeEntry[] = []
+  // `ancestors` holds the ids currently on the recursion stack. A slot
+  // that references an ancestor (a cycle) is emitted once but not
+  // descended into, so the walk terminates instead of overflowing.
   const walk = (
     node: CmsNode,
     depth: number,
     slotName: string | undefined,
     parentId: string | undefined,
+    ancestors: ReadonlySet<string>,
   ): void => {
     const hasDraft = draft[node.id] != null
     entries.push({
@@ -259,7 +276,9 @@ export function buildCmsTreeEntries(
       draftOnly: hasDraft && !publishedIds.has(node.id),
       hasDraft,
     })
+    if (ancestors.has(node.id)) return
     if (!node.slots) return
+    const nextAncestors = new Set(ancestors).add(node.id)
     const slotEntries = Object.entries(node.slots)
     const collapseHeader = slotEntries.length === 1
     for (const [name, children] of slotEntries) {
@@ -277,7 +296,7 @@ export function buildCmsTreeEntries(
       }
       for (const child of children) {
         const effective = merged[child.id] ?? child
-        walk(effective, childDepth, name, node.id)
+        walk(effective, childDepth, name, node.id, nextAncestors)
       }
       entries.push({
         id: slotAddEntryId(node.id, name),
@@ -294,7 +313,7 @@ export function buildCmsTreeEntries(
   for (const node of Object.values(merged)) {
     if (slotChildIds.has(node.id)) continue
     if (rootFilter && !rootFilter.has(node.id)) continue
-    walk(node, 0, undefined, undefined)
+    walk(node, 0, undefined, undefined, new Set())
   }
   return entries
 }
@@ -415,10 +434,10 @@ export function pickBestConfigIndex(
 export function cmsFingerprintContribution(id: string, request: Request): string {
   const node = lookupCmsNode(id, request)
   if (!node) return `|cms=${id}:miss`
-  return `|cms=${id}:${contributionForNode(node, request)}`
+  return `|cms=${id}:${contributionForNode(node, request, new Set([node.id]))}`
 }
 
-function contributionForNode(node: CmsNode, request: Request): string {
+function contributionForNode(node: CmsNode, request: Request, ancestors: Set<string>): string {
   const fields = mergeMatchingConfigs(node.configs, request)
   const base = stableStringify(fields)
   if (!node.slots) return base
@@ -426,6 +445,10 @@ function contributionForNode(node: CmsNode, request: Request): string {
   for (const name of Object.keys(node.slots).sort()) {
     const children = node.slots[name]
     const childParts = children.map((child) => {
+      // A slot child can resolve back to an ancestor (a cycle in a
+      // hand-edited store). Emit a bounded marker instead of recursing
+      // — keeps the contribution finite and stable.
+      if (ancestors.has(child.id)) return `${child.id}=<cycle>`
       // Resolve each child through `lookupCmsNode` so a top-level
       // draft override on the slot-child id (saveCmsFields writes
       // edits to `partials[childId]`, not into the parent's slot
@@ -435,7 +458,8 @@ function contributionForNode(node: CmsNode, request: Request): string {
       // and the preview keeps showing the old label until the next
       // full page render.
       const effective = lookupCmsNode(child.id, request) ?? child
-      return `${child.id}=${contributionForNode(effective, request)}`
+      const nextAncestors = new Set(ancestors).add(child.id)
+      return `${child.id}=${contributionForNode(effective, request, nextAncestors)}`
     })
     slotParts.push(`${name}:[${childParts.join(",")}]`)
   }
