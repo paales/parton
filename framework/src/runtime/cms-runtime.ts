@@ -350,38 +350,64 @@ export function lookupDraftNode(id: string): CmsNode | null {
   return loadPublishedStore().index.get(id) ?? null
 }
 
-export async function writeDraftNode(id: string, node: CmsNode): Promise<void> {
-  const backend = getCmsStorage()
-  const current = (await backend.loadDraft())?.store ?? emptyStore()
-  current.partials[id] = { ...node, id: id }
-  await backend.saveDraft(current)
-  _invalidateCmsStoreCache()
+// Every draft/published mutation is a load-modify-save. Run on a
+// promise-chain mutex so concurrent calls don't interleave their
+// loads and clobber each other's keys (the atomic file write keeps
+// the bytes intact but can't prevent a lost logical update — two
+// writers that both read the pre-write store, then the second save
+// drops the first's key). Serializing the whole load→save span makes
+// each mutation observe the prior one's result.
+let writeChain: Promise<void> = Promise.resolve()
+
+function serializeStoreWrite(work: () => Promise<void>): Promise<void> {
+  const next = writeChain.then(work, work)
+  // Keep the chain alive regardless of whether `work` rejected, so one
+  // failed write doesn't wedge every subsequent one.
+  writeChain = next.then(
+    () => {},
+    () => {},
+  )
+  return next
 }
 
-export async function publishDraft(): Promise<void> {
-  const backend = getCmsStorage()
-  const [draft, published] = await Promise.all([backend.loadDraft(), backend.loadPublished()])
-  const draftStore = draft?.store ?? emptyStore()
-  const publishedStore = published?.store ?? emptyStore()
-  for (const [id, node] of Object.entries(draftStore.partials)) {
-    publishedStore.partials[id] = node
-  }
-  await backend.savePublished(publishedStore)
-  await backend.saveDraft(emptyStore())
-  _invalidateCmsStoreCache()
-}
-
-export async function revertDraftNode(id: string): Promise<void> {
-  const backend = getCmsStorage()
-  const current = (await backend.loadDraft())?.store
-  if (!current || !(id in current.partials)) return
-  delete current.partials[id]
-  if (Object.keys(current.partials).length === 0) {
-    await backend.deleteDraft()
-  } else {
+export function writeDraftNode(id: string, node: CmsNode): Promise<void> {
+  return serializeStoreWrite(async () => {
+    const backend = getCmsStorage()
+    const current = (await backend.loadDraft())?.store ?? emptyStore()
+    current.partials[id] = { ...node, id: id }
     await backend.saveDraft(current)
-  }
-  _invalidateCmsStoreCache()
+    _invalidateCmsStoreCache()
+  })
+}
+
+export function publishDraft(): Promise<void> {
+  return serializeStoreWrite(async () => {
+    const backend = getCmsStorage()
+    const [draft, published] = await Promise.all([backend.loadDraft(), backend.loadPublished()])
+    const draftStore = draft?.store ?? emptyStore()
+    const publishedStore = published?.store ?? emptyStore()
+    for (const [id, node] of Object.entries(draftStore.partials)) {
+      publishedStore.partials[id] = node
+    }
+    await backend.savePublished(publishedStore)
+    await backend.saveDraft(emptyStore())
+    _invalidateCmsStoreCache()
+  })
+}
+
+export function revertDraftNode(id: string): Promise<void> {
+  return serializeStoreWrite(async () => {
+    const backend = getCmsStorage()
+    const current = (await backend.loadDraft())?.store
+    if (!current || !(id in current.partials)) return
+    delete current.partials[id]
+    if (Object.keys(current.partials).length === 0) {
+      await backend.deleteDraft()
+    } else {
+      await backend.saveDraft(current)
+    }
+    _invalidateCmsStoreCache()
+  })
 }
 
 export function _invalidateCmsStoreCache(): void {
