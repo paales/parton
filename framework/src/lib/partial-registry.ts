@@ -98,6 +98,13 @@ export interface PartialSnapshot {
    *  so the fp-trailer's `recomputeFp` doesn't have to re-derive it
    *  from the catalog/URL after the ALS context has unwound. */
   matchKey?: string
+  /** `|schema=<hash>` term the spec folded into its own structural fp
+   *  on this render — the resolved-cell surface (`cellId:partition:value`
+   *  for each cell read in `schema` or via cell-bearing props). It can't
+   *  be recomputed at flush (that would mean re-resolving cells from
+   *  storage), so it's snapshotted here for the fp-trailer's `recomputeFp`
+   *  to fold back in. Empty/absent for any spec that resolves no cells. */
+  schemaKey?: string
   /** The full fingerprint the spec emitted in this render — the value
    *  baked into the `<PartialErrorBoundary>`'s `partialFingerprint`
    *  prop that the client registered. Used by the fp-trailer flush

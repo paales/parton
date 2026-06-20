@@ -206,10 +206,15 @@ function recomputeFpWithFold(
   // independent specs still produce distinct fps across variants of
   // their match-bearing ancestor.
   const matchKey = snap.matchKey ?? ""
+  // Resolved-cell surface the live render folded in (`|schema=<hash>`).
+  // Re-resolving cells at flush is impossible, so the snapshot carries
+  // the term verbatim; its position (between vary and props) must match
+  // the live formula exactly.
+  const schemaKey = snap.schemaKey ?? ""
   const invalidationTs = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
   const invalidationKey = invalidationTs > 0 ? `|inv=${invalidationTs}` : ""
   const ownStructuralFp = hash(
-    `${id}|matchKey=${matchKey}|vary=${varyKey}${propsKey}${invalidationKey}${depsKey}`,
+    `${id}|matchKey=${matchKey}|vary=${varyKey}${schemaKey}${propsKey}${invalidationKey}${depsKey}`,
   )
   return hash(`${ownStructuralFp}${ambientFrameKey}${fold}`)
 }

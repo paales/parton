@@ -715,6 +715,11 @@ interface PartialBoundaryProps {
    *  Stored on the snapshot so the fp-trailer's `recomputeFp` can
    *  read it without re-deriving from the catalog. */
   matchKey?: string
+  /** `|schema=<hash>` term folded into this spec's own structural fp —
+   *  the resolved-cell surface. Snapshotted so the fp-trailer's
+   *  `recomputeFp` folds the identical term (it can't re-resolve cells
+   *  at flush). Empty for any spec that resolves no cells. */
+  schemaKey?: string
   /** The full fp baked into this spec's PartialErrorBoundary prop —
    *  i.e. what the client ends up registering. Stored on the snapshot
    *  so the fp-trailer flush can detect cold→warm drift and ship the
@@ -742,6 +747,7 @@ export function PartialBoundary({
   varyKey,
   deps,
   matchKey,
+  schemaKey,
   emittedFp,
   expiresAt,
   staleUntil,
@@ -778,6 +784,7 @@ export function PartialBoundary({
     varyKey,
     deps,
     matchKey,
+    schemaKey,
     emittedFp,
     expiresAt,
     staleUntil,
@@ -1804,6 +1811,7 @@ function createSpecComponent<V>(
           varyKey={varyKey}
           deps={priorSnap?.deps}
           matchKey={matchKey}
+          schemaKey={schemaKeyHash || undefined}
           emittedFp={snapshotFp}
           expiresAt={expiresAt}
           staleUntil={staleUntil}
@@ -1842,6 +1850,7 @@ function createSpecComponent<V>(
           varyKey={varyKey}
           deps={priorSnap?.deps}
           matchKey={matchKey}
+          schemaKey={schemaKeyHash || undefined}
           emittedFp={snapshotFp}
           expiresAt={expiresAt}
           staleUntil={staleUntil}
@@ -1917,6 +1926,7 @@ function createSpecComponent<V>(
           varyKey={varyKey}
           deps={selfDeps}
           matchKey={matchKey}
+          schemaKey={schemaKeyHash || undefined}
           emittedFp={snapshotFp}
           expiresAt={expiresAt}
           staleUntil={staleUntil}
