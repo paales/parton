@@ -275,6 +275,37 @@ export function computePartitionKeyFromArgs(args: CellArgs): string {
   return hash(stableStringify(args))
 }
 
+/**
+ * A partition is "unresolved" when any of its values is the empty
+ * string — the sentinel `session.id` returns for an anonymous request
+ * with no `__frame_sid` cookie (see `createSessionReadSurface`). A
+ * persistent cell partitioned on `{sid: session.id}` would otherwise
+ * fold EVERY such visitor into the single `sid:""` slot, sharing (and
+ * disk-persisting) state across distinct anonymous users.
+ */
+function isUnresolvedPartition(args: CellArgs): boolean {
+  for (const k in args) {
+    if (args[k] === "") return true
+  }
+  return false
+}
+
+/**
+ * Resolve the storage backend for a cell at a given partition. The
+ * cell's own `storage()` for a resolved partition; per-request
+ * EPHEMERAL storage when the partition is unresolved (an empty
+ * `session.id` component). The ephemeral bucket is request-scoped and
+ * never touches disk, so two anonymous visitors get isolated state
+ * instead of a shared persistent slot — closing the cross-user leak
+ * the session docstring warns about. Already-ephemeral cells
+ * (gqlCell / fragmentCell) are unaffected: their `storage()` is the
+ * same per-request store either way.
+ */
+export function cellStorageForArgs(cell: CellInterface<unknown>, args: CellArgs): CellStorage {
+  if (isUnresolvedPartition(args)) return getEphemeralCellStorage()
+  return cell.storage()
+}
+
 // ─── Shared validator / shape plumbing ────────────────────────────────
 
 function shapeFromSpec(spec: CellShapeSpec): CellShape {
@@ -355,7 +386,8 @@ function buildPeek<T>(
   return () => {
     const varyOut = varyFn(buildCellVaryScopeFromRequest())
     const partitionKey = hash(stableStringify(varyOut))
-    const stored = storage().read(getScope(), id, partitionKey)
+    const readStorage = isUnresolvedPartition(varyOut) ? getEphemeralCellStorage() : storage()
+    const stored = readStorage.read(getScope(), id, partitionKey)
     if (stored === undefined) return defaultValue
     try {
       return validate(stored)
@@ -403,7 +435,7 @@ export async function resolveCellValue<T>(
   args: CellArgs,
 ): Promise<T> {
   const partitionKey = hash(stableStringify(args))
-  const storage = cell.storage()
+  const storage = cellStorageForArgs(cell as CellInterface<unknown>, args)
   const stored = storage.read(getScope(), cell.id, partitionKey)
   if (stored !== undefined) {
     try {
@@ -416,7 +448,7 @@ export async function resolveCellValue<T>(
     const loaded = await cell.load(args)
     const validated = cell.validate(loaded)
     const transformed = cell.write ? cell.write(validated) : validated
-    cell.storage().write(getScope(), cell.id, partitionKey, transformed)
+    storage.write(getScope(), cell.id, partitionKey, transformed)
     return transformed
   }
   return cell.defaultValue
@@ -452,7 +484,7 @@ function buildBoundCell<T>(cell: CellInterface<T>, args: CellArgs): BoundCell<T>
       // Then fire the partition-scoped signal so connected viewers
       // re-resolve (and hit the loader since storage is now empty).
       const partitionKey = hash(stableStringify(args))
-      cell.storage().write(getScope(), cellId, partitionKey, undefined)
+      cellStorageForArgs(cell as CellInterface<unknown>, args).write(getScope(), cellId, partitionKey, undefined)
       const { __cellInvalidate } = await import("../runtime/cell-actions.ts")
       await __cellInvalidate(cellId, args)
     },
@@ -460,7 +492,7 @@ function buildBoundCell<T>(cell: CellInterface<T>, args: CellArgs): BoundCell<T>
       const partitionKey = hash(stableStringify(args))
       const validated = cell.validate(value)
       const stored = cell.write ? cell.write(validated) : validated
-      cell.storage().write(getScope(), cellId, partitionKey, stored)
+      cellStorageForArgs(cell as CellInterface<unknown>, args).write(getScope(), cellId, partitionKey, stored)
     },
   }
 }

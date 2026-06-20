@@ -31,7 +31,7 @@
  *      `cell:<id>` is emitted only when args are empty.
  */
 
-import { getCellById, type CellVaryScope } from "../lib/cell.ts"
+import { cellStorageForArgs, getCellById, type CellVaryScope } from "../lib/cell.ts"
 import { hash } from "../lib/hash.ts"
 import { stableStringify } from "../lib/stable-stringify.ts"
 import { getRegisteredMatchPatterns } from "../lib/partial.tsx"
@@ -220,7 +220,7 @@ function writeOneCell(
     args = cell.vary(scope)
   }
   const partitionKey = hash(stableStringify(args))
-  cell.storage().write(getScope(), cellId, partitionKey, stored)
+  cellStorageForArgs(cell, args).write(getScope(), cellId, partitionKey, stored)
   // Count the write for the deferred-commit decision. A write to a
   // `deferred` cell lets the action response skip its re-render — the
   // open streaming connection carries the new value instead.

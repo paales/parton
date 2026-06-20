@@ -39,6 +39,7 @@
 import { getActionById, getInlineCellsForParton, getSchemaForParton } from "../lib/parton-actions.ts"
 import {
   buildResolvedCell,
+  cellStorageForArgs,
   computeCellPartitionKey,
   computePartitionKeyFromArgs,
   computeScopedCellPartitionKey,
@@ -110,20 +111,21 @@ function resolveSchemaForAction(
     if (isScopedCellDescriptor(val)) {
       const descriptor = val as ScopedCellDescriptor<unknown>
       const cell = finalizeScopedCell(descriptor, partonId, key)
-      const partitionKey = computeScopedCellPartitionKey(descriptor, partonVary)
-      const stored = cell.storage().read(getScope(), cell.id, partitionKey)
-      const value = stored === undefined ? cell.defaultValue : stored
       const partitionVary = descriptor.varyFn
         ? descriptor.varyFn(partonVary as never)
         : partonVary
+      const partitionKey = computeScopedCellPartitionKey(descriptor, partonVary)
+      const stored = cellStorageForArgs(cell, partitionVary).read(getScope(), cell.id, partitionKey)
+      const value = stored === undefined ? cell.defaultValue : stored
       const resolvedCell = buildResolvedCell(cell, value, partitionVary)
       resolved[key] = resolvedCell
       cellsByKey.set(key, resolvedCell)
     } else if (isModuleCell(val)) {
       const c = val as CellInterface<unknown>
       const cellScope = buildCellVaryScope()
+      const cellArgs = c.vary(cellScope)
       const partitionKey = computeCellPartitionKey(c, cellScope)
-      const stored = c.storage().read(getScope(), c.id, partitionKey)
+      const stored = cellStorageForArgs(c, cellArgs).read(getScope(), c.id, partitionKey)
       const value = stored === undefined ? c.defaultValue : stored
       const resolvedCell = buildResolvedCell(c, value)
       resolved[key] = resolvedCell
@@ -147,7 +149,7 @@ function resolveSchemaForAction(
       // partition — not the last render's recorded one.
       const partition = rec.varyFn ? rec.varyFn(inlineScope) : rec.partition
       const partitionKey = computePartitionKeyFromArgs(partition)
-      const stored = cell.storage().read(getScope(), cell.id, partitionKey)
+      const stored = cellStorageForArgs(cell, partition).read(getScope(), cell.id, partitionKey)
       const value = stored === undefined ? cell.defaultValue : stored
       const resolvedCell = buildResolvedCell(cell, value, partition)
       resolved[key] = resolvedCell
