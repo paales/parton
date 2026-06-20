@@ -302,8 +302,6 @@ export function scaffoldMeta(bytes: Uint8Array): SpliceMeta {
 
 // ─── Splice (hit) ──────────────────────────────────────────────────────
 
-const ID_BLOCK = 0x100000
-
 function toHex(n: number): string {
   return n.toString(16)
 }
@@ -315,11 +313,17 @@ function toHex(n: number): string {
  * for the `slowSource` diagnostic / a slow remote source) and passes
  * through row-by-row at feed pace — so a no-hole payload degenerates to
  * pure passthrough (the streaming-preservation path, unified). Each
- * hole's fresh rows are renumbered into a private id block (root → the
+ * hole's fresh rows are renumbered into a private id lane (root → the
  * hole's seam id, so the parent's `$L` resolves to the fresh render) and
  * merged in as they arrive, so the hole's own Suspense streams through.
  * Import / symbol rows the scaffold already declares are dropped and
  * their refs remapped to the scaffold's id — no payload growth.
+ *
+ * Lanes are interleaved, not fixed-size blocks: hole `i` of `H` holes
+ * maps a fresh internal id `n` to `maxId + 1 + n*H + i`. Each hole owns
+ * one residue class mod `H`, so lanes are disjoint for *any* `n` — a
+ * deep render that emits a large internal id can't overrun into the next
+ * hole's range, and every mapped id stays above the scaffold's `maxId`.
  */
 export function spliceHoles<H extends HoleRef>(
   scaffold: ReadableStream<Uint8Array>,
@@ -329,6 +333,7 @@ export function spliceHoles<H extends HoleRef>(
 ): ReadableStream<Uint8Array> {
   const holeRowIds = new Set(holes.map((h) => h.rowId))
   const shared = new Map(meta.shared)
+  const lanes = holes.length
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -337,7 +342,7 @@ export function spliceHoles<H extends HoleRef>(
       await Promise.all([
         pipeScaffold(scaffold, holeRowIds, controller),
         ...holes.map((hole, i) =>
-          spliceOne(controller, hole, meta.maxId + 1 + i * ID_BLOCK, shared, renderHole),
+          spliceOne(controller, hole, meta.maxId + 1, lanes, i, shared, renderHole),
         ),
       ])
       controller.close()
@@ -377,18 +382,22 @@ async function spliceOne<H extends HoleRef>(
   controller: ReadableStreamDefaultController<Uint8Array>,
   hole: H,
   base: number,
+  lanes: number,
+  lane: number,
   scaffoldShared: Map<string, string>,
   renderHole: (hole: H) => ReadableStream<Uint8Array>,
 ): Promise<void> {
   // Per-hole id remap: fresh root `0` → the seam id (so the parent's
   // `$L<seam>` resolves here); shared import/symbol rows → the scaffold's
-  // existing id; everything else → a private block above the scaffold.
+  // existing id; everything else → this hole's interleaved lane above the
+  // scaffold (`base + n*lanes + lane`), disjoint from every other lane
+  // for any `n` so deep renders can't overrun an adjacent hole's range.
   const dropped = new Set<string>() // fresh ids whose row is deduped away
   const remap = (id: string): string => {
     if (id === "0") return hole.rowId
     const n = parseInt(id, 16)
     if (Number.isNaN(n)) return id
-    return toHex(base + n)
+    return toHex(base + n * lanes + lane)
   }
 
   // First pass over each row: decide dedup mapping before emitting refs.
