@@ -16,11 +16,21 @@ import { useNavigation } from "../lib/partial-client.tsx"
  * client. This component is the fallback for RSC refetches, where
  * a `fetch()` 302 would transparently follow and commit the
  * wrong payload.
+ *
+ * Self-redirect guard: when `url` resolves to the URL we're already
+ * on — a page that redirects to itself, or an A→B→A cycle whose hop
+ * lands back here — firing the navigation would refetch the same URL,
+ * re-resolve the same redirect, and re-mount this component, with no
+ * termination signal. The current-entry check short-circuits that
+ * loop: we never navigate to where we already are.
  */
 export function Redirect({ url }: { url: string }) {
-  const [navigate] = useNavigation().navigate()
+  const nav = useNavigation()
+  const [navigate] = nav.navigate()
+  const currentUrl = nav.currentEntry?.url
   useEffect(() => {
+    if (currentUrl != null && new URL(url, currentUrl).href === currentUrl) return
     void navigate(url)
-  }, [url, navigate])
+  }, [url, currentUrl, navigate])
   return null
 }
