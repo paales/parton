@@ -166,14 +166,40 @@ fresh per request.
 
 Every read/write site (`resolveCellValue`, `BoundCell.set/clear/
 invalidate/hydrate`, `__cellWrite`'s `writeOneCell`, the schema-
-resolution path in `partial.tsx`) calls `cell.storage()` to fetch
-the current storage. Same code path for both tiers; the only
-difference is which adapter the getter returns.
+resolution path in `partial.tsx`) routes through `cellStorageForArgs`
+to fetch the current storage. Same code path for both tiers; the only
+difference is which adapter it returns.
 
 Outside-request fallback: `getEphemeralCellStorage` returns a fresh
 `MemoryCellStorage` if no request is active (bootstrap, isolated
 tests). Production paths always run inside `runWithRequestAsync`,
 so they always get the per-request storage.
+
+### Empty-session safety guard
+
+A partition is *unresolved* when any of its values is the empty
+string — the sentinel `session.id` returns for an anonymous request
+with no `__frame_sid` cookie (see `createSessionReadSurface`). A
+persistent cell partitioned on `{sid: session.id}` would otherwise
+fold EVERY such visitor into the single `sid:""` slot, sharing (and
+disk-persisting) state across distinct anonymous users — a cross-user
+leak on exactly the axis `localCell`'s per-session pattern uses.
+
+`cellStorageForArgs` guards at the routing boundary: an unresolved
+partition routes to per-request ephemeral storage regardless of the
+cell's own tier. The ephemeral bucket is request-scoped and never
+touches disk, so two anonymous visitors get isolated state while a
+write and a later read in the SAME request still cohere. A resolved
+`session.id` is unchanged — it routes to the cell's persistent,
+per-user partition. Already-ephemeral cells are unaffected.
+
+When the guard routes a *persistent* cell to ephemeral, it emits a
+dev-only, once-per-cell-id `console.warn` (gated on
+`import.meta.env.DEV`): the cell's state won't persist, and the fix is
+to establish a session (`ensureSessionId()`) before the cell resolves.
+Apps that want per-user persistence for anonymous visitors mint the
+session in their render (forms-demo does this) — session-minting is
+app policy, not framework default.
 
 ## Resolution path — parton's wrapper component
 

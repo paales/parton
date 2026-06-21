@@ -11,8 +11,13 @@
  * partition to per-request ephemeral storage instead.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { localCell } from "../cell.ts"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  buildEphemeralCell,
+  cellStorageForArgs,
+  localCell,
+  _resetUnresolvedPersistentWarnings,
+} from "../cell.ts"
 import { __cellWrite } from "../../runtime/cell-actions.ts"
 import {
   MemoryCellStorage,
@@ -33,12 +38,14 @@ beforeEach(() => {
   setCellStorage(new MemoryCellStorage())
   _clearInvalidationRegistry()
   _clearAllSessions()
+  _resetUnresolvedPersistentWarnings()
 })
 
 afterEach(() => {
   _resetCellStorage()
   _clearInvalidationRegistry()
   _clearAllSessions()
+  _resetUnresolvedPersistentWarnings()
 })
 
 describe("persistent cell partitioned on session.id — anonymous isolation", () => {
@@ -100,5 +107,114 @@ describe("persistent cell partitioned on session.id — anonymous isolation", ()
       () => Promise.resolve(notes.peek()),
     )
     expect(seen).toBe("kept")
+  })
+
+  it("two DIFFERENT resolved sessions get DIFFERENT persistent partitions", async () => {
+    const notes = localCell({
+      id: "test.session.per-user",
+      shape: "string",
+      vary: ({ session }) => ({ sid: session.id }),
+      initial: "",
+    })
+
+    // User A writes under their own cookie.
+    await runWithRequestAsync(
+      new Request("http://t/", { headers: { cookie: "__frame_sid=user-a" } }),
+      async () => {
+        await __cellWrite("test.session.per-user", "a-private")
+      },
+    )
+    // User B writes under a DIFFERENT cookie.
+    await runWithRequestAsync(
+      new Request("http://t/", { headers: { cookie: "__frame_sid=user-b" } }),
+      async () => {
+        await __cellWrite("test.session.per-user", "b-private")
+      },
+    )
+
+    // Each reads back ONLY their own value — distinct persistent
+    // partitions, never shared.
+    const { result: seenA } = await runWithRequestAsync(
+      new Request("http://t/", { headers: { cookie: "__frame_sid=user-a" } }),
+      () => Promise.resolve(notes.peek()),
+    )
+    const { result: seenB } = await runWithRequestAsync(
+      new Request("http://t/", { headers: { cookie: "__frame_sid=user-b" } }),
+      () => Promise.resolve(notes.peek()),
+    )
+    expect(seenA).toBe("a-private")
+    expect(seenB).toBe("b-private")
+  })
+})
+
+describe("dev warning — unresolved persistent partition routed to ephemeral", () => {
+  it("fires ONCE for a persistent cell with an empty-session partition", async () => {
+    const notes = localCell({
+      id: "test.session.warn-once",
+      shape: "string",
+      vary: ({ session }) => ({ sid: session.id }),
+      initial: "",
+    })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await anonRequest(async () => {
+        // Two routing decisions in one anon request: a write + a read.
+        await __cellWrite("test.session.warn-once", "draft")
+        notes.peek()
+      })
+      // Second anon request hits the same unresolved partition again.
+      await anonRequest(() => Promise.resolve(notes.peek()))
+
+      const cellWarnings = warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("test.session.warn-once"),
+      )
+      expect(cellWarnings).toHaveLength(1)
+      expect(cellWarnings[0]?.[0]).toContain("persistent cell")
+      expect(cellWarnings[0]?.[0]).toContain("won't persist")
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("does NOT fire for a resolved session.id", async () => {
+    const notes = localCell({
+      id: "test.session.warn-resolved",
+      shape: "string",
+      vary: ({ session }) => ({ sid: session.id }),
+      initial: "",
+    })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await runWithRequestAsync(
+        new Request("http://t/", { headers: { cookie: "__frame_sid=user-x" } }),
+        async () => {
+          await __cellWrite("test.session.warn-resolved", "kept")
+          notes.peek()
+        },
+      )
+      const cellWarnings = warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("test.session.warn-resolved"),
+      )
+      expect(cellWarnings).toHaveLength(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("does NOT fire for an already-ephemeral cell, even with an empty partition", () => {
+    // An ephemeral cell (gqlCell / fragmentCell shape) routes to
+    // ephemeral storage by design — routing its unresolved partition to
+    // ephemeral persists nothing either way, so there's nothing to warn.
+    const ephemeral = buildEphemeralCell<unknown>("test.session.warn-ephemeral", "", undefined)
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      cellStorageForArgs(ephemeral, { sid: "" })
+      const cellWarnings = warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("test.session.warn-ephemeral"),
+      )
+      expect(cellWarnings).toHaveLength(0)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

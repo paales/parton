@@ -97,6 +97,16 @@ const ProductHeader = parton(
 The framework resolves `palette` against the request, passes
 `ResolvedCell<...>` to Render via `palette` prop.
 
+> **Empty session → ephemeral.** `session.id` is the empty string for
+> an anonymous request with no `__frame_sid` cookie. A persistent cell
+> partitioned on it would fold every such visitor into one shared
+> disk slot, so the framework routes an unresolved (`sid:""`) partition
+> to per-request ephemeral storage instead — state stays per-visitor
+> but does NOT persist across requests (dev logs a one-time warning).
+> To get per-user *persistence* for anonymous visitors, mint the
+> session before the cell resolves by calling `ensureSessionId()` in
+> your render (see `e2e-testing/src/app/pages/forms-demo.tsx`).
+
 ### 2. Parton-scoped cell, declared inline in schema
 
 For cells owned by a specific parton, partitioned by the parton's

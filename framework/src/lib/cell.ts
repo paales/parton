@@ -291,6 +291,42 @@ function isUnresolvedPartition(args: CellArgs): boolean {
 }
 
 /**
+ * Cell ids already warned about an unresolved persistent partition.
+ * The warning fires once per id — a hot path resolves the same cell on
+ * every request, and a session that never resolves would otherwise log
+ * on each one.
+ */
+const warnedUnresolvedPersistent = new Set<string>()
+
+/**
+ * Dev-only, once-per-cell-id nudge: a PERSISTENT cell (one whose
+ * `storage()` is the persistent singleton) resolved to an unresolved
+ * partition — an empty-string `session.id` — and is being routed to
+ * ephemeral storage to stay leak-safe, so its state won't persist.
+ * Tell the author the partition never resolved and how to make it
+ * persist (establish a session before the cell resolves). No-op for an
+ * already-ephemeral cell (gqlCell / fragmentCell): routing its
+ * partition to ephemeral persists nothing either way.
+ */
+function warnUnresolvedPersistent(id: string, storage: CellStorage): void {
+  if (!import.meta.env?.DEV) return
+  if (storage !== getCellStorage()) return
+  if (warnedUnresolvedPersistent.has(id)) return
+  warnedUnresolvedPersistent.add(id)
+  console.warn(
+    `[cell] persistent cell "${id}" partitioned on an empty session ` +
+      `→ routed to ephemeral storage (state won't persist). Establish a ` +
+      `session (ensureSessionId) before the cell resolves so it routes to ` +
+      `per-user persistent storage.`,
+  )
+}
+
+/** Test-only: reset the once-per-id warning dedup. */
+export function _resetUnresolvedPersistentWarnings(): void {
+  warnedUnresolvedPersistent.clear()
+}
+
+/**
  * Resolve the storage backend for a cell at a given partition. The
  * cell's own `storage()` for a resolved partition; per-request
  * EPHEMERAL storage when the partition is unresolved (an empty
@@ -299,11 +335,14 @@ function isUnresolvedPartition(args: CellArgs): boolean {
  * instead of a shared persistent slot — closing the cross-user leak
  * the session docstring warns about. Already-ephemeral cells
  * (gqlCell / fragmentCell) are unaffected: their `storage()` is the
- * same per-request store either way.
+ * same per-request store either way — and they get no warning, since
+ * routing an already-ephemeral partition to ephemeral persists nothing
+ * either way.
  */
 export function cellStorageForArgs(cell: CellInterface<unknown>, args: CellArgs): CellStorage {
-  if (isUnresolvedPartition(args)) return getEphemeralCellStorage()
-  return cell.storage()
+  if (!isUnresolvedPartition(args)) return cell.storage()
+  warnUnresolvedPersistent(cell.id, cell.storage())
+  return getEphemeralCellStorage()
 }
 
 // ─── Shared validator / shape plumbing ────────────────────────────────
@@ -386,7 +425,11 @@ function buildPeek<T>(
   return () => {
     const varyOut = varyFn(buildCellVaryScopeFromRequest())
     const partitionKey = hash(stableStringify(varyOut))
-    const readStorage = isUnresolvedPartition(varyOut) ? getEphemeralCellStorage() : storage()
+    let readStorage = storage()
+    if (isUnresolvedPartition(varyOut)) {
+      warnUnresolvedPersistent(id, readStorage)
+      readStorage = getEphemeralCellStorage()
+    }
     const stored = readStorage.read(getScope(), id, partitionKey)
     if (stored === undefined) return defaultValue
     try {
