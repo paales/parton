@@ -282,12 +282,28 @@ read in the render path as `spec.addressable`.
 
 ## Cold → warm fp drift and the trailer
 
-A spec's fp folds in `descendantFold`, which reads
-`getRouteSnapshots()` at fp-computation time. The fp computation
-runs INSIDE `createSpecComponent` BEFORE `<PartialBoundary>` registers
-the spec — so on the FIRST render of a route in a fresh scope, no
-descendants of this spec are in the snapshot map yet (they render
-later in the tree). The fold is empty; the spec emits `fp_cold`.
+A spec's fp folds in `descendantFold`, which the per-pass fold cache
+resolves at fp-computation time. The fp computation runs INSIDE
+`createSpecComponent` BEFORE `<PartialBoundary>` registers the spec —
+so on the FIRST render of a route in a fresh scope, no descendants of
+this spec are in the snapshot set yet (they render later in the tree).
+The fold is empty; the spec emits `fp_cold`.
+
+That same top-down ordering is what makes the per-pass fold cache
+transparent. The fold reads its descendants from the **fold base** —
+the canonical (prior-commit) snapshots for the route, built once per
+pass by `getFoldBaseSnapshots`, NOT the live `pendingWrites` overlay.
+Because every ancestor renders before any of its descendants
+re-register this pass, an ancestor never sees a descendant's
+this-pass `pendingWrites` entry anyway; folding the overlay in would
+be a no-op, so the base stays canonical-only and is memoized for the
+whole pass. The fold then walks a per-pass `ancestor → descendants`
+index (so each fold is O(its descendants), a leaf O(1)) and a per-pass
+contribution memo (each descendant's vary/dep/hash work runs once,
+since a descendant's contribution depends only on `(descId, snap,
+current request)`, never on which ancestor folds it). The fingerprints
+are byte-identical to a per-call full-snapshot rebuild + scan; the
+cache only removes the O(N²) tax of redoing that work per parton.
 
 After the render commits, every spec on the page has a snapshot. The
 same spec on the next request would compute a non-empty fold and a

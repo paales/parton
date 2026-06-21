@@ -220,6 +220,23 @@ export interface RequestRegistry {
    *  commit, so the canonical hint table sees the remote's snapshots
    *  before client-side selector refetch can hit a registry miss. */
   pendingDefers: Promise<unknown>[]
+  /** Memoized descendant-fold base — the canonical hint snapshots for
+   *  the route with invalidations applied, built once per pass by
+   *  `getFoldBaseSnapshots`. Keyed by the canonical store identity +
+   *  routeKey so a re-enter under a different store/route rebuilds it.
+   *  See `getFoldBaseSnapshots` for why the overlay is deliberately
+   *  excluded. */
+  _foldBase?: {
+    store: ScopeStore | undefined
+    routeKey: string | undefined
+    map: Map<string, PartialSnapshot>
+  }
+  /** Per-pass descendant-fold scratch owned by `partial.tsx`: the
+   *  ancestor→descendants index and the per-descendant contribution
+   *  memo. Opaque here (an arbitrary object the fold sets and reads) so
+   *  it lives and dies with the pass without coupling the registry to
+   *  the fold's internals. */
+  foldScratch?: unknown
 }
 
 const registryAls = new AsyncLocalStorage<RequestRegistry>()
@@ -386,12 +403,10 @@ export function lookupPartial(id: string): PartialSnapshot | undefined {
   return store.partials.get(id)?.get(variantKey)
 }
 
-export function getRouteSnapshots(): Map<string, PartialSnapshot> | undefined {
-  const ctx = registryAls.getStore()
-  const scope = ctx?.scope ?? getScope()
-  const store = canonical.get(scope)
-  const routeKey = activeRouteKey(ctx)
-
+function buildHintSnapshots(
+  store: ScopeStore | undefined,
+  routeKey: string | undefined,
+): Map<string, PartialSnapshot> {
   const merged = new Map<string, PartialSnapshot>()
   if (store && routeKey !== undefined) {
     const hint = store.hints.get(routeKey)
@@ -402,11 +417,62 @@ export function getRouteSnapshots(): Map<string, PartialSnapshot> | undefined {
       }
     }
   }
+  return merged
+}
+
+export function getRouteSnapshots(): Map<string, PartialSnapshot> | undefined {
+  const ctx = registryAls.getStore()
+  const scope = ctx?.scope ?? getScope()
+  const store = canonical.get(scope)
+  const routeKey = activeRouteKey(ctx)
+
+  const merged = buildHintSnapshots(store, routeKey)
   if (ctx) {
     for (const id of ctx.invalidations) merged.delete(id)
     for (const [id, snap] of ctx.pendingWrites) merged.set(id, snap)
   }
   return merged.size > 0 ? merged : undefined
+}
+
+/**
+ * The descendant-fold base: the canonical hint snapshots for the
+ * current route with this request's id-wide invalidations removed.
+ * It carries NO `pendingWrites` overlay — and that omission is exactly
+ * what makes it the right base for `computeDescendantFold`.
+ *
+ * React renders top-down, so every ancestor computes its fold BEFORE
+ * any of its this-pass descendants register into `pendingWrites`. An
+ * ancestor's fold therefore only ever reads its descendants from the
+ * prior commit (the canonical hints) — a descendant's re-registration
+ * this pass is invisible to it. Folding the overlay in would be a
+ * no-op for descendant lookups and only risks divergence, so the base
+ * stays canonical-only.
+ *
+ * The canonical store object is immutable within a request (writes
+ * buffer into `pendingWrites`/`invalidations` and commit at request
+ * exit), and `invalidations` is not mutated during the live render
+ * path, so the base is stable for the whole pass. It's memoized on the
+ * ctx keyed by the canonical store identity + routeKey; a re-enter
+ * with a different store/route rebuilds it.
+ */
+export function getFoldBaseSnapshots(): Map<string, PartialSnapshot> {
+  const ctx = registryAls.getStore()
+  const scope = ctx?.scope ?? getScope()
+  const store = canonical.get(scope)
+  const routeKey = activeRouteKey(ctx)
+
+  if (ctx) {
+    const cached = ctx._foldBase
+    if (cached && cached.store === store && cached.routeKey === routeKey) {
+      return cached.map
+    }
+  }
+
+  const merged = buildHintSnapshots(store, routeKey)
+  if (ctx) for (const id of ctx.invalidations) merged.delete(id)
+
+  if (ctx) ctx._foldBase = { store, routeKey, map: merged }
+  return merged
 }
 
 /**

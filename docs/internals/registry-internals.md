@@ -105,6 +105,22 @@ fall back to the route's committed hint:
 3. `pendingHints.get(id)` → resolve to the variant in `partials`.
 4. `hints.get(route)?.get(id)` → resolve to the canonical variant.
 
+The canonical store is **immutable within a request** — writes
+buffer into the pending sets and only land at commit. Two reads lean
+on that. `getRouteSnapshots()` merges the route's committed hint with
+the live overlay (invalidations delete, `pendingWrites` set) and is
+the general route-snapshot view. The descendant fold instead reads
+`getFoldBaseSnapshots()` — the committed hint snapshots with
+`invalidations` applied but **no `pendingWrites` overlay** — and
+memoizes it for the whole pass (keyed on the canonical store identity
++ routeKey). The overlay is omitted on purpose: React renders
+top-down, so every ancestor folds before any descendant re-registers,
+and an ancestor's fold never observes a descendant's this-pass
+`pendingWrites` entry. Folding the overlay in would be a no-op, so the
+base stays canonical-only and stable, which is what lets the fold
+cache it once per pass instead of rebuilding per parton. See the
+"Cold → warm fp drift" section in `render-pipeline.md`.
+
 `commitRequestRegistry` runs on stream flush and atomically applies
 the pending sets to the canonical store. Snapshots merge into
 `partials[id][variantKey]` unconditionally — same structural

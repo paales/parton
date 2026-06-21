@@ -39,6 +39,8 @@ import { RemoteFrame } from "./remote-frame.tsx"
 import type { Capability } from "../runtime/capability.ts"
 import {
   enterRequestRegistry,
+  getActiveRegistry,
+  getFoldBaseSnapshots,
   getRouteSnapshots,
   lookupPartial,
   registerPartial,
@@ -800,6 +802,56 @@ type StoredSpecFC = FC<PartialComponentProps & Record<string, unknown>>
 const componentById = new Map<string, StoredSpecFC>()
 
 /**
+ * Per-pass scratch for the descendant fold. Built once from the fold
+ * base (the canonical prior-commit snapshots for the route) and reused
+ * across every `computeDescendantFold` call in the pass.
+ *
+ *  - `index` maps each ancestor id to the `(descId, snap)` pairs whose
+ *    `parentPath` includes it, so a fold is O(its descendants) instead
+ *    of O(tree); a leaf with no descendants is O(1) (absent key → "").
+ *  - `contributions` memoizes `descendantContribution(descId)`: the
+ *    contribution depends only on `(descId, snap, current request)`,
+ *    never on which ancestor folds it (the function reads no ancestor
+ *    state), so it's computed once and reused by every ancestor.
+ */
+interface FoldScratch {
+  base: Map<string, PartialSnapshot>
+  index: Map<string, Array<readonly [string, PartialSnapshot]>>
+  contributions: Map<string, string>
+}
+
+/**
+ * Get (or build) the per-pass fold scratch. Keyed on the fold base map
+ * identity: `getFoldBaseSnapshots` returns the same map object for the
+ * whole pass, so when it changes (a re-enter under a different
+ * store/route) the scratch rebuilds. Outside a registry context the
+ * scratch can't be cached on the ctx, so it's rebuilt per call — that
+ * path (HMR / prerender) isn't the hot live-tick loop.
+ */
+function foldScratch(): FoldScratch {
+  const base = getFoldBaseSnapshots()
+  const ctx = getActiveRegistry()
+  const cached = ctx?.foldScratch as FoldScratch | undefined
+  if (cached && cached.base === base) return cached
+
+  const index = new Map<string, Array<readonly [string, PartialSnapshot]>>()
+  for (const [descId, snap] of base) {
+    for (const ancestorId of snap.parentPath) {
+      if (ancestorId === descId) continue
+      let bucket = index.get(ancestorId)
+      if (!bucket) {
+        bucket = []
+        index.set(ancestorId, bucket)
+      }
+      bucket.push([descId, snap] as const)
+    }
+  }
+  const scratch: FoldScratch = { base, index, contributions: new Map() }
+  if (ctx) ctx.foldScratch = scratch
+  return scratch
+}
+
+/**
  * Compute the descendant-fp fold for a spec.
  *
  * Walks the previous-render snapshots for descendants of `ancestorId`
@@ -813,18 +865,26 @@ const componentById = new Map<string, StoredSpecFC>()
  * the parent's render time rather than via lagged stored values.
  * Returns a string suffix to fold into the parent's hash — empty
  * string when there are no descendants.
+ *
+ * The descendant set and each descendant's contribution come from
+ * per-pass scratch (`foldScratch`), so the cost is O(this ancestor's
+ * descendants) with each contribution evaluated once per pass — not a
+ * full route-snapshot rebuild + scan per call.
  */
 function computeDescendantFold(ancestorId: string): string {
-  const snapshots = getRouteSnapshots()
-  if (!snapshots) return ""
+  const scratch = foldScratch()
+  const bucket = scratch.index.get(ancestorId)
+  if (!bucket || bucket.length === 0) return ""
 
   const parts: string[] = []
-  for (const [descId, snap] of snapshots) {
-    if (descId === ancestorId) continue
-    if (!snap.parentPath.includes(ancestorId)) continue
-    parts.push(descendantContribution(descId, snap))
+  for (const [descId, snap] of bucket) {
+    let contribution = scratch.contributions.get(descId)
+    if (contribution === undefined) {
+      contribution = descendantContribution(descId, snap)
+      scratch.contributions.set(descId, contribution)
+    }
+    parts.push(contribution)
   }
-  if (parts.length === 0) return ""
   // Order shouldn't matter for fingerprint stability, but sorting
   // keeps it deterministic across registry iteration order changes.
   parts.sort()
