@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@parton/framework": ["../framework/index.ts"],
+      "@parton/framework/*": ["../framework/src/*"],
+      "@parton/cms": ["../cms/index.ts"],
+      "@parton/cms/*": ["../cms/src/*"],
+      "@parton/copies": ["../copies/index.ts"],
+      "@parton/copies/*": ["../copies/src/*"]
+    }
+  },
+  "include": ["server"]
+}

@@ -278,7 +278,7 @@ function isStreamingRequest(): boolean {
  * profile (~7% total + URL parse cost). The carrier collapses it to
  * one map mutation per snapshot.
  */
-function promoteSnapshotsToCachedOverride(): void {
+export function promoteSnapshotsToCachedOverride(): void {
   let request: Request
   let scope: string
   try {

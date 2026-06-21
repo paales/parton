@@ -32,3 +32,10 @@ cms/data/cells.json
 
 # Scratch / throwaway logs.
 .tmp/
+
+# Server benchmark artifacts. The committed baseline JSON
+# (bench/results/server-warm-tick.json) is the regression substrate;
+# CPU profiles and scratch logs are machine-specific and stay local.
+bench/results/prof/
+bench/results/*.log
+bench/results/baseline.json
