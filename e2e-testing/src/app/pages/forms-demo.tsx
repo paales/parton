@@ -4,9 +4,11 @@
  * Cells are declared inline in the parton's `Render` via the
  * `localCell("key", …)` server-hook, each partitioned per session
  * (`vary: ({session}) => ({sid: session.id})`) so every session sees its
- * own draft, notes, save history, and failure setting. `session()` folds
- * the session into the parton's fingerprint, so it re-renders when the
- * session changes.
+ * own draft, notes, save history, and failure setting. The render calls
+ * `ensureSessionId()` first to mint the `__frame_sid` cookie, so each
+ * visitor has a stable, non-empty `session.id` and the cells land in
+ * their OWN persistent partition. `session()` folds the session into the
+ * parton's fingerprint, so it re-renders when the session changes.
  *
  * The `save` action resolves those inline cells by key without a render
  * (the framework records each inline cell on declaration; the action
@@ -26,6 +28,7 @@
  */
 
 import {
+  ensureSessionId,
   localCell,
   parton,
   session,
@@ -47,6 +50,14 @@ export const FormsDemoPage = parton(
   }: {
     save: ResolvedAction<{ cardName?: string; cardCvc?: string }, void>
   } & RenderArgs) {
+    // Establish a session BEFORE the cells resolve. Every cell here
+    // partitions on `session.id`; minting the `__frame_sid` cookie up
+    // front gives each visitor a stable, non-empty id, so the cells
+    // route to their OWN persistent partition (an unresolved, empty
+    // `session.id` would be routed to per-request ephemeral storage and
+    // never persist). Session-minting is app policy — the framework
+    // only provides the capability and the safe-by-default routing.
+    ensureSessionId()
     // Fold the session into the fp so the parton re-renders when the
     // session changes (the cells partition by it).
     session()
