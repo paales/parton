@@ -79,12 +79,18 @@ export default defineConfig({
             // `yarn test:e2e`, not vitest.
             "e2e-testing/e2e/**",
             "**/*.rsc.test.?(c|m)[jt]s?(x)",
+            "**/*.rsc-prod.test.?(c|m)[jt]s?(x)",
             "**/*.browser.test.?(c|m)[jt]s?(x)",
           ],
           environment: "jsdom",
         },
       },
       "./framework/vitest.rsc.config.ts",
+      // The rsc tier against the PRODUCTION Flight build. Only runs under
+      // `yarn test:rsc:prod` (which sets NODE_ENV=production + filters to
+      // this project); its tests `skipIf` non-prod, so a plain all-projects
+      // `vitest run` skips them. See framework/vitest.rsc-prod.config.ts.
+      "./framework/vitest.rsc-prod.config.ts",
       "./framework/vitest.browser.config.ts",
     ],
   },

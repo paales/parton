@@ -168,7 +168,10 @@ change; the asserted anchors are the early-warning system.
 
 **Test both builds.** `test:rsc` and `test:e2e` run the *dev* Flight build, so
 they exercise only the dev half of the patch; the dev and prod builds schedule
-tasks differently and the prod half can diverge silently. After regenerating,
-smoke-test a `yarn build` + `yarn preview` page that reads server context (e.g.
-`/frames-demo`, whose frame chain rides `ParentContext`) — not just the dev
-server.
+tasks differently and the prod half can diverge silently. The `rsc-prod` tier
+covers the prod build —
+[`server-context.rsc-prod.test.tsx`](../../framework/src/lib/__tests__/server-context.rsc-prod.test.tsx),
+run by `yarn test:rsc:prod` (folded into `yarn test`), renders the threading,
+sibling-isolation, array-deferral and client-boundary cases against the
+production Flight build. After regenerating the patch, run it. See
+[`testing.md`](./testing.md).

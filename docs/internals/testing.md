@@ -1,11 +1,12 @@
 # Testing
 
-Three Vitest projects:
+Four Vitest projects:
 
 | Project | Where | Runs |
 |---|---|---|
 | `node` | `framework/src/lib/__tests__/*.test.ts(x)` (jsdom-safe), `cms/src/editor/__tests__/*` | Plain TS / DOM-safe units. |
-| `rsc` | `framework/src/lib/__tests__/*.rsc.test.tsx`, `framework/src/runtime/__tests__/*` | In-process Flight render via `framework/src/test/rsc-server.ts`. |
+| `rsc` | `framework/src/lib/__tests__/*.rsc.test.tsx`, `framework/src/runtime/__tests__/*` | In-process Flight render via `framework/src/test/rsc-server.ts` — the **dev** Flight build. |
+| `rsc-prod` | `framework/src/lib/__tests__/*.rsc-prod.test.tsx` | The same harness against the **production** Flight build. `yarn test:rsc:prod` sets `NODE_ENV=production`, which the vendored `server.edge` entry uses to require the prod build. The dev and prod builds schedule tasks differently, so prod-only regressions (e.g. the server-context carrier) need their own tier — every other tier runs the dev build. Tests `skipIf(NODE_ENV !== "production")`, so a plain all-projects run skips them. |
 | `browser` | `framework/src/lib/__tests__/*.browser.test.ts(x)` | Real Chromium via Vitest browser mode. |
 
 Plus Playwright:
