@@ -6,9 +6,10 @@
  * them inside `<ParentContext value>`, exactly as the real parton wrapper /
  * `<Frame>` do.
  *
- * The value rides React's own task graph (`createTask` inherits, `retryTask`
- * save/restores the rendering task), so it survives `await` and isolates
- * siblings (see [[partial-context]] / [[server-context]]).
+ * The value rides the parton ALS frame: `createTask` snapshots the current
+ * frame's `ctx` onto each task, `retryTask` re-enters it, and a provider
+ * outlines its children into a task carrying the overlay. So it survives
+ * `await` and isolates siblings (see [[partial-context]] / [[server-context]]).
  */
 
 import { describe, expect, it } from "vitest"

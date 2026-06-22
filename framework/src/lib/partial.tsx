@@ -1371,7 +1371,7 @@ function createSpecComponent<V>(
       children?: ReactNode
     } & Record<string, unknown>
     // Parent comes from server context (the ambient parton, threaded
-    // through React's task graph — see server-context.ts), NOT a prop.
+    // through the parton ALS frame — see server-context.ts), NOT a prop.
     // `__parent` overrides it for isolated renders that are their own
     // render root: a cache hole, a `<RemoteFrame>`, an addressable
     // refetch (`partialFromSnapshot`), where there is no ambient parton.
@@ -2320,7 +2320,7 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
   // id mid-flight (e.g. when activator-supplied props arrive after the
   // initial cold render).
   // Isolated render (cache hole / refetch): there's no ambient parton,
-  // so inject the snapshot's parent via `__parent`. The task graph threads
+  // so inject the snapshot's parent via `__parent`. The ALS frame threads
   // it onward to this parton's descendants.
   return <Component __parent={parent} __instanceId={id} {...props} />
 }

@@ -1,19 +1,21 @@
 diff --git a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js
-index e70ceca585a39736991445d1411843aa956bf702..9777a72b0337f76ffc5f90712584fced414cf0b6 100644
+index e70ceca585a39736991445d1411843aa956bf702..b11602b219899115c7ffcacab761f434d86d4f61 100644
 --- a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js
 +++ b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js
-@@ -1621,7 +1621,9 @@
+@@ -1621,7 +1621,11 @@
        thenableIndexCounter = 0;
        thenableState = prevThenableState;
        currentComponentDebugInfo = componentDebugInfo;
 -      props = supportsComponentStorage
 +      ReactSharedInternalsServer.__partonStorage = partonStorage;
-+      props = partonStorage.run(task, function () {
++      var __pf = partonStorage.getStore();
++      var __frame = { ctx: __pf ? __pf.ctx : null };
++      props = partonStorage.run(__frame, function () {
 +        return supportsComponentStorage
          ? task.debugTask
            ? task.debugTask.run(
                componentStorage.run.bind(
-@@ -1650,6 +1652,7 @@
+@@ -1650,6 +1654,7 @@
                )
              )
            : callComponentInDEV(Component, props, componentDebugInfo);
@@ -21,91 +23,101 @@ index e70ceca585a39736991445d1411843aa956bf702..9777a72b0337f76ffc5f90712584fced
        if (request.status === ABORTING)
          throw (
            ("object" !== typeof props ||
-@@ -1994,6 +1997,8 @@
+@@ -1994,6 +1999,7 @@
          keyPath: keyPath,
          implicitSlot: implicitSlot,
          formatContext: formatContext,
-+        serverContext: request.__renderingTask ? (request.__renderingTask.serverChildContext !== undefined ? request.__renderingTask.serverChildContext : request.__renderingTask.serverContext) : null,
-+        serverChildContext: request.__renderingTask ? (request.__renderingTask.serverChildContext !== undefined ? request.__renderingTask.serverChildContext : request.__renderingTask.serverContext) : null,
++        serverCtx: partonStorage.getStore() ? partonStorage.getStore().ctx : null,
          ping: function () {
            return pingTask(request, task);
          },
-@@ -3496,6 +3501,9 @@
+@@ -2394,6 +2400,7 @@
+       if (value === REACT_ELEMENT_TYPE) return "$";
+       if (null === value) return null;
+       if ("object" === typeof value) {
++        if (value.$$typeof === PARTON_CTX) { var __ct = partonStorage.run({ ctx: value._ctx }, createTask, request, value._node, task.keyPath, task.implicitSlot, task.formatContext, request.abortableTasks, task.time, task.debugOwner, task.debugStack, task.debugTask); pingTask(request, __ct); return serializeLazyID(__ct.id); }
+         switch (value.$$typeof) {
+           case REACT_ELEMENT_TYPE:
+             var elementReference = null,
+@@ -3496,6 +3503,7 @@
        callOnAllReadyIfReady(request);
      }
      function retryTask(request, task) {
-+      var __prevRenderingTask = request.__renderingTask;
-+      request.__renderingTask = task;
-+      try {
++      partonStorage.run({ ctx: task.serverCtx }, function () {
        if (0 === task.status) {
          var prevCanEmitDebugInfo = canEmitDebugInfo;
          task.status = 5;
-@@ -3566,6 +3574,9 @@
+@@ -3566,6 +3574,7 @@
              (serializedSize = parentSerializedSize);
          }
        }
-+      } finally {
-+        request.__renderingTask = __prevRenderingTask;
-+      }
++      });
      }
      function tryStreamTask(request, task) {
        var prevCanEmitDebugInfo = canEmitDebugInfo;
-@@ -5354,6 +5365,7 @@
+@@ -5354,6 +5363,8 @@
        componentStorage = supportsComponentStorage
          ? new AsyncLocalStorage()
          : null,
 +      partonStorage = (typeof globalThis !== "undefined" && typeof globalThis.AsyncLocalStorage === "function") ? new globalThis.AsyncLocalStorage() : new (require("node:async_hooks").AsyncLocalStorage)(),
++      PARTON_CTX = Symbol.for("parton.serverContext"),
        TEMPORARY_REFERENCE_TAG = Symbol.for("react.temporary.reference"),
        proxyHandlers = {
          get: function (target, name) {
 diff --git a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js
-index 087f238c1a0ec9cc1003b2bcb9ea024ba762f2b8..dfa3f24e5e3c6540ccfdade747494a4b3c658a37 100644
+index 087f238c1a0ec9cc1003b2bcb9ea024ba762f2b8..7a260aff0658869fc9072c8872ad837ce6346df4 100644
 --- a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js
 +++ b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js
-@@ -497,6 +497,7 @@ function getChildFormatContext(parentContext, type, props) {
+@@ -497,6 +497,8 @@ function getChildFormatContext(parentContext, type, props) {
  }
  var supportsRequestStorage = "function" === typeof AsyncLocalStorage,
    requestStorage = supportsRequestStorage ? new AsyncLocalStorage() : null,
 +  partonStorage = (typeof globalThis !== "undefined" && typeof globalThis.AsyncLocalStorage === "function") ? new globalThis.AsyncLocalStorage() : new (require("node:async_hooks").AsyncLocalStorage)(),
++  PARTON_CTX = Symbol.for("parton.serverContext"),
    TEMPORARY_REFERENCE_TAG = Symbol.for("react.temporary.reference"),
    proxyHandlers = {
      get: function (target, name) {
-@@ -1150,7 +1151,8 @@ function renderFunctionComponent(request, task, key, Component, props) {
+@@ -1150,7 +1152,10 @@ function renderFunctionComponent(request, task, key, Component, props) {
    task.thenableState = null;
    thenableIndexCounter = 0;
    thenableState = prevThenableState;
 -  props = Component(props, void 0);
 +  ReactSharedInternalsServer.__partonStorage = partonStorage;
-+  props = partonStorage.run(task, Component, props, void 0);
++  var __pf = partonStorage.getStore();
++  var __frame = { ctx: __pf ? __pf.ctx : null };
++  props = partonStorage.run(__frame, Component, props, void 0);
    if (12 === request.status)
      throw (
        ("object" === typeof props &&
-@@ -1287,6 +1289,8 @@ function createTask(
+@@ -1287,6 +1292,7 @@ function createTask(
      keyPath: keyPath,
      implicitSlot: implicitSlot,
      formatContext: formatContext,
-+    serverContext: request.__renderingTask ? (request.__renderingTask.serverChildContext !== undefined ? request.__renderingTask.serverChildContext : request.__renderingTask.serverContext) : null,
-+    serverChildContext: request.__renderingTask ? (request.__renderingTask.serverChildContext !== undefined ? request.__renderingTask.serverChildContext : request.__renderingTask.serverContext) : null,
++    serverCtx: partonStorage.getStore() ? partonStorage.getStore().ctx : null,
      ping: function () {
        return pingTask(request, task);
      },
-@@ -1911,6 +1915,9 @@ function erroredTask(request, task, error) {
+@@ -1509,6 +1515,7 @@ function renderModelDestructive(
+   if (value === REACT_ELEMENT_TYPE) return "$";
+   if (null === value) return null;
+   if ("object" === typeof value) {
++    if (value.$$typeof === PARTON_CTX) { var __ct = partonStorage.run({ ctx: value._ctx }, createTask, request, value._node, task.keyPath, task.implicitSlot, task.formatContext, request.abortableTasks); pingTask(request, __ct); return serializeLazyID(__ct.id); }
+     switch (value.$$typeof) {
+       case REACT_ELEMENT_TYPE:
+         var elementReference = null,
+@@ -1911,6 +1918,7 @@ function erroredTask(request, task, error) {
  }
  var emptyRoot = {};
  function retryTask(request, task) {
-+  var __prevRenderingTask = request.__renderingTask;
-+  request.__renderingTask = task;
-+  try {
++  partonStorage.run({ ctx: task.serverCtx }, function () {
    if (0 === task.status) {
      task.status = 5;
      var parentSerializedSize = serializedSize;
-@@ -1969,6 +1976,9 @@ function retryTask(request, task) {
+@@ -1969,6 +1977,7 @@ function retryTask(request, task) {
        serializedSize = parentSerializedSize;
      }
    }
-+  } finally {
-+    request.__renderingTask = __prevRenderingTask;
-+  }
++  });
  }
  function tryStreamTask(request, task) {
    var parentSerializedSize = serializedSize;

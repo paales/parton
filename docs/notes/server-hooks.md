@@ -5,8 +5,9 @@ staged plan with open architectural decisions flagged per step below.
 
 ## Thesis
 
-The server-context patch — a per-component `AsyncLocalStorage` the Flight
-render site enters per component, riding React's task graph (see
+The server-context patch — a per-component frame in an `AsyncLocalStorage` the
+Flight render site enters per component, carried to descendants by a
+`createTask` snapshot (see
 [`../internals/server-context.md`](../internals/server-context.md)) — gave
 Server Components a value that flows down the render tree, survives `await`,
 and isolates siblings. `createServerContext` was the first use (downward

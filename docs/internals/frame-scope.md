@@ -24,9 +24,9 @@ on cold render) and falls back to the page request.
 RSC sibling interleaving makes a per-request mutable cell unsafe: a
 sibling spec's body can overwrite the cell between an ancestor's
 setup and its descendant's body. The frame chain rides server context
-instead — threaded through React's Flight task graph — which survives
-`await` and isolates siblings, so the chain propagates without any ALS
-/ cell drift. `vary` runs once per spec invocation with the resolved
+instead — threaded through the parton ALS frame — which survives
+`await` and isolates siblings, so the chain propagates without any
+per-request cell drift. `vary` runs once per spec invocation with the resolved
 request as an argument.
 
 ## Wire protocol

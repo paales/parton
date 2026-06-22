@@ -2,36 +2,44 @@
  * Server context — values threaded parent→child through React's Flight
  * render tree, readable during any Server Component's render.
  *
- * One channel, every consumer. A single immutable map flows down the task
- * graph (patched into `createTask`; see `.yarn/patches/` and
- * `docs/internals/server-context.md`). Each context is one keyed entry —
- * every `createServerContext` value, and the framework's own parton parent
- * (which rides this channel as a reserved entry; see [[partial-context]]).
+ * One channel, every consumer. Context rides an `AsyncLocalStorage` the Flight
+ * patch enters per component (`partonStorage`; see `.yarn/patches/` and
+ * `docs/internals/server-context.md`) — the SAME store the reader uses, so the
+ * carrier follows post-`await` continuations as reliably as a read does. The
+ * unit in the store is a per-render FRAME `{ ctx, parton? }`, where `ctx` is the
+ * immutable map this subtree reads. Each context is one keyed entry — every
+ * `createServerContext` value, and the framework's own parton parent
+ * ([[partial-context]]).
  *
- * Reads ride an `AsyncLocalStorage` the patch enters per component
- * (`partonStorage.run(task, …)`, mirroring React's dev `componentStorage`).
- * Because an ALS store follows the JS engine's post-`await` continuation, a
- * read is valid ANYWHERE in a render — before or after awaits — and sibling
- * renders stay isolated. This module knows nothing about `PartialCtx`; it is
- * the generic primitive, and consumers live elsewhere.
+ * A provider scopes its descendants by returning a `PARTON_CTX` MARKER
+ * (`{ $$typeof, _ctx, _node }`): the Flight patch's `renderModelDestructive`
+ * renders `_node` inside `partonStorage.run({ ctx: _ctx }, …)`. Because the
+ * marker lives in the model, it re-establishes the overlay every time the
+ * subtree is walked — including React's deferred serialization pass — instead
+ * of relying on a render-time scope that wouldn't survive it. Nothing mutates a
+ * shared slot, so a read is valid ANYWHERE in a render (before or after awaits)
+ * and sibling subtrees stay isolated. This module knows nothing about
+ * `PartialCtx`; it is the generic primitive, and consumers live elsewhere.
  */
 
 import React from "react"
 import type { ReactNode } from "react"
 
-/** A Flight Task, as far as server context cares: the inherited map and the
- *  map it scopes for its descendants. The patch threads both at `createTask`. */
-interface ServerTask {
-  /** Map inherited from the parent task — what this component reads. */
-  serverContext?: ReadonlyMap<symbol, unknown>
-  /** Map this task scopes for its descendants — what its children inherit. */
-  serverChildContext?: ReadonlyMap<symbol, unknown>
+/** Sentinel shared with the Flight patch (`Symbol.for`, same key both sides):
+ *  a provider's return value carries it so `renderModelDestructive` re-scopes
+ *  the subtree. */
+const PARTON_CTX = Symbol.for("parton.serverContext")
+
+/** The per-render frame in the parton ALS, as far as server context cares:
+ *  `ctx` is the immutable context map this subtree reads. */
+interface RenderFrame {
+  ctx?: ReadonlyMap<symbol, unknown> | null
 }
 
 const sharedInternals = (
   React as unknown as {
     __SERVER_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE?: {
-      __partonStorage?: { getStore(): ServerTask | undefined }
+      __partonStorage?: { getStore(): RenderFrame | undefined }
     }
   }
 ).__SERVER_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE
@@ -42,7 +50,7 @@ const sharedInternals = (
  * handle passed to `getServerContext`.
  */
 export interface ServerContext<T> {
-  (props: { value: T; children?: ReactNode }): Promise<ReactNode>
+  (props: { value: T; children?: ReactNode }): ReactNode
   readonly _id: symbol
   readonly _default: T
 }
@@ -60,25 +68,16 @@ export interface ServerContext<T> {
  */
 export function createServerContext<T>(defaultValue: T): ServerContext<T> {
   const id = Symbol("serverContext")
-  const Provider = async ({
-    value,
-    children,
-  }: {
-    value: T
-    children?: ReactNode
-  }): Promise<ReactNode> => {
-    // Yield once so this provider renders in its own (outlined) task before
-    // overlaying — a sibling sharing the parent task then never inherits the
-    // overlay. Copying the existing map threads every other context through
-    // untouched; the captured task object is stable across the yield.
-    const task = sharedInternals?.__partonStorage?.getStore()
-    await null
-    if (task) {
-      const next = new Map(task.serverChildContext ?? task.serverContext)
-      next.set(id, value)
-      task.serverChildContext = next
-    }
-    return children
+  // Synchronous: overlay this context onto a fresh copy of the inherited map
+  // (every other context threads through untouched, nothing shared is mutated)
+  // and hand it to the patch as a marker wrapping the children. The patch
+  // renders `_node` inside `run({ ctx: _ctx })`, so the overlay reaches the
+  // descendants on every walk — render AND serialization.
+  const Provider = ({ value, children }: { value: T; children?: ReactNode }): ReactNode => {
+    const frame = sharedInternals?.__partonStorage?.getStore()
+    const next = new Map(frame?.ctx ?? null)
+    next.set(id, value)
+    return { $$typeof: PARTON_CTX, _ctx: next, _node: children } as unknown as ReactNode
   }
   return Object.assign(Provider, { _id: id, _default: defaultValue })
 }
@@ -88,15 +87,12 @@ export function createServerContext<T>(defaultValue: T): ServerContext<T> {
  * value on this branch, or the context's default. Call inside a Server
  * Component's render (anywhere — before or after awaits).
  *
- * Reads the task's child map first, then its inherited map: a provider's
- * direct (un-outlined) child renders in the provider's OWN task, where the
- * scoped value lives on `serverChildContext`; an outlined descendant gets it
- * as its inherited `serverContext`. The only writer is a provider, which
- * overlays then returns its children without reading — so a read never
- * returns the reader's own overlay.
+ * Reads the rendering frame's immutable `ctx`. A provider never reads its own
+ * overlay: it writes `childCtx` and the patch renders the children in a fresh
+ * frame whose `ctx` is that overlay, so only descendants see it.
  */
 export function getServerContext<T>(context: ServerContext<T>): T {
-  const task = sharedInternals?.__partonStorage?.getStore()
-  const map = task?.serverChildContext ?? task?.serverContext
+  const frame = sharedInternals?.__partonStorage?.getStore()
+  const map = frame?.ctx
   return map && map.has(context._id) ? (map.get(context._id) as T) : context._default
 }

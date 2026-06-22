@@ -1,9 +1,9 @@
 /**
- * Regression documenting why the server-context CARRIER rides React's Flight
- * task graph (see [[server-context]]) rather than a request-level
- * `AsyncLocalStorage`. (The READER does use an ALS — the patch runs each
- * component inside `partonStorage.run`; that's a per-component scope, which is
- * a different thing from the two request-level strategies probed here.)
+ * Regression documenting why server context rides a PER-COMPONENT frame in the
+ * parton ALS (see [[server-context]]) rather than a REQUEST-level
+ * `AsyncLocalStorage`. The patch runs each component inside
+ * `partonStorage.run(frame, …)`; that per-component scope is a different thing
+ * from the two request-level strategies probed here, both of which fail:
  *
  *  - `als.run(ctx, () => renderToReadableStream(tree))` DOES carry `ctx`
  *    into async descendants — but only across a dedicated per-parton
@@ -15,7 +15,7 @@
  *    async traversal — the disqualifying failure.
  *
  * So neither request-level ALS strategy carries parent→child in-place; the
- * task-graph patch does.
+ * per-component frame + `createTask` snapshot does.
  */
 
 import { describe, expect, it } from "vitest"
