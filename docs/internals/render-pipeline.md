@@ -419,3 +419,26 @@ the runWithRequestAsync auto-commit. Commit then fires when the
 TransformStream's `flush` callback runs — which only happens after
 the upstream Flight render has emitted its last chunk, by which point
 every spec has registered.
+
+## Error containment
+
+The per-partial `<PartialErrorBoundary>` wraps the *resolved body*
+only. Schema/props cell resolution (`await resolveCellValue`) and the
+synchronous `Render` call both run earlier in the spec component —
+above where that boundary sits in the returned tree. A React error
+boundary catches throws from its descendants, so it cannot catch a
+throw from the component that *renders* it. Uncaught, such a throw
+propagates to the RSC entry and takes down the whole render (cold
+loads 500; client navigations hit the global boundary).
+
+So `createSpecComponent` wraps the resolver: the exported `Component`
+is a thin shell that `await`s the inner `renderSpec` in a `try/catch`.
+An uncaught throw becomes a `<PartialErrorCard>` (the same card the
+boundary renders) in the parton's place — containment without
+disturbing the success-path tree shape, so the client wrapper-walker,
+fp registration, and Activity keying are all unchanged on the happy
+path. The catch rethrows `__framework`-branded errors
+(`NotFoundError` / `RedirectError` / `NavigationError`) so route
+controls still reach the entry / host boundary. A throw from a child
+that streams *after* `renderSpec` returns is still caught by the inner
+`PartialErrorBoundary`.

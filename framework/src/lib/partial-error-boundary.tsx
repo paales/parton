@@ -81,52 +81,11 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
         return this.props.fallback
       }
       return (
-        <div
-          style={{
-            background: "#2a1a1a",
-            border: "1px solid #5a2a2a",
-            borderRadius: 12,
-            padding: "1.25rem",
-            marginBottom: "1rem",
-          }}
-        >
-          <div
-            style={{
-              color: "#f56565",
-              fontWeight: 600,
-              marginBottom: "0.5rem",
-            }}
-          >
-            Partial "{this.props.partialId}" failed to render
-          </div>
-          {import.meta.env.DEV && (
-            <pre
-              style={{
-                fontSize: "0.75rem",
-                color: "#e88",
-                whiteSpace: "pre-wrap",
-                marginBottom: "0.75rem",
-              }}
-            >
-              {this.state.error.message}
-            </pre>
-          )}
-          <button
-            type="button"
-            onClick={this.retry}
-            style={{
-              background: "#5a2a2a",
-              color: "#ededed",
-              border: "1px solid #7a3a3a",
-              padding: "0.4rem 0.8rem",
-              borderRadius: 6,
-              cursor: "pointer",
-              fontSize: "0.8rem",
-            }}
-          >
-            Retry
-          </button>
-        </div>
+        <PartialErrorCard
+          partialId={this.props.partialId}
+          message={import.meta.env.DEV ? this.state.error.message : undefined}
+          onRetry={this.retry}
+        />
       )
     }
     // Provide the enclosing-partial id to client descendants.
@@ -140,4 +99,79 @@ export class PartialErrorBoundary extends React.Component<Props, State> {
       </PartialIdContext.Provider>
     )
   }
+}
+
+/**
+ * The inline "failed to render" card.
+ *
+ * Shared by two failure modes so both surface identically:
+ *   - {@link PartialErrorBoundary} renders it when a descendant throws
+ *     while rendering the resolved body.
+ *   - The spec wrapper in `partial.tsx` renders it when schema/props
+ *     resolution or the synchronous `Render` call throws — failures that
+ *     happen above the boundary and would otherwise crash the whole app.
+ *
+ * `message` is supplied only in dev builds (callers gate on
+ * `import.meta.env.DEV`); production omits it to avoid leaking internals.
+ * `onRetry` defaults to a full window reload — enough to re-run a failed
+ * resolution from scratch when there's no boundary state to clear.
+ */
+export function PartialErrorCard({
+  partialId,
+  message,
+  onRetry,
+}: {
+  partialId: string
+  message?: string
+  onRetry?: () => void
+}) {
+  const retry = onRetry ?? (() => React.startTransition(() => void _windowNav().reload()))
+  return (
+    <div
+      style={{
+        background: "#2a1a1a",
+        border: "1px solid #5a2a2a",
+        borderRadius: 12,
+        padding: "1.25rem",
+        marginBottom: "1rem",
+      }}
+    >
+      <div
+        style={{
+          color: "#f56565",
+          fontWeight: 600,
+          marginBottom: "0.5rem",
+        }}
+      >
+        Partial "{partialId}" failed to render
+      </div>
+      {message != null && (
+        <pre
+          style={{
+            fontSize: "0.75rem",
+            color: "#e88",
+            whiteSpace: "pre-wrap",
+            marginBottom: "0.75rem",
+          }}
+        >
+          {message}
+        </pre>
+      )}
+      <button
+        type="button"
+        onClick={retry}
+        style={{
+          background: "#5a2a2a",
+          color: "#ededed",
+          border: "1px solid #7a3a3a",
+          padding: "0.4rem 0.8rem",
+          borderRadius: 6,
+          cursor: "pointer",
+          fontSize: "0.8rem",
+        }}
+      >
+        Retry
+      </button>
+    </div>
+  )
 }

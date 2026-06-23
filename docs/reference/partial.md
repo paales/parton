@@ -400,6 +400,26 @@ Wrappers called with `outerChildren` (transparent passthrough)
 skip fp-skip entirely — their output IS their children, which the
 JSX parent renders directly.
 
+## Error containment
+
+A parton resolves its `schema` / props cells and runs its `Render`
+*above* the per-partial `PartialErrorBoundary` (which wraps only the
+already-resolved body). So a throw during resolution — a cell loader
+that rejects, a failed GraphQL read — or a synchronous throw in
+`Render` escapes that boundary. The spec wrapper catches those throws
+and renders the parton's own error card in place, so one failing
+parton degrades to a contained card while its siblings and the
+surrounding chrome keep rendering. A cold SSR load of a route whose
+parton throws still returns its page (carrying the card), not a 500.
+
+Framework controls are exempt: `notFound()`, `redirect()`, and a
+client-refetch `NavigationError` carry the `__framework` brand and
+keep bubbling — to the RSC entry (404 / `Location`) or the host's
+enclosing error boundary — rather than being swallowed into a card.
+
+A throw raised *later*, while a child of the resolved body streams,
+is caught by the `PartialErrorBoundary` itself, as before.
+
 ## Page-level routing — wrapper specs
 
 Page routing is just specs with `match`. There's no separate router

@@ -31,7 +31,7 @@ import React, {
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 import { _childContext, ParentContext, type PartialCtx } from "./partial-context.ts"
-import { PartialErrorBoundary } from "./partial-error-boundary.tsx"
+import { PartialErrorBoundary, PartialErrorCard } from "./partial-error-boundary.tsx"
 import { PageUrlProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
 import type { CacheOptions } from "./cache-options.ts"
@@ -1359,7 +1359,7 @@ function createSpecComponent<V>(
   // paths still settle in a microtask (await of a resolved value), so
   // overhead is one Promise tick on hot reads — sync-equivalent in
   // practice.
-  const Component: FC<PartialComponentProps & Record<string, unknown>> = async (props) => {
+  const renderSpec: FC<PartialComponentProps & Record<string, unknown>> = async (props) => {
     const {
       __parent: __injectedParent,
       __instanceId: instanceIdOverride,
@@ -1995,6 +1995,28 @@ function createSpecComponent<V>(
         </PartialBoundary>
       </ParentContext>
     )
+  }
+  // Per-parton error containment. Schema/props cell resolution and the
+  // synchronous Render call run in `renderSpec`, OUTSIDE the per-partial
+  // PartialErrorBoundary (which only wraps the already-resolved body). An
+  // uncaught throw there would escape every boundary and crash the whole
+  // page. Contain it as this partial's error card in place — except
+  // framework controls (notFound / redirect / NavigationError), which
+  // carry the `__framework` brand and must bubble to the RSC entry / host
+  // boundary exactly as before.
+  const Component: FC<PartialComponentProps & Record<string, unknown>> = async (props) => {
+    try {
+      return await renderSpec(props)
+    } catch (err) {
+      if ((err as { __framework?: string }).__framework) throw err
+      const message = err instanceof Error ? err.message : String(err)
+      return (
+        <PartialErrorCard
+          partialId={spec.id}
+          message={import.meta.env.DEV ? message : undefined}
+        />
+      )
+    }
   }
   Component.displayName = `Partial(${spec.id})`
   return Component
