@@ -256,6 +256,21 @@ signal, not a failure — `finished` flips true, `error` stays
 unsurfaced, nothing bubbles. Inline `.catch` handlers should treat
 `err.name === "AbortError"` as a no-op.
 
+When a supersede tears the in-flight RSC stream *mid-render*, React's
+Flight client may throw a stream error (`"Connection closed."`) rather
+than a clean `AbortError` — thrown while rendering the superseded
+payload, so it lands in an error boundary, not a `.catch`. The
+framework's `<NavigationErrorBoundary>` (wrapped around the rendered
+payload root in the host's browser entry, *inside* the component that
+owns the payload state) recovers from these transient tears in place —
+remounting against the superseding navigation's payload — so a fast
+click-through or back/forward never strands the app on the global
+error page. Genuine render errors still bubble to
+`<GlobalErrorBoundary>`. A tear in a *deferred* part whose server
+render fails closes the whole payload stream; that case still surfaces
+the error page (the page genuinely failed to render) — contain it
+server-side at the failing partial.
+
 ### Driving a refetch with fresh data
 
 A targeted refetch carries a *signal* — the `selector` — and the

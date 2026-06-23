@@ -442,3 +442,19 @@ path. The catch rethrows `__framework`-branded errors
 controls still reach the entry / host boundary. A throw from a child
 that streams *after* `renderSpec` returns is still caught by the inner
 `PartialErrorBoundary`.
+
+The client has a counterpart for a different failure: a superseding
+navigation tears the in-flight RSC Flight stream while React is
+rendering the prior payload, which the Flight client surfaces as
+`"Connection closed."` (not a clean `AbortError`) — thrown during
+render, so no `.catch` sees it. `<NavigationErrorBoundary>` (framework;
+wrapped around `payload.root` *inside* the host's browser root, so the
+payload state and heartbeat survive a recovery) classifies that family
+(`isTransientNavError`: connection-closed, torn Suspense, abort,
+concurrent-commit `removeChild`/`insertBefore`) and remounts its
+children against the now-current payload, bounded by a recovery budget.
+Genuine errors, and a tear that never settles, rethrow to
+`<GlobalErrorBoundary>`. It can't rescue a *deferred* part whose server
+render fails and closes the whole payload stream — there's no intact
+payload to remount — so that surfaces the error page; the durable fix
+is server-side containment at the failing partial.

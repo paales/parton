@@ -54,6 +54,10 @@ const STEPS = Number(args.steps ?? 120)
 const RUNS = Number(args.runs ?? 1)
 const OVERLAP = Number(args.overlap ?? 0.35) // P(fire next action before settling)
 const HEADED = Boolean(args.headed)
+// Substrings to skip in link hrefs — e.g. routes that depend on an
+// external backend or a companion server, so a campaign can isolate the
+// core navigation surface from environmental (network) noise.
+const EXCLUDE = typeof args.exclude === "string" ? args.exclude.split(",").filter(Boolean) : []
 
 // ── seeded PRNG (mulberry32) — the whole run derives from one int ────
 function mulberry32(seed) {
@@ -127,16 +131,20 @@ async function checkInvariants(page) {
 
 // ── action model: same-origin link clicks + history traversal ───────
 async function sameOriginLinks(page) {
-  return page.$$eval("a[href]", (els) =>
-    els
-      .filter((a) => {
-        const href = a.getAttribute("href") || ""
-        if (!href || href.startsWith("#") || href.startsWith("http") || href.startsWith("//"))
-          return false
-        const r = a.getBoundingClientRect()
-        return r.width > 0 && r.height > 0 // visible
-      })
-      .map((a) => a.getAttribute("href")),
+  return page.$$eval(
+    "a[href]",
+    (els, exclude) =>
+      els
+        .filter((a) => {
+          const href = a.getAttribute("href") || ""
+          if (!href || href.startsWith("#") || href.startsWith("http") || href.startsWith("//"))
+            return false
+          if (exclude.some((e) => href.includes(e))) return false
+          const r = a.getBoundingClientRect()
+          return r.width > 0 && r.height > 0 // visible
+        })
+        .map((a) => a.getAttribute("href")),
+    EXCLUDE,
   )
 }
 
@@ -206,8 +214,15 @@ async function runSeed(seed, browser) {
     // Overlap knob: sometimes DON'T settle — fire into an in-flight nav.
     if (rng() > OVERLAP) await rsc.settle().catch(() => {})
     else await page.waitForTimeout(Math.floor(rng() * 60))
-    const v = await checkInvariants(page).catch(() => null)
-    if (v) violation = { ...v, at: i, action }
+    let v = await checkInvariants(page).catch(() => null)
+    if (v) {
+      // Distinguish a STUCK failure (the "only a refresh fixes it"
+      // symptom) from a one-frame recovery blank: re-check after a beat.
+      // A failure that self-heals within ~half a second is not the bug.
+      await page.waitForTimeout(450)
+      v = await checkInvariants(page).catch(() => null)
+      if (v) violation = { ...v, at: i, action }
+    }
   }
   if (!violation && pageError) violation = { type: "pageerror", ...pageError }
 

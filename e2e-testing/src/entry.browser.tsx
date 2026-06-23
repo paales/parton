@@ -8,7 +8,10 @@ import React from "react"
 import { createRoot, hydrateRoot } from "react-dom/client"
 import { rscStream } from "rsc-html-stream/client"
 import type { RscPayload } from "./entry.rsc"
-import { GlobalErrorBoundary } from "@parton/framework/runtime/error-boundary.tsx"
+import {
+  GlobalErrorBoundary,
+  NavigationErrorBoundary,
+} from "@parton/framework/runtime/error-boundary.tsx"
 import { NavigationError } from "@parton/framework/runtime/navigation-error.ts"
 import { createRscRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
@@ -80,7 +83,12 @@ async function main() {
 
     return (
       <>
-        {payload.root}
+        {/* Recover from torn RSC streams when a navigation supersedes an
+         *  in-flight one (the payload is rendered HERE, so a recovery
+         *  remounts the payload — not BrowserRoot, whose state + the
+         *  heartbeat below must survive). Genuine errors still bubble to
+         *  the outer <GlobalErrorBoundary>. */}
+        <NavigationErrorBoundary>{payload.root}</NavigationErrorBoundary>
         {/* Opt-in live updates. The heartbeat holds a `?streaming=1`
          *  long-poll connection open against the current URL; the
          *  server's segment driver pushes refreshSelector /
