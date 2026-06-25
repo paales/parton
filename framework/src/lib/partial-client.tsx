@@ -58,6 +58,7 @@ import {
 } from "../runtime/navigation-api.ts"
 import { NavigationError, toNavigationError } from "../runtime/navigation-error.ts"
 import type { FpUpdatesPayload } from "./fp-trailer-marker.ts"
+import { claimRefetchCommit, nextRefetchSeq } from "./refetch-ordering.ts"
 
 /**
  * Return true if the node looks like the outermost wrapper a
@@ -1074,6 +1075,7 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
       __rsc_partial_refetch?: (
         url: string,
         signal?: AbortSignal,
+        claimCommit?: () => boolean,
       ) => RefetchMilestones
     }
   ).__rsc_partial_refetch
@@ -1129,7 +1131,21 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
     if (cached.length > 0) url.searchParams.set("cached", cached.join(","))
   }
 
-  const milestones = handler(url.toString(), signal)
+  // Monotonic commit ordering. Stamp this fire with the next issue seq
+  // for its selector key, and hand the host a commit gate bound to it.
+  // The host calls the gate before each segment commit and drops the
+  // commit when a newer fire for the same selector has already landed —
+  // so a superseded fire whose response arrives late can't clobber the
+  // newer tree. Keyed on the sorted label set (matches `?partials=` and
+  // `inFlightKey`); a label-less batch (no selector) gets no gate.
+  const orderKey = inFlightKey([...labelSet])
+  let claimCommit: (() => boolean) | undefined
+  if (orderKey != null) {
+    const seq = nextRefetchSeq(orderKey)
+    claimCommit = () => claimRefetchCommit(orderKey, seq)
+  }
+
+  const milestones = handler(url.toString(), signal, claimCommit)
   milestones.streaming.then(
     () => {
       for (const e of batch) e.resolveStreaming()
@@ -1217,8 +1233,14 @@ function enqueueRefetch(
 // `reload({selector})`) do NOT use this. They are finite documents;
 // aborting one mid-decode rejects the whole Flight document and
 // crashes the page through the nearest error boundary. They drain and
-// commit harmlessly on supersede (React's last render wins), and are
-// cancelled only by the caller's own `options.signal`.
+// commit on supersede, ordered by the monotonic commit guard
+// (`refetch-ordering.ts`): each fire carries a per-selector issue seq,
+// and a late-arriving OLDER fire's commit is dropped rather than
+// clobbering a newer one — last ISSUED wins, not last to arrive. That
+// real signal is what keeps a `reload({selector})` of live server state
+// correct when responses race (the URL is identical, so it can't
+// arbitrate). They are cancelled only by the caller's own
+// `options.signal`.
 //
 // Abort is DEFERRED: the older fire keeps streaming into its Suspense
 // boundaries until the newer fire's first segment lands, then
@@ -1969,9 +1991,11 @@ function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeNavigati
           // aborting it mid-decode rejects the entire document (not
           // just the superseded section) and crashes the page through
           // the nearest error boundary. Superseded fires drain and
-          // commit harmlessly — they're small once fp-skipped, and
-          // React's last render wins. `navigate` has no caller signal
-          // (unlike `reload`), so nothing cancels a window-nav fire.
+          // commit — they're small once fp-skipped — but the monotonic
+          // commit guard (`refetch-ordering.ts`) drops a late older
+          // fire's commit so it can't clobber a newer one. `navigate`
+          // has no caller signal (unlike `reload`), so nothing cancels
+          // a window-nav fire.
           const refetch = enqueueRefetch({
             labels: parsed.labels,
             streaming: options?.streaming ?? false,

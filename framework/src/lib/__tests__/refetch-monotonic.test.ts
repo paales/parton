@@ -1,0 +1,89 @@
+/**
+ * Monotonic commit ordering for window-scoped selector refetches.
+ *
+ * Every search keystroke fires an independent `.search-results`
+ * refetch (`navigate({selector})`). Superseded fires are NOT aborted —
+ * they drain and commit, because aborting one mid-decode would reject
+ * the whole Flight document and crash the page. The hazard: their
+ * responses can arrive OUT OF ORDER, so an older-issued ("po") tree can
+ * land after a newer-issued ("pokemo") one and clobber it — the
+ * "stage-1 committed a tree for a stale query" bug.
+ *
+ * The fix is a per-selector monotonic sequence: each fire gets an
+ * increasing issue seq (`_nextRefetchSeq`), and a commit is only
+ * allowed if its seq is not older than the newest already committed for
+ * that selector (`_claimRefetchCommit`). "Last ISSUED wins", regardless
+ * of arrival order — the real signal, not the window-URL proxy.
+ *
+ * Selector identity is the key (the sorted, comma-joined label set, as
+ * on the wire's `?partials=`). Each test uses a distinct key so the
+ * module-level high-water marks don't bleed across cases.
+ */
+
+import { describe, expect, it } from "vitest"
+import {
+  claimRefetchCommit as _claimRefetchCommit,
+  nextRefetchSeq as _nextRefetchSeq,
+} from "../refetch-ordering.ts"
+
+describe("_claimRefetchCommit — monotonic per-selector commit ordering", () => {
+  it("commits fires that arrive in issue order", () => {
+    const k = "search-results-inorder"
+    expect(_claimRefetchCommit(k, 1)).toBe(true)
+    expect(_claimRefetchCommit(k, 2)).toBe(true)
+    expect(_claimRefetchCommit(k, 3)).toBe(true)
+  })
+
+  it("drops a superseded fire that arrives out of order (the stale-q bug)", () => {
+    const k = "search-results-reorder"
+    // The newer fire ("pokemo", seq 2) lands and commits first…
+    expect(_claimRefetchCommit(k, 2)).toBe(true)
+    // …then the older fire ("po", seq 1) arrives late. Committing it
+    // would clobber the newer tree — it must be dropped.
+    expect(_claimRefetchCommit(k, 1)).toBe(false)
+  })
+
+  it("lets every segment of one streaming fire (shared seq) commit", () => {
+    const k = "search-results-stream"
+    // One streaming refetch commits per segment (stage 1/2/3) — all
+    // carry the same issue seq, so each must be allowed.
+    expect(_claimRefetchCommit(k, 5)).toBe(true)
+    expect(_claimRefetchCommit(k, 5)).toBe(true)
+    expect(_claimRefetchCommit(k, 5)).toBe(true)
+  })
+
+  it("drops the older fire's later segments once a newer fire commits mid-stream", () => {
+    const k = "search-results-interleave"
+    expect(_claimRefetchCommit(k, 1)).toBe(true) // old fire, stage 1 paints
+    expect(_claimRefetchCommit(k, 2)).toBe(true) // newer fire supersedes
+    expect(_claimRefetchCommit(k, 1)).toBe(false) // old fire's stage 2: dropped
+    expect(_claimRefetchCommit(k, 2)).toBe(true) // newer fire's stage 2: commits
+  })
+
+  it("keeps per-selector keys independent", () => {
+    expect(_claimRefetchCommit("sel-a", 9)).toBe(true)
+    // A different selector's first fire is unaffected by sel-a's high-water mark.
+    expect(_claimRefetchCommit("sel-b", 1)).toBe(true)
+  })
+})
+
+describe("_nextRefetchSeq — monotonic issue counter", () => {
+  it("increments per key and is independent across keys", () => {
+    const a = "issue-a"
+    const b = "issue-b"
+    expect(_nextRefetchSeq(a)).toBe(1)
+    expect(_nextRefetchSeq(a)).toBe(2)
+    expect(_nextRefetchSeq(b)).toBe(1)
+    expect(_nextRefetchSeq(a)).toBe(3)
+    expect(_nextRefetchSeq(b)).toBe(2)
+  })
+
+  it("feeds the claim gate so issue order is what commits last", () => {
+    const k = "issue-claim-roundtrip"
+    const first = _nextRefetchSeq(k) // 1
+    const second = _nextRefetchSeq(k) // 2
+    // Responses arrive reversed: the second-issued lands first.
+    expect(_claimRefetchCommit(k, second)).toBe(true)
+    expect(_claimRefetchCommit(k, first)).toBe(false)
+  })
+})

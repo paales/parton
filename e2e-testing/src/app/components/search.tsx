@@ -187,10 +187,11 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
  *
  * Fires `navigate({selector})` on every keystroke. Each keystroke is
  * an independent refetch of the ".search-results" section; superseded
- * fires are NOT aborted — they drain and commit harmlessly, and
- * React's last render wins, so the section converges on the latest
- * query. (Aborting a superseded fire would tear its in-flight Flight
- * document mid-decode and crash the page through the error boundary.)
+ * fires are NOT aborted — they drain and commit, ordered by the
+ * framework's monotonic commit guard (a late older fire can't clobber a
+ * newer one), so the section converges on the latest-ISSUED query.
+ * (Aborting a superseded fire would tear its in-flight Flight document
+ * mid-decode and crash the page through the error boundary.)
  *
  * `progress.committed && !progress.streaming` is the spinner predicate:
  * "asked, no rows back yet" — it clears the moment the first row

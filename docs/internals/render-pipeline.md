@@ -185,6 +185,41 @@ trigger a streaming-mode fallback (so a fresh range expansion like
 `?end=N+1` re-renders the page rather than producing a registry
 miss).
 
+## Selector-refetch commit ordering
+
+Window-scoped selector refetches (`navigate({selector})` /
+`reload({selector})`) are **not aborted on supersede** — aborting one
+mid-decode rejects its whole Flight document and tears the page through
+the error boundary. So a burst of fires (every search keystroke, a
+rapidly-clicked refresh) all drain and commit. Their responses can
+arrive **out of order**, so the framework must commit them in **issue
+order, not arrival order**: a late older fire must not clobber a newer
+one.
+
+The arbiter is a monotonic per-selector issue sequence
+(`lib/refetch-ordering.ts`). The refetch dispatcher
+(`flushRefetchBatch`) stamps each fire with `nextRefetchSeq(key)` —
+`key` is the sorted label set, matching `?partials=` — and hands the
+host a commit gate bound to that seq. Before every segment commit the
+host calls `claimRefetchCommit(key, seq)`, which returns `false` once a
+newer seq has committed for that selector; a dropped commit is skipped
+(trailers included) while the stream still drains.
+
+This is the real signal, not the page-URL staleness check that sits
+beside it. `pageUrlKey` drops a commit when the page **navigated away**
+since the fire was issued (cross-nav staleness); it cannot order two
+fires for the **same** URL — exactly the case that matters for live
+server state, where a `reload({selector})` of a cell-backed or
+time-varying partial returns different content on each fire of one URL.
+The two guards are complementary: `pageUrlKey` for cross-navigation,
+the issue sequence for same-selector supersession.
+
+The fires are still not aborted, so a burst holds its connections until
+each drains — superseded work isn't cancelled, only its commit is
+dropped. That's a deliberate safety tradeoff (cancelling a committed
+fire's stream would tear its visible tree); the cost is bounded
+because superseded fires fp-skip to near-empty bytes.
+
 ## Fingerprint protocol
 
 Each spec emits its `fp` via `<PartialErrorBoundary partialId,

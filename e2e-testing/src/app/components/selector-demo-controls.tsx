@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect } from "react"
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 
@@ -29,4 +30,24 @@ export function SelectorRefetchButton({
       {pending ? "…" : label}
     </Button>
   )
+}
+
+/**
+ * Test affordance: exposes `window.__fireProductReload()` to drive
+ * overlapping `.product` reloads WITHOUT the button's
+ * disabled-while-pending guard. A spec uses it to fire two superseding
+ * same-URL refetches (whose `<ServerTime>` content differs per render)
+ * and assert the framework commits them in ISSUE order, not arrival
+ * order. Renders nothing.
+ */
+export function ProductReloadProbe() {
+  const [reload] = useNavigation().reload()
+  useEffect(() => {
+    const w = window as unknown as { __fireProductReload?: () => void }
+    w.__fireProductReload = () => reload({ selector: ".product" })
+    return () => {
+      delete w.__fireProductReload
+    }
+  }, [reload])
+  return null
 }

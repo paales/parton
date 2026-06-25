@@ -128,6 +128,7 @@ async function main() {
   function fetchRscPayload(
     overrideUrl?: string,
     signal?: AbortSignal,
+    claimCommit?: () => boolean,
   ): { streaming: Promise<void>; finished: Promise<void> } {
     let resolveStreaming!: () => void
     let rejectStreaming!: (err: unknown) => void
@@ -242,6 +243,14 @@ async function main() {
             // (which would otherwise register fingerprints for the
             // stale tree). Keep draining so the stream closes cleanly.
             if (pageUrlKey() !== issuedForPageUrl) continue
+            // Monotonic commit ordering: drop this segment if a newer
+            // fire for the same selector has already committed (a
+            // superseded refetch whose response arrived out of order —
+            // the stale-`q` search bug). Keep draining so the stream
+            // closes cleanly; just skip the commit and its trailers. The
+            // gate is provided by the framework's refetch dispatcher
+            // (`refetch-ordering.ts`); full-page navs pass none.
+            if (claimCommit && !claimCommit()) continue
             segment.trailers.then(applyStandardTrailers).catch(() => {})
             if (streamingMode) {
               setPayloadRaw(payload)
@@ -264,6 +273,14 @@ async function main() {
             url: renderRequest.url,
             cause: err,
           })
+        }
+        // A fully-superseded fire commits nothing (every segment dropped
+        // by the monotonic gate), so `streaming` never resolved in the
+        // loop. The body has drained — resolve it now (alongside
+        // `finished`) so the caller's `await streaming` can't hang.
+        if (!streamingResolved) {
+          streamingResolved = true
+          resolveStreaming()
         }
         resolveFinished()
       } catch (err) {
@@ -331,7 +348,8 @@ async function main() {
   ;(window as any).__rsc_partial_refetch = (
     url: string,
     signal?: AbortSignal,
-  ) => fetchRscPayload(url, signal)
+    claimCommit?: () => boolean,
+  ) => fetchRscPayload(url, signal, claimCommit)
   // Preload counterpart: warm-only, no commit. See `warmRscPayload`.
   ;(window as any).__rsc_partial_preload = (
     url: string,

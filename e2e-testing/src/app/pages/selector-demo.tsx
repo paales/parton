@@ -4,7 +4,10 @@
  */
 
 import { parton, type RenderArgs } from "@parton/framework"
-import { SelectorRefetchButton } from "../components/selector-demo-controls.tsx"
+import {
+  ProductReloadProbe,
+  SelectorRefetchButton,
+} from "../components/selector-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 
 function ServerTime({ label }: { label: string }) {
@@ -52,6 +55,7 @@ export const SelectorDemoPage = parton(
     return (
       <main className="py-4">
         <title>Selector Demo</title>
+        <ProductReloadProbe />
         <h1 className="mb-4 text-2xl font-semibold">Selector-based refetch</h1>
         <p className="mb-8 text-muted-foreground">
           <InlineCode>useNavigation().reload({'{selector: ".price"}'})</InlineCode> refetches every

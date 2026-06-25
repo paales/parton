@@ -1,23 +1,28 @@
 import { test, expect, request } from "./fixtures"
 
 /**
- * Repro for the rapid type→backspace→close races in the search overlay.
+ * The search section must CONVERGE on the latest-typed query under a
+ * rapid type→backspace burst — never settle permanently on a stale one.
  *
- * Symptoms reported in production (hard to pin to one specific state):
- *   - stage-1 commits an empty tree ("Start typing to search...") even
- *     though the input has a non-empty query;
- *   - a committed stage shows results for a STALE query (an older,
- *     superseded refetch's tree clobbered the newer one);
- *   - after closing the overlay it stays visible.
+ * Each keystroke fires an independent `.search-results` refetch; the
+ * fires are not aborted on supersede. Two things make convergence
+ * eventual rather than instant here: the section runs in `streaming:
+ * false` (startTransition holds the prior results visible until the
+ * latest query's stages are ready), and the fixture's stages carry
+ * artificial 1s/2s delays behind the un-aborted predecessor fires. So
+ * the correct latest-query tree arrives a beat late — we poll for it
+ * rather than asserting at a fixed instant.
+ *
+ * The framework guarantee underneath is monotonic commit ordering: a
+ * late older fire can't clobber a newer one. Search content is a pure
+ * function of `?q`, so that ordering isn't independently visible HERE
+ * (two fires of the same query are identical) — the same-url ordering
+ * case is demonstrated directly in `selector-refetch-monotonic.spec.ts`.
  *
  * The instrumentation in `pokemon.tsx` stamps each stage with `data-q`
  * (the query its committed tree was rendered against) and `data-count`
- * (row count), and the dialog body with `data-search-q`. That lets us
- * assert the COMMITTED state matches the LATEST input, not just that
- * "something" rendered.
- *
- * Run with --repeat-each to shake out the race; a single pass may get
- * lucky on timing.
+ * (row count), so we can assert the COMMITTED state matches the LATEST
+ * input, not just that "something" rendered.
  */
 
 test.beforeEach(async ({ baseURL }) => {
@@ -25,12 +30,6 @@ test.beforeEach(async ({ baseURL }) => {
   await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
   await ctx.dispose()
 })
-
-async function settle(page: import("@playwright/test").Page) {
-  // Stage 3 has a 2s server delay; give every in-flight fire time to
-  // either commit or be superseded, then a beat for React to flush.
-  await page.waitForTimeout(3500)
-}
 
 test("rapid type then backspace leaves stage-1 consistent with the input", async ({ page }) => {
   const errors: string[] = []
@@ -54,22 +53,27 @@ test("rapid type then backspace leaves stage-1 consistent with the input", async
     await page.waitForTimeout(40)
   }
 
-  await settle(page)
-
   const value = await input.inputValue()
   const stage1 = page.locator('[data-testid="stage-1"]')
   await expect(stage1).toBeVisible()
-  const committedQ = await stage1.getAttribute("data-q")
-  const count = Number(await stage1.getAttribute("data-count"))
 
-  console.log(`input="${value}" stage1.data-q="${committedQ}" stage1.count=${count}`)
+  // The committed stage-1 must CONVERGE on the query currently in the
+  // box, never settling permanently on a stale superseded one. The
+  // latest query's (artificially 1s/2s-delayed) stages stream in past
+  // the un-aborted predecessor fires while startTransition holds the
+  // prior results, so convergence is eventual — poll for it rather than
+  // a fixed settle. A timeout here is the stale-query regression.
+  await expect
+    .poll(() => stage1.getAttribute("data-q"), {
+      timeout: 12000,
+      message: "stage-1 never converged on the latest query (stale-q monotonic regression)",
+    })
+    .toBe(value)
 
-  // The committed stage-1 must reflect the query currently in the box,
-  // not a stale superseded one.
-  expect(committedQ, "stage-1 committed a tree for a stale query").toBe(value)
   // With a non-empty query there should be matching pokemon — an empty
   // stage-1 here is the "Start typing to search..." regression.
   if (value.length > 0) {
+    const count = Number(await stage1.getAttribute("data-count"))
     expect(count, `stage-1 empty for non-empty query "${value}"`).toBeGreaterThan(0)
   }
   expect(errors, `page errors: ${JSON.stringify(errors)}`).toHaveLength(0)
