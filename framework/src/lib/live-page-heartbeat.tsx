@@ -8,6 +8,27 @@ import { getNavigation } from "../runtime/navigation-api.ts"
  *  connection is already open, the interval tick is a no-op. */
 const DEFAULT_INTERVAL_MS = 5_000
 
+/**
+ * Whether a navigation crosses to a DIFFERENT page (pathname) than the
+ * one the live heartbeat stream was opened for — the only case in which
+ * the stream is torn down (see the `navigate` listener). A same-page
+ * refetch — a search keystroke flipping `?q`, opening/closing an overlay
+ * via `?search` — returns `false`, so the stream (and any overlay
+ * rendered inside it) survives the abort. An unknown / unparseable
+ * destination is treated as same-page (don't tear).
+ */
+export function _liveStreamCrossesPage(
+  openPathname: string,
+  destinationUrl: string | undefined,
+): boolean {
+  if (!destinationUrl) return false
+  try {
+    return new URL(destinationUrl).pathname !== openPathname
+  } catch {
+    return false
+  }
+}
+
 interface Props {
   intervalMs?: number
 }
@@ -47,10 +68,13 @@ interface Props {
  *   - Every `intervalMs` (default 5s), re-fires IF no stream is
  *     currently open. While a stream is open the tick is a no-op.
  *     When the server's keepalive elapses, the next tick reopens.
- *   - On `navigate` (URL change), aborts the in-flight stream.
- *     The framework's nav handler opens the new page's fetch;
- *     once that fetch commits, the next interval tick opens a
- *     fresh streaming connection on the new URL.
+ *   - On a cross-PAGE `navigate` (pathname change), aborts the
+ *     in-flight stream; the next interval tick opens a fresh
+ *     connection on the new page. A SAME-page refetch (a search
+ *     keystroke flipping `?q`, an overlay toggling `?search`) leaves
+ *     the stream open — aborting it rejects the committed payload's
+ *     pending references ("Connection closed.") and tears the visible
+ *     page, dropping an open overlay mid-interaction.
  *
  * Actions complete with one-shot responses and call
  * `refreshSelector` inside their bodies. The already-open stream
@@ -71,10 +95,14 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
     }
     let alive = true
     let inFlight: AbortController | null = null
+    // Pathname the live stream was opened for. The stream is torn down
+    // only when navigation crosses to a DIFFERENT page (see onNavigate).
+    let openPathname = location.pathname
 
     const fire = () => {
       if (!alive) return
       if (inFlight) return
+      openPathname = location.pathname
       inFlight = new AbortController()
       const { finished } = reload({ streaming: true, signal: inFlight.signal })
       finished
@@ -110,16 +138,28 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
     }
 
     const nav = getNavigation()
-    const onNavigate = () => {
-      if (inFlight) inFlight.abort()
+    const onNavigate = (event: { destination?: { url?: string } }) => {
+      // Tear the live stream down ONLY on a real page change (pathname).
+      // A same-page refetch — a search keystroke flipping `?q`, opening
+      // or closing an overlay via `?search` — must NOT abort it: aborting
+      // a streaming connection rejects its already-committed payload's
+      // pending references ("Connection closed"), which crashes the
+      // visible page through the nearest error boundary (e.g. it drops
+      // the open search dialog mid-typing). Same-page refetches drive
+      // their own `navigate({selector})` fires; the heartbeat just keeps
+      // holding its connection. On a cross-page nav the abort is fine —
+      // the destination page replaces this one anyway.
+      if (inFlight && _liveStreamCrossesPage(openPathname, event?.destination?.url)) {
+        inFlight.abort()
+      }
     }
-    nav?.addEventListener("navigate", onNavigate)
+    nav?.addEventListener("navigate", onNavigate as EventListener)
 
     return () => {
       alive = false
       if (timer) clearInterval(timer)
       window.removeEventListener("load", startCadence)
-      nav?.removeEventListener("navigate", onNavigate)
+      nav?.removeEventListener("navigate", onNavigate as EventListener)
       if (inFlight) inFlight.abort()
     }
   }, [reload, intervalMs])

@@ -152,9 +152,14 @@ Behaviour:
 - **Interval re-fires** every 5s by default — but each tick is a
   no-op if a stream is already open. So in steady state there's
   exactly one streaming connection.
-- **On `navigate`** (URL change), aborts the in-flight stream.
-  The framework's nav handler then opens the new page's fetch;
-  the heartbeat's next interval tick takes over once that's done.
+- **On a cross-PAGE `navigate`** (pathname change), aborts the
+  in-flight stream; the next interval tick reopens on the new page.
+  A SAME-page refetch (a search keystroke flipping `?q`, an overlay
+  toggling `?search`) does NOT abort — aborting a streaming connection
+  rejects its committed payload's pending references (`"Connection
+  closed."`, thrown while rendering the deferred parts), which tears
+  the visible page through the error boundary and drops an open
+  overlay mid-interaction. The decision is `_liveStreamCrossesPage`.
 - **No live-state gating.** The heartbeat is on or off at the app
   level, not per-page. A page with no `expiresAt` / cells still
   pays the cost of one open streaming connection — the fp-skip

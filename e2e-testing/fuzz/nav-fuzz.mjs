@@ -129,6 +129,34 @@ async function checkInvariants(page) {
   return null
 }
 
+// Base invariants + (right after a keystroke) the search overlay must
+// survive being typed into — typing must never drop the dialog. `action`
+// supplies that context; the check is a no-op for non-search actions.
+async function checkAll(page, action) {
+  const base = await checkInvariants(page)
+  if (base) return base
+  if (action?.typedIntoSearch) {
+    // A drop only counts as a bug if URL search is STILL meant to be open
+    // (`?search` present). A `back`/link that popped `?search` closes the
+    // dialog legitimately — typing a beat later then "loses" it, but
+    // that's the navigation, not a torn stream.
+    let searchMeantOpen = false
+    try {
+      searchMeantOpen = new URL(page.url()).searchParams.has("search")
+    } catch {
+      /* ignore */
+    }
+    if (searchMeantOpen) {
+      const stillOpen = await page
+        .locator("dialog input[type=text]")
+        .count()
+        .catch(() => 1)
+      if (stillOpen === 0) return { type: "search-dialog-dropped" }
+    }
+  }
+  return null
+}
+
 // ── action model: same-origin link clicks + history traversal ───────
 async function sameOriginLinks(page) {
   return page.$$eval(
@@ -150,6 +178,15 @@ async function sameOriginLinks(page) {
 
 async function doAction(page, rng, hist) {
   const links = await sameOriginLinks(page)
+  // Search surface: type into an open overlay (each keystroke is a
+  // same-page `?q` nav — the case that tore the page via the heartbeat),
+  // or open one when the page offers it.
+  const searchOpen = (await page.locator("dialog input[type=text]").count()) > 0
+  // URL-mode search: each keystroke is a window `?q` nav — the surface
+  // the heartbeat tear dropped. (Frame-mode search navigates the frame,
+  // which doesn't fire a window `navigate`, so it never hit the bug.)
+  const urlSearchBtn = page.getByRole("button", { name: /Search \(URL\)/ })
+  const canOpenSearch = !searchOpen && (await urlSearchBtn.count()) > 0
   // History-depth gating keeps traversal INSIDE the app: never `back`
   // past the entry page (which would land on about:blank), and only
   // `forward` when we've actually backed up.
@@ -157,9 +194,24 @@ async function doAction(page, rng, hist) {
   if (links.length) kinds.push("link", "link") // weight navigation higher
   if (hist.pos > 0) kinds.push("back")
   if (hist.pos < hist.max) kinds.push("forward")
+  if (searchOpen) kinds.push("searchKey", "searchKey", "searchKey") // hammer when open
+  if (canOpenSearch) kinds.push("searchOpen")
   if (!kinds.length) kinds.push("link")
   const kind = pick(rng, kinds)
 
+  if (kind === "searchKey") {
+    const key = rng() < 0.75 ? "abcdefghijklmnopqrstuvwxyz"[Math.floor(rng() * 26)] : "Backspace"
+    await page
+      .locator("dialog input[type=text]")
+      .first()
+      .press(key, { timeout: 2000 })
+      .catch(() => {})
+    return { kind, key, typedIntoSearch: true }
+  }
+  if (kind === "searchOpen") {
+    await urlSearchBtn.first().click({ timeout: 2000 }).catch(() => {})
+    return { kind }
+  }
   if (kind === "link" && links.length) {
     const href = pick(rng, links)
     await page
@@ -214,13 +266,13 @@ async function runSeed(seed, browser) {
     // Overlap knob: sometimes DON'T settle — fire into an in-flight nav.
     if (rng() > OVERLAP) await rsc.settle().catch(() => {})
     else await page.waitForTimeout(Math.floor(rng() * 60))
-    let v = await checkInvariants(page).catch(() => null)
+    let v = await checkAll(page, action).catch(() => null)
     if (v) {
       // Distinguish a STUCK failure (the "only a refresh fixes it"
       // symptom) from a one-frame recovery blank: re-check after a beat.
       // A failure that self-heals within ~half a second is not the bug.
       await page.waitForTimeout(450)
-      v = await checkInvariants(page).catch(() => null)
+      v = await checkAll(page, action).catch(() => null)
       if (v) violation = { ...v, at: i, action }
     }
   }
