@@ -172,6 +172,19 @@ rule below ("latest state only, no progression"): a comment that only
 makes sense if you know what the code replaced is transient — move it
 to the commit.
 
+## No heuristics
+
+Solve a problem with the real signal, never a proxy that's merely
+*usually* right. A heuristic infers intent from a coincidence — matching
+a pathname to guess "same page", a timeout to guess "settled", a string
+match to guess "benign abort". It works until the coincidence breaks,
+and it bakes in the wrong mental model so the next reader reasons from a
+fiction. When the signal you need doesn't exist yet, **add it** — an
+explicit marker the producer writes, a milestone, a state flag — rather
+than guessing from what happens to be observable. Example: the live
+heartbeat learns a stream is safe to abort from a done-marker the stream
+itself writes, not by comparing URLs and hoping.
+
 ## Working in a worktree
 
 Prefer running a task in a fresh git worktree over editing the main
