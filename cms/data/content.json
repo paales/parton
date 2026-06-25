@@ -26,6 +26,19 @@
             ]
           },
           {
+            "id": "app-nav-link-docs",
+            "type": "nav-link",
+            "configs": [
+              {
+                "match": {},
+                "fields": {
+                  "href": "/docs",
+                  "label": "Docs"
+                }
+              }
+            ]
+          },
+          {
             "id": "app-nav-link-magento",
             "type": "nav-link",
             "configs": [

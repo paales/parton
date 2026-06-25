@@ -9,6 +9,7 @@ import {
 import type { ReactFormState } from "react-dom/client"
 import { Root } from "./app/root.tsx"
 import { NotFoundPage } from "./app/pages/not-found.tsx"
+import { serveDocAsset } from "./app/pages/docs-fs.ts"
 import { createRemoteHandler } from "@parton/framework"
 import { parseRenderRequest } from "@parton/framework/runtime/request.tsx"
 import {
@@ -46,6 +47,12 @@ const remoteHandler = createRemoteHandler({
 async function handler(request: Request): Promise<Response> {
   const remote = await remoteHandler(request)
   if (remote) return remote
+
+  // Image subresources under /docs/ (direct links + screenshots
+  // embedded in markdown) are served as raw bytes; HTML doc pages fall
+  // through to the normal RSC/SSR pipeline below.
+  const docAsset = await serveDocAsset(request)
+  if (docAsset) return docAsset
 
   const url = new URL(request.url)
 
