@@ -3118,37 +3118,46 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
     // cross-route nav never reuses the prior route's `_template`.
     const route = templateRouteKey()
     if (stats.pending > 0) {
-      // A Flight chunk hadn't arrived when we walked the children tree,
-      // so the cache walk is incomplete — a wrapper inside a pending lazy
-      // was missed. Deriving a fresh template and substituting from the
-      // incomplete cache would emit bare `<i hidden>` placeholders for
-      // those partials (the streaming-demo-schema-hydration regression).
-      // The choice turns on whether a template for THIS route exists:
+      // A Flight chunk hadn't arrived when we walked the children tree, so
+      // the cache walk is incomplete — a wrapper inside a pending lazy was
+      // missed. We still must substitute the fp-skipped CHROME (the nav,
+      // the header) from cache: returning it raw leaves bare `<i hidden>`
+      // placeholders, so the nav vanishes until the next full re-render
+      // (the heartbeat) restores it. The choice turns on which template to
+      // substitute through:
       //
       //   - Same-route template (steady-state streaming segment — e.g. the
       //     chat's `<ChunkSlot>` is suspended): render through the SAME
-      //     `_template` + cache path a cache-mode refetch takes. A page
-      //     with two live connections commits cache-mode (the chat
+      //     complete `_template` + cache path a cache-mode refetch takes. A
+      //     page with two live connections commits cache-mode (the chat
       //     overlay's frame long-poll) AND streaming-mode (the heartbeat)
       //     segments onto one root; if this branch returned a raw shape
       //     instead, every partial inside the page would remount on each
       //     seam (the nav, the grid — the inspect-overlay flicker).
-      //     Matching the cache path lets React reconcile in place. Nothing
-      //     blanks: the cache already holds each wrapper (the pending lazy
-      //     rides inside, resolved natively) and `substituteNested` pulls
-      //     current content from the cache, not the stale template.
+      //     Matching the cache path lets React reconcile in place, and the
+      //     complete prior template carries structure currently behind the
+      //     pending lazy that a fresh derive would miss.
+      //
+      //   - Cross-route nav whose new route still has a chunk in flight:
+      //     derive a FRESH template from the NEW children and substitute.
+      //     Reusing the prior route's `_template` would re-render the page
+      //     just navigated away from (the `/magento → /` stuck-page
+      //     regression); a fresh derive shows the new page. `deriveTemplate`
+      //     keeps pending lazies raw, so the new page's deferred content
+      //     resolves natively for the NEW route, while
+      //     `cacheFromStreamingChildren` above just cached every walkable
+      //     wrapper — so the fp-skipped chrome fills from cache instead of
+      //     blanking. `_template` is left untouched (this derive is
+      //     incomplete); the next fully-resolved render refreshes it.
       //
       //   - No template yet (`_template == null`, first render hydrating
-      //     against SSR HTML) OR a DIFFERENT route (`route !==
-      //     _templateRoute`, a cross-route nav whose new route still has a
-      //     chunk in flight): return raw `children`. Same tree shape as the
-      //     SSR branch keeps useId aligned, and React resolves the lazies
-      //     natively for the NEW route. Reusing a prior route's template
-      //     here would re-render the page just navigated away from — the
-      //     `/magento → /` "stuck on the old page" regression. `_template`
-      //     is left untouched; the next fully-resolved render refreshes it.
-      if (_template == null || route !== _templateRoute) return renderChildren([children])
-      return renderChildren(renderTemplate(_template, cache))
+      //     against SSR HTML): no cache to substitute from. Raw `children`
+      //     keep the tree shape aligned for `useId`.
+      if (_template != null && route === _templateRoute) {
+        return renderChildren(renderTemplate(_template, cache))
+      }
+      if (_template == null) return renderChildren([children])
+      return renderChildren(renderTemplate(deriveTemplate(children), cache))
     }
     const derived = deriveTemplate(children)
     _template = derived
