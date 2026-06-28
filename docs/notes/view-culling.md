@@ -65,11 +65,18 @@ So one scroll produces one coalesced request — `?partials=<entered ∪ left>`
 ## Cold start & the URL
 
 `?page=N` is the cold seed and the shareable URL. On the cold render
-`visible()` is `undefined`, so the app paints the `?page=` neighborhood full;
-a tiny client `<ScrollToPage>` lands the viewport there on mount. That's the
-one bit of app-side glue — translating the app's own `?page=` URL semantics
-into a scroll target. `?page=` is NOT rewritten as you scroll; the live
-position lives only in the ephemeral `?visible=` refetch param.
+`visible()` is `undefined`, so the app paints the `?page=` neighborhood full.
+A tiny client `<PageUrlSync>` ties the URL to the scroll two ways: on mount it
+lands a deep-link `?page=N` in view, and as you scroll it mirrors the centered
+page back to `?page=` (silent — no refetch — and `history: "replace"`). That's
+the one bit of app-side glue: the app's own `?page=` URL semantics.
+
+The silent mirror stays out of the culling's way via two framework hooks: a
+framework-silent nav is intercepted with `scroll: "manual"` (so the viewport
+doesn't jump to the top), and the host strips `page` from its stale-commit key
+(so a ticking anchor doesn't drop in-flight culling commits — the failure that
+sank the first attempt). The live cull still rides the ephemeral `?visible=`
+refetch param; `?page=` is just the bookmarkable shadow.
 
 ## Findings (the load-bearing part for a framework `<Scroller>`)
 
@@ -117,8 +124,8 @@ position lives only in the ephemeral `?visible=` refetch param.
 
 The framework already owns observation (`visible()` + the boundary's Fragment
 ref + the controller). The app owns: reading `visible()` to branch
-skeleton/full, the fixed-height section, the cold-anchor seed, and
-`<ScrollToPage>`. A `<Scroller>` would absorb the cold-anchor + scroll glue
-and the reservation bookkeeping. Findings 1–6 are its hard requirements.
-Extraction waits for a second call site (the AI-thread streaming case), per
-YAGNI.
+skeleton/full, the fixed-height section, the cold-anchor seed, and the
+`<PageUrlSync>` ↔ `?page=` glue. A `<Scroller>` would absorb the cold-anchor +
+URL-sync glue and the reservation bookkeeping. Findings 1–6 are its hard
+requirements. Extraction waits for a second call site (the AI-thread streaming
+case), per YAGNI.

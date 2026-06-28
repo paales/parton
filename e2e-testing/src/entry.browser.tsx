@@ -112,12 +112,15 @@ async function main() {
   // to the live `window.location`.
   function pageUrlKey(href: string = window.location.href): string {
     const u = new URL(href, window.location.origin)
-    // `visible` is an ephemeral per-refetch param — the read-tracked
-    // culling set, sent via reload({params}). Strip it so a refetch that
-    // carries it still keys to the same page — otherwise the stale-URL
-    // commit guard drops it. (It is NOT a FRAMEWORK_URL_PARAM, so the
-    // render still sees it: that's what visible() reads.)
-    for (const k of ["partials", "cached", "streaming", "live", "visible", "__frame", "__frameUrl"]) {
+    // Position params the page url carries but that must NOT key the
+    // stale-commit guard: `visible` (the read-tracked culling set, sent via
+    // reload({params})) and `page` (the scroll anchor, silently mirrored as
+    // you scroll). Both move while you stay on the same page; if they keyed
+    // the guard, an in-flight culling commit would be dropped as "stale"
+    // every time the anchor ticked. They are NOT FRAMEWORK_URL_PARAMS, so
+    // the render still sees them (visible() and the ?page= cold seed read
+    // them).
+    for (const k of ["partials", "cached", "streaming", "live", "visible", "page", "__frame", "__frameUrl"]) {
       u.searchParams.delete(k)
     }
     return u.pathname + u.search
@@ -502,8 +505,14 @@ function listenNavigation(
     // a live refetch (the search input typing into `selector: ".…"`,
     // a filter that updates a frame URL, etc.) loses focus on every
     // keystroke.
+    //
+    // `scroll: "manual"` opts out of the default post-commit scroll. A
+    // framework-silent nav is a URL-only sync (a bookmarkable `?page=` /
+    // `?q=` the caller updates without a refetch); the default
+    // `"after-transition"` would scroll a push/replace to the top, yanking
+    // the viewport out from under whatever the user is doing.
     if (isFrameworkSilentInfo(event.info)) {
-      event.intercept({ focusReset: "manual" })
+      event.intercept({ focusReset: "manual", scroll: "manual" })
       return
     }
 

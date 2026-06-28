@@ -21,7 +21,7 @@
 
 import { parton, visible, searchParam, type CellValue, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
-import { ScrollToPage } from "../../components/scroll-to-page.tsx"
+import { PageUrlSync } from "../../components/page-url-sync.tsx"
 import { magentoProductsCell } from "./products-cell.ts"
 
 type ProductsValue = NonNullable<CellValue<typeof magentoProductsCell>>
@@ -153,7 +153,7 @@ export const ProductBrowsePage = parton(
           </p>
         </header>
         <BrowseList totalPages={totalPages} />
-        <ScrollToPage />
+        <PageUrlSync />
       </>
     )
   },

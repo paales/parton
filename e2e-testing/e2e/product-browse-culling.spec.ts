@@ -107,7 +107,7 @@ test("deep-link ?page=50 lands on page 50 with its products", async ({ page }) =
   expect(await centeredPage(page)).toBeLessThanOrEqual(52)
 })
 
-test("the catalog is data-driven and the URL stays clean while scrolling", async ({ page }) => {
+test("data-driven catalog; ?page= mirrors scroll without resetting it", async ({ page }) => {
   await page.goto("/magento/browse")
   await page.waitForSelector('[data-testid="browse-list"]', { timeout: 20000 })
 
@@ -115,13 +115,21 @@ test("the catalog is data-driven and the URL stays clean while scrolling", async
   // every page gets a reserved section — culling, not windowing, so the
   // document height is constant and the whole catalog is reachable.
   const total = await totalPages(page)
-  const rendered = await page.locator("[data-page]").count()
   expect(total).toBeGreaterThan(40)
-  expect(rendered).toBe(total)
+  expect(await page.locator("[data-page]").count()).toBe(total)
 
-  // Scrolling drives culling via `?visible=` refetches — it does NOT write
-  // a `?page=` shadow to the page URL.
-  await wheelDown(page, 12)
-  await page.waitForTimeout(800)
-  expect(new URL(page.url()).searchParams.has("page")).toBe(false)
+  await wheelDown(page, 16)
+  const yScrolled = await page.evaluate(() => Math.round(window.scrollY))
+  expect(yScrolled, "actually scrolled down").toBeGreaterThan(3000)
+
+  // The centered page is mirrored into ?page= once the scroll settles —
+  // silent (no refetch), and it must NOT yank the viewport back to the top
+  // (the silent-navigate scroll-reset bug).
+  await expect
+    .poll(() => Number(new URL(page.url()).searchParams.get("page") || "0"), { timeout: 5000 })
+    .toBeGreaterThan(3)
+  const param = Number(new URL(page.url()).searchParams.get("page"))
+  expect(Math.abs(param - ((await centeredPage(page)) ?? 0))).toBeLessThanOrEqual(2)
+  const yAfter = await page.evaluate(() => Math.round(window.scrollY))
+  expect(Math.abs(yAfter - yScrolled), "silent ?page= write kept the viewport put").toBeLessThan(120)
 })
