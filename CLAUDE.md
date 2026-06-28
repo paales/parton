@@ -198,6 +198,30 @@ no refetch is `navigate(url, { history: "replace", silent: true })`, not
 `replaceState`. There is no case in this codebase where the History API
 is the right tool.
 
+## React 19.3 + canary — use the current patterns
+
+This repo runs React 19.3 canary. Reach for the modern primitive, not the
+older workaround:
+
+- **`useEffectEvent(fn)`** — a stable callback that always sees the latest
+  props/state; call it *from* effects/handlers. Use it instead of writing
+  `ref.current = latest` during render to smuggle a fresh value into a
+  mount-only effect.
+- **`useNavigation().currentEntry.url`** for the URL (isomorphic) — never
+  `window.location` or the History API (see above).
+- **`ref` is a plain prop** — no `forwardRef`.
+- **`<Context value=…>` is the provider** — no `<Context.Provider>`.
+- **`use(promise)` / `use(context)`** — conditional/unwrapping reads.
+- **`<Fragment ref>`** → a `FragmentInstance` (`observeUsing` /
+  `unobserveUsing`, `getClientRects`, …) to observe/measure children with
+  no wrapper element.
+- **`<Activity mode="hidden">`** to keep a subtree mounted but inert (state
+  kept, effects unmounted) — the React-native way to park off-screen UI.
+- **Document metadata** (`<title>` / `<meta>` / `<link>`) hoists from
+  anywhere — render it where it's owned.
+- **Forms/actions:** `<form action>`, `useActionState`, `useFormStatus`,
+  `useOptimistic`, and `startTransition` around async actions.
+
 ## Working in a worktree
 
 Prefer running a task in a fresh git worktree over editing the main

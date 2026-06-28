@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useEffectEvent } from "react"
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 
 /**
@@ -16,23 +16,41 @@ import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
  * One IntersectionObserver watches every `<section data-page>`; a
  * MutationObserver re-syncs its target set when the list re-commits. On
  * scroll it writes the anchor to the `browse_vis` cookie (the driver, off
- * the sharable url) and reloads `#browse-list` against it, so the ring
- * follows the viewport. The refetches are serialized so each committed
- * window sticks. No History API — see CLAUDE.md.
+ * the sharable url), reloads `#browse-list` against it so the ring follows
+ * the viewport, and reflects the anchor on `?page=` for a sharable shadow.
+ * Refetches are serialized so each committed window sticks. All URL work
+ * goes through the Navigation API — see CLAUDE.md.
  */
 export function BrowseScroller() {
-  const [reload] = useNavigation().reload()
-  const reloadRef = useRef(reload)
-  reloadRef.current = reload
+  const nav = useNavigation()
+  const [reload] = nav.reload()
+  const [navigate] = nav.navigate()
+
+  // Effect Events: stable callbacks that always see the latest bound
+  // `reload` / `navigate` / `currentEntry`, so the effect below can stay
+  // mount-only without writing to refs during render.
+  const reloadList = useEffectEvent(() => reload({ selector: "#browse-list" }))
+  const pageParam = useEffectEvent(() => {
+    const url = nav.currentEntry?.url
+    return url ? Number(new URL(url).searchParams.get("page") || "1") : 1
+  })
+  const writeAnchor = useEffectEvent((anchor: number) => {
+    const url = nav.currentEntry?.url
+    if (!url) return
+    const next = new URL(url)
+    if (next.searchParams.get("page") === String(anchor)) return
+    next.searchParams.set("page", String(anchor))
+    void navigate(next.pathname + next.search, { history: "replace", silent: true })
+  })
 
   useEffect(() => {
     const scope = document.querySelector('[data-testid="browse-scope"]')
     if (!scope) return
 
-    // Cold-start: a deep-linked `?page=N` rendered the window centered on
-    // N (past the top spacer). Scroll N into view before observing, so the
-    // camera reports N — not the top.
-    const initialAnchor = Number(new URL(window.location.href).searchParams.get("page") || "1")
+    // Cold-start: a deep-linked `?page=N` rendered the ring centered on N.
+    // Scroll N into view before observing, so the camera reports N — not
+    // the top.
+    const initialAnchor = pageParam()
     if (initialAnchor > 1) {
       scope.querySelector(`[data-page="${initialAnchor}"]`)?.scrollIntoView({ block: "start" })
     }
@@ -43,6 +61,16 @@ export function BrowseScroller() {
     let inFlight = false
     let dirty = false
     let raf = 0
+    let urlTimer: ReturnType<typeof setTimeout> | undefined
+
+    // Reflect the anchor on `?page=` only once the scroll truly settles —
+    // the silent navigate's commit disrupts an in-flight reload, so the
+    // debounce must outlast the reload cycle. The URL is a lazy shadow;
+    // during an active scroll the cookie+reload alone drive the ring.
+    const scheduleUrl = (anchor: number) => {
+      if (urlTimer) clearTimeout(urlTimer)
+      urlTimer = setTimeout(() => writeAnchor(anchor), 600)
+    }
 
     // Serialize the refetches: one in flight at a time, re-firing with the
     // latest anchor if it moved while a reload was outstanding. Rapid
@@ -64,8 +92,9 @@ export function BrowseScroller() {
           // url), then reload the list against it — the cookie rides the
           // request. (document.cookie is not the History API.)
           document.cookie = `browse_vis=${anchor};path=/;samesite=lax;max-age=3600`
-          await reloadRef.current({ selector: "#browse-list" }).finished.catch(ignoreAbort)
+          await reloadList().finished.catch(ignoreAbort)
           committedAnchor = anchor
+          scheduleUrl(anchor)
         } while (dirty)
       } finally {
         inFlight = false
@@ -134,6 +163,7 @@ export function BrowseScroller() {
 
     return () => {
       if (raf) cancelAnimationFrame(raf)
+      if (urlTimer) clearTimeout(urlTimer)
       mo.disconnect()
       io.disconnect()
     }

@@ -83,15 +83,36 @@ test("deep-link ?page=50 cold-starts centered on page 50 with products", async (
   expect(centered).toBeLessThanOrEqual(52)
 })
 
-test("the page count is data-driven, not a fixed pool", async ({ page }) => {
+test("?page= updates to a sharable anchor once scrolling settles", async ({ page }) => {
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+
+  // Mid-scroll the url stays clean (the cookie drives the ring); the
+  // `?page=` shadow lands only after the scroll settles.
+  await wheelDown(page, 14)
+  await page.waitForTimeout(1000)
+
+  const pageParam = Number(new URL(page.url()).searchParams.get("page") || "0")
+  const centered = await centeredPage(page)
+  expect(pageParam).toBeGreaterThan(3)
+  // ...and it points roughly where the viewport is.
+  expect(Math.abs(pageParam - (centered ?? 0))).toBeLessThanOrEqual(3)
+})
+
+test("renders only a window — count is data-driven, the rest is spacers", async ({ page }) => {
   await page.goto("/magento/browse")
   await page.waitForSelector('[data-testid="browse-list"]', { timeout: 20000 })
 
-  const totalPages = await page
-    .locator('[data-testid="browse-list"]')
-    .getAttribute("data-total-pages")
-  // The Magento catalog is well over any small hardcoded pool — proves the
-  // count came from total_count, and every page has a real section.
-  expect(Number(totalPages)).toBeGreaterThan(40)
-  expect(await page.locator("[data-page]").count()).toBe(Number(totalPages))
+  const totalPages = Number(
+    await page.locator('[data-testid="browse-list"]').getAttribute("data-total-pages"),
+  )
+  const rendered = await page.locator("[data-page]").count()
+
+  // The total is well over any small hardcoded pool — it came from
+  // total_count. But only a small WINDOW of pages is actually rendered;
+  // the rest of the catalog's height is held by the bottom spacer.
+  expect(totalPages).toBeGreaterThan(40)
+  expect(rendered).toBeLessThan(20)
+  expect(rendered).toBeLessThan(totalPages)
+  await expect(page.locator('[data-testid="browse-spacer-bottom"]')).toBeAttached()
 })

@@ -133,9 +133,9 @@ Open questions if/when we build this:
 > **Built** (app-side) — see [`view-culling.md`](./view-culling.md) and
 > `/magento/browse`. The shape that worked is *not* a per-item
 > `deactivate()` on `useActivate`; it's a client camera that writes the
-> anchor page to a cookie and reloads a list partial, which renders the
-> whole catalog as fixed-height sections (`content-visibility` culls the
-> off-screen paint) and fetches only the ring around the anchor — no new
+> anchor page to a cookie and reloads a list partial, which renders a
+> WINDOW of fixed-height sections around the anchor (the rest of the
+> catalog's height held by two spacers) and fetches only the ring — no new
 > primitive. The notes below are the original sketch; the build's findings
 > supersede the `deactivate()` framing.
 

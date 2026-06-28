@@ -2,14 +2,16 @@
  * /magento/browse — view-culled product scroller over a data-driven,
  * unbounded page count.
  *
- * `BrowseList` renders one fixed-height section per page of the whole
- * catalog (the count comes from `total_count`, not a hardcoded pool), so
- * the document height is stable — scrolling never jumps. Off-screen pages
- * are culled from PAINT by `content-visibility`, and only the RING of
- * pages around the anchor fetch products; the rest are skeletons. The
- * anchor rides the `browse_vis` cookie (off the sharable url, written by
- * `<BrowseScroller>`); on scroll the list reloads against it and the ring
- * follows the viewport.
+ * `BrowseList` renders only a WINDOW of fixed-height sections around the
+ * anchor; everything above and below collapses into two spacers sized
+ * from `total_count` (data-driven, not a hardcoded pool), so the document
+ * height stays `totalPages × PAGE_H` — stable scroll, no jumps — while the
+ * payload is just the window, not the whole catalog. Only the RING of
+ * pages nearest the anchor fetch products; the rest of the window is a
+ * skeleton runway so the observer sees the edge coming. The anchor rides
+ * the `browse_vis` cookie (off the sharable url, written by
+ * `<BrowseScroller>`); on scroll the list reloads against it and the
+ * window follows the viewport.
  *
  * Two deliberate shapes here, both load-bearing:
  *  - `total_count` is fetched by the ROUTE (rendered once) and passed to
@@ -31,6 +33,11 @@ type ProductItem = NonNullable<NonNullable<NonNullable<ProductsValue["products"]
 const PAGE_SIZE = 12
 /** Pages within ±RING_OVER of the anchor fetch + render products. */
 const RING_OVER = 2
+/** The window actually rendered is ±WINDOW_OVER of the anchor: the ring,
+ *  plus a skeleton runway so the observer can see the edge coming. Pages
+ *  outside the window are not rendered at all — they're collapsed into the
+ *  two spacers above and below, sized from the page count. */
+const WINDOW_OVER = 6
 /** Fixed pixel height of every page — keeps the document stable. */
 const PAGE_H = 760
 
@@ -48,25 +55,22 @@ function GridSkeleton() {
 
 function BrowseProductCard({ product }: { product: ProductItem }) {
   const { name, sku, id } = product
-  const imageUrl = product.small_image?.url
-  const imageLabel = product.small_image?.label
-  const rawPrice = product.price_range.minimum_price.regular_price.value
-  const currency = product.price_range.minimum_price.regular_price.currency ?? "USD"
-  const price = typeof rawPrice === "number" ? rawPrice : 0
+
   return (
     <Card className="h-full overflow-hidden p-4" data-testid={`browse-card-${sku ?? id}`}>
       <CardContent className="flex h-full flex-col gap-1 px-0">
-        {imageUrl && (
+        {product.small_image?.url && (
           <img
-            src={imageUrl}
-            alt={imageLabel || name || ""}
+            src={product.small_image.url}
+            alt={product.small_image?.label || name || ""}
             loading="lazy"
             className="h-24 w-24 object-contain"
           />
         )}
         <h3 className="mt-1 line-clamp-2 text-sm">{name}</h3>
         <span className="mt-auto font-semibold tabular-nums">
-          {currency} {price.toFixed(2)}
+          {product.price_range.minimum_price.regular_price.currency}{" "}
+          {(product.price_range.minimum_price.regular_price.value || 0).toFixed(2)}
         </span>
       </CardContent>
     </Card>
@@ -99,22 +103,23 @@ const BrowseList = parton(
     totalPages,
     anchor,
   }: { totalPages: number; anchor: number } & RenderArgs) {
+    // Render only the window around the anchor; collapse everything above
+    // and below into two spacers, sized from the page count, so the
+    // document height stays `totalPages × PAGE_H` (stable scroll) while the
+    // payload is just the window — not the whole catalog.
+    const lo = Math.max(1, anchor - WINDOW_OVER)
+    const hi = Math.min(totalPages, anchor + WINDOW_OVER)
     const pages: number[] = []
-    for (let p = 1; p <= totalPages; p++) pages.push(p)
+    for (let p = lo; p <= hi; p++) pages.push(p)
     return (
       <div data-testid="browse-list" data-anchor={anchor} data-total-pages={totalPages}>
+        <div aria-hidden data-testid="browse-spacer-top" style={{ height: (lo - 1) * PAGE_H }} />
         {pages.map((p) => (
           <section
             key={p}
             data-testid={`browse-page-${p}`}
             data-page={p}
-            // Fixed height keeps the document stable; content-visibility
-            // culls the PAINT of off-screen pages (browser-native).
-            style={{
-              height: PAGE_H,
-              contentVisibility: "auto",
-              containIntrinsicSize: `auto ${PAGE_H}px`,
-            }}
+            style={{ height: PAGE_H }}
             className="flex flex-col overflow-hidden"
           >
             <h2 className="h-6 text-xs font-medium text-muted-foreground">Page {p}</h2>
@@ -128,6 +133,11 @@ const BrowseList = parton(
             )}
           </section>
         ))}
+        <div
+          aria-hidden
+          data-testid="browse-spacer-bottom"
+          style={{ height: Math.max(0, totalPages - hi) * PAGE_H }}
+        />
       </div>
     )
   },
