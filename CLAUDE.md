@@ -185,6 +185,19 @@ than guessing from what happens to be observable. Example: the live
 heartbeat learns a stream is safe to abort from a done-marker the stream
 itself writes, not by comparing URLs and hoping.
 
+## Navigation — the Navigation API only
+
+All client-side URL work goes through the framework's Navigation API
+surface — `useNavigation()` (`navigate` / `reload` / `preload`) and the
+ambient browser Navigation API it wraps. **Never touch the legacy
+History API** (`history.pushState`, `history.replaceState`,
+`window.onpopstate`, `location.assign`): it bypasses the framework's
+entry state, scroll restoration, and intercept()-based interception, and
+silently desyncs `useNavigation().currentEntry`. A bare URL update with
+no refetch is `navigate(url, { history: "replace", silent: true })`, not
+`replaceState`. There is no case in this codebase where the History API
+is the right tool.
+
 ## Working in a worktree
 
 Prefer running a task in a fresh git worktree over editing the main

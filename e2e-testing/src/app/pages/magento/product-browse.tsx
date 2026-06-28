@@ -1,31 +1,26 @@
 /**
- * /magento/browse — view-culled, bidirectional product scroller.
+ * /magento/browse — view-culled product scroller over a data-driven,
+ * unbounded page count.
  *
- * The page is split into fixed page-partons (`#browse-page-N`), each
- * bound to one `currentPage` slice of `magentoProductsCell`. A page
- * renders in one of three zones, decided by `vary` reading `visible`
- * off the FRAME url (the client `<BrowseScroller>` reports it there):
+ * `BrowseList` renders one fixed-height section per page of the whole
+ * catalog (the count comes from `total_count`, not a hardcoded pool), so
+ * the document height is stable — scrolling never jumps. Off-screen pages
+ * are culled from PAINT by `content-visibility`, and only the RING of
+ * pages around the anchor fetch products; the rest are skeletons. The
+ * anchor rides the `browse_vis` cookie (off the sharable url, written by
+ * `<BrowseScroller>`); on scroll the list reloads against it and the ring
+ * follows the viewport.
  *
- *   ring     — near the viewport: binds the cell, renders products.
- *   reserved — the runway just outside the ring: a fixed-height
- *              skeleton that reserves space (so the observer can see
- *              the page coming) WITHOUT fetching.
- *   absent   — beyond the reserved band: `vary` → null, so the page
- *              leaves the live tree (keepalive parks it warm in the
- *              client cache for a cheap scroll-back).
- *
- * The visible set is the driver; `?page=` on the page url is its
- * sharable shadow (an effect the scroller writes via replaceState, and
- * the cold-start seed for the frame). See `<BrowseScroller>`.
+ * Two deliberate shapes here, both load-bearing:
+ *  - `total_count` is fetched by the ROUTE (rendered once) and passed to
+ *    BrowseList as a `totalPages` PROP. It must NOT be BrowseList's
+ *    `schema` cell: a cached schema cell makes the framework treat the
+ *    partial as unchanged, so its reloads stop committing.
+ *  - the ring's products are a parton keyed by page, so pages that stay
+ *    in-ring across a scroll fp-skip while new ones stream in.
  */
 
-import {
-  parton,
-  type CellValue,
-  type RenderArgs,
-  type ResolvedCell,
-} from "@parton/framework"
-import { Frame } from "@parton/framework/lib/frame.tsx"
+import { parton, type CellValue, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
 import { BrowseScroller } from "../../components/browse-scroller.tsx"
 import { magentoProductsCell } from "./products-cell.ts"
@@ -34,91 +29,20 @@ type ProductsValue = NonNullable<CellValue<typeof magentoProductsCell>>
 type ProductItem = NonNullable<NonNullable<NonNullable<ProductsValue["products"]>["items"]>[number]>
 
 const PAGE_SIZE = 12
-/** Pages within ±RING_OVER of the visible span fetch + render products. */
-const RING_OVER = 1
-/** Pages within ±RESERVE_OVER reserve space as skeletons (the runway). */
-const RESERVE_OVER = 3
-/** Fixed pool — capped well above any realistic Magento page count. */
-const MAX_PAGES = 30
+/** Pages within ±RING_OVER of the anchor fetch + render products. */
+const RING_OVER = 2
+/** Fixed pixel height of every page — keeps the document stable. */
+const PAGE_H = 760
 
-type Zone = "ring" | "reserved"
+const GRID = "grid flex-1 grid-cols-4 grid-rows-3 gap-3 min-h-0"
 
-function parseVisible(raw: string | undefined): number[] {
-  if (!raw) return []
-  return raw
-    .split(",")
-    .map((s) => Number(s))
-    .filter((n) => Number.isFinite(n) && n >= 1)
-}
-
-/** The ring/reserve bands derived from the reported visible span. The
- *  client reports the set; the server derives the bands here — the
- *  policy lives server-side. */
-function bands(visibleRaw: string | undefined) {
-  const vis = parseVisible(visibleRaw)
-  if (vis.length === 0) return null
-  const lo = Math.min(...vis)
-  const hi = Math.max(...vis)
-  return {
-    ringLo: lo - RING_OVER,
-    ringHi: hi + RING_OVER,
-    reserveLo: lo - RESERVE_OVER,
-    reserveHi: hi + RESERVE_OVER,
-  }
-}
-
-function makeBrowsePage(page: number) {
-  return parton(
-    function BrowsePageRender({
-      zone,
-      products,
-    }: {
-      zone: Zone
-      products?: ResolvedCell<CellValue<typeof magentoProductsCell>>
-    } & RenderArgs) {
-      if (zone === "reserved" || !products) {
-        return <BrowsePageSection page={page} skeleton />
-      }
-      const items = (products.value?.products?.items ?? []).filter(
-        (it): it is ProductItem => it != null,
-      )
-      if (items.length === 0) return null
-      return <BrowsePageSection page={page} items={items} />
-    },
-    {
-      selector: `#browse-page-${page}`,
-      // Cull cleanly: an out-of-band page leaves the tree rather than
-      // parking a hidden variant sibling.
-      keepalive: false,
-      // `visible` rides the FRAME url, so inside <Frame name="browse">
-      // this `search` is the frame's — never the sharable page url.
-      vary: ({ search: { visible } }) => {
-        const b = bands(visible)
-        if (!b || page < b.reserveLo || page > b.reserveHi) return null
-        const inRing = page >= b.ringLo && page <= b.ringHi
-        return { zone: inRing ? ("ring" as const) : ("reserved" as const) }
-      },
-      // Bind the cell only in the ring — a reserved/absent page never
-      // fetches. This is where the payload actually shrinks.
-      schema: (_f, vary) =>
-        (vary as { zone: Zone }).zone === "ring"
-          ? { products: magentoProductsCell.with({ pageSize: PAGE_SIZE, currentPage: page }) }
-          : {},
-      // While a ring page's cell loads, hold its reserved space.
-      fallback: <BrowsePageSection page={page} skeleton />,
-    },
-  )
-}
-
-const BrowsePagePartials = Array.from({ length: MAX_PAGES }, (_, i) => makeBrowsePage(i + 1))
-
-function BrowseSkeletonCard() {
+function GridSkeleton() {
   return (
-    <div
-      data-testid="browse-skeleton"
-      className="h-[260px] animate-pulse rounded-xl bg-muted/40"
-      aria-hidden
-    />
+    <div className={GRID} aria-hidden>
+      {Array.from({ length: PAGE_SIZE }, (_, i) => (
+        <div key={i} className="h-full animate-pulse rounded-xl bg-muted/40" />
+      ))}
+    </div>
   )
 }
 
@@ -130,21 +54,18 @@ function BrowseProductCard({ product }: { product: ProductItem }) {
   const currency = product.price_range.minimum_price.regular_price.currency ?? "USD"
   const price = typeof rawPrice === "number" ? rawPrice : 0
   return (
-    <Card className="p-5" data-testid={`browse-card-${sku ?? id}`}>
-      <CardContent className="flex flex-col gap-2 px-0">
+    <Card className="h-full overflow-hidden p-4" data-testid={`browse-card-${sku ?? id}`}>
+      <CardContent className="flex h-full flex-col gap-1 px-0">
         {imageUrl && (
           <img
             src={imageUrl}
             alt={imageLabel || name || ""}
             loading="lazy"
-            className="h-30 w-30 object-contain"
+            className="h-24 w-24 object-contain"
           />
         )}
-        <h3 className="mt-2 text-base">{name}</h3>
-        <code className="w-fit rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono text-muted-foreground">
-          {sku}
-        </code>
-        <span className="font-semibold tabular-nums">
+        <h3 className="mt-1 line-clamp-2 text-sm">{name}</h3>
+        <span className="mt-auto font-semibold tabular-nums">
           {currency} {price.toFixed(2)}
         </span>
       </CardContent>
@@ -152,57 +73,106 @@ function BrowseProductCard({ product }: { product: ProductItem }) {
   )
 }
 
-function BrowsePageSection({
-  page,
-  items,
-  skeleton,
-}: {
-  page: number
-  items?: ProductItem[]
-  skeleton?: boolean
-}) {
-  return (
-    <section
-      data-testid={`browse-page-${page}`}
-      data-page={page}
-      data-zone={skeleton ? "reserved" : "ring"}
-      className="mb-6"
-    >
-      <h2 className="mb-2 text-xs font-medium text-muted-foreground">Page {page}</h2>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
-        {skeleton
-          ? Array.from({ length: PAGE_SIZE }, (_, i) => <BrowseSkeletonCard key={i} />)
-          : (items ?? []).map((p) => <BrowseProductCard key={p.sku ?? p.id} product={p} />)}
+// One ring page's products — a parton keyed by page (distinct props ⇒
+// distinct id), so in-ring pages fp-skip across a scroll. `data-page`
+// lives on the SECTION shell (BrowseList), not here.
+const BrowsePageProducts = parton(
+  function BrowsePageProductsRender({
+    products,
+  }: { page: number; products: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
+    const items = (products.value?.products?.items ?? []).filter(
+      (it): it is ProductItem => it != null,
+    )
+    return (
+      <div className={GRID}>
+        {items.map((p) => (
+          <BrowseProductCard key={p.sku ?? p.id} product={p} />
+        ))}
       </div>
-    </section>
-  )
-}
+    )
+  },
+  { fallback: <GridSkeleton /> },
+)
+
+const BrowseList = parton(
+  function BrowseListRender({
+    totalPages,
+    anchor,
+  }: { totalPages: number; anchor: number } & RenderArgs) {
+    const pages: number[] = []
+    for (let p = 1; p <= totalPages; p++) pages.push(p)
+    return (
+      <div data-testid="browse-list" data-anchor={anchor} data-total-pages={totalPages}>
+        {pages.map((p) => (
+          <section
+            key={p}
+            data-testid={`browse-page-${p}`}
+            data-page={p}
+            // Fixed height keeps the document stable; content-visibility
+            // culls the PAINT of off-screen pages (browser-native).
+            style={{
+              height: PAGE_H,
+              contentVisibility: "auto",
+              containIntrinsicSize: `auto ${PAGE_H}px`,
+            }}
+            className="flex flex-col overflow-hidden"
+          >
+            <h2 className="h-6 text-xs font-medium text-muted-foreground">Page {p}</h2>
+            {Math.abs(p - anchor) <= RING_OVER ? (
+              <BrowsePageProducts
+                page={p}
+                products={magentoProductsCell.with({ pageSize: PAGE_SIZE, currentPage: p })}
+              />
+            ) : (
+              <GridSkeleton />
+            )}
+          </section>
+        ))}
+      </div>
+    )
+  },
+  {
+    selector: "#browse-list",
+    // Anchor rides the `browse_vis` cookie (off the sharable url);
+    // cold-start falls back to the `?page=` anchor on the page url.
+    vary: ({ cookies, search }) => {
+      const c = Number(cookies.browse_vis)
+      const anchor = Number.isFinite(c) && c >= 1 ? c : Math.max(1, Number(search.page) || 1)
+      return { anchor }
+    },
+  },
+)
 
 export const ProductBrowsePage = parton(
-  function ProductBrowseRender({ anchor }: { anchor: number } & RenderArgs) {
+  function ProductBrowseRender({
+    meta,
+  }: { meta: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
+    const total = meta.value?.products?.total_count ?? 0
+    const totalPages = total > 0 ? Math.ceil(total / PAGE_SIZE) : 1
     return (
       <>
         <title>Browse Products</title>
         <header className="mb-4">
           <h1 className="text-2xl font-semibold">Browse Products</h1>
           <p className="text-muted-foreground">
-            View-culled infinite scroll — pages cull both ways; <code>?page=</code> tracks where
-            you are.
+            View-culled scroll over the whole catalog ({totalPages} pages) — only the pages near the
+            viewport fetch; the rest are reserved space. <code>?page=</code> tracks where you are.
           </p>
         </header>
-        {/* Cold-start: seed the frame's `visible` from the page anchor. */}
-        <Frame name="browse" initialUrl={`/magento/browse?visible=${anchor}`}>
-          <BrowseScroller>
-            {BrowsePagePartials.map((P, i) => (
-              <P key={`browse-page-${i + 1}`} />
-            ))}
-          </BrowseScroller>
-        </Frame>
+        {/* The scope is a stable element the route owns; BrowseList is a
+            direct refetchable child of it, and the scroller observes it
+            from beside (not around) the list. */}
+        <div data-testid="browse-scope">
+          <BrowseList totalPages={totalPages} />
+        </div>
+        <BrowseScroller />
       </>
     )
   },
   {
     match: "/magento/browse",
-    vary: ({ search: { page } }) => ({ anchor: Math.max(1, Number(page) || 1) }),
+    // `total_count` is fetched HERE (the route renders once) and passed to
+    // BrowseList as a prop — never BrowseList's schema (see header note).
+    schema: () => ({ meta: magentoProductsCell.with({ pageSize: PAGE_SIZE, currentPage: 1 }) }),
   },
 )

@@ -1,115 +1,91 @@
-# View culling — a bidirectional, addressable scroller
+# View culling — a stable, data-driven product scroller
 
-**Status:** prototyped, app-side, at `/magento/browse`
+**Status:** working, app-side, at `/magento/browse`
 (`e2e-testing/src/app/pages/magento/product-browse.tsx` +
-`components/browse-scroller.tsx`). This note captures the design and
-the framework-level findings the prototype surfaced, as the substrate
-for a future framework `<Scroller>` primitive.
+`components/browse-scroller.tsx`, specs in
+`e2e/product-browse-scroller.spec.ts`). This note is the design and the
+framework-level findings the build surfaced — the substrate for a future
+framework `<Scroller>`.
 
-This is the shipped form of the "Activate ⇄ deactivate symmetry"
-backlog item in [`IDEAS.md`](./IDEAS.md): a list that culls in **both**
-directions, not the old grow-only `?end=` model.
+This is the shipped form of the "Activate ⇄ deactivate symmetry" backlog
+item in [`IDEAS.md`](./IDEAS.md).
 
-## The model — a camera over an ordered set of page-partons
+## The model — all pages, fixed height, only the ring fetches
 
-Infinite scroll, pagination, and virtualization are one thing: a
-windowed camera over an ordered collection. The collection is a fixed
-pool of **page-partons** (`#browse-page-N`), each bound to one
-`currentPage` slice of a cell. The camera has two axes — *where*
-(scroll position → which partons) and, eventually, *how close*
-(zoom/viewport → which fidelity); the prototype implements *where*.
+`BrowseList` renders **one fixed-height section per page of the whole
+catalog** — the count comes from `total_count`, not a hardcoded pool, so
+it's data-driven and unbounded. Because every page is the same `PAGE_H`
+and they're all present, the document height is constant: **scrolling
+never jumps.** Off-screen pages are culled from PAINT by
+`content-visibility: auto` (browser-native), so keeping them all in the
+DOM stays cheap.
 
-Each page renders in one of three **zones**, decided server-side from
-the reported visible span (`vis`), `lo = min(vis)`, `hi = max(vis)`:
+Only the **ring** — the pages within ±`RING_OVER` of the anchor — fetches
+products (one cell each, a parton keyed by page so in-ring pages fp-skip
+across a scroll). Every other page is a skeleton. As the anchor moves, the
+ring slides and the products follow the viewport.
 
-| Zone | Range | Renders | Fetches |
-|---|---|---|---|
-| **ring** | `[lo-1, hi+1]` | products | yes (binds the cell) |
-| **reserved** | `[lo-3, hi+3]` minus ring | a fixed-height skeleton (the runway) | no |
-| **absent** | beyond | nothing (`vary → null`) | no |
+This is render/fetch culling, not DOM eviction. True windowing — keeping
+only ~N sections live with spacers for the rest — would shrink the DOM for
+enormous catalogs, but it needs the framework to substitute a
+*structurally changing* partial on refetch, which it can't today (see
+findings). For moderate catalogs, all-pages + `content-visibility` is the
+working trade.
 
-The reserved band is the game-engine "load distance > render distance":
-skeletons give the observer a runway to see a page coming before it's
-fetched, and reserve closed-form space (the grid is uniform, so a
-culled page reserves exact rows with no measurement). As the camera
-moves, pages slide reserved→ring→reserved→absent; the document grows
-and shrinks with the runway. The scrollbar is approximate and
-self-corrects as real pages stream in — and that's fine.
+## The protocol — anchor on a cookie, reload the list
 
-Culling is parton-native: `vary → null` drops an out-of-band page; the
-ring boundary is just `vary` reading `visible` and returning a zone.
-Fetch-skip falls out of `schema` only binding the cell in the ring.
+- **Anchor → `browse_vis` cookie.** The driver. `<BrowseScroller>` writes
+  the most-prominent visible page to the cookie (via `document.cookie` —
+  not the History API) and reloads `#browse-list`, which reads the cookie
+  in `vary`. The cookie keeps the anchor **off the sharable url**.
+- **`?page=` → cold-start only.** A deep-linked `?page=N` is read by
+  BrowseList's `vary` as the cold fallback (no cookie yet), and the
+  scroller scrolls page N into view on mount. (`?page=` is NOT rewritten
+  as you scroll — a silent navigate re-commits and resets the
+  cookie-driven list; live url-position is a known gap.)
 
-## The protocol — driver vs effect, each in its own scope
-
-A render is a pure function of the request, so whatever drives the
-render must be in the request. Two distinct things, two scopes:
-
-- **Visible set → the FRAME url** (`useNavigation("browse")`). The
-  driver. The client reports the intersecting page ids (ordered by
-  prominence; first = anchor) as `?visible=`; a frame refetch
-  re-renders the band, fp-skipping pages whose zone didn't change.
-  Because it rides the frame url (`?__frameUrl=`), it is **never on the
-  sharable page url** — exactly the scope `<Frame>` already provides.
-- **Anchor → the PAGE url** (`?page=N`). The effect. A sharable
-  bookmark shadow the client writes via `replaceState` as the camera
-  moves. It drives only once — at cold-start — and is a passive
-  reflection thereafter.
-
-**Cold-start.** The wrapper (outside the frame) reads `?page=N` and
-seeds the frame `initialUrl` to `?visible=N`, so the deep-linked band
-renders on first paint with no client round-trip. The client then
-**scrolls page N into view** before observing (see finding 4).
-(Caveat: `initialUrl` is a cold-session default, so a *returning* user
-whose `browse` frame session still holds an old `visible=` sees that
-position instead of `?page=N` — the documented "frame url shared per
-session" edge. Honouring the anchor over stale frame state would need
-the wrapper to reset the frame on a fresh document load.)
+`<BrowseScroller>` renders nothing and sits *beside* the list: it observes
+the `[data-page]` sections through a stable `browse-scope` element via one
+IntersectionObserver (+ a MutationObserver to re-sync after a commit), and
+serializes its reloads.
 
 ## Findings (the load-bearing part for a framework `<Scroller>`)
 
-The prototype is small; getting it to work surfaced four framework
-interactions that any extracted primitive must respect:
+The model is simple; getting it to commit reliably surfaced these:
 
-1. **`observeUsing` can't watch framework partials.** The natural
-   "FragmentRef over the children + one IntersectionObserver"
-   (`<WhenVisible>`'s mechanism) observes *zero* nodes here: the
-   framework substitutes partials outside the fragment's React-child
-   range, so `observeUsing`'s fiber traversal finds no host nodes. The
-   working form is a plain block container (layout-neutral for stacked
-   sections) scoping a DOM query, with a **MutationObserver** keeping
-   the IntersectionObserver's target set in sync as pages mount/unmount.
+1. **A `schema` cell on the refetched partial silently breaks its
+   reloads.** With `total_count` bound as BrowseList's `schema` cell, every
+   reload *resolved* and the server *re-rendered* — but the client never
+   committed the new content (a false fp-skip; the cached cell made the
+   partial look unchanged). The fix: fetch derived data (`total_count`) in
+   a parent that renders **once** (the route) and pass it down as a
+   **prop**. The refetched partial keeps a cookie-only `vary`.
 
-2. **`keepalive: false` on the page-partons.** With the default
-   (`keepalive: true`), an out-of-band page emits a *parked* variant —
-   kept in the tree but `display: none`. Driving that from a scroll
-   meant the whole frame collapsed to hidden parked siblings (document
-   height → viewport height). `keepalive: false` culls cleanly: the
-   page leaves the tree. (Trade-off: scroll-back refetches instead of
-   restoring warm — acceptable; warm-cache cull-back is future work.)
+2. **Rapid same-selector reloads supersede each other.** Fire-and-forget
+   reloads on every scroll tick abort each other (deferred-abort), and the
+   slow product fetch means none lands. **Serialize**: one reload in
+   flight, re-firing with the latest anchor when it changes.
 
-3. **The anchor must be a raw `replaceState`, not a framework
-   navigate.** Even a `silent` window `navigate` re-commits the page,
-   which parks the frame's content and collapses the layout. The
-   `?page=` anchor is cosmetic (read only server-side on cold load), so
-   a bare `window.history.replaceState` is correct — it updates the url
-   with no re-commit.
+3. **A `silent` navigate re-commits and resets a cookie-driven partial.**
+   That's why `?page=` isn't written during scroll — it knocked the ring
+   back to its cold state. Deep-link via a *pasted* `?page=` still works
+   (cold-start path).
 
-4. **Cold-start must scroll to the anchor.** A deep-linked `?page=5`
-   renders the band centered on 5, but the viewport is at the top
-   (showing page 2). Without an explicit scroll, the camera reports
-   "I see page 2," the ring shifts up, and page 5 is demoted ring→
-   reserved (a brief duplicate). Scrolling N into view on mount, before
-   the observer starts, makes the deep-link stick.
+4. **`observeUsing` can't watch framework partials.** A React 19.2 Fragment
+   ref would be the no-wrapper way, but the framework substitutes partials
+   outside the fragment's React-child range, so it observes zero nodes. The
+   scroller queries the DOM under a stable scope element and keeps the
+   observer synced with a MutationObserver.
+
+5. **Stability is fixed height + a constant page count**, not spacers — and
+   `content-visibility: auto` keeps the off-screen pages from costing paint.
 
 ## Toward a framework `<Scroller>`
 
-The app currently owns: the page-pool + zones (`vary`/`schema`), the
-reservation skeleton, the anchor projection (`?page=` ↔ page number),
-and the `BrowseScroller` reporter. A framework `<Scroller name layout>`
-would absorb the cross-cutting half — the container+MO+IO reporter, the
-`visible`→frame-url / anchor→page-url wiring, and the cold-start
-seed+scroll — leaving the app to supply only the ordered partons, the
-zone policy, the reservation, and the anchor projection. The four
-findings above are its hard requirements. Extraction waits for a second
-call site (the AI-thread / streaming case), per YAGNI.
+The app owns: the all-pages list with a cookie `vary`, the fixed-height
+sections, the ring policy, and the `BrowseScroller` reporter. A framework
+`<Scroller name>` would absorb the reporter (observe + cookie + serialized
+reload + cold-start scroll) and could, with framework support for
+refetch-substituting a structurally changing partial, do true windowing
+with spacers. Findings 1–4 are its hard requirements. Extraction waits for
+a second call site (the AI-thread streaming case), per YAGNI.
