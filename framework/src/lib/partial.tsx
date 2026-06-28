@@ -1218,6 +1218,17 @@ export function deriveMatchKey(
   return ROOT_MATCH_KEY
 }
 
+/** A parton is cullable when it recorded a `visible:` tracked read — its
+ *  fp folds its viewport state (server-hooks `visible()`), so the client
+ *  wraps it in a viewport observer and self-refetches it as it enters or
+ *  leaves view. Derived from the parton's own deps (or the prior snapshot's
+ *  on a skip/defer, where Render didn't run this pass). */
+function hasVisibleDep(deps: ReadonlySet<string> | undefined): boolean {
+  if (!deps) return false
+  for (const d of deps) if (d.startsWith("visible:")) return true
+  return false
+}
+
 function placeholderFor(id: string, matchKey: string): ReactElement {
   return (
     <i
@@ -1890,7 +1901,13 @@ function createSpecComponent<V>(
             ? cloneElement(defer as ReactElement<ActivatorProps>, { partialId: id }, fallback)
             : fallback
       let deferBody: ReactNode = (
-        <PartialErrorBoundary key={id} partialId={id} {...fpProp} partialMatchKey={matchKey}>
+        <PartialErrorBoundary
+          key={id}
+          partialId={id}
+          {...fpProp}
+          partialMatchKey={matchKey}
+          cullable={hasVisibleDep(priorSnap?.deps)}
+        >
           {dormant}
         </PartialErrorBoundary>
       )
@@ -1921,6 +1938,9 @@ function createSpecComponent<V>(
     }
 
     let body: ReactNode = spec.Render(renderProps)
+    // Cullable if the render read `visible()` — the client observes its
+    // viewport intersection and self-refetches it on enter/leave.
+    const cullable = hasVisibleDep(selfDeps)
 
     if (opts.cache !== undefined) {
       body = (
@@ -1938,12 +1958,22 @@ function createSpecComponent<V>(
         <Suspense
           key={id}
           fallback={
-            <PartialErrorBoundary partialId={id} {...fpProp} partialMatchKey={matchKey}>
+            <PartialErrorBoundary
+              partialId={id}
+              {...fpProp}
+              partialMatchKey={matchKey}
+              cullable={cullable}
+            >
               {fallback}
             </PartialErrorBoundary>
           }
         >
-          <PartialErrorBoundary partialId={id} {...fpProp} partialMatchKey={matchKey}>
+          <PartialErrorBoundary
+            partialId={id}
+            {...fpProp}
+            partialMatchKey={matchKey}
+            cullable={cullable}
+          >
             {body}
           </PartialErrorBoundary>
         </Suspense>
@@ -1953,7 +1983,13 @@ function createSpecComponent<V>(
       // so the client's `isPartialWrapper` walker (which checks
       // `node.key != null`) detects it.
       body = (
-        <PartialErrorBoundary key={id} partialId={id} {...fpProp} partialMatchKey={matchKey}>
+        <PartialErrorBoundary
+          key={id}
+          partialId={id}
+          {...fpProp}
+          partialMatchKey={matchKey}
+          cullable={cullable}
+        >
           {body}
         </PartialErrorBoundary>
       )

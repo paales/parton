@@ -67,6 +67,45 @@ export function session(): { readonly id: string } {
   return { id: getSessionId() ?? "" }
 }
 
+/**
+ * Read this parton's view-visibility and record it as an fp dependency —
+ * the read-tracked culling signal, the viewport analogue of `cookie()` /
+ * `searchParam()`. A parton that calls `visible()` becomes cullable
+ * (entering/leaving the viewport moves its fp, so it self-refetches);
+ * one that never calls it is invariant to scrolling. The read IS the
+ * dependency, exactly like a cell. Tri-state:
+ *
+ *   - `true`      — the client reported this parton within the viewport
+ *     (expanded by the observer's runway margin).
+ *   - `false`     — the client reported and it's outside that margin.
+ *   - `undefined` — no client report yet: the PRE-MEASUREMENT state
+ *     (cold render / SSR / no-JS). Seed the cull decision off the anchor
+ *     here, e.g. `const show = visible() ?? nearAnchor(searchParam("page"))`,
+ *     so the first paint reserves the right neighborhood.
+ *
+ * `undefined` is GLOBAL — it means the request carries no `?visible=` at
+ * all, not that this one parton is unmeasured. Once the client sends
+ * `?visible=`, every parton is in (`true`) or out (`false`); the
+ * observer's `rootMargin` is the runway, so "out" is the correct skeleton
+ * state for everything past it.
+ */
+export function visible(): boolean | undefined {
+  const cp = getCurrentParton()
+  if (!cp) return undefined
+  cp.deps.add(`visible:${cp.id}`)
+  return readVisible(new URL(cp.request.url).searchParams, cp.id)
+}
+
+/** Resolve a parton's visibility from a request's `?visible=<id>,…` set:
+ *  absent param → `undefined` (cold / pre-measurement), present →
+ *  membership. Shared by the `visible()` hook and `evalDepKeys`'
+ *  store-and-reread so the live read and the fp fold can't drift. */
+function readVisible(search: URLSearchParams, id: string): boolean | undefined {
+  const raw = search.get("visible")
+  if (raw === null) return undefined
+  return raw.split(",").includes(id)
+}
+
 // URLPattern helpers — mirror the parton `match` option's compilation
 // (`compileMatchPattern` / `extractNamedParams` in partial.tsx),
 // duplicated here to avoid a partial.tsx ↔ server-hooks import cycle.
@@ -154,6 +193,13 @@ export function evalDepKeys(
       // one.
       const sel = parseSelector(key)
       value = String(queryMatchingTs([sel.name], sel.constraints))
+    } else if (kind === "visible") {
+      // `name` is the parton's own id. Re-read the request's `?visible=`
+      // set (store-and-reread): in → "1", out → "0", absent (cold) → "u".
+      // Three distinct strings so entering view, leaving view, and the
+      // first client report each move the fp.
+      const v = readVisible(url.searchParams, name)
+      value = v === undefined ? "u" : v ? "1" : "0"
     } else value = undefined
     parts.push(`${key}=${value ?? ""}`)
   }

@@ -130,14 +130,18 @@ Open questions if/when we build this:
 
 ### Activate ⇄ deactivate symmetry (deferred + infinite-scroll unload)
 
-> **Built** (app-side) — see [`view-culling.md`](./view-culling.md) and
+> **Built** — see [`view-culling.md`](./view-culling.md) and
 > `/magento/browse`. The shape that worked is *not* a per-item
-> `deactivate()` on `useActivate`; it's a client camera that writes the
-> anchor page to a cookie and reloads a list partial, which renders a
-> WINDOW of fixed-height sections around the anchor (the rest of the
-> catalog's height held by two spacers) and fetches only the ring — no new
-> primitive. The notes below are the original sketch; the build's findings
-> supersede the `deactivate()` framing.
+> `deactivate()` on `useActivate`, nor the client-camera-reloads-a-windowed-
+> list sketch: it's **read-tracked culling**. A parton calls `visible()` (a
+> tri-state server-hook); reading it folds the parton's viewport state into
+> its fingerprint via the same dep-record path as `cookie()` / a cell, so it
+> self-refetches as it enters or leaves view. The framework observes each
+> cullable boundary through a React 19.3 `<Fragment ref>` + `observeUsing`
+> (no wrapper DOM, no id stamping — the boundary knows its own id) and
+> coalesces reports into one self-refetch carrying the live `?visible=` set.
+> The notes below are the original `deactivate()` sketch; the build
+> supersedes them.
 
 Today `useActivate(partialId, subscribe)` fires once and the partial
 stays live. There's no path back to dormant. The infinite-scroll

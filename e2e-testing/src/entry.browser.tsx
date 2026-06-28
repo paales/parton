@@ -112,7 +112,12 @@ async function main() {
   // to the live `window.location`.
   function pageUrlKey(href: string = window.location.href): string {
     const u = new URL(href, window.location.origin)
-    for (const k of ["partials", "cached", "streaming", "live", "__frame", "__frameUrl"]) {
+    // `visible` is an ephemeral per-refetch param — the read-tracked
+    // culling set, sent via reload({params}). Strip it so a refetch that
+    // carries it still keys to the same page — otherwise the stale-URL
+    // commit guard drops it. (It is NOT a FRAMEWORK_URL_PARAM, so the
+    // render still sees it: that's what visible() reads.)
+    for (const k of ["partials", "cached", "streaming", "live", "visible", "__frame", "__frameUrl"]) {
       u.searchParams.delete(k)
     }
     return u.pathname + u.search

@@ -1084,6 +1084,10 @@ interface RefetchBatchEntry {
    *  and aborts predecessors when the newer fire's `streaming`
    *  resolves. Passed straight through to `__rsc_partial_refetch`. */
   signal?: AbortSignal
+  /** Extra query params appended to the refetch url (not the page url).
+   *  Mirrors `FrameworkReloadOptions.params` — ephemeral per-request
+   *  view state read by `vary`'s `search`. */
+  params?: Record<string, string>
   /** Resolver for this entry's `streaming` milestone — called when the
    *  flushed batch's first segment lands. */
   resolveStreaming: () => void
@@ -1120,10 +1124,12 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
   const labelSet = new Set<string>()
   let streamingMode = false
   let liveMode = false
+  const extraParams = new Map<string, string>()
   for (const entry of batch) {
     for (const l of entry.labels) labelSet.add(l)
     if (entry.streaming) streamingMode = true
     if (entry.live) liveMode = true
+    if (entry.params) for (const [k, v] of Object.entries(entry.params)) extraParams.set(k, v)
   }
 
   // Combine per-entry signals so the batched fetch aborts when any
@@ -1164,6 +1170,10 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
         : cachedIds
     if (cached.length > 0) url.searchParams.set("cached", cached.join(","))
   }
+
+  // Caller-supplied per-request params (ephemeral view state) — appended
+  // to the refetch url only; the page url is untouched.
+  for (const [k, v] of extraParams) url.searchParams.set(k, v)
 
   // Monotonic commit ordering. Stamp this fire with the next issue seq
   // for its selector key, and hand the host a commit gate bound to it.
@@ -2124,6 +2134,7 @@ function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeNavigati
             // one-shot and closes once its segment drains.
             live: options?.live ?? false,
             signal: options?.signal,
+            params: options?.params,
           })
           await refetch.streaming
           m.streaming.resolve()

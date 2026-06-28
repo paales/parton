@@ -1,45 +1,40 @@
 /**
- * /magento/browse — view-culled product scroller over a data-driven,
- * unbounded page count.
+ * /magento/browse — read-tracked view culling over the product catalog.
  *
- * `BrowseList` renders only a WINDOW of fixed-height sections around the
- * anchor; everything above and below collapses into two spacers sized
- * from `total_count` (data-driven, not a hardcoded pool), so the document
- * height stays `totalPages × PAGE_H` — stable scroll, no jumps — while the
- * payload is just the window, not the whole catalog. Only the RING of
- * pages nearest the anchor fetch products; the rest of the window is a
- * skeleton runway so the observer sees the edge coming. The anchor rides
- * the `browse_vis` cookie (off the sharable url, written by
- * `<BrowseScroller>`); on scroll the list reloads against it and the
- * window follows the viewport.
+ * Each catalog page is a `BrowsePage` parton that reads `visible()`: in
+ * view it renders the page's products, out of view a skeleton. Reading
+ * `visible()` is the whole protocol — it makes the parton CULLABLE, so the
+ * framework observes its viewport intersection through a `<Fragment ref>`
+ * (no wrapper DOM, no id stamping) and self-refetches it as it enters or
+ * leaves the viewport, carrying the live `?visible=` set so the re-render
+ * reads its own bit. The fixed-height section (owned by the parent, always
+ * present) reserves the space, so culling never shifts the scroll. No
+ * app-side scroller, anchor, or cookie.
  *
- * Two deliberate shapes here, both load-bearing:
- *  - `total_count` is fetched by the ROUTE (rendered once) and passed to
- *    BrowseList as a `totalPages` PROP. It must NOT be BrowseList's
- *    `schema` cell: a cached schema cell makes the framework treat the
- *    partial as unchanged, so its reloads stop committing.
- *  - the ring's products are a parton keyed by page, so pages that stay
- *    in-ring across a scroll fp-skip while new ones stream in.
+ * Two deliberate shapes:
+ *  - `total_count` is fetched by the ROUTE (rendered once) and passed down
+ *    as a prop — never a child's `schema` cell, which would make the
+ *    framework treat the child as unchanged and stop its reloads.
+ *  - the products for a page are a parton keyed by page, rendered only
+ *    while that page is visible — so the fetch itself is gated by culling.
  */
 
-import { parton, type CellValue, type RenderArgs, type ResolvedCell } from "@parton/framework"
+import { parton, visible, searchParam, type CellValue, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
-import { BrowseScroller } from "../../components/browse-scroller.tsx"
+import { ScrollToPage } from "../../components/scroll-to-page.tsx"
 import { magentoProductsCell } from "./products-cell.ts"
 
 type ProductsValue = NonNullable<CellValue<typeof magentoProductsCell>>
 type ProductItem = NonNullable<NonNullable<NonNullable<ProductsValue["products"]>["items"]>[number]>
 
 const PAGE_SIZE = 12
-/** Pages within ±RING_OVER of the anchor fetch + render products. */
-const RING_OVER = 2
-/** The window actually rendered is ±WINDOW_OVER of the anchor: the ring,
- *  plus a skeleton runway so the observer can see the edge coming. Pages
- *  outside the window are not rendered at all — they're collapsed into the
- *  two spacers above and below, sized from the page count. */
-const WINDOW_OVER = 6
-/** Fixed pixel height of every page — keeps the document stable. */
+/** Fixed pixel height of every page section — reserves space so a culled
+ *  (skeleton) page holds exactly the room its products will need. */
 const PAGE_H = 760
+/** Pages rendered full on the COLD paint (before the client has measured),
+ *  centered on the `?page=` anchor — a placeholder neighborhood the live
+ *  `visible()` set then refines. */
+const COLD_RING = 2
 
 const GRID = "grid flex-1 grid-cols-4 grid-rows-3 gap-3 min-h-0"
 
@@ -77,11 +72,11 @@ function BrowseProductCard({ product }: { product: ProductItem }) {
   )
 }
 
-// One ring page's products — a parton keyed by page (distinct props ⇒
-// distinct id), so in-ring pages fp-skip across a scroll. `data-page`
-// lives on the SECTION shell (BrowseList), not here.
-const BrowsePageProducts = parton(
-  function BrowsePageProductsRender({
+// One page's products — a parton keyed by page (distinct props ⇒ distinct
+// id, so it fp-skips and caches). Rendered only while its page is visible,
+// so the products fetch is gated by culling.
+const PageProducts = parton(
+  function PageProductsRender({
     products,
   }: { page: number; products: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
     const items = (products.value?.products?.items ?? []).filter(
@@ -98,60 +93,47 @@ const BrowsePageProducts = parton(
   { fallback: <GridSkeleton /> },
 )
 
-const BrowseList = parton(
-  function BrowseListRender({
-    totalPages,
-    anchor,
-  }: { totalPages: number; anchor: number } & RenderArgs) {
-    // Render only the window around the anchor; collapse everything above
-    // and below into two spacers, sized from the page count, so the
-    // document height stays `totalPages × PAGE_H` (stable scroll) while the
-    // payload is just the window — not the whole catalog.
-    const lo = Math.max(1, anchor - WINDOW_OVER)
-    const hi = Math.min(totalPages, anchor + WINDOW_OVER)
-    const pages: number[] = []
-    for (let p = lo; p <= hi; p++) pages.push(p)
-    return (
-      <div data-testid="browse-list" data-anchor={anchor} data-total-pages={totalPages}>
-        <div aria-hidden data-testid="browse-spacer-top" style={{ height: (lo - 1) * PAGE_H }} />
-        {pages.map((p) => (
-          <section
-            key={p}
-            data-testid={`browse-page-${p}`}
-            data-page={p}
-            style={{ height: PAGE_H }}
-            className="flex flex-col overflow-hidden"
-          >
-            <h2 className="h-6 text-xs font-medium text-muted-foreground">Page {p}</h2>
-            {Math.abs(p - anchor) <= RING_OVER ? (
-              <BrowsePageProducts
-                page={p}
-                products={magentoProductsCell.with({ pageSize: PAGE_SIZE, currentPage: p })}
-              />
-            ) : (
-              <GridSkeleton />
-            )}
-          </section>
-        ))}
-        <div
-          aria-hidden
-          data-testid="browse-spacer-bottom"
-          style={{ height: Math.max(0, totalPages - hi) * PAGE_H }}
-        />
-      </div>
-    )
-  },
-  {
-    selector: "#browse-list",
-    // Anchor rides the `browse_vis` cookie (off the sharable url);
-    // cold-start falls back to the `?page=` anchor on the page url.
-    vary: ({ cookies, search }) => {
-      const c = Number(cookies.browse_vis)
-      const anchor = Number.isFinite(c) && c >= 1 ? c : Math.max(1, Number(search.page) || 1)
-      return { anchor }
-    },
-  },
-)
+// One catalog page — CULLABLE. Reads `visible()`: in view → its products,
+// out → a skeleton. Keyed by page. The fixed-height section that reserves
+// its space lives in the parent (always present), so this parton's content
+// can swap skeleton ⇄ products without ever shifting layout.
+const BrowsePage = parton(function BrowsePageRender({ page }: { page: number } & RenderArgs) {
+  const vis = visible()
+  // Cold (no client report yet): seed the cull off the `?page=` anchor so
+  // the first paint fills the right neighborhood; the live set refines it.
+  const show = vis ?? Math.abs(page - (Number(searchParam("page")) || 1)) <= COLD_RING
+  return show ? (
+    <PageProducts page={page} products={magentoProductsCell.with({ pageSize: PAGE_SIZE, currentPage: page })} />
+  ) : (
+    <GridSkeleton />
+  )
+})
+
+function BrowseList({ totalPages }: { totalPages: number }) {
+  // Render every catalog page as a fixed-height section. Off-screen ones
+  // are cheap skeletons (no fetch) until `visible()` pulls them in, so the
+  // whole catalog is reachable at a constant document height. (Not
+  // rendering thousands of skeletons for a huge catalog — true windowing —
+  // is a perf follow-up; the catalog here is bounded by `total_count`.)
+  const pages: number[] = []
+  for (let p = 1; p <= totalPages; p++) pages.push(p)
+  return (
+    <div data-testid="browse-list" data-total-pages={totalPages}>
+      {pages.map((p) => (
+        <section
+          key={p}
+          data-testid={`browse-page-${p}`}
+          data-page={p}
+          style={{ height: PAGE_H }}
+          className="flex flex-col overflow-hidden"
+        >
+          <h2 className="h-6 text-xs font-medium text-muted-foreground">Page {p}</h2>
+          <BrowsePage page={p} />
+        </section>
+      ))}
+    </div>
+  )
+}
 
 export const ProductBrowsePage = parton(
   function ProductBrowseRender({
@@ -165,24 +147,19 @@ export const ProductBrowsePage = parton(
         <header className="mb-4">
           <h1 className="text-2xl font-semibold">Browse Products</h1>
           <p className="text-muted-foreground">
-            View-culled scroll over the whole catalog ({totalPages} pages) — only the pages near the
-            viewport fetch; the rest are reserved space. <code>?page=</code> tracks where you are.
+            Read-tracked view culling over the whole catalog ({totalPages} pages) — only pages in
+            view fetch; the rest are reserved space. <code>?page=</code> seeds the first paint.
           </p>
         </header>
-        {/* The scope is a stable element the route owns; BrowseList is a
-            direct refetchable child of it, and the scroller observes it
-            from beside (not around) the list. */}
-        <div data-testid="browse-scope">
-          <BrowseList totalPages={totalPages} />
-        </div>
-        <BrowseScroller />
+        <BrowseList totalPages={totalPages} />
+        <ScrollToPage />
       </>
     )
   },
   {
     match: "/magento/browse",
     // `total_count` is fetched HERE (the route renders once) and passed to
-    // BrowseList as a prop — never BrowseList's schema (see header note).
+    // BrowseList as a prop — never a child's schema (see header note).
     schema: () => ({ meta: magentoProductsCell.with({ pageSize: PAGE_SIZE, currentPage: 1 }) }),
   },
 )
