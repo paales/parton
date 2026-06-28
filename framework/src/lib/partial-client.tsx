@@ -660,6 +660,29 @@ function deriveTemplate(node: ReactNode): ReactNode {
     : cloneElement(node, {}, newInner)
 }
 
+/**
+ * True if any node in the tree is a still-pending Flight lazy — i.e. the
+ * render is incomplete because a chunk is in flight. Used to defer the
+ * cache-mode prune past a mid-stream render so live partials hidden
+ * behind an unresolved lazy aren't evicted. Mirrors the lazy-stop rule
+ * in `cacheFromStreamingChildren` / `substituteNested`.
+ */
+function treeHasPendingLazy(node: ReactNode): boolean {
+  if (node == null || typeof node === "boolean") return false
+  if (typeof node === "string" || typeof node === "number") return false
+  if (Array.isArray(node)) {
+    return node.some((c) => treeHasPendingLazy(c as ReactNode))
+  }
+  const unwrapped = unwrapLazy(node)
+  if (unwrapped !== node) {
+    if (unwrapped === LAZY_PENDING) return true
+    if (unwrapped == null) return false
+    return treeHasPendingLazy(unwrapped as ReactNode)
+  }
+  if (!isValidElement(node)) return false
+  return treeHasPendingLazy((node.props as { children?: ReactNode }).children)
+}
+
 function renderTemplate(template: ReactNode, cache: PartialCache): ReactNode[] {
   const result: ReactNode[] = []
 
@@ -3279,9 +3302,23 @@ export function PartialsClient({ mode = "cache", children }: PartialsClientProps
   // keys on "still in the rendered/parked tree", not on how data is
   // passed. Un-refetched partials (header, list pages) and live sibling
   // instances stay — they're present in `rendered`.
-  const live = new Map<string, Set<string>>()
-  harvestPartialIds(rendered, live)
-  pruneToLive(live)
+  //
+  // Guard on a COMPLETE render. A substituted cache wrapper can still
+  // carry an in-flight Flight lazy — a slow descendant (the search
+  // stages) hadn't resolved when the wrapper was last cached. The
+  // partials behind that lazy are still live but aren't materialised in
+  // `rendered`, so `harvestPartialIds` doesn't see them; pruning would
+  // evict their cache + advertised-fp entries, and the next render's
+  // fp-skip placeholder would have nothing to substitute — blanking the
+  // region until a full re-render restores it ("content behind search
+  // disappears"). The streaming-mode path prunes only in its
+  // non-pending branch for the same reason; mirror it here and defer
+  // the prune to a later commit whose render is whole.
+  if (!treeHasPendingLazy(rendered)) {
+    const live = new Map<string, Set<string>>()
+    harvestPartialIds(rendered, live)
+    pruneToLive(live)
+  }
 
   return renderChildren(rendered)
 }

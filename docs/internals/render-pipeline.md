@@ -93,6 +93,28 @@ same `match`-driven structure, so they reuse the template. See
 [`streaming.md`](./streaming.md) and `PartialsClient` in
 `partial-client.tsx`.
 
+### Bounding the client cache (and the pending-lazy guard)
+
+Both commit paths bound `_currentPagePartials` / `_currentPageFingerprints`
+to what the rendered page actually references, so a superseded variant
+(a churned-away instance id, an evicted match variant) stops being
+advertised in `?cached=`. The streaming-mode path prunes against the
+walk's `seen` set; the cache-mode path harvests the rendered tree
+(`renderTemplate` output) and drops anything not present.
+
+Both prune **only on a complete render**. A substituted cache wrapper
+can still carry an in-flight Flight lazy — a slow descendant (a search
+stage, the chat's `<ChunkSlot>`) hadn't resolved when the wrapper was
+last cached. The partials *behind* that lazy are still live but aren't
+materialised in the rendered tree, so a harvest under-counts them.
+Pruning then would evict their cache + advertised-fp entries, and the
+next render's fp-skip placeholder would have nothing to substitute —
+blanking the region until a full re-render restores it (the "content
+behind the search disappears" bug). The streaming-mode path gets this
+for free (it prunes only in its non-pending branch); the cache-mode
+path guards explicitly via `treeHasPendingLazy(rendered)` and defers
+the prune to a later commit whose render is whole.
+
 ## Preload (warm-only client commit)
 
 `useNavigation().preload(target)` (see
