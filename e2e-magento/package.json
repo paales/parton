@@ -20,6 +20,6 @@
     "@vitejs/plugin-react": "latest",
     "@vitejs/plugin-rsc": "patch:@vitejs/plugin-rsc@npm%3A0.5.24#~/.yarn/patches/@vitejs-plugin-rsc-npm-0.5.24-0a8431f84b.patch",
     "tailwindcss": "^4.2.4",
-    "vite": "^8.0.3"
+    "vite": "^8.1.0"
   }
 }
