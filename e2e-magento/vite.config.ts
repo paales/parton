@@ -1,5 +1,6 @@
 import path from "node:path"
-import react from "@vitejs/plugin-react"
+import babel from "@rolldown/plugin-babel"
+import react, { reactCompilerPreset } from "@vitejs/plugin-react"
 import rsc from "@vitejs/plugin-rsc"
 import tailwindcss from "@tailwindcss/vite"
 import { defineConfig } from "vite"
@@ -50,9 +51,19 @@ const workspaceAliases = [
 ]
 
 export default defineConfig({
+  // React Compiler — see e2e-testing/vite.config.ts. Opt-in ("annotation":
+  // only "use memo" components compile) and client-environment only.
   plugins: isTest
     ? [react(), tailwindcss()]
-    : [rscCompression(), rsc(), react(), tailwindcss()],
+    : [
+        rscCompression(),
+        rsc(),
+        react(),
+        babel({
+          presets: [reactCompilerPreset({ target: "19", compilationMode: "annotation" })],
+        }),
+        tailwindcss(),
+      ],
   server: { port: 5181, strictPort: true },
   // Preview shares the dev port so the host's hard-coded
   // cross-origin URL (http://localhost:5181) works in both modes

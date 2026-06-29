@@ -95,7 +95,7 @@ succeeds where find-refs fails, returns the full edit plan.
 ## Development
 
 ```bash
-yarn dev                # Vite 8 + RSC dev server (e2e-testing app)
+yarn dev                # Vite 8.1 (Rolldown) + RSC dev server (e2e-testing app)
 yarn dev:magento        # Same, but against the empty e2e-magento showcase (port 5181)
 yarn build              # Production build for e2e-testing
 yarn build:magento      # Production build for e2e-magento
@@ -108,6 +108,7 @@ yarn test:all           # All three Vitest projects
 yarn test:watch         # Watch mode — node project
 yarn test:watch:rsc     # Watch mode — rsc project
 yarn test:e2e           # Playwright — full-stack specs in e2e-testing/e2e/
+yarn lint               # ESLint — React Compiler + rules-of-hooks (Biome stays the formatter)
 yarn bench:server       # Server-side warm-tick benchmark (live-tick CPU cost) — see bench/README.md
 ```
 
@@ -127,6 +128,12 @@ its tsconfig). Tier picking and harness mechanics are in
 `yarn test:e2e` auto-starts a dev server if nothing's on port 5179.
 HMR dispose hooks clear cache + registry on edits, so server
 restart is rarely needed during dev.
+
+`yarn lint` is separate: ESLint with `eslint-plugin-react-hooks`
+(`recommended-latest`) for the rules-of-hooks + React Compiler diagnostics
+Biome doesn't implement. Scoped to the workspace `src/` trees via the root
+`eslint.config.js`; it's advisory — NOT part of `yarn test`. Biome
+(`biome.json`) stays the formatter and general linter.
 
 `yarn bench:server` measures the server CPU cost of a live re-render
 ("warm tick") in-process — the parton hot path's recalculate-the-world
@@ -221,6 +228,12 @@ older workaround:
   anywhere — render it where it's owned.
 - **Forms/actions:** `<form action>`, `useActionState`, `useFormStatus`,
   `useOptimistic`, and `startTransition` around async actions.
+- **React Compiler** — opt-in (`compilationMode: "annotation"`): add a
+  `"use memo"` directive to a component/hook to compile it; nothing compiles
+  otherwise. Wired (via `@rolldown/plugin-babel` + plugin-react's
+  `reactCompilerPreset`) on the browser (`client`) environment only, so server
+  components and their read-tracking / fingerprinting are never compiled.
+  `yarn lint` surfaces what blocks a component from compiling.
 
 ## Working in a worktree
 

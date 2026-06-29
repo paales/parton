@@ -1,5 +1,6 @@
 import path from "node:path"
-import react from "@vitejs/plugin-react"
+import babel from "@rolldown/plugin-babel"
+import react, { reactCompilerPreset } from "@vitejs/plugin-react"
 import rsc from "@vitejs/plugin-rsc"
 import tailwindcss from "@tailwindcss/vite"
 import { defineConfig } from "vite"
@@ -85,9 +86,25 @@ const HOOK_CALLING_DEPS = [
 ]
 
 export default defineConfig(({ mode }) => ({
+  // React Compiler — opt-in auto-memoization. compilationMode "annotation"
+  // compiles only components/hooks carrying a "use memo" directive; everything
+  // else is left untouched. The preset's applyToEnvironmentHook also scopes it
+  // to the browser ("client") environment, so server components and their
+  // read-tracking / fingerprinting are never compiled. It runs through
+  // @rolldown/plugin-babel because plugin-react@6's Oxc transform can't host
+  // the compiler yet, and the babel pass must see original JSX — so it sits
+  // alongside react().
   plugins: isTest
     ? [react(), tailwindcss()]
-    : [rscCompression(), rsc(), react(), tailwindcss()],
+    : [
+        rscCompression(),
+        rsc(),
+        react(),
+        babel({
+          presets: [reactCompilerPreset({ target: "19", compilationMode: "annotation" })],
+        }),
+        tailwindcss(),
+      ],
   server: mode === "clean" ? { port: 5174, strictPort: true, hmr: false, ws: false } : undefined,
   // Preview pinned to 5173 to match dev — same hard-coded URLs
   // work in both modes. Run `yarn preview:all` only when no dev
