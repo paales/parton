@@ -1,6 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef } from "react"
+import { useIsSSR } from "@parton/copies/hooks/use-is-ssr"
 import type { ResolvedCell } from "@parton/framework"
 import { moveCursor } from "../pages/cursors-actions.ts"
 import type { CursorMap } from "../pages/cursors-state.ts"
@@ -17,6 +18,21 @@ interface Identity {
   color: string
 }
 
+let tabIdentity: Identity | undefined
+/** Per-tab cursor identity, created once off the render path: a random uid
+ *  persisted in sessionStorage (so a refresh keeps it and two tabs differ).
+ *  Only read past hydration — see `useIsSSR` in CursorLayer. */
+function getTabIdentity(): Identity {
+  if (tabIdentity) return tabIdentity
+  let uid = sessionStorage.getItem("cursor-uid")
+  if (!uid) {
+    uid = Math.random().toString(36).slice(2, 10)
+    sessionStorage.setItem("cursor-uid", uid)
+  }
+  tabIdentity = { uid, color: colorFor(uid) }
+  return tabIdentity
+}
+
 /**
  * Multiplayer cursor layer. Tracks the local pointer over the area and
  * writes it up via `moveCursor` (single-inflight + replace-coalesce, so
@@ -27,21 +43,10 @@ interface Identity {
  * cursor; we don't draw it.
  */
 export function CursorLayer({ cursors }: { cursors: ResolvedCell<CursorMap> }) {
-  // Per-tab identity. Generated in an effect (not during render) so the
-  // server-render pass — which has no `sessionStorage` — doesn't throw,
-  // and so two tabs of the same browser get distinct ids.
-  const [identity, setIdentity] = useState<Identity | null>(null)
-  useEffect(() => {
-    let uid = sessionStorage.getItem("cursor-uid")
-    if (!uid) {
-      uid = Math.random().toString(36).slice(2, 10)
-      sessionStorage.setItem("cursor-uid", uid)
-    }
-    // Per-tab identity init from sessionStorage on mount — must be an effect
-    // (no sessionStorage during SSR render); one-time, not a render cascade.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIdentity({ uid, color: colorFor(uid) })
-  }, [])
+  // Per-tab identity, resolved only past hydration (useIsSSR) so the SSR pass —
+  // which has no `sessionStorage` — never touches it: null during SSR +
+  // hydration, the created identity afterwards.
+  const identity = useIsSSR() ? null : getTabIdentity()
   // Stamp ready only once `identity` has committed — this effect runs
   // after the re-render that sets it, so by the time the harness sees
   // the attribute, `onPointerMove`/`flush` close over a non-null

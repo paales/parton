@@ -28,8 +28,11 @@ export default [
       "**/__tests__/**",
       "**/*.test.{ts,tsx}",
       "**/e2e/**",
-      // Vendored AI-elements — unused, and excluded from typecheck too.
+      // Vendored shadcn — upstream code we don't modify, so don't lint it:
+      // the AI-elements (also unused), the UI primitives, and use-mobile.
       "copies/src/components/ai-elements/**",
+      "copies/src/components/ui/**",
+      "copies/src/hooks/use-mobile.ts",
     ],
   },
   {
