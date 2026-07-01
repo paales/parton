@@ -1033,30 +1033,6 @@ const registeredMatchPatterns: URLPattern[] = []
  *  `registerMatchPattern`. */
 const registeredPatternSignatures = new Set<string>()
 
-/** True once any registered pattern constrains a component other than
- *  pathname. Set by `registerMatchPattern`; read by `computeRouteKey`
- *  to decide whether the pathname-keyed cache is sound. Never unset —
- *  patterns are never unregistered. */
-let hasNonPathnamePattern = false
-
-/**
- * A pattern is pathname-only when every other component sits at the
- * URLPattern wildcard default (`*`). Such a pattern's match result is
- * a function of the pathname alone — the invariant that licenses the
- * pathname-keyed routeKey cache.
- */
-function isPathnameOnly(pattern: URLPattern): boolean {
-  return (
-    pattern.protocol === "*" &&
-    pattern.username === "*" &&
-    pattern.password === "*" &&
-    pattern.hostname === "*" &&
-    pattern.port === "*" &&
-    pattern.search === "*" &&
-    pattern.hash === "*"
-  )
-}
-
 /**
  * Register a spec's compiled URLPattern, deduplicated by signature.
  * HMR re-executes a spec module and runs the constructor again with
@@ -1070,7 +1046,6 @@ function registerMatchPattern(pattern: URLPattern): void {
   if (registeredPatternSignatures.has(signature)) return
   registeredPatternSignatures.add(signature)
   registeredMatchPatterns.push(pattern)
-  if (!isPathnameOnly(pattern)) hasNonPathnamePattern = true
   // Adding a pattern invalidates the routeKey cache — a URL whose
   // matched-set previously excluded this pattern may now include it.
   routeKeyCache.clear()
@@ -1120,63 +1095,61 @@ function patternSignature(pattern: URLPattern): string {
 
 /**
  * Compute a routeKey from a URL: a stable hash of WHICH registered
- * URLPatterns match. Two URLs that match the same set of patterns
- * collapse to one routeKey, so the variant-hint table scales with
- * pattern combinations (a small finite space) instead of distinct
- * pathnames. 50k product URLs that all match `/p/:slug` share one
- * hint entry instead of evicting each other from the LRU; spam
- * traffic to junk URLs that all match the same pattern can't displace
- * real hot routes.
+ * URLPatterns match the URL's BASE — scheme + host + pathname, with
+ * search and hash stripped BEFORE matching. Two URLs that share a
+ * base collapse to one routeKey, so the variant-hint table scales
+ * with pattern combinations (a small finite space) instead of
+ * distinct pathnames. 50k product URLs that all match `/p/:slug`
+ * share one hint entry instead of evicting each other from the LRU;
+ * spam traffic to junk URLs that all match the same pattern can't
+ * displace real hot routes.
+ *
+ * Search and hash are request dimensions WITHIN a page — `vary`,
+ * matchKeys, and fingerprints carry them — not part of the page's
+ * addressable identity. A pattern that constrains them (`match:
+ * { search: "*q=:query" }`) gates its SPEC's rendering against the
+ * full URL as always, but never splits its page's registry bucket:
+ * a search overlay's `?q=` refetch must find the snapshots, hints,
+ * and fold base the page's earlier renders committed, and the
+ * fp-trailer must keep the client's warm fps in lockstep across
+ * those refetches. Matching the base also makes the routeKey a pure
+ * function of the URL — never of request arrival order.
  *
  * Returns `__no-pattern` when nothing matches — those requests don't
  * commit to the registry anyway (`notFound()` throws past the commit),
  * so the sentinel just keeps lookups deterministic on the read side.
  */
-/** Pathname → routeKey cache. Per-segment streaming responses change
- *  only the `?cached=` query each tick; keying the cache by pathname
- *  (instead of full URL) is what lets one streaming request's N
- *  segments share one routeKey computation instead of N. The pathname
- *  key is sound only while every registered pattern is pathname-only:
- *  such patterns' match results are invariant under query / host /
- *  hash changes. `match` also accepts URLPatternInit dicts that
- *  constrain other components (`match: { search: "*q=:query" }`), and
- *  one such registration makes two same-pathname URLs match different
- *  pattern sets — `registerMatchPattern` records this in
- *  `hasNonPathnamePattern` and `computeRouteKey` bypasses the cache
- *  entirely from then on, doing the full match per call. Invalidated
- *  by pattern registration so a new pattern can shift the matched-set
- *  for previously-seen pathnames. */
+/** URL base → routeKey cache. Sound by construction: the matched set
+ *  is computed from the base, which is the cache key. Per-segment
+ *  streaming responses change only the `?cached=` query each tick;
+ *  keying by base lets one streaming request's N segments share one
+ *  routeKey computation instead of N. Invalidated by pattern
+ *  registration so a new pattern can shift the matched-set for
+ *  previously-seen bases. */
 const routeKeyCache = new Map<string, string>()
 const ROUTE_KEY_CACHE_MAX = 2048
 
-function extractPathname(url: string): string {
-  // Hand-rolled path extraction — `new URL(url).pathname` is the
-  // hot path here; this memoization exists to avoid URL parsing.
+/** Slice a URL down to its base — everything before `?` or `#` —
+ *  without paying for `new URL()` on the hot path. */
+function extractUrlBase(url: string): string {
   const schemeIdx = url.indexOf("//")
   const pathStart = schemeIdx >= 0 ? url.indexOf("/", schemeIdx + 2) : 0
-  if (pathStart < 0) return "/"
+  const from = pathStart < 0 ? 0 : pathStart
   let end = url.length
-  const qIdx = url.indexOf("?", pathStart)
+  const qIdx = url.indexOf("?", from)
   if (qIdx >= 0 && qIdx < end) end = qIdx
-  const hashIdx = url.indexOf("#", pathStart)
+  const hashIdx = url.indexOf("#", from)
   if (hashIdx >= 0 && hashIdx < end) end = hashIdx
-  return url.slice(pathStart, end) || "/"
+  return url.slice(0, end)
 }
 
 export function computeRouteKey(url: string): string {
-  // The pathname-keyed cache is licensed only by the pathname-only
-  // invariant (see the cache's docstring). A registered pattern that
-  // constrains search/host/etc. breaks it — compute per call then.
-  const cacheable = !hasNonPathnamePattern
-  let pathname = ""
-  if (cacheable) {
-    pathname = extractPathname(url)
-    const cached = routeKeyCache.get(pathname)
-    if (cached !== undefined) return cached
-  }
+  const base = extractUrlBase(url)
+  const cached = routeKeyCache.get(base)
+  if (cached !== undefined) return cached
   const matched: string[] = []
   for (const pattern of registeredMatchPatterns) {
-    if (pattern.exec(url) !== null) {
+    if (pattern.exec(base) !== null) {
       matched.push(patternSignature(pattern))
     }
   }
@@ -1187,15 +1160,13 @@ export function computeRouteKey(url: string): string {
     matched.sort()
     result = hash(matched.join(""))
   }
-  if (cacheable) {
-    // Simple FIFO bound. The streaming case repeats one pathname so the
-    // cap is mostly defensive against pathological pathname diversity.
-    if (routeKeyCache.size >= ROUTE_KEY_CACHE_MAX) {
-      const oldest = routeKeyCache.keys().next().value
-      if (oldest !== undefined) routeKeyCache.delete(oldest)
-    }
-    routeKeyCache.set(pathname, result)
+  // Simple FIFO bound. The streaming case repeats one base so the
+  // cap is mostly defensive against pathological URL diversity.
+  if (routeKeyCache.size >= ROUTE_KEY_CACHE_MAX) {
+    const oldest = routeKeyCache.keys().next().value
+    if (oldest !== undefined) routeKeyCache.delete(oldest)
   }
+  routeKeyCache.set(base, result)
   return result
 }
 
@@ -1210,7 +1181,6 @@ export function _clearRouteKeyCache(): void {
 export function _resetMatchPatterns(): void {
   registeredMatchPatterns.length = 0
   registeredPatternSignatures.clear()
-  hasNonPathnamePattern = false
   routeKeyCache.clear()
 }
 

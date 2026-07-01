@@ -31,15 +31,21 @@ Two layers:
    variant store. Bounded LRU (default 10 000 routeKeys).
 
    The routeKey is NOT the URL pathname — it's a hash of which
-   registered URLPatterns match the current URL (see
+   registered URLPatterns match the URL's *base* (scheme + host +
+   pathname; search and hash are stripped before matching — see
    `computeRouteKey` in `partial.tsx`). 50k product URLs that all
    match `/p/:slug` collapse to one routeKey, so they share a hint
    slot instead of evicting each other from the LRU. Spam to junk
    URLs that hit the same pattern can't displace real hot entries
-   for the same reason. URLs that match no pattern share a single
-   `__no-pattern` sentinel routeKey — those requests never commit
-   anyway (`notFound()` throws past the commit), so the sentinel
-   is a read-side fallback.
+   for the same reason. Search and hash are request dimensions
+   *within* a page (vary, matchKeys, fingerprints carry them), so a
+   search-constrained pattern (`match: { search: "*q=:query" }`)
+   never splits its page's bucket — a search overlay's `?q=`
+   refetches keep finding the snapshots and hints the page's earlier
+   renders committed. URLs whose base matches no pattern share a
+   single `__no-pattern` sentinel routeKey — those requests never
+   commit anyway (`notFound()` throws past the commit), so the
+   sentinel is a read-side fallback.
 
 ## Variant key
 
