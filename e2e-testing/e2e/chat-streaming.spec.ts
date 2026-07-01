@@ -1,4 +1,11 @@
-import { test, expect, request, waitForRscIdle, type Page } from "./fixtures"
+import {
+  clearCaches,
+  test,
+  expect,
+  waitForPageInteractive,
+  waitForRscIdle,
+  type Page,
+} from "./fixtures"
 
 /**
  * End-to-end coverage for the segment-loop chat. The chat overlay
@@ -44,9 +51,7 @@ test.afterAll(async ({ baseURL }) => {
   // Wipe sessions / logs / registry so downstream specs inherit a
   // clean server even if the last test left a producer running mid-
   // budget.
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("clicking the open pill streams chunks progressively into the chat", async ({ page }) => {
@@ -54,15 +59,19 @@ test("clicking the open pill streams chunks progressively into the chat", async 
   // mounted by `root.tsx` so it's available wherever we navigate.
   await page.goto("/pokemon/1")
 
-  // Open pill is a client component; wait until hydration is ready.
+  // Open pill is a client component; wait for the interactive marker
+  // (handler wired) and RSC settle.
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
 
   // Click the open pill — this fires `navigate("?chat=open",
   // {selector: "#chat-overlay"})`, which becomes an RSC GET against
   // the segment-loop driver because the chat partial now signals
   // `markConnectionLive()`.
-  await page.locator('[data-testid="chat-open-pill"]').click()
-  await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({ timeout: 10000 })
+  await page.locator('[data-testid=\"chat-open-pill\"][data-hydrated]').click()
+  await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({
+    timeout: 10000,
+  })
 
   // Message frame mounts.
   await expect(page.locator('[data-testid="chat-msg-AA_CHAT_STREAMING"]')).toBeAttached({
@@ -85,10 +94,7 @@ test("clicking the open pill streams chunks progressively into the chat", async 
   while (Date.now() < deadline) {
     const n = await countChunks(page, "AA_CHAT_STREAMING")
     samples.push(n)
-    if (
-      n > 5 &&
-      (await page.locator('[data-testid="chat-done-AA_CHAT_STREAMING"]').count()) > 0
-    ) {
+    if (n > 5 && (await page.locator('[data-testid="chat-done-AA_CHAT_STREAMING"]').count()) > 0) {
       break
     }
     await page.waitForTimeout(50)
@@ -114,9 +120,7 @@ test("clicking the open pill streams chunks progressively into the chat", async 
   // Final chunk count matches the "✓ stream complete (N chunks)"
   // counter rendered by the done-branch.
   const finalCount = await countChunks(page, "AA_CHAT_STREAMING")
-  const doneText = await page
-    .locator('[data-testid="chat-done-AA_CHAT_STREAMING"]')
-    .textContent()
+  const doneText = await page.locator('[data-testid="chat-done-AA_CHAT_STREAMING"]').textContent()
   expect(doneText).toMatch(new RegExp(`${finalCount} chunks`))
 })
 
@@ -144,9 +148,12 @@ test("closing the chat collapses the overlay back to the open pill mid-stream", 
   // fetch, the segment loop tears down, and the close-click
   // payload commits cleanly.
   await page.goto("/pokemon/1")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
-  await page.locator('[data-testid="chat-open-pill"]').click()
-  await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({ timeout: 10000 })
+  await page.locator('[data-testid=\"chat-open-pill\"][data-hydrated]').click()
+  await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({
+    timeout: 10000,
+  })
 
   // Wait for at least one chunk so we know the segment loop is
   // actively streaming when we click close.
@@ -154,8 +161,10 @@ test("closing the chat collapses the overlay back to the open pill mid-stream", 
     page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]').first(),
   ).toBeAttached({ timeout: 5000 })
 
-  await page.locator('[data-testid="chat-close-pill"]').click()
+  await page.locator('[data-testid=\"chat-close-pill\"][data-hydrated]').click()
   // After close, the overlay collapses and the open-pill returns.
-  await expect(page.locator('[data-testid="chat-open-pill"]')).toBeVisible({ timeout: 5000 })
+  await expect(page.locator('[data-testid="chat-open-pill"]')).toBeVisible({
+    timeout: 5000,
+  })
   await expect(page.locator('[data-testid="chat-box"]')).toHaveCount(0)
 })

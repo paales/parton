@@ -1,4 +1,4 @@
-import { test, expect, waitForRscIdle } from "./fixtures"
+import { test, expect, waitForPageInteractive, waitForRscIdle } from "./fixtures"
 
 // Skipped: requires the `/chat-notes` route + the `defaultOpen`
 // plumbing on `<ChatOverlay/>`, neither of which is wired in
@@ -21,6 +21,7 @@ test.beforeEach(async ({ page }) => {
 
 test.skip("opened chat overlay survives navigation from / to /magento", async ({ page }) => {
   await page.goto("/")
+  await waitForPageInteractive(page)
   // The overlay pill sits in the page — wait until it's interactive
   // before clicking. Without this, a click can fire pre-hydration and
   // follow the plain `<a href="?chat=open">` fallback, which lands on
@@ -28,7 +29,7 @@ test.skip("opened chat overlay survives navigation from / to /magento", async ({
   await waitForRscIdle(page)
 
   // Open the overlay.
-  await page.locator('[data-testid="chat-open-pill"]').click()
+  await page.locator('[data-testid=\"chat-open-pill\"][data-hydrated]').click()
   await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({
     timeout: 10000,
   })
@@ -42,7 +43,7 @@ test.skip("opened chat overlay survives navigation from / to /magento", async ({
 
   // Navigate to /magento via the top nav link (same intercept path the
   // user's repro uses — not a direct `page.goto`).
-  await page.locator('a[href="/magento"]').first().click()
+  await page.locator('a[href="/magento"][data-hydrated]').first().click()
   await expect(page).toHaveURL(/\/magento/)
 
   // The overlay must still be open (not collapsed back to the pill).

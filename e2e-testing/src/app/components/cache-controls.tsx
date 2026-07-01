@@ -19,6 +19,10 @@ export function CacheControls() {
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
       <Button
+        // `data-hydrated`: React owns the button (onClick live) — the
+        // controls hydrate after the page shell; e2e specs click via
+        // the marker-qualified locator.
+        ref={(el) => el?.setAttribute("data-hydrated", "")}
         type="button"
         size="sm"
         variant="outline"
@@ -28,6 +32,10 @@ export function CacheControls() {
         Refetch slow
       </Button>
       <Button
+        // `data-hydrated`: React owns the button (onClick live) — the
+        // controls hydrate after the page shell; e2e specs click via
+        // the marker-qualified locator.
+        ref={(el) => el?.setAttribute("data-hydrated", "")}
         type="button"
         size="sm"
         variant="outline"
@@ -37,6 +45,10 @@ export function CacheControls() {
         Refetch clock
       </Button>
       <Button
+        // `data-hydrated`: React owns the button (onClick live) — the
+        // controls hydrate after the page shell; e2e specs click via
+        // the marker-qualified locator.
+        ref={(el) => el?.setAttribute("data-hydrated", "")}
         type="button"
         size="sm"
         variant="outline"

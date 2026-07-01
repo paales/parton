@@ -26,6 +26,7 @@ import {
 import { splitSegments } from "@parton/framework/lib/fp-trailer-split.ts"
 import { applyStandardTrailers } from "@parton/framework/lib/segment-trailers-client.ts"
 import { LivePageHeartbeat } from "@parton/framework/lib/live-page-heartbeat.tsx"
+import { markPageInteractive } from "@parton/framework/lib/page-interactive.ts"
 import { getNavigation } from "@parton/framework/runtime/navigation-api.ts"
 
 async function main() {
@@ -73,12 +74,16 @@ async function main() {
     }, [setPayload_])
 
     React.useEffect(() => {
-      return listenNavigation(
-        (url, types, signal) => {
-          setPendingTransitionTypes(types ?? [])
-          return fetchRscPayload(url, signal).finished
-        },
-      )
+      const off = listenNavigation((url, types, signal) => {
+        setPendingTransitionTypes(types ?? [])
+        return fetchRscPayload(url, signal).finished
+      })
+      // BrowserRoot is the tree root, so this effect runs after every
+      // child's — hydration handlers are attached — and the navigate
+      // listener above is now intercepting. Both "safe to interact"
+      // conditions hold; publish the signal.
+      markPageInteractive()
+      return off
     }, [])
 
     return (
@@ -120,7 +125,16 @@ async function main() {
     // every time the anchor ticked. They are NOT FRAMEWORK_URL_PARAMS, so
     // the render still sees them (visible() and the ?page= cold seed read
     // them).
-    for (const k of ["partials", "cached", "streaming", "live", "visible", "page", "__frame", "__frameUrl"]) {
+    for (const k of [
+      "partials",
+      "cached",
+      "streaming",
+      "live",
+      "visible",
+      "page",
+      "__frame",
+      "__frameUrl",
+    ]) {
       u.searchParams.delete(k)
     }
     return u.pathname + u.search
@@ -327,7 +341,11 @@ async function main() {
       response = await fetch(renderRequest)
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return
-      throw new NavigationError({ kind: "network", url: renderRequest.url, cause: err })
+      throw new NavigationError({
+        kind: "network",
+        url: renderRequest.url,
+        cause: err,
+      })
     }
     if (!response.ok || !response.body) {
       throw new NavigationError({
@@ -347,7 +365,6 @@ async function main() {
       segment.trailers.then(applyStandardTrailers).catch(() => {})
     }
   }
-
   // Navigation handles (useNavigation / frame) dispatch targeted
   // refetches by calling this handler with a fully-formed URL.
   // Exposed on `window` directly to avoid module-instance duplication
@@ -359,10 +376,8 @@ async function main() {
     claimCommit?: () => boolean,
   ) => fetchRscPayload(url, signal, claimCommit)
   // Preload counterpart: warm-only, no commit. See `warmRscPayload`.
-  ;(window as any).__rsc_partial_preload = (
-    url: string,
-    signal?: AbortSignal,
-  ) => warmRscPayload(url, signal)
+  ;(window as any).__rsc_partial_preload = (url: string, signal?: AbortSignal) =>
+    warmRscPayload(url, signal)
 
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet()
@@ -447,11 +462,7 @@ async function main() {
 }
 
 function listenNavigation(
-  onNavigation: (
-    url: string,
-    transitionTypes?: string[],
-    signal?: AbortSignal,
-  ) => Promise<void>,
+  onNavigation: (url: string, transitionTypes?: string[], signal?: AbortSignal) => Promise<void>,
 ) {
   const nav = getNavigation()
   if (!nav) return () => {}

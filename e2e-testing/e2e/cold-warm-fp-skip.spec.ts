@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * Cold→warm fp instability fix via the fp-trailer.
@@ -28,9 +28,7 @@ import { test, expect, request } from "./fixtures"
  * unchanged partials come down.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("re-visit to a route fp-skips on the very next nav after cold", async ({ page }) => {
@@ -50,11 +48,7 @@ test("re-visit to a route fp-skips on the very next nav after cold", async ({ pa
   // Visit /magento (cold). Body renders fully, snapshots register.
   await page.goto("/magento")
   await page.waitForSelector("[data-testid=product-grid]", { timeout: 15000 })
-  await page.waitForFunction(
-    () => typeof (window as any).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   // Clear the response log — we're interested in what happens AFTER
   // the cold render commits.

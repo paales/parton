@@ -90,13 +90,32 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
       // `streaming: true` makes the client commit each pushed segment
       // progressively. The two are orthogonal — a targeted refetch
       // takes `streaming` without `live` and stays one-shot.
-      const { finished } = reload({ streaming: true, live: true, signal: inFlight.signal })
+      const { streaming, finished } = reload({
+        streaming: true,
+        live: true,
+        signal: inFlight.signal,
+      })
+      // `<html data-parton-live>` is the connection's own liveness
+      // marker: set when this fire's first segment has committed
+      // (the subscription is established and pushing), removed when
+      // the connection settles (keepalive elapsed, abort, error).
+      // Consumers that depend on a live push channel — specs waiting
+      // for a server-pushed update, tooling — wait on this signal
+      // instead of guessing whether a stream happens to be open.
+      // Fires are strictly sequential (`inFlight` gates), so the
+      // remove of one fire always precedes the set of the next.
+      streaming
+        .then(() => {
+          if (alive) document.documentElement.setAttribute("data-parton-live", "")
+        })
+        .catch(() => {})
       finished
         .catch(() => {
           // Network error / abort. Clear the in-flight slot so the
           // next interval tick can reopen.
         })
         .finally(() => {
+          document.documentElement.removeAttribute("data-parton-live")
           inFlight = null
         })
     }

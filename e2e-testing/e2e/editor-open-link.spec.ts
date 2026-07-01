@@ -8,16 +8,14 @@
  * page.
  */
 
-import { expect, test, request as apiRequest, waitForRscIdle } from "./fixtures.ts"
+import { clearCaches, expect, test, waitForPageInteractive, waitForRscIdle } from "./fixtures.ts"
 
 test.beforeEach(async ({ baseURL, context }) => {
   // Start from a cold editor state — the editor cookie must NOT be
   // pre-set, otherwise this spec degenerates into "editor was already
   // open."
   await context.clearCookies({ name: "__editor" })
-  const ctx = await apiRequest.newContext({ baseURL })
-  await ctx.get("/__test/clear-caches")
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("clicking the app-nav 'Open Editor' link sets the editor cookie and renders the chrome", async ({
@@ -25,6 +23,7 @@ test("clicking the app-nav 'Open Editor' link sets the editor cookie and renders
   baseURL,
 }) => {
   await page.goto("/")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
 
   // Sanity: editor chrome is NOT visible yet (no cookie).

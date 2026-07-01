@@ -19,6 +19,7 @@ import {
   getCachedPartialIds,
   isFrameworkSilentInfo,
 } from "@parton/framework/lib/partial-client.tsx"
+import { markPageInteractive } from "@parton/framework/lib/page-interactive.ts"
 import { getNavigation } from "@parton/framework/runtime/navigation-api.ts"
 
 async function main() {
@@ -36,7 +37,13 @@ async function main() {
     }, [setPayload_])
 
     React.useEffect(() => {
-      return listenNavigation((url) => fetchRscPayload(url).finished)
+      const off = listenNavigation((url) => fetchRscPayload(url).finished)
+      // BrowserRoot is the tree root, so this effect runs after every
+      // child's — hydration handlers are attached — and the navigate
+      // listener above is now intercepting. Both "safe to interact"
+      // conditions hold; publish the signal.
+      markPageInteractive()
+      return off
     }, [])
 
     return payload.root
@@ -133,16 +140,13 @@ async function main() {
 
     return { streaming, finished }
   }
-
   // Navigation handles (useNavigation / frame) dispatch targeted
   // refetches by calling this handler with a fully-formed URL.
   // Exposed on `window` directly to avoid module-instance duplication
   // between the browser entry bundle and "use client" component
   // bundles.
-  ;(window as any).__rsc_partial_refetch = (
-    url: string,
-    signal?: AbortSignal,
-  ) => fetchRscPayload(url, signal)
+  ;(window as any).__rsc_partial_refetch = (url: string, signal?: AbortSignal) =>
+    fetchRscPayload(url, signal)
 
   setServerCallback(async (id, args) => {
     const temporaryReferences = createTemporaryReferenceSet()

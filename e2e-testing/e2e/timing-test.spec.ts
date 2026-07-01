@@ -1,13 +1,11 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect } from "./fixtures"
 
 // Cold-start every run so the `<Cache>` store doesn't short-circuit
 // stage-2/3's artificial delays. Without this, a prior test's cached
 // `{searchQuery: "ab"}` entry would return instantly and the fallback
 // never flashes.
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("measure stage appearance timing with raw setState", async ({ page }) => {

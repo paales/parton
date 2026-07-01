@@ -12,17 +12,15 @@ import { Button } from "@parton/copies/components/ui/button"
  * hosted at <origin>" annotation on the snapshot so the refetch is
  * routed to the remote.
  */
-export function RemoteRefreshButton({
-  selector,
-  label,
-}: {
-  selector: string
-  label: string
-}) {
+export function RemoteRefreshButton({ selector, label }: { selector: string; label: string }) {
   const [reload, { committed, finished }] = useNavigation().reload()
   const pending = committed && !finished
   return (
     <Button
+      // `data-hydrated`: React owns the button (onClick live) — the
+      // host chrome hydrates after the page shell; e2e specs click via
+      // the marker-qualified locator.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       size="sm"
       variant="outline"

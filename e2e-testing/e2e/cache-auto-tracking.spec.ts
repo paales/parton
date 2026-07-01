@@ -1,4 +1,4 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, request, test } from "./fixtures"
 
 /**
  * End-to-end verification of cache keying off the spec's vary.
@@ -11,16 +11,23 @@ import { expect, request, test } from "./fixtures"
  * increments).
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 async function readRenderCount(page: import("@playwright/test").Page): Promise<number> {
   // Read the count baked INTO the cached SlowContent, not the outer
   // `server-render-count` span (which sits outside the cache and
   // reflects the live module-level counter on every request).
-  const attr = await page.locator('[data-testid="slow-content"]').getAttribute("data-render-count")
+  //
+  // `.first()` — while a Suspense re-commit is in flight (e.g. the
+  // live heartbeat re-rendering the partial), React keeps the prior
+  // children hidden in the DOM alongside the incoming copy, so the
+  // testid transiently matches twice. Both copies carry the same
+  // cached bytes; either one answers the render-count question.
+  const attr = await page
+    .locator('[data-testid="slow-content"]')
+    .first()
+    .getAttribute("data-render-count")
   return Number(attr)
 }
 

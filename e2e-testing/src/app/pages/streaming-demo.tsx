@@ -33,11 +33,7 @@
 
 import { parton, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
-import {
-  BumpButton,
-  PushUrlButton,
-  StreamingDemoReady,
-} from "../components/streaming-demo-buttons.tsx"
+import { BumpButton, PushUrlButton } from "../components/streaming-demo-buttons.tsx"
 import { CardForm } from "../components/streaming-demo-card-form.tsx"
 import {
   applyLocalTransform,
@@ -133,9 +129,8 @@ export const StreamingDemoPage = parton(
         <title>Streaming primitives demo</title>
         <h1 className="text-2xl font-semibold">Streaming primitives</h1>
         <p className="text-sm text-muted-foreground">
-          Three live demonstrations of the segmented-Flight server
-          primitives. Open the network panel to watch chunks land
-          in one rolling HTTP response.
+          Three live demonstrations of the segmented-Flight server primitives. Open the network
+          panel to watch chunks land in one rolling HTTP response.
         </p>
 
         <Card className="p-5">
@@ -146,11 +141,9 @@ export const StreamingDemoPage = parton(
           </CardHeader>
           <CardContent className="px-0">
             <p className="mb-2 text-xs text-muted-foreground">
-              <code>vary</code> reads <code>time.nextSecond</code> as
-              its <code>expiresAt</code>. The framework's heartbeat
-              holds the page's RSC connection open; the segment
-              driver wakes at each second boundary and re-renders,
-              shipping the next tick as a new segment.
+              <code>vary</code> reads <code>time.nextSecond</code> as its <code>expiresAt</code>.
+              The framework's heartbeat holds the page's RSC connection open; the segment driver
+              wakes at each second boundary and re-renders, shipping the next tick as a new segment.
             </p>
             <LiveTick />
           </CardContent>
@@ -164,11 +157,10 @@ export const StreamingDemoPage = parton(
           </CardHeader>
           <CardContent className="px-0">
             <p className="mb-2 text-xs text-muted-foreground">
-              Bump button calls <code>bumps.set(bumps.value + 1)</code>{" "}
-              through the cell's Flight-serialized server-action ref.
-              The action's response refetches{" "}
-              <code>cell:demo.bumps</code>, which the cell layer
-              auto-stamps onto this parton's labels.
+              Bump button calls <code>bumps.set(bumps.value + 1)</code> through the cell's
+              Flight-serialized server-action ref. The action's response refetches{" "}
+              <code>cell:demo.bumps</code>, which the cell layer auto-stamps onto this parton's
+              labels.
             </p>
             <BumpCounter />
           </CardContent>
@@ -183,11 +175,10 @@ export const StreamingDemoPage = parton(
           <CardContent className="flex flex-col gap-3 px-0">
             <p className="text-xs text-muted-foreground">
               The Push URL button fires a server action that calls{" "}
-              <code>{"getServerNavigation().navigate(`?seq=${N}`)"}</code>
-              . The response trailer carries a <code>url</code> entry
-              that the client applies via{" "}
-              <code>{"_windowNav().navigate(url, { silent: true })"}</code>{" "}
-              — same URL bar update, no redundant page-level refetch.
+              <code>{"getServerNavigation().navigate(`?seq=${N}`)"}</code>. The response trailer
+              carries a <code>url</code> entry that the client applies via{" "}
+              <code>{"_windowNav().navigate(url, { silent: true })"}</code> — same URL bar update,
+              no redundant page-level refetch.
             </p>
             <PushUrlButton />
           </CardContent>
@@ -196,37 +187,27 @@ export const StreamingDemoPage = parton(
         <Card className="p-5">
           <CardHeader className="px-0">
             <CardTitle className="text-base">
-              4. controlled form — three cells, atomic batch, random
-              server delay
+              4. controlled form — three cells, atomic batch, random server delay
             </CardTitle>
           </CardHeader>
           <CardContent className="px-0">
             <p className="mb-3 text-xs text-muted-foreground">
-              Five cells: three form values (<code>cardName</code>,{" "}
-              <code>cardNumber</code>, <code>cardCvc</code>) and two
-              demo toggles (<code>serverDelay</code>,{" "}
-              <code>applyLocalTransform</code>). The client binds
-              inputs via <code>useCell(cell).input(...)</code> — the
-              hook owns refs, caret restoration, and the per-keystroke
-              transform + <code>set</code> pipeline. Each keystroke
-              fires <code>set</code> on name/number AND a coin-flipped
-              CVC: 50% in the same microtask batch (one{" "}
-              <code>__cellWriteBatch</code> POST, all three cells
-              commit together), 50% via a 50 ms setTimeout (two POSTs).
-              Per-batch latency is a trimodal simulator (0–30 ms /
-              100–200 ms / 400–500 ms), gated by the{" "}
-              <code>serverDelay</code> cell so the toggle broadcasts
-              the choice across tabs. Open in a second tab to watch
-              the authoritative panel update from the other tab's
-              typing — every cell is global
-              (<code>vary: () =&gt; ({"{}"})</code>), broadcast rides
-              the open heartbeat stream.
+              Five cells: three form values (<code>cardName</code>, <code>cardNumber</code>,{" "}
+              <code>cardCvc</code>) and two demo toggles (<code>serverDelay</code>,{" "}
+              <code>applyLocalTransform</code>). The client binds inputs via{" "}
+              <code>useCell(cell).input(...)</code> — the hook owns refs, caret restoration, and the
+              per-keystroke transform + <code>set</code> pipeline. Each keystroke fires{" "}
+              <code>set</code> on name/number AND a coin-flipped CVC: 50% in the same microtask
+              batch (one <code>__cellWriteBatch</code> POST, all three cells commit together), 50%
+              via a 50 ms setTimeout (two POSTs). Per-batch latency is a trimodal simulator (0–30 ms
+              / 100–200 ms / 400–500 ms), gated by the <code>serverDelay</code> cell so the toggle
+              broadcasts the choice across tabs. Open in a second tab to watch the authoritative
+              panel update from the other tab's typing — every cell is global (
+              <code>vary: () =&gt; ({"{}"})</code>), broadcast rides the open heartbeat stream.
             </p>
             <CardFormPartial />
           </CardContent>
         </Card>
-
-        <StreamingDemoReady />
       </main>
     )
   },

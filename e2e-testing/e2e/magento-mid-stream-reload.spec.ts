@@ -1,4 +1,4 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, test } from "./fixtures"
 
 /**
  * Bug reproduction: reloading /magento before LivePrice partials
@@ -12,9 +12,7 @@ import { expect, request, test } from "./fixtures"
  * resolves.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches?all=1`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("reload mid-stream lands cleanly on the magento page", async ({ page }) => {
@@ -29,10 +27,12 @@ test("reload mid-stream lands cleanly on the magento page", async ({ page }) => 
   // After reload, the page must settle into a healthy state:
   //  - No "Partial failed to render" error cards.
   //  - Prices eventually resolve.
-  await expect(page.getByText("failed to render")).toHaveCount(0, { timeout: 1000 }).catch(() => {
-    // The error might still be there transiently; we'll re-check after
-    // the prices resolve.
-  })
+  await expect(page.getByText("failed to render"))
+    .toHaveCount(0, { timeout: 1000 })
+    .catch(() => {
+      // The error might still be there transiently; we'll re-check after
+      // the prices resolve.
+    })
   await page.waitForSelector('[data-testid^="live-price-"][data-price-tick]', {
     timeout: 15000,
   })

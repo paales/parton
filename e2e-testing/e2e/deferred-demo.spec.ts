@@ -1,4 +1,10 @@
-import { test, expect, request } from "./fixtures"
+import {
+  clearCaches,
+  test,
+  expect,
+  waitForLiveConnection,
+  waitForPageInteractive,
+} from "./fixtures"
 
 /**
  * /deferred-demo — a `deferred` cell write propagates ONLY over the
@@ -14,36 +20,29 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5379"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
-
-// Wait for the page's use-client subtree to hydrate — `DeferredDemoReady`
-// stamps `data-deferred-demo-ready` on `<body>` from a post-commit
-// effect, by which point the Ping button's onClick is attached. Without
-// it a fast Playwright click can land on the SSR DOM before
-// `hydrateRoot` installs its delegated listener and no-op.
-async function waitForReady(page: import("@playwright/test").Page): Promise<void> {
-  await page.locator("body[data-deferred-demo-ready]").waitFor({ timeout: 10000 })
-}
 
 test("deferred write propagates over the open heartbeat stream", async ({ page }) => {
   await page.goto("/deferred-demo")
   await expect(page.locator('[data-testid="deferred-pings"]')).toContainText("Pings: 0", {
     timeout: 10000,
   })
-  await waitForReady(page)
+  await waitForPageInteractive(page)
 
-  await page.locator('[data-testid="deferred-ping-btn"]').click()
+  // A deferred write rides the live stream — click only while the
+  // subscription's own marker says it's open and committing, so each
+  // ping's segment has a channel to arrive on.
+  await waitForLiveConnection(page)
+  await page.locator('[data-testid="deferred-ping-btn"][data-hydrated]').click()
   // The action POST returns no root; the new value arrives on the next
-  // heartbeat segment. Generous timeout — the heartbeat may need to
-  // (re)open its streaming connection before the bump lands.
+  // heartbeat segment.
   await expect(page.locator('[data-testid="deferred-pings"]')).toContainText("Pings: 1", {
     timeout: 15000,
   })
 
-  await page.locator('[data-testid="deferred-ping-btn"]').click()
+  await waitForLiveConnection(page)
+  await page.locator('[data-testid="deferred-ping-btn"][data-hydrated]').click()
   await expect(page.locator('[data-testid="deferred-pings"]')).toContainText("Pings: 2", {
     timeout: 15000,
   })
@@ -59,9 +58,9 @@ test("with the heartbeat off, the write completes but nothing commits on the POS
   await expect(page.locator('[data-testid="deferred-pings"]')).toContainText("Pings: 0", {
     timeout: 10000,
   })
-  await waitForReady(page)
+  await waitForPageInteractive(page)
 
-  await page.locator('[data-testid="deferred-ping-btn"]').click()
+  await page.locator('[data-testid="deferred-ping-btn"][data-hydrated]').click()
   // The write round-trips: `sent:` advances once `pings.set(...)` resolves.
   await expect(page.locator('[data-testid="deferred-ping-sent"]')).toContainText("sent: 1", {
     timeout: 10000,

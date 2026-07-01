@@ -1,4 +1,4 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, request, test, waitForPageInteractive } from "./fixtures"
 
 /**
  * Dynamic Partial discovery + refresh end-to-end.
@@ -17,9 +17,7 @@ import { expect, request, test } from "./fixtures"
 // without clearing, dynamic refetches can return cached bytes that
 // don't match the current page state.
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("dynamic live-price Partial is discoverable and individually refetchable by id", async ({
@@ -48,12 +46,12 @@ test("dynamic live-price Partial is discoverable and individually refetchable by
   expect(sku.length).toBeGreaterThan(0)
 
   rscRefetches.length = 0
-  await page.locator(`[data-testid="refresh-price-${sku}"]`).first().click()
+  await page.locator(`[data-testid="refresh-price-${sku}"][data-hydrated]`).first().click()
 
   // The refetch should hit the RSC endpoint with a single id. The id
   // is the framework-derived per-instance instance id — opaque on the
   // wire but stable for self-refetch via the `@self` selector token.
-  await expect.poll(() => rscRefetches.length, { timeout: 5000 }).toBeGreaterThan(0)
+  await expect.poll(() => rscRefetches.length, { timeout: 10000 }).toBeGreaterThan(0)
   const partials = rscRefetches[0].partials
   expect(partials).toBeTruthy()
   // The id is derived from the spec id ("price") plus a per-instance
@@ -85,11 +83,11 @@ test("clicking refresh updates the targeted price's tick in the DOM", async ({ p
   const otherPrice = page.locator('[data-testid^="live-price-"][data-price-tick]').nth(1)
   const otherTickBefore = await otherPrice.getAttribute("data-price-tick")
 
-  await page.locator(`[data-testid="refresh-price-${sku}"]`).first().click()
+  await page.locator(`[data-testid="refresh-price-${sku}"][data-hydrated]`).first().click()
 
   // The targeted price's tick should update within a few seconds.
   await expect
-    .poll(() => firstPrice.getAttribute("data-price-tick"), { timeout: 5000 })
+    .poll(() => firstPrice.getAttribute("data-price-tick"), { timeout: 10000 })
     .not.toBe(tickBefore)
 
   // Sibling did NOT get refreshed.
@@ -126,14 +124,7 @@ test("clicking 'refresh all prices' updates every visible price in one request",
   const firstPrice = page.locator('[data-testid^="live-price-"][data-price-tick]').first()
   await expect(firstPrice).toBeVisible({ timeout: 15000 })
 
-  // Hydration must have installed `window.__rsc_partial_refetch`
-  // before the click — otherwise the handler's early-return fires
-  // silently and the test sees no Flight request.
-  await page.waitForFunction(
-    () => typeof (window as any).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   // Snapshot all visible ticks before the click.
   const before = await page.$$eval('[data-testid^="live-price-"][data-price-tick]', (els) =>
@@ -145,10 +136,10 @@ test("clicking 'refresh all prices' updates every visible price in one request",
   expect(before.length).toBeGreaterThan(2)
 
   rscRefetches.length = 0
-  await page.locator('[data-testid="refresh-all-prices"]').click()
+  await page.locator('[data-testid="refresh-all-prices"][data-hydrated]').click()
 
   // Exactly one refetch, carrying the `price` label.
-  await expect.poll(() => rscRefetches.length, { timeout: 5000 }).toBeGreaterThan(0)
+  await expect.poll(() => rscRefetches.length, { timeout: 10000 }).toBeGreaterThan(0)
   expect(rscRefetches[0].partials).toBe("price")
 
   // Every price's tick should update to a new value.
@@ -167,7 +158,7 @@ test("clicking 'refresh all prices' updates every visible price in one request",
           return a != null && a !== b.tick
         })
       },
-      { timeout: 5000 },
+      { timeout: 10000 },
     )
     .toBe(true)
 })

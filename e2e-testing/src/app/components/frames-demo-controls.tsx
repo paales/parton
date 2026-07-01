@@ -23,6 +23,10 @@ export function FrameNavigateButton({
   const [navigate] = nav.navigate()
   return (
     <Button
+      // `data-hydrated`: React owns the button (onClick live) — the
+      // frame content hydrates after the page shell; e2e specs wait
+      // for the marker before clicking.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       size="sm"
       variant="outline"

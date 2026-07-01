@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * With `keepalive: true` (the default on every spec), partials that
@@ -18,9 +18,7 @@ import { test, expect, request } from "./fixtures"
  * pruned and the round-trip would lose state.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("client-side nav from /pokemon/1 to /defer-demo keeps parked ids in ?cached=", async ({
@@ -30,11 +28,7 @@ test("client-side nav from /pokemon/1 to /defer-demo keeps parked ids in ?cached
   // species, trivia, plus search stages and dynamic price-XXX.
   await page.goto("/pokemon/1")
   await page.waitForSelector("header", { timeout: 10000 })
-  await page.waitForFunction(
-    () => typeof (window as any).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   // Client-side nav via the app-nav link. A hard `page.goto` would
   // drop the browser process entirely and clear module state (making
@@ -43,11 +37,7 @@ test("client-side nav from /pokemon/1 to /defer-demo keeps parked ids in ?cached
   // Maps, which is what we want to assert against.
   await page.getByRole("link", { name: /Defer Demo/ }).click()
   await expect(page.locator('[data-testid="manual-fallback"]')).toBeVisible()
-  await page.waitForFunction(
-    () => typeof (window as any).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   // Capture the RSC refetch URL when we activate the "manual" partial.
   // Match specifically on `partials=manual` — mount/visible activators on

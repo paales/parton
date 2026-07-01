@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * Verify: on a navigation (URL param change), the server skips
@@ -12,9 +12,7 @@ test.beforeEach(async ({ baseURL, page }) => {
   await page.addInitScript(() => {
     ;(window as unknown as { __partonHeartbeatDisabled?: boolean }).__partonHeartbeatDisabled = true
   })
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("nav with warm client cache streams placeholders for unchanged partials", async ({ page }) => {
@@ -35,11 +33,7 @@ test("nav with warm client cache streams placeholders for unchanged partials", a
   // their current fingerprints.
   await page.goto("/pokemon/1")
   await page.waitForSelector("header", { timeout: 10000 })
-  await page.waitForFunction(
-    () => typeof (window as any).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   rscResponses.length = 0
 
@@ -47,8 +41,11 @@ test("nav with warm client cache streams placeholders for unchanged partials", a
   // param makes stage-1 appear (new mount), but every other partial
   // in the tree is unchanged. Use the "Search (URL)" button so the
   // navigate event fires through the framework's normal path.
-  await page.getByRole("button", { name: /Search \(URL\)/ }).click()
-  await page.waitForSelector("input[type=text]", { timeout: 10000 })
+  await page
+    .getByRole("button", { name: /Search \(URL\)/ })
+    .and(page.locator("[data-hydrated]"))
+    .click()
+  await page.waitForSelector("input[type=text][data-hydrated]", { timeout: 10000 })
 
   expect(rscResponses.length, "expected one RSC response for the nav").toBe(1)
 

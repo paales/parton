@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request } from "./fixtures"
 
 /**
  * /defer-demo § 2,5 — dispatch behavior under concurrent activations.
@@ -15,9 +15,7 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test.describe("defer batching + race", () => {
@@ -70,38 +68,38 @@ test.describe("defer batching + race", () => {
     // `waitUntil: "commit"` lets us observe the streaming fallback
     // before the 1.5s slow partial resolves. Default `load` waits for
     // stream close, which hides the interleaving this test is about.
-    const start = Date.now()
     await page.goto("/defer-demo", { waitUntil: "commit" })
 
     // The slow partial streams its Suspense fallback first. race-defer
     // activates on mount and completes its refetch in parallel with
     // the slow stream.
     await page.waitForSelector('[data-testid="slow-fallback"]', {
-      timeout: 5000,
+      timeout: 10000,
     })
-    const fallbackMs = Date.now() - start
 
-    // race-defer's refetch should resolve before the 1.5s slow delay
-    // — it's a cold refetch of trivial content, typical ~200-400ms.
     await page.waitForSelector('[data-testid="race-defer-content"]', {
-      timeout: 5000,
+      timeout: 10000,
     })
-    const raceMs = Date.now() - start
-
-    // Finally the slow partial resolves.
     await page.waitForSelector('[data-testid="slow-content"]', {
-      timeout: 5000,
+      timeout: 10000,
     })
-    const slowMs = Date.now() - start
 
-    console.log(`fallback=${fallbackMs}ms race-defer=${raceMs}ms slow-content=${slowMs}ms`)
-
-    // race-defer must land meaningfully earlier than the slow stream.
-    // If they serialized (race waited on slow, or vice versa), both
-    // would arrive together near the 1.5s mark.
+    // The non-waiting claim, from the SERVER's own render stamps:
+    // race-defer's activation render STARTED before the slow stream
+    // FINISHED its 1.5s of work — the two ran concurrently. A
+    // pipeline that serialized the activation behind the slow stream
+    // could never produce that interval overlap. Server-clock stamps
+    // are immune to client-side scheduling jitter, unlike a
+    // wall-clock arrival gap.
+    const raceStarted = Number(
+      await page.locator('[data-testid="race-defer-content"]').getAttribute("data-started-at"),
+    )
+    const slowFinished = Number(
+      await page.locator('[data-testid="slow-content"]').getAttribute("data-finished-at"),
+    )
     expect(
-      slowMs - raceMs,
-      `expected race-defer to land well before slow-content; race=${raceMs}ms slow=${slowMs}ms`,
-    ).toBeGreaterThan(400)
+      raceStarted,
+      `race-defer must start before the slow stream finishes (parallel); race.started=${raceStarted} slow.finished=${slowFinished}`,
+    ).toBeLessThan(slowFinished)
   })
 })

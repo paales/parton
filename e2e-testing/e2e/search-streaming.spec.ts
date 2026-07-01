@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * E2E test: do search stages stream progressively on AJAX refetch?
@@ -31,10 +31,14 @@ test("search stages stream progressively on AJAX refetch", async ({ page }) => {
   })
   console.log("Initial SSR: all 3 stages loaded")
 
+  // The toggle + keystrokes below need live React handlers — checking
+  // the box pre-hydration flips the DOM without updating React state.
+  await waitForPageInteractive(page)
+
   // Opt into streaming commit mode. Default is startTransition
   // (preserve UI, no fallback, no per-chunk streaming), which this
   // test is not about.
-  await page.locator('[data-testid="streaming-toggle"] input').check()
+  await page.locator('[data-testid="streaming-toggle"] input[data-hydrated]').check()
 
   // 2. Inject timing tracker before typing
   await page.evaluate(() => {
@@ -111,7 +115,7 @@ test("search stages stream progressively on AJAX refetch", async ({ page }) => {
   //    Move cursor to end first, then type. Start the clock explicitly,
   //    just before typing — stage-1 has 0ms delay so there's no
   //    fallback-flash to detect; we need to anchor t0 manually.
-  const input = page.locator("input[type=text]")
+  const input = page.locator("input[type=text][data-hydrated]")
   await input.focus()
   await input.press("End")
   await page.evaluate(() => {

@@ -11,10 +11,10 @@
  */
 
 import { gqlCellBuilder } from "@parton/framework"
-import { client } from "../../magento-data.ts"
+import { catalogClient } from "../../magento-data.ts"
 import { graphql } from "../../magento-graphql.ts"
 
-const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
+const magento = gqlCellBuilder({ client: catalogClient, graphql, prefix: "magento" })
 
 // id auto-derives to "magento.products" (operation name + prefix).
 // `currentPage` partitions the cache per page, so an infinite-scroll

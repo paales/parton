@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * The app-nav highlights the link for the current route. "Active" is
@@ -34,13 +34,11 @@ test("active nav link is server-rendered and flips on client navigation", async 
 
   // Live page: the same link is marked active.
   await page.goto(`${base}/cache-demo`)
+  await waitForPageInteractive(page)
   await expect(page.locator('a[href="/cache-demo"]')).toHaveAttribute("aria-current", "page")
 
   // Client navigation flips the active link (no full reload).
-  await page.locator('a[href="/cms-demo"]').first().click()
-  await expect(page.locator('a[href="/cms-demo"]').first()).toHaveAttribute(
-    "aria-current",
-    "page",
-  )
+  await page.locator('a[href="/cms-demo"][data-hydrated]').first().click()
+  await expect(page.locator('a[href="/cms-demo"]').first()).toHaveAttribute("aria-current", "page")
   await expect(page.locator('a[href="/cache-demo"]')).not.toHaveAttribute("aria-current", "page")
 })

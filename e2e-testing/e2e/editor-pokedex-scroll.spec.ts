@@ -1,4 +1,4 @@
-import { expect, test, request as apiRequest, waitForRscIdle } from "./fixtures.ts"
+import { clearCaches, expect, test, waitForPageInteractive, waitForRscIdle } from "./fixtures.ts"
 
 /**
  * Scrolling the Pokedex while the editor is open must keep the
@@ -13,13 +13,12 @@ test.beforeEach(async ({ baseURL, context }) => {
   // trigger — set the cookie before navigating so the editor chrome
   // renders on the very first response.
   await context.addCookies([{ name: "__editor", value: "1", url: baseURL! }])
-  const ctx = await apiRequest.newContext({ baseURL })
-  await ctx.get("/__test/clear-caches")
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("editor preview keeps Pokedex grid visible after a LoadMore scroll", async ({ page }) => {
   await page.goto("/")
+  await waitForPageInteractive(page)
 
   const preview = page.getByTestId("page-shell")
   await expect(preview).toBeVisible()

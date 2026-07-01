@@ -9,13 +9,19 @@
  *   - Remove line shrinks the cart (and other lines stay)
  */
 
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 // Cart actions share Magento's backend state across all tests in this
 // file. Run serially to avoid cart cookie / cart-id contention under
 // the parallel-workers default — each test creates its own cart and
 // reasons about its own line-uids.
 test.describe.configure({ mode: "serial" })
+
+// Every test here drives REAL GraphCommerce cart mutations — a shared
+// demo backend whose latency is outside our control sets the pace.
+// The waits below are all on real state (badge value, line rows);
+// `slow()` only raises the give-up ceiling to fit the backend's p99.
+test.slow()
 test.use({ actionTimeout: 30000 })
 
 test.beforeEach(async ({ page }) => {
@@ -31,6 +37,7 @@ test.beforeEach(async ({ page }) => {
 
 async function addOneCartLine(page: import("@playwright/test").Page): Promise<void> {
   await page.goto("/magento")
+  await waitForPageInteractive(page)
   // Wait for the badge to settle (no "?" fallback).
   await page.waitForFunction(
     () => {
@@ -38,7 +45,7 @@ async function addOneCartLine(page: import("@playwright/test").Page): Promise<vo
       if (!header) return false
       return !(header.textContent ?? "").includes("?")
     },
-    { timeout: 15000 },
+    { timeout: 20000 },
   )
   const buttons = page.getByRole("button", { name: "Add to Cart" })
   const count = await buttons.count()
@@ -51,10 +58,9 @@ async function addOneCartLine(page: import("@playwright/test").Page): Promise<vo
     // false success while the round-trip is still in flight.
     await Promise.all([
       page
-        .waitForResponse(
-          (r) => r.url().includes("_.rsc") && r.request().method() === "POST",
-          { timeout: 15000 },
-        )
+        .waitForResponse((r) => r.url().includes("_.rsc") && r.request().method() === "POST", {
+          timeout: 15000,
+        })
         .catch(() => null),
       btn.click(),
     ])
@@ -100,7 +106,7 @@ test("badge updates immediately after Add to Cart", async ({ page, context }) =>
       }
       return false
     },
-    { timeout: 15000 },
+    { timeout: 20000 },
   )
 
   const qty = await readQty()
@@ -108,14 +114,18 @@ test("badge updates immediately after Add to Cart", async ({ page, context }) =>
   expect(qty as number).toBeGreaterThan(0)
 })
 
-test("update qty updates the matching cart line and leaves others alone", async ({ page, context }) => {
+test("update qty updates the matching cart line and leaves others alone", async ({
+  page,
+  context,
+}) => {
   await context.clearCookies()
   await addOneCartLine(page)
   // Add a second line so we can verify per-line isolation.
   await addOneCartLine(page)
 
   await page.goto("/magento/cart")
-  await page.locator("[data-testid='cart-lines']").waitFor({ timeout: 10000 })
+  await waitForPageInteractive(page)
+  await page.locator("[data-testid='cart-lines']").waitFor({ timeout: 20000 })
 
   const lines = page.locator("[data-testid^='cart-line-']").filter({
     has: page.locator("[data-testid^='cart-line-name-']"),
@@ -144,7 +154,7 @@ test("update qty updates the matching cart line and leaves others alone", async 
       return el && (el.textContent ?? "").trim() !== oldQty
     },
     { uid: firstUid, oldQty: before[0].qty },
-    { timeout: 10000 },
+    { timeout: 20000 },
   )
 
   // Verify every OTHER line still has its name + qty intact.
@@ -167,7 +177,8 @@ test("remove line removes only that line", async ({ page, context }) => {
   await addOneCartLine(page)
 
   await page.goto("/magento/cart")
-  await page.locator("[data-testid='cart-lines']").waitFor({ timeout: 10000 })
+  await waitForPageInteractive(page)
+  await page.locator("[data-testid='cart-lines']").waitFor({ timeout: 20000 })
 
   const lines = page.locator("[data-testid^='cart-line-']").filter({
     has: page.locator("[data-testid^='cart-line-name-']"),
@@ -175,9 +186,10 @@ test("remove line removes only that line", async ({ page, context }) => {
   const before = await lines.count()
   expect(before).toBeGreaterThanOrEqual(2)
 
-  const firstUid = (
-    (await lines.first().getAttribute("data-testid")) ?? ""
-  ).replace(/^cart-line-/, "")
+  const firstUid = ((await lines.first().getAttribute("data-testid")) ?? "").replace(
+    /^cart-line-/,
+    "",
+  )
   await page.locator(`[data-testid='cart-line-remove-${firstUid}']`).click()
 
   await page.waitForFunction(
@@ -186,6 +198,6 @@ test("remove line removes only that line", async ({ page, context }) => {
       return els.length === count
     },
     before - 1,
-    { timeout: 10000 },
+    { timeout: 20000 },
   )
 })

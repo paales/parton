@@ -1,4 +1,11 @@
-import { test, expect, request } from "./fixtures"
+import {
+  clearCaches,
+  test,
+  expect,
+  waitForLiveConnection,
+  waitForPageInteractive,
+  type Page,
+} from "./fixtures"
 
 /**
  * /streaming-demo card-form (card 4) — exercises:
@@ -17,22 +24,33 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
-async function waitForStreamingDemoReady(
-  page: import("@playwright/test").Page,
-): Promise<void> {
-  await page.locator("body[data-streaming-demo-ready]").waitFor({ timeout: 10000 })
+/**
+ * These tests TYPE into cell-bound inputs, and text input is not
+ * covered by React's discrete-event replay — a keystroke landing
+ * before the input's boundary hydrates is silently lost. Wait for
+ * the page-interactive marker AND the inputs' own `data-hydrated`
+ * (stamped by the framework's `useCell().input()` callback ref at
+ * the commit that wires their onChange pipeline).
+ */
+async function waitForCardFormReady(page: Page): Promise<void> {
+  await waitForPageInteractive(page)
+  // Settle the heartbeat's first live fire: a cold→warm re-commit
+  // landing mid-typing adopts the PRE-typing server value into the
+  // input and swallows the first keystroke. Its own marker says when
+  // it's done.
+  await waitForLiveConnection(page)
+  await page.locator('[data-testid="card-name-input"][data-hydrated]').waitFor({ timeout: 10000 })
+  await page.locator('[data-testid="card-number-input"][data-hydrated]').waitFor({ timeout: 10000 })
 }
 
 test("local-transform ON: name typed verbatim ends up on the server, CVC fires", async ({
   page,
 }) => {
   await page.goto("/streaming-demo")
-  await waitForStreamingDemoReady(page)
+  await waitForCardFormReady(page)
 
   const nameInput = page.locator('[data-testid="card-name-input"]')
   await nameInput.fill("JOHN DOE")
@@ -40,22 +58,20 @@ test("local-transform ON: name typed verbatim ends up on the server, CVC fires",
   // Server panel adopts the typed value once the queue drains. Max
   // server delay per action is 1500 ms; fill issues one keystroke per
   // char so the queue can grow up to N+1 actions. Generous timeout.
-  await expect(page.locator('[data-testid="card-server-name"]')).toContainText(
-    "JOHN DOE",
-    { timeout: 15000 },
-  )
+  await expect(page.locator('[data-testid="card-server-name"]')).toContainText("JOHN DOE", {
+    timeout: 15000,
+  })
   // CVC populated atomically by the same action body.
-  await expect(page.locator('[data-testid="card-server-cvc"]')).not.toContainText(
-    "cvc: —",
-    { timeout: 5000 },
-  )
+  await expect(page.locator('[data-testid="card-server-cvc"]')).not.toContainText("cvc: —", {
+    timeout: 5000,
+  })
 })
 
 test("local-transform OFF: input adopts server-formatted value after the queue drains", async ({
   page,
 }) => {
   await page.goto("/streaming-demo")
-  await waitForStreamingDemoReady(page)
+  await waitForCardFormReady(page)
 
   // Turn off local transform so the input shows raw typing until the
   // server's authoritative value lands.
@@ -66,47 +82,42 @@ test("local-transform OFF: input adopts server-formatted value after the queue d
 
   // Server-authoritative panel shows the cleaned form (no specials,
   // uppercase).
-  await expect(page.locator('[data-testid="card-server-name"]')).toContainText(
-    "JOHNDOE",
-    { timeout: 15000 },
-  )
+  await expect(page.locator('[data-testid="card-server-name"]')).toContainText("JOHNDOE", {
+    timeout: 15000,
+  })
 
   // Once the framework's auto-batched queue drains, the input itself
   // adopts the server value — the visible "reconcile moment."
-  await expect(page.locator('[data-testid="card-name-input"]')).toHaveValue(
-    "JOHNDOE",
-    { timeout: 10000 },
-  )
+  await expect(page.locator('[data-testid="card-name-input"]')).toHaveValue("JOHNDOE", {
+    timeout: 10000,
+  })
 })
 
-test("server inserts spaces in the card number; CVC reflects (name, number)", async ({
-  page,
-}) => {
+test("server inserts spaces in the card number; CVC reflects (name, number)", async ({ page }) => {
   await page.goto("/streaming-demo")
-  await waitForStreamingDemoReady(page)
+  await waitForCardFormReady(page)
 
   // Type 8 digits into the number field. Server formats to "1234 5678".
   await page.locator('[data-testid="card-number-input"]').fill("12345678")
 
-  await expect(page.locator('[data-testid="card-server-number"]')).toContainText(
-    "1234 5678",
-    { timeout: 15000 },
-  )
+  await expect(page.locator('[data-testid="card-server-number"]')).toContainText("1234 5678", {
+    timeout: 15000,
+  })
 
   // CVC is derived deterministically from (cleanName, digits). Empty
   // name + "12345678" produces a specific 3-digit code that the
   // computeCvc helper will land on. We don't assert the exact value
   // (would couple the spec to the hash impl) — just that it's the
   // expected 3-char width and stable across re-typing.
-  const cvc1 = await page.locator('[data-testid="card-server-cvc"]').textContent()
-  expect(cvc1).toMatch(/cvc: \d{3}$/)
+  // The CVC write is coin-flipped between the same batch and a 50 ms
+  // stagger (see the demo's comment) — poll for the derived value
+  // rather than sampling once while the staggered batch is in flight.
+  await expect(page.locator('[data-testid="card-server-cvc"]')).toHaveText(/cvc: \d{3}$/)
 })
 
-test("rapid typing — every character ends up on the server in send-order", async ({
-  page,
-}) => {
+test("rapid typing — every character ends up on the server in send-order", async ({ page }) => {
   await page.goto("/streaming-demo")
-  await waitForStreamingDemoReady(page)
+  await waitForCardFormReady(page)
 
   // pressSequentially fires one keystroke per char with no built-in
   // delay; the framework's auto-batched coalescer is single-inflight
@@ -121,17 +132,14 @@ test("rapid typing — every character ends up on the server in send-order", asy
   // at ~500 ms. With single-inflight the drain takes at most a couple
   // of seconds after the last keystroke. The server-authoritative
   // panel reflects the entire typed string once the queue drains.
-  await expect(page.locator('[data-testid="card-server-name"]')).toContainText(
-    target,
-    { timeout: 20000 },
-  )
+  await expect(page.locator('[data-testid="card-server-name"]')).toContainText(target, {
+    timeout: 20000,
+  })
 })
 
-test("auto-batch: per-keystroke writes coalesce into a small number of POSTs", async ({
-  page,
-}) => {
+test("auto-batch: per-keystroke writes coalesce into a small number of POSTs", async ({ page }) => {
   await page.goto("/streaming-demo")
-  await waitForStreamingDemoReady(page)
+  await waitForCardFormReady(page)
 
   const postUrls: string[] = []
   page.on("request", (req) => {
@@ -188,26 +196,21 @@ test("multi-page broadcast: a second tab sees the typing tab's commits via its h
     const pageB = await ctxB.newPage()
 
     await Promise.all([pageA.goto("/streaming-demo"), pageB.goto("/streaming-demo")])
-    await Promise.all([
-      waitForStreamingDemoReady(pageA),
-      waitForStreamingDemoReady(pageB),
-    ])
+    await Promise.all([waitForCardFormReady(pageA), waitForCardFormReady(pageB)])
 
     await pageA.locator('[data-testid="card-name-input"]').fill("HELLO B")
 
     // Page B never touched its input — yet its server-authoritative
     // panel updates because the heartbeat stream landed a segment
     // with the new cell value.
-    await expect(pageB.locator('[data-testid="card-server-name"]')).toContainText(
-      "HELLO B",
-      { timeout: 15000 },
-    )
+    await expect(pageB.locator('[data-testid="card-server-name"]')).toContainText("HELLO B", {
+      timeout: 15000,
+    })
     // Page B's input ALSO adopts (no inflight/pending on B; the
     // safe-moment rule applies).
-    await expect(pageB.locator('[data-testid="card-name-input"]')).toHaveValue(
-      "HELLO B",
-      { timeout: 5000 },
-    )
+    await expect(pageB.locator('[data-testid="card-name-input"]')).toHaveValue("HELLO B", {
+      timeout: 5000,
+    })
   } finally {
     await ctxA.close()
     await ctxB.close()

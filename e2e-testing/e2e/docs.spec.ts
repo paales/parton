@@ -34,9 +34,7 @@ test.beforeEach(async ({ page }) => {
 
 test("index links into the tree", async ({ page }) => {
   await page.goto("/docs")
-  await expect(
-    page.locator('[data-testid="docs-content"] a[href="/docs/reference"]'),
-  ).toBeVisible()
+  await expect(page.locator('[data-testid="docs-content"] a[href="/docs/reference"]')).toBeVisible()
 })
 
 test("renders a markdown file as HTML", async ({ page }) => {
@@ -67,9 +65,7 @@ test("renders a code file's contents", async ({ page }) => {
 })
 
 test("serves image bytes for linked screenshots", async ({ page, baseURL }) => {
-  const res = await page.request.get(
-    `${baseURL}/docs/archive/design/v6-screenshots/01-default.png`,
-  )
+  const res = await page.request.get(`${baseURL}/docs/archive/design/v6-screenshots/01-default.png`)
   expect(res.status()).toBe(200)
   expect(res.headers()["content-type"]).toBe("image/png")
   expect((await res.body()).length).toBeGreaterThan(0)

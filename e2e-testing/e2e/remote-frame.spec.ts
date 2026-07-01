@@ -1,4 +1,4 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, request, test, waitForPageInteractive } from "./fixtures"
 
 /**
  * /remote-frame-demo — `<RemoteFrame>` integration coverage.
@@ -15,9 +15,7 @@ import { expect, request, test } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches?all=1`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("host chrome paints before any remote arrives", async ({ page }) => {
@@ -33,39 +31,51 @@ test("host chrome paints before any remote arrives", async ({ page }) => {
   await expect(page.getByTestId("remote-slow")).toBeVisible({ timeout: 5000 })
 })
 
-test("multiple remotes stream in parallel (fastest arrives well before slowest)", async ({
-  page,
-}) => {
+test("multiple remotes stream in parallel (slow doesn't gate fast)", async ({ page }) => {
   await page.goto("/remote-frame-demo", { waitUntil: "commit" })
 
-  const fastStart = Date.now()
   await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })
-  const fastT = Date.now() - fastStart
+  await page.waitForSelector('[data-testid="remote-slow"]', { timeout: 10000 })
 
-  await page.waitForSelector('[data-testid="remote-slow"]', { timeout: 5000 })
-  const slowT = Date.now() - fastStart
-
-  // remote-fast (200ms) vs remote-slow (1000ms). If they were
-  // serialized, fast would be ~200ms and slow would be ~1200ms.
-  // In parallel both fire concurrently. fast arrives < slow by at
-  // least ~500ms — generous slack for the SSR stream pipeline.
+  // Parallelism from the remotes' own render intervals: each card
+  // stamps `data-started-at` / `data-finished-at` (server clock,
+  // around its awaited delay — fast 200ms, slow 1000ms). Rendered in
+  // parallel means the intervals OVERLAP: slow must have started
+  // before fast finished. A pipeline that serialized the remote
+  // fetches would start slow only after fast (and mid) completed.
+  // `.first()` — during a Suspense re-commit (heartbeat re-render)
+  // React transiently keeps the prior children hidden alongside the
+  // incoming copy, so the testid can match twice with identical
+  // stamps. Either copy answers the interval question.
+  const read = async (testid: string) => {
+    const el = page.getByTestId(testid).first()
+    return {
+      started: Number(await el.getAttribute("data-started-at")),
+      finished: Number(await el.getAttribute("data-finished-at")),
+    }
+  }
+  const fast = await read("remote-fast")
+  const slow = await read("remote-slow")
   expect(
-    slowT - fastT,
-    `parallel streaming check: fast=${fastT}ms slow=${slowT}ms`,
-  ).toBeGreaterThan(400)
+    slow.started,
+    `slow must start before fast finishes (parallel); fast=${JSON.stringify(fast)} slow=${JSON.stringify(slow)}`,
+  ).toBeLessThan(fast.finished)
 })
 
 test("client component inside a remote spec hydrates and is interactive", async ({ page }) => {
   await page.goto("/remote-frame-demo")
+  await waitForPageInteractive(page)
 
   // Wait for the remote that contains ClickCounter.
-  await page.waitForSelector('[data-testid="remote-counter-mount"]', { timeout: 5000 })
+  await page.waitForSelector('[data-testid="remote-counter-mount"]', {
+    timeout: 5000,
+  })
 
   // Scope the ClickCounter query to the remote-counter mount — the
   // cached-region demo has its own copy and we don't want to grab it.
   const counter = page
     .getByTestId("remote-counter-mount")
-    .getByTestId("click-counter")
+    .locator('[data-testid="click-counter"][data-hydrated]')
 
   await expect(counter).toHaveText(/clicked 0/, { timeout: 5000 })
   await counter.click()
@@ -74,21 +84,18 @@ test("client component inside a remote spec hydrates and is interactive", async 
   await expect(counter).toHaveText(/clicked 2/)
 })
 
-test("cached remote spec: second direct fetch is faster than the first", async ({
-  request,
-}) => {
-  const coldStart = Date.now()
-  await request.get("/__remote/remote-cached")
-  const coldMs = Date.now() - coldStart
+test("cached remote spec: second direct fetch replays the stored render", async ({ request }) => {
+  // The spec renders an ISO timestamp AFTER its 500ms of awaited
+  // work. A cache hit replays the stored Flight bytes, so the second
+  // fetch must carry the SAME timestamp — the direct signal the work
+  // didn't re-run (wall-clock comparisons only correlate with it).
+  const iso = /\d{4}-\d{2}-\d{2}T[\d:.]+Z/
+  const coldBody = await (await request.get("/__remote/remote-cached")).text()
+  const coldStamp = coldBody.match(iso)?.[0]
+  expect(coldStamp, "cold render must carry a timestamp").toBeDefined()
 
-  const warmStart = Date.now()
-  await request.get("/__remote/remote-cached")
-  const warmMs = Date.now() - warmStart
-
-  // Cold pays the 500ms artificial delay; warm hits the cache and
-  // returns immediately. Generous bounds for CI.
-  expect(coldMs).toBeGreaterThan(400)
-  expect(warmMs).toBeLessThan(coldMs / 3)
+  const warmBody = await (await request.get("/__remote/remote-cached")).text()
+  expect(warmBody.match(iso)?.[0], "warm fetch must replay the stored timestamp").toBe(coldStamp)
 })
 
 test("refresh button updates a remote frame's timestamp", async ({ page }) => {
@@ -104,15 +111,18 @@ test("refresh button updates a remote frame's timestamp", async ({ page }) => {
   // `source: "remote:<origin>"` annotation to route refetches
   // back to the remote endpoint.
   await page.goto("/remote-frame-demo")
+  await waitForPageInteractive(page)
   await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })
 
   const card = page.getByTestId("remote-fast")
   const initialText = await card.textContent()
 
-  await page.getByTestId("rfd-refresh-remote-fast").click()
+  await page.locator('[data-testid="rfd-refresh-remote-fast"][data-hydrated]').click()
 
   await expect
-    .poll(async () => (await card.textContent()) !== initialText, { timeout: 5000 })
+    .poll(async () => (await card.textContent()) !== initialText, {
+      timeout: 5000,
+    })
     .toBe(true)
 })
 

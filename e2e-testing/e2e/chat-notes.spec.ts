@@ -1,4 +1,4 @@
-import { test, expect, request, type Page } from "./fixtures"
+import { clearCaches, test, expect, waitForPageInteractive, type Page } from "./fixtures"
 
 // Skipped: requires the `/chat-notes` route + the `defaultOpen` /
 // `frameUrl` plumbing on `<ChatOverlay/>`, neither of which is wired
@@ -51,15 +51,14 @@ test.afterAll(async ({ baseURL }) => {
   // After the whole spec finishes, kill any producer that the final
   // test left running (the 10-second budget may not have elapsed) and
   // wipe sessions / logs so downstream specs inherit a clean server.
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test.skip("empty state renders when ?msgs= is explicitly empty", async ({ page }) => {
   // No ?msgs= defaults to streaming AA_CHAT_STREAMING; pass an empty
   // value to force the empty state.
   await page.goto("/chat-notes?msgs=")
+  await waitForPageInteractive(page)
   await expect(page.locator('[data-testid="chat-box"]')).toBeVisible()
   await expect(page.locator('[data-testid="chat-empty"]')).toBeVisible()
   expect(await page.locator("[data-chunk]").count()).toBe(0)
@@ -71,6 +70,7 @@ test.skip("initial render bounds Piece recursion at MAX_DEPTH with a ResumeTail"
   // IDEAS.md has ~79 paragraphs — guaranteed to exceed MAX_DEPTH so the
   // initial render hits the bound.
   await page.goto("/chat-notes?msgs=IDEAS")
+  await waitForPageInteractive(page)
 
   // Wait for the first chunk to show (log producer + Flight stream).
   await expect(page.locator('[data-testid="chat-body-IDEAS"] [data-chunk]').first()).toBeAttached({
@@ -99,6 +99,7 @@ test.skip("initial render bounds Piece recursion at MAX_DEPTH with a ResumeTail"
 
 test.skip("chat list auto-scrolls to bottom as chunks stream in", async ({ page }) => {
   await page.goto("/chat-notes?msgs=IDEAS")
+  await waitForPageInteractive(page)
 
   // Wait until there's enough content for the list to actually overflow.
   await expect
@@ -128,6 +129,7 @@ test.skip("chat list auto-scrolls to bottom as chunks stream in", async ({ page 
 
 test.skip("compaction: cursor advances and chunk count grows monotonically", async ({ page }) => {
   await page.goto("/chat-notes?msgs=IDEAS")
+  await waitForPageInteractive(page)
 
   // The message mounts with cursor=0.
   await expect(page.locator('[data-testid="chat-msg-IDEAS"]')).toHaveAttribute("data-cursor", "0", {
@@ -158,6 +160,7 @@ test.skip("compaction preserves rendered chunks — never regresses across the s
   page,
 }) => {
   await page.goto("/chat-notes?msgs=IDEAS")
+  await waitForPageInteractive(page)
 
   // Sample the rendered chunk count every ~100ms. Each sample must be
   // >= the previous one — compaction cannot drop chunks, since the
@@ -187,6 +190,7 @@ test.skip("stream reaches the done marker after all compactions finish", async (
   // README.md is ~7000 chars → ~70 chunks at 100 chars/chunk → several
   // compactions → `chat-done-README` when the producer drains the log.
   await page.goto("/chat-notes?msgs=README")
+  await waitForPageInteractive(page)
   await expect(page.locator('[data-testid="chat-done-README"]')).toBeVisible({
     timeout: 10000,
   })
@@ -199,6 +203,7 @@ test.skip("new message link appends a fileId to ?msgs= and a second stream start
   page,
 }) => {
   await page.goto("/chat-notes?msgs=README")
+  await waitForPageInteractive(page)
   // Wait for README to finish so test state is steady before the click.
   await expect(page.locator('[data-testid="chat-done-README"]')).toBeVisible({
     timeout: 10000,

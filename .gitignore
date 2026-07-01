@@ -39,3 +39,8 @@ cms/data/cells.json
 bench/results/prof/
 bench/results/*.log
 bench/results/baseline.json
+
+# GraphQL record/replay store for the e2e harness (see
+# e2e-testing/src/app/gql-disk-cache.ts). Machine-local; delete to
+# re-record.
+.gql-cache/

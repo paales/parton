@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * The search section must CONVERGE on the latest-typed query under a
@@ -26,9 +26,7 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("rapid type then backspace leaves stage-1 consistent with the input", async ({ page }) => {
@@ -36,9 +34,11 @@ test("rapid type then backspace leaves stage-1 consistent with the input", async
   page.on("pageerror", (e) => errors.push(e.message))
 
   await page.goto("/?search=url")
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.waitFor({ state: "visible", timeout: 15000 })
-  await page.waitForTimeout(300)
+  // Text input is not covered by discrete-event replay — wait for the
+  // interactive marker so the onChange pipeline is live.
+  await waitForPageInteractive(page)
   await input.focus()
 
   // Type "pokemon" one key at a time, fast — each keystroke fires a

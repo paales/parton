@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test"
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * /magento/browse — read-tracked view culling.
@@ -59,6 +59,9 @@ async function totalPages(page: Page) {
 test("scrolling down never jumps the viewport backward", async ({ page }) => {
   await page.goto("/magento/browse")
   await page.waitForSelector(card, { timeout: 20000 })
+  // The culling machinery (Fragment-ref observers + refetch dispatch)
+  // only runs on the hydrated page — scroll after the marker.
+  await waitForPageInteractive(page)
 
   const ys = await wheelDown(page, 18)
 
@@ -76,6 +79,9 @@ test("culling follows the viewport — products load where you scroll, far pages
 }) => {
   await page.goto("/magento/browse")
   await page.waitForSelector(card, { timeout: 20000 })
+  // The culling machinery (Fragment-ref observers + refetch dispatch)
+  // only runs on the hydrated page — scroll after the marker.
+  await waitForPageInteractive(page)
 
   await wheelDown(page, 18)
   const centered = await centeredPage(page)
@@ -97,12 +103,15 @@ test("culling follows the viewport — products load where you scroll, far pages
 
 test("deep-link ?page=50 lands on page 50 with its products", async ({ page }) => {
   await page.goto("/magento/browse?page=50")
-  await page.waitForSelector(card, { timeout: 20000 })
+  await page.waitForSelector(card, { timeout: 30000 })
+  await waitForPageInteractive(page, { timeout: 30000 })
 
   // The anchor seed renders page 50's neighborhood full on the cold paint;
   // ScrollToPage then lands the viewport there (a mount-effect scroll, so
   // poll for it rather than racing it).
-  await expect(page.locator(`[data-page="50"] ${card}`).first()).toBeVisible({ timeout: 20000 })
+  await expect(page.locator(`[data-page="50"] ${card}`).first()).toBeVisible({
+    timeout: 20000,
+  })
   await expect.poll(() => centeredPage(page), { timeout: 10000 }).toBeGreaterThanOrEqual(48)
   expect(await centeredPage(page)).toBeLessThanOrEqual(52)
 })
@@ -110,6 +119,7 @@ test("deep-link ?page=50 lands on page 50 with its products", async ({ page }) =
 test("data-driven catalog; ?page= mirrors scroll without resetting it", async ({ page }) => {
   await page.goto("/magento/browse")
   await page.waitForSelector('[data-testid="browse-list"]', { timeout: 20000 })
+  await waitForPageInteractive(page)
 
   // Data-driven count (from total_count), well over any hardcoded pool;
   // every page gets a reserved section — culling, not windowing, so the
@@ -126,12 +136,16 @@ test("data-driven catalog; ?page= mirrors scroll without resetting it", async ({
   // silent (no refetch), and it must NOT yank the viewport back to the top
   // (the silent-navigate scroll-reset bug).
   await expect
-    .poll(() => Number(new URL(page.url()).searchParams.get("page") || "0"), { timeout: 5000 })
+    .poll(() => Number(new URL(page.url()).searchParams.get("page") || "0"), {
+      timeout: 5000,
+    })
     .toBeGreaterThan(3)
   const param = Number(new URL(page.url()).searchParams.get("page"))
   expect(Math.abs(param - ((await centeredPage(page)) ?? 0))).toBeLessThanOrEqual(2)
   const yAfter = await page.evaluate(() => Math.round(window.scrollY))
-  expect(Math.abs(yAfter - yScrolled), "silent ?page= write kept the viewport put").toBeLessThan(120)
+  expect(Math.abs(yAfter - yScrolled), "silent ?page= write kept the viewport put").toBeLessThan(
+    120,
+  )
 })
 
 test("client-side nav from home swaps to browse, not a torn page", async ({ page }) => {
@@ -141,7 +155,8 @@ test("client-side nav from home swaps to browse, not a torn page", async ({ page
   // visible on top. The controller now defers culling until the navigation
   // settles.
   await page.goto("/")
-  await page.locator('a[href="/magento/browse"]').first().click()
+  await waitForPageInteractive(page)
+  await page.locator('a[href="/magento/browse"][data-hydrated]').first().click()
   // The visible page heading becomes browse's, and its sections render —
   // home is swapped out (keepalive-hidden), not torn on top.
   await expect(page.locator("h1:visible").first()).toHaveText("Browse Products", { timeout: 20000 })

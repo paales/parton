@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * "Search (Frame)" — frame-scoped version of the pokemon search demo.
@@ -16,11 +16,7 @@ test.beforeEach(async ({ request }) => {
 })
 
 async function awaitHydrated(page: import("@playwright/test").Page) {
-  await page.waitForFunction(() => {
-    const el = document.querySelector('[data-testid="search-frame-open"]')
-    if (!el) return false
-    return Object.keys(el).some((k) => k.startsWith("__reactFiber"))
-  })
+  await waitForPageInteractive(page)
 }
 
 test("opens the search frame without touching the page URL", async ({ page }) => {
@@ -28,11 +24,11 @@ test("opens the search frame without touching the page URL", async ({ page }) =>
   await awaitHydrated(page)
   const beforeUrl = page.url()
 
-  await page.getByTestId("search-frame-open").click()
+  await page.locator('[data-testid="search-frame-open"][data-hydrated]').click()
 
   // The dialog renders from the frame Partial.
   await expect(page.locator("dialog")).toBeVisible()
-  await expect(page.locator("dialog input[type=text]")).toBeVisible()
+  await expect(page.locator("dialog input[type=text][data-hydrated]")).toBeVisible()
 
   // Page URL is untouched — no ?search=, no ?q=.
   expect(page.url()).toBe(beforeUrl)
@@ -43,10 +39,10 @@ test("typing in the frame search navigates the frame, not the page", async ({ pa
   await awaitHydrated(page)
   const beforeUrl = page.url()
 
-  await page.getByTestId("search-frame-open").click()
+  await page.locator('[data-testid="search-frame-open"][data-hydrated]').click()
   await expect(page.locator("dialog")).toBeVisible()
 
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.focus()
   await input.fill("pika")
 
@@ -68,7 +64,7 @@ test("typing in the frame search navigates the frame, not the page", async ({ pa
 test("closing the dialog (Escape) navigates the frame back to /", async ({ page }) => {
   await page.goto("/")
   await awaitHydrated(page)
-  await page.getByTestId("search-frame-open").click()
+  await page.locator('[data-testid="search-frame-open"][data-hydrated]').click()
   await expect(page.locator("dialog")).toBeVisible()
 
   // The modal <dialog> intercepts pointer events on the header button,
@@ -84,10 +80,10 @@ test("closing the dialog (Escape) navigates the frame back to /", async ({ page 
 test("search input keeps focus across live refetches", async ({ page }) => {
   await page.goto("/")
   await awaitHydrated(page)
-  await page.getByTestId("search-frame-open").click()
+  await page.locator('[data-testid="search-frame-open"][data-hydrated]').click()
   await expect(page.locator("dialog")).toBeVisible()
 
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.focus()
 
   // Stamp the DOM node and watch for remount.
@@ -110,7 +106,7 @@ test("search input keeps focus across live refetches", async ({ page }) => {
     .locator("dialog input[type=text]")
     .evaluate((el) => el === document.activeElement)
   expect(isFocused).toBe(true)
-  await expect(page.locator("dialog input[type=text]")).toHaveValue("pika")
+  await expect(page.locator("dialog input[type=text][data-hydrated]")).toHaveValue("pika")
 })
 
 test("frame search refetch uses ?__frame=search, not ?q= on the page", async ({ page }) => {
@@ -122,12 +118,12 @@ test("frame search refetch uses ?__frame=search, not ?q= on the page", async ({ 
 
   await page.goto("/")
   await awaitHydrated(page)
-  await page.getByTestId("search-frame-open").click()
+  await page.locator('[data-testid="search-frame-open"][data-hydrated]').click()
   await expect(page.locator("dialog")).toBeVisible()
 
   refetches.length = 0
 
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.focus()
   await input.fill("a")
 

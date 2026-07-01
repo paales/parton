@@ -83,9 +83,14 @@ export const BatchBPartial = makeBatch("batch-b")
 
 export const SlowStreamPartial = parton(
   async function SlowStreamRender({}: RenderArgs) {
+    // Render interval stamped into the DOM — the defer-race e2e spec
+    // proves race-defer's activation did not serialize behind this
+    // stream from interval OVERLAP (race started before slow
+    // finished), a server-clock signal.
+    const startedAt = Date.now()
     await new Promise((r) => setTimeout(r, 1500))
     return (
-      <div data-testid="slow-content">
+      <div data-testid="slow-content" data-started-at={startedAt} data-finished-at={Date.now()}>
         <Timestamp prefix="slow stream resolved at" />
       </div>
     )
@@ -100,8 +105,10 @@ export const SlowStreamPartial = parton(
 
 export const RaceDeferPartial = parton(
   function RaceDeferRender({}: RenderArgs) {
+    // See SlowStreamPartial — the pair's stamps prove the activation
+    // refetch ran concurrently with the slow stream.
     return (
-      <div data-testid="race-defer-content">
+      <div data-testid="race-defer-content" data-started-at={Date.now()}>
         <Timestamp prefix="race defer activated at" />
       </div>
     )
@@ -120,9 +127,18 @@ export const RaceDeferPartial = parton(
 function makeConcurrent(label: string, delayMs: number) {
   return parton(
     async function ConcurrentRender({}: RenderArgs) {
+      // Server-side render interval, stamped into the DOM. The
+      // concurrency e2e spec proves parallel handling from interval
+      // OVERLAP (`started(b) < finished(a)`), which no client-side
+      // wall-clock measurement can do reliably under machine load.
+      const startedAt = Date.now()
       await new Promise((r) => setTimeout(r, delayMs))
       return (
-        <div data-testid={`concurrent-${label}`}>
+        <div
+          data-testid={`concurrent-${label}`}
+          data-started-at={startedAt}
+          data-finished-at={Date.now()}
+        >
           <strong>{label}</strong> ({delayMs}ms): {new Date().toISOString()}
         </div>
       )

@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * /selector-demo — verify selector-based refetch semantics.
@@ -15,9 +15,7 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 async function readTimestamps(page: import("@playwright/test").Page) {
@@ -35,16 +33,12 @@ async function readTimestamps(page: import("@playwright/test").Page) {
 test.describe("selector-based refetch", () => {
   test("`.product` refetches only the id-less product Partial", async ({ page }) => {
     await page.goto("/selector-demo")
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     const before = await readTimestamps(page)
     // Ensure enough time passes so a fresh render produces a different ISO string.
     await page.waitForTimeout(50)
-    await page.locator('[data-testid="refresh-product"]').click()
+    await page.locator('[data-testid=\"refresh-product\"][data-hydrated]').click()
     // Wait until the "product" timestamp text changes.
     await expect.poll(async () => (await readTimestamps(page))["product"]).not.toBe(before.product)
     const after = await readTimestamps(page)
@@ -58,15 +52,11 @@ test.describe("selector-based refetch", () => {
 
   test("`.price` refetches all three price Partials", async ({ page }) => {
     await page.goto("/selector-demo")
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     const before = await readTimestamps(page)
     await page.waitForTimeout(50)
-    await page.locator('[data-testid="refresh-price"]').click()
+    await page.locator('[data-testid=\"refresh-price\"][data-hydrated]').click()
     await expect
       .poll(async () => (await readTimestamps(page))["price-a"])
       .not.toBe(before["price-a"])
@@ -81,15 +71,11 @@ test.describe("selector-based refetch", () => {
 
   test("`.price.featured` refetches only the two featured ones", async ({ page }) => {
     await page.goto("/selector-demo")
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     const before = await readTimestamps(page)
     await page.waitForTimeout(50)
-    await page.locator('[data-testid="refresh-price-featured"]').click()
+    await page.locator('[data-testid=\"refresh-price-featured\"][data-hydrated]').click()
     await expect
       .poll(async () => (await readTimestamps(page))["price-b"])
       .not.toBe(before["price-b"])
@@ -104,15 +90,11 @@ test.describe("selector-based refetch", () => {
 
   test("`#price-a` refetches a single id", async ({ page }) => {
     await page.goto("/selector-demo")
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     const before = await readTimestamps(page)
     await page.waitForTimeout(50)
-    await page.locator('[data-testid="refresh-price-a"]').click()
+    await page.locator('[data-testid=\"refresh-price-a\"][data-hydrated]').click()
     await expect
       .poll(async () => (await readTimestamps(page))["price-a"])
       .not.toBe(before["price-a"])

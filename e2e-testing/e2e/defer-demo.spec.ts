@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * /defer-demo — exercises the activation shapes of `<Partial defer>`:
@@ -14,9 +14,7 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test.describe("Partial defer demo", () => {
@@ -34,11 +32,7 @@ test.describe("Partial defer demo", () => {
 
     await expect(page.locator('[data-testid="manual-fallback"]')).toBeVisible()
     expect(await page.locator('[data-testid="manual-content"]').count()).toBe(0)
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     rscCalls.length = 0
     await page.locator('[data-testid="activate-manual"]').click()
@@ -56,11 +50,7 @@ test.describe("Partial defer demo", () => {
     await page.goto("/defer-demo")
     await expect(page.locator('[data-testid="any-fallback"]')).toBeVisible()
     expect(await page.locator('[data-testid="any-content"]').count()).toBe(0)
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     await page.locator('[data-testid="any-fallback"]').scrollIntoViewIfNeeded()
     await expect(page.locator('[data-testid="any-content"]')).toBeVisible({

@@ -243,16 +243,19 @@ be committed and merged as a unit.
 
 When you do:
 
-1. **Remap the e2e port first.** Change the `5179` references in
-   `e2e-testing/playwright.config.ts` (the `use.baseURL`, the
-   `webServer.command` `--port`, and `webServer.url`) to a random-ish
-   free port (a `53xx`/`54xx` value). Playwright's `webServer` runs with
-   `reuseExistingServer: true`, so on the default port it silently
-   reuses a dev server the author already has open — your specs then run
-   against THEIR code, not the worktree's. A distinct port forces a
-   fresh server on your changes. This remap is worktree-local
-   scaffolding: **leave it out of your commits** (revert it before
-   committing) so master keeps the canonical `5179`.
+1. **Remap the e2e ports first.** Change the `PORT` and
+   `MAGENTO_PORT` constants at the top of
+   `e2e-testing/playwright.config.ts` (canonically `5179` / `5181`) to
+   random-ish free ports (`53xx`/`54xx` values). Everything else —
+   baseURL, webServer commands and readiness URLs, the remote-binding
+   origin, the cross-origin spec — derives from those two constants.
+   Playwright's `webServer` runs with `reuseExistingServer: true`, so
+   on the default ports it silently reuses dev servers the author
+   already has open — your specs then run against THEIR code, not the
+   worktree's. Distinct ports force fresh servers on your changes.
+   This remap is worktree-local scaffolding: **leave it out of your
+   commits** (revert it before committing) so master keeps the
+   canonical `5179` / `5181`.
 
 2. **When everything is done and both test tiers are green, commit and
    merge back to master, then remove the worktree.** See the
