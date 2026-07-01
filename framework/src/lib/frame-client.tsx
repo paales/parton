@@ -208,6 +208,77 @@ function emptyHistoryEntry(): FrameHistoryEntry {
   return { past: [], future: [] }
 }
 
+// ─── Frames-tree write serialisation ──────────────────────────────
+
+/**
+ * Tail of the frames-tree write queue: the promise the NEXT
+ * read-modify-write must wait on, or `null` when no write is holding
+ * the tree. See `runFrameTreeWrite`.
+ */
+let _frameTreeWriteTail: Promise<void> | null = null
+
+/**
+ * Run a read-modify-write cycle on the frames tree, serialised against
+ * every other cycle.
+ *
+ * All frames-tree mutations are clone-and-patch: read the current
+ * entry's state, `writeFrameNode` a new snapshot, hand it to the
+ * Navigation API. For `updateCurrentEntry` that cycle is synchronous —
+ * atomic on its own — but an explicit `history: "push" | "replace"`
+ * frame nav bakes its snapshot into `nav.navigate(...)`, whose entry
+ * commits ASYNCHRONOUSLY. Any other frames-tree write that reads the
+ * entry inside that window works from a snapshot missing the pending
+ * navigation's node — and whichever write lands last silently drops
+ * the other frame's update (two navs read the same state, clone
+ * independently, last commit wins).
+ *
+ * The queue closes that window with mutual exclusion, not timing:
+ * a `write` whose returned promise is still pending HOLDS the tree
+ * (a push-mode nav returns its browser `committed`), and every later
+ * cycle queues behind it, re-reading the then-current entry when its
+ * turn comes. When no write is holding the tree, the cycle runs
+ * synchronously — the common single-writer path keeps its
+ * updateCurrentEntry-is-synchronous semantics.
+ *
+ * `write` returns the promise to hold the tree until (settled either
+ * way), or `undefined` when its mutation applied synchronously. A
+ * queued `write` that throws is contained so the queue keeps
+ * draining; write closures are expected to report their own failures
+ * through their navigation milestones.
+ */
+function runFrameTreeWrite(write: () => Promise<unknown> | undefined): void {
+  const settle = (hold: Promise<unknown> | undefined): Promise<void> | null => {
+    if (hold == null) return null
+    return hold.then(
+      () => undefined,
+      () => undefined,
+    )
+  }
+
+  if (_frameTreeWriteTail == null) {
+    const settled = settle(write())
+    if (settled == null) return
+    const release: Promise<void> = settled.then(() => {
+      if (_frameTreeWriteTail === release) _frameTreeWriteTail = null
+    })
+    _frameTreeWriteTail = release
+    return
+  }
+
+  const release: Promise<void> = _frameTreeWriteTail
+    .then(() => {
+      try {
+        return settle(write()) ?? undefined
+      } catch {
+        return undefined
+      }
+    })
+    .then(() => {
+      if (_frameTreeWriteTail === release) _frameTreeWriteTail = null
+    })
+  _frameTreeWriteTail = release
+}
+
 // ─── FrameNameProvider ────────────────────────────────────────────
 
 /**
@@ -244,19 +315,22 @@ export function FrameNameProvider({
   const seedFrameNode = useEffectEvent(() => {
     const nav = getNavigation()
     if (!nav) return
-    const current = nav.currentEntry?.getState() ?? null
-    const existing = _readFrameNode(current, path)
-    const hasUrl = existing?.url != null
-    const hasHistory = existing?.__frameHistory != null
-    if (!hasUrl || !hasHistory) {
-      nav.updateCurrentEntry({
-        state: writeFrameNode(current, path, (node) => ({
-          ...node,
-          url: node.url ?? initialUrl,
-          __frameHistory: node.__frameHistory ?? emptyHistoryEntry(),
-        })),
-      })
-    }
+    runFrameTreeWrite(() => {
+      const current = nav.currentEntry?.getState() ?? null
+      const existing = _readFrameNode(current, path)
+      const hasUrl = existing?.url != null
+      const hasHistory = existing?.__frameHistory != null
+      if (!hasUrl || !hasHistory) {
+        nav.updateCurrentEntry({
+          state: writeFrameNode(current, path, (node) => ({
+            ...node,
+            url: node.url ?? initialUrl,
+            __frameHistory: node.__frameHistory ?? emptyHistoryEntry(),
+          })),
+        })
+      }
+      return undefined
+    })
   })
   useEffect(() => {
     // Client cache: so `useNavigation(path).currentEntry.url` is non-null on
@@ -848,35 +922,11 @@ export function buildFrameHandle(
     const url = resolveFrameTarget(target, key)
     const historyMode: NavigationHistoryBehavior = options?.history ?? "auto"
 
-    const priorState = (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {}
-    const priorNode = _readFrameNode(priorState, path)
-    // Prior URL for this frame — prefer the entry snapshot, fall back
-    // to the module-level cache for first nav before FrameNameProvider
-    // seeded the entry.
-    const priorUrl = priorNode?.url ?? getFrameUrl(key) ?? null
-
-    // History update policy per mode:
-    //   auto  — push prior URL onto past, clear future. (DEFAULT)
-    //   push  — same push on the per-frame stack, PLUS a new browser
-    //           entry (drawer URLs the user wants in browser history).
-    //   replace — no change to the per-frame stack (pure URL sync).
-    const pushToHistory = historyMode === "auto" || historyMode === "push"
-
-    const userState = (options?.state as Record<string, unknown> | null) ?? null
-    const baseState = { ...priorState, ...(userState ?? {}) }
-    const nextState = writeFrameNode(baseState, path, (node) => {
-      const existingHistory = node.__frameHistory ?? emptyHistoryEntry()
-      const nextHistory: FrameHistoryEntry = pushToHistory
-        ? {
-            past:
-              priorUrl != null && priorUrl !== url
-                ? [...existingHistory.past, priorUrl]
-                : existingHistory.past,
-            future: [],
-          }
-        : existingHistory
-      return { ...node, url, __frameHistory: nextHistory }
-    })
+    // Fallback prior URL for the per-frame history push, captured
+    // BEFORE the cache write below overwrites it. Only consulted when
+    // the entry carries no node for this frame yet (first nav before
+    // FrameNameProvider seeded it).
+    const cachedPriorUrl = getFrameUrl(key) ?? null
 
     // Seed the client-side frame-URL cache BEFORE we touch Navigation —
     // `nav.navigate`/`updateCurrentEntry` fires events synchronously
@@ -900,61 +950,102 @@ export function buildFrameHandle(
       inFlightK && controller ? { controller } : null
     if (inFlightK && inFlightEntry) registerInFlight(inFlightK, inFlightEntry)
 
-    if (historyMode === "auto") {
-      // No new browser entry. updateCurrentEntry patches state in
-      // place, fires currententrychange (consumers update) but NOT
-      // navigate — no silent-info bypass needed. `committed` resolves
-      // immediately because there's no browser commit to wait on.
-      nav.updateCurrentEntry({ state: nextState })
-      m.committed.resolve(nav.currentEntry!)
-      const refetch = _dispatchFrameRefetch(path, url, options, controller?.signal)
+    // The frames-tree read-modify-write runs under the write
+    // serialiser (see `runFrameTreeWrite`): the entry state is read,
+    // patched and committed as one exclusive cycle, so concurrent
+    // frame navs can't clone the same snapshot and drop each other's
+    // updates. A push/replace nav holds the serialiser until its
+    // browser entry commits (the snapshot is baked into
+    // `nav.navigate`); the auto path applies synchronously.
+    runFrameTreeWrite(() => {
+      const priorState =
+        (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {}
+      const priorNode = _readFrameNode(priorState, path)
+      // Prior URL for this frame — prefer the entry snapshot, fall back
+      // to the module-level cache for first nav before FrameNameProvider
+      // seeded the entry.
+      const priorUrl = priorNode?.url ?? cachedPriorUrl
+
+      // History update policy per mode:
+      //   auto  — push prior URL onto past, clear future. (DEFAULT)
+      //   push  — same push on the per-frame stack, PLUS a new browser
+      //           entry (drawer URLs the user wants in browser history).
+      //   replace — no change to the per-frame stack (pure URL sync).
+      const pushToHistory = historyMode === "auto" || historyMode === "push"
+
+      const userState = (options?.state as Record<string, unknown> | null) ?? null
+      const baseState = { ...priorState, ...(userState ?? {}) }
+      const nextState = writeFrameNode(baseState, path, (node) => {
+        const existingHistory = node.__frameHistory ?? emptyHistoryEntry()
+        const nextHistory: FrameHistoryEntry = pushToHistory
+          ? {
+              past:
+                priorUrl != null && priorUrl !== url
+                  ? [...existingHistory.past, priorUrl]
+                  : existingHistory.past,
+              future: [],
+            }
+          : existingHistory
+        return { ...node, url, __frameHistory: nextHistory }
+      })
+
+      if (historyMode === "auto") {
+        // No new browser entry. updateCurrentEntry patches state in
+        // place, fires currententrychange (consumers update) but NOT
+        // navigate — no silent-info bypass needed. `committed` resolves
+        // immediately because there's no browser commit to wait on.
+        nav.updateCurrentEntry({ state: nextState })
+        m.committed.resolve(nav.currentEntry!)
+        const refetch = _dispatchFrameRefetch(path, url, options, controller?.signal)
+        void (async () => {
+          try {
+            await refetch.streaming
+            if (inFlightK && inFlightEntry) abortPredecessors(inFlightK, inFlightEntry)
+            m.streaming.resolve()
+            await refetch.finished
+            m.finished.resolve(nav.currentEntry!)
+          } catch (err) {
+            m.streaming.reject(err)
+            m.finished.reject(err)
+          } finally {
+            if (inFlightK && inFlightEntry) unregisterInFlight(inFlightK, inFlightEntry)
+          }
+        })()
+        // State applied synchronously — release the serialiser.
+        return undefined
+      }
+
+      // Explicit push/replace — browser entry grows/replaces. Use the
+      // silent-info brand so the page-level listener doesn't also fire
+      // a full-page refetch.
+      const result = nav.navigate(window.location.href, {
+        history: historyMode,
+        state: nextState,
+        info: makeSilentInfo("frame", key),
+      })
       void (async () => {
         try {
+          await awaitCommitted(result)
+          m.committed.resolve(nav.currentEntry!)
+          const refetch = _dispatchFrameRefetch(path, url, options, controller?.signal)
           await refetch.streaming
           if (inFlightK && inFlightEntry) abortPredecessors(inFlightK, inFlightEntry)
           m.streaming.resolve()
           await refetch.finished
           m.finished.resolve(nav.currentEntry!)
         } catch (err) {
+          m.committed.reject(err)
           m.streaming.reject(err)
           m.finished.reject(err)
         } finally {
           if (inFlightK && inFlightEntry) unregisterInFlight(inFlightK, inFlightEntry)
         }
       })()
-      return {
-        committed: m.committed.promise,
-        streaming: m.streaming.promise,
-        finished: m.finished.promise,
-      }
-    }
-
-    // Explicit push/replace — browser entry grows/replaces. Use the
-    // silent-info brand so the page-level listener doesn't also fire
-    // a full-page refetch.
-    const result = nav.navigate(window.location.href, {
-      history: historyMode,
-      state: nextState,
-      info: makeSilentInfo("frame", key),
+      // Hold the serialiser until the browser entry (with the baked
+      // state snapshot) commits or the navigation aborts.
+      return result.committed?.catch(() => {})
     })
-    void (async () => {
-      try {
-        await awaitCommitted(result)
-        m.committed.resolve(nav.currentEntry!)
-        const refetch = _dispatchFrameRefetch(path, url, options, controller?.signal)
-        await refetch.streaming
-        if (inFlightK && inFlightEntry) abortPredecessors(inFlightK, inFlightEntry)
-        m.streaming.resolve()
-        await refetch.finished
-        m.finished.resolve(nav.currentEntry!)
-      } catch (err) {
-        m.committed.reject(err)
-        m.streaming.reject(err)
-        m.finished.reject(err)
-      } finally {
-        if (inFlightK && inFlightEntry) unregisterInFlight(inFlightK, inFlightEntry)
-      }
-    })()
+
     return {
       committed: m.committed.promise,
       streaming: m.streaming.promise,
@@ -1002,64 +1093,80 @@ export function buildFrameHandle(
    * Move within the per-entry `__frameHistory` arrays. No browser
    * traversal — pure state patch via `updateCurrentEntry` plus a
    * refetch dispatch. Missing / empty stack → no-op with stub result.
+   * The read-compute-patch cycle runs under the frames-tree write
+   * serialiser, like every other frames-tree mutation.
    */
   const frameTraverseInState = (direction: "back" | "forward"): NavigationResult => {
     const stub = null as unknown as NavigationHistoryEntry
-    const priorState = (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {}
-    const priorNode = _readFrameNode(priorState, path)
-    const history = priorNode?.__frameHistory ?? emptyHistoryEntry()
-    const currentUrl = priorNode?.url ?? getFrameUrl(key) ?? null
+    const committed = deferred<NavigationHistoryEntry>()
+    const finished = deferred<NavigationHistoryEntry>()
+    committed.promise.catch(() => {})
+    finished.promise.catch(() => {})
+    runFrameTreeWrite(() => {
+      const priorState =
+        (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {}
+      const priorNode = _readFrameNode(priorState, path)
+      const history = priorNode?.__frameHistory ?? emptyHistoryEntry()
+      const currentUrl = priorNode?.url ?? getFrameUrl(key) ?? null
 
-    let nextUrl: string | null = null
-    let nextPast = history.past
-    let nextFuture = history.future
-    if (direction === "back") {
-      if (history.past.length === 0) {
-        return {
-          committed: Promise.resolve(stub),
-          finished: Promise.resolve(stub),
+      let nextUrl: string | null = null
+      let nextPast = history.past
+      let nextFuture = history.future
+      if (direction === "back") {
+        if (history.past.length === 0) {
+          committed.resolve(stub)
+          finished.resolve(stub)
+          return undefined
         }
-      }
-      nextUrl = history.past[history.past.length - 1]
-      nextPast = history.past.slice(0, -1)
-      nextFuture = currentUrl != null ? [currentUrl, ...history.future] : history.future
-    } else {
-      if (history.future.length === 0) {
-        return {
-          committed: Promise.resolve(stub),
-          finished: Promise.resolve(stub),
+        nextUrl = history.past[history.past.length - 1]
+        nextPast = history.past.slice(0, -1)
+        nextFuture = currentUrl != null ? [currentUrl, ...history.future] : history.future
+      } else {
+        if (history.future.length === 0) {
+          committed.resolve(stub)
+          finished.resolve(stub)
+          return undefined
         }
+        nextUrl = history.future[0]
+        nextFuture = history.future.slice(1)
+        nextPast = currentUrl != null ? [...history.past, currentUrl] : history.past
       }
-      nextUrl = history.future[0]
-      nextFuture = history.future.slice(1)
-      nextPast = currentUrl != null ? [...history.past, currentUrl] : history.past
-    }
 
-    const resolvedNextUrl = nextUrl
-    const nextState = writeFrameNode(priorState, path, (node) => ({
-      ...node,
-      url: resolvedNextUrl,
-      __frameHistory: { past: nextPast, future: nextFuture },
-    }))
+      const resolvedNextUrl = nextUrl
+      const nextState = writeFrameNode(priorState, path, (node) => ({
+        ...node,
+        url: resolvedNextUrl,
+        __frameHistory: { past: nextPast, future: nextFuture },
+      }))
 
-    setFrameUrl(key, resolvedNextUrl)
-    nav.updateCurrentEntry({ state: nextState })
-    const work = _dispatchFrameRefetch(path, resolvedNextUrl)
-    const resolveEntry = () => nav.currentEntry ?? stub
+      setFrameUrl(key, resolvedNextUrl)
+      nav.updateCurrentEntry({ state: nextState })
+      const work = _dispatchFrameRefetch(path, resolvedNextUrl)
+      const resolveEntry = () => nav.currentEntry ?? stub
+      committed.resolve(resolveEntry())
+      work.finished.then(
+        () => finished.resolve(resolveEntry()),
+        (err) => finished.reject(err),
+      )
+      return undefined
+    })
     return {
-      committed: Promise.resolve(resolveEntry()),
-      finished: work.finished.then(resolveEntry),
+      committed: committed.promise,
+      finished: finished.promise,
     }
   }
 
   const frameUpdateCurrentEntry = (options: NavigationUpdateCurrentEntryOptions): void => {
-    const current = (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {}
-    const patch = options.state as Record<string, unknown> | null
-    const next = writeFrameNode(current, path, (node) => ({
-      ...node,
-      __frameState: { ...(node.__frameState ?? {}), ...(patch ?? {}) },
-    }))
-    nav.updateCurrentEntry({ state: next })
+    runFrameTreeWrite(() => {
+      const current = (nav.currentEntry?.getState() as Record<string, unknown> | null) ?? {}
+      const patch = options.state as Record<string, unknown> | null
+      const next = writeFrameNode(current, path, (node) => ({
+        ...node,
+        __frameState: { ...(node.__frameState ?? {}), ...(patch ?? {}) },
+      }))
+      nav.updateCurrentEntry({ state: next })
+      return undefined
+    })
   }
 
   return new Proxy(nav, {
