@@ -1,3 +1,10 @@
+> **Superseded 2026-07-02 by [docs/internals/streaming.md](../internals/streaming.md).**
+> §3's per-parton multiplexed lanes are shipped: `driveLaneStream` in
+> `segmented-response.ts` (server), the `lanes` region in
+> `fp-trailer-split.ts` + `_commitPartonLane` (client). The §1/§2 wire
+> facts stay pinned by `flight-duplicate-rows` / `flight-stream-slots`
+> tests and the flight-format canary.
+
 # Flight multi-update — can one response write the same slot twice?
 
 Research question: the live-update path emits whole-tree segments,
