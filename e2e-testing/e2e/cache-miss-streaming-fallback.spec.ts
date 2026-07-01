@@ -1,4 +1,4 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, test } from "./fixtures"
 
 /**
  * Cold-cache regression: on the first load (no cached entry), the
@@ -17,9 +17,7 @@ import { expect, request, test } from "./fixtures"
  * is still async — so outer Suspense fallbacks naturally fire.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("cold cache: LivePrice Suspense fallback appears before content", async ({ page }) => {

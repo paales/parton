@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures"
+import { expect, test, waitForPageInteractive } from "./fixtures"
 
 /**
  * Regression: `getServerNavigation().navigate(url)` ships a `url`
@@ -19,9 +19,7 @@ import { expect, test } from "./fixtures"
  * `?seq=` URL.
  */
 
-test("server-pushed URL trailer applies silently — no redundant GET fires", async ({
-  page,
-}) => {
+test("server-pushed URL trailer applies silently — no redundant GET fires", async ({ page }) => {
   const rscRequests: Array<{ url: string; method: string }> = []
   page.on("request", (req) => {
     const url = req.url()
@@ -34,12 +32,12 @@ test("server-pushed URL trailer applies silently — no redundant GET fires", as
   })
 
   await page.goto("/streaming-demo")
-  await page.locator("body[data-streaming-demo-ready]").waitFor({ timeout: 10000 })
+  await waitForPageInteractive(page)
   // Settle any in-flight RSC from initial render.
   await page.waitForTimeout(500)
   rscRequests.length = 0
 
-  await page.locator('[data-testid="streaming-demo-push-btn"]').click()
+  await page.locator('[data-testid=\"streaming-demo-push-btn\"][data-hydrated]').click()
   // Long enough for the action POST to complete AND for any
   // navigation-triggered GET to fire.
   await page.waitForTimeout(1500)

@@ -8,6 +8,10 @@ export function RefreshAllPricesButton() {
   const pending = committed && !finished
   return (
     <Button
+      // `data-hydrated`: React owns the button (onClick live) — the
+      // header controls hydrate after the page shell; e2e specs click
+      // via the marker-qualified locator.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       size="sm"
       variant="outline"

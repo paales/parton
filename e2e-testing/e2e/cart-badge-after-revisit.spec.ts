@@ -1,4 +1,4 @@
-import { test, expect, request, waitForRscIdle } from "./fixtures"
+import { clearCaches, test, expect, request, waitForRscIdle } from "./fixtures"
 
 /**
  * Regression user reported 2026-05-13:
@@ -21,9 +21,7 @@ test.beforeEach(async ({ baseURL, page }) => {
   await page.addInitScript(() => {
     ;(window as unknown as { __partonHeartbeatDisabled?: boolean }).__partonHeartbeatDisabled = true
   })
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("cart-badge updates after Add to Cart on /magento re-visit", async ({ page }) => {

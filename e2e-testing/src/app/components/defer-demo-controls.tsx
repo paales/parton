@@ -34,6 +34,10 @@ export function ActivateButton({
   const disabled = streaming ? false : pending
   return (
     <Button
+      // `data-hydrated`: React owns the button (onClick live) — the
+      // demo controls hydrate after the page shell; e2e specs click
+      // via the marker-qualified locator.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       size="sm"
       variant="outline"

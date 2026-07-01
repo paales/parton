@@ -130,6 +130,15 @@ export async function RemoteFrame({
   if (capability !== undefined) {
     requestHeaders[CAPABILITY_HEADER] = encodeCapability(capability)
   }
+  // Requests spawned on behalf of a scoped request inherit its scope:
+  // the test harness partitions process-wide server state per
+  // `x-test-scope` (see `runtime/context.ts` — `deriveScope`), and a
+  // remote render is part of the host request's work. Without the
+  // forward, every remote render lands in the shared default bucket —
+  // parallel workers then contend on (and must wholesale-clear) each
+  // other's remote caches.
+  const hostScopeHeader = getRequest().headers.get("x-test-scope")
+  if (hostScopeHeader) requestHeaders["x-test-scope"] = hostScopeHeader
 
   const sourceOrigin = new URL(absoluteUrl).origin
   // Only stamp `source` when the remote is genuinely on a different

@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * Targeted-refetch failures surface as typed `NavigationError`s
@@ -20,18 +20,8 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
-
-async function waitForHydration(page: import("@playwright/test").Page) {
-  await page.waitForFunction(
-    () => typeof (window as { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
-}
 
 /** Matches the targeted-refetch URL shape: <path>_.rsc?...&partials=… */
 const matchesTargetedRefetch = (url: URL) =>
@@ -68,21 +58,21 @@ async function expectClassifiedNavigationError(
 test("HTTP 500 on a targeted refetch produces a typed NavigationError", async ({ page }) => {
   const consoleErrors = captureConsoleErrors(page)
   await page.goto("/selector-demo")
-  await waitForHydration(page)
+  await waitForPageInteractive(page)
 
   await page.route(
     (url) => matchesTargetedRefetch(url),
     (route) => route.fulfill({ status: 500, body: "boom" }),
   )
 
-  await page.locator('[data-testid="refresh-product"]').click()
+  await page.locator('[data-testid="refresh-product"][data-hydrated]').click()
   await expectClassifiedNavigationError(page, consoleErrors, "Navigation failed: HTTP 500")
 })
 
 test("network failure on a targeted refetch produces a typed NavigationError", async ({ page }) => {
   const consoleErrors = captureConsoleErrors(page)
   await page.goto("/selector-demo")
-  await waitForHydration(page)
+  await waitForPageInteractive(page)
 
   // Abort the request at the network layer — the browser's fetch()
   // rejects with a TypeError, which `toNavigationError` classifies
@@ -92,7 +82,7 @@ test("network failure on a targeted refetch produces a typed NavigationError", a
     (route) => route.abort("failed"),
   )
 
-  await page.locator('[data-testid="refresh-product"]').click()
+  await page.locator('[data-testid="refresh-product"][data-hydrated]').click()
   // The TypeError's browser message varies across engines; the framework
   // prefixes with "Navigation failed:" and the kind label, which is stable.
   await expectClassifiedNavigationError(page, consoleErrors, "Navigation failed:")

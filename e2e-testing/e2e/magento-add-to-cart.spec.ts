@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * E2E test: after a successful "Add to Cart" action, the cart badge in the
@@ -46,6 +46,7 @@ test("cart badge updates after successful add-to-cart", async ({ page, context }
   })
 
   await page.goto("/magento")
+  await waitForPageInteractive(page)
 
   // Wait for the cart partial to finish its fallback and display a real quantity.
   // CartBadge fallback renders quantity="?" while the suspended cart query runs.
@@ -154,9 +155,11 @@ test("cart badge updates after successful add-to-cart", async ({ page, context }
     "at least one Add-to-Cart button must succeed without user_errors",
   ).toBeGreaterThanOrEqual(0)
 
-  // Wait for the cart partial to re-render with the new quantity.
-  // CartPartial has a small delay; give it plenty of room.
-  await page.waitForTimeout(3000)
+  // Wait on the real state change: the badge showing a quantity above
+  // the initial one. The live GraphCommerce mutation + cart refetch
+  // round-trip sets the pace, so poll the DOM value rather than
+  // assuming a fixed settle window.
+  await expect.poll(readCartQuantity, { timeout: 15000 }).toBeGreaterThan(initialQty ?? 0)
 
   const log = await page.evaluate(() => {
     const w = window as any

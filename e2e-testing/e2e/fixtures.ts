@@ -92,6 +92,72 @@ export const request = {
 }
 
 /**
+ * Clear the calling worker's scope bucket on the dev server (see
+ * `/__test/clear-caches` in `entry.rsc.tsx`). The context created
+ * here carries the worker's `x-test-scope` header, so only this
+ * worker's state is wiped. One retry on a dropped connection: the
+ * endpoint is a test utility, and a keep-alive/backlog reset on a
+ * busy dev server says nothing about the system under test.
+ */
+export async function clearCaches(
+  baseURL: string | undefined,
+  opts: { cms?: boolean } = {},
+): Promise<void> {
+  const url = `${baseURL ?? ""}/__test/clear-caches${opts.cms ? "?cms=1" : ""}`
+  const ctx = await request.newContext()
+  try {
+    try {
+      await ctx.get(url)
+    } catch {
+      await ctx.get(url)
+    }
+  } finally {
+    await ctx.dispose()
+  }
+}
+
+/**
+ * Wait for the page's "safe to interact" signal: the browser entry
+ * stamps `<html data-parton-interactive>` from the effect that both
+ * follows React's first hydration commit AND attaches the Navigation
+ * API intercept listener (see `framework/lib/page-interactive.ts`).
+ * Until it's present, a click or keystroke can land on SSR DOM with
+ * no handlers attached (a silent no-op) and a link click falls
+ * through to a full document navigation instead of the framework's
+ * intercepted client-side nav.
+ *
+ * Call it after `page.goto(...)` in any spec that interacts with the
+ * page (click / type / scroll-driven behavior). Specs that only
+ * assert on streamed/SSR output don't need it.
+ */
+export async function waitForPageInteractive(
+  page: Page,
+  opts: { timeout?: number } = {},
+): Promise<void> {
+  await page
+    .locator("html[data-parton-interactive]")
+    .waitFor({ state: "attached", timeout: opts.timeout ?? 15_000 })
+}
+
+/**
+ * Wait for the framework's live-update subscription to be open and
+ * committing: `<html data-parton-live>` is set by `LivePageHeartbeat`
+ * when the current live stream's first segment has committed, and
+ * removed when the connection settles (keepalive elapsed, abort).
+ * Specs that assert on server-PUSHED updates (live ticks, deferred
+ * cell writes) wait on this before acting — a push can only arrive
+ * once the subscription is actually established.
+ */
+export async function waitForLiveConnection(
+  page: Page,
+  opts: { timeout?: number } = {},
+): Promise<void> {
+  await page
+    .locator("html[data-parton-live]")
+    .waitFor({ state: "attached", timeout: opts.timeout ?? 15_000 })
+}
+
+/**
  * Replacement for `page.waitForLoadState("networkidle")` that
  * ignores the framework's live-update heartbeat connection.
  *

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { ResolvedCell } from "@parton/framework"
 import { Button } from "@parton/copies/components/ui/button"
 
@@ -23,6 +23,10 @@ export function PingButton({ pings }: { pings: ResolvedCell<number> }) {
   return (
     <div className="flex flex-col gap-2">
       <Button
+        // `data-hydrated`: React owns the button (onClick live) — the
+        // ping partial hydrates after the page shell; e2e specs click
+        // through the marker-qualified locator.
+        ref={(el) => el?.setAttribute("data-hydrated", "")}
         type="button"
         variant="outline"
         size="sm"
@@ -40,17 +44,4 @@ export function PingButton({ pings }: { pings: ResolvedCell<number> }) {
       </span>
     </div>
   )
-}
-
-/**
- * Stamps `<body data-deferred-demo-ready>` on hydration so the
- * Playwright spec waits for React's event-replay listener to attach
- * before clicking — without it a fast click can land on the SSR DOM
- * and no-op. Mirrors `StreamingDemoReady`.
- */
-export function DeferredDemoReady() {
-  useEffect(() => {
-    document.body.setAttribute("data-deferred-demo-ready", "1")
-  }, [])
-  return null
 }

@@ -4,7 +4,11 @@
 import { remote } from "@parton/framework"
 import type { PaymentCap } from "./types.ts"
 
-const ORIGIN = "http://localhost:5181"
+// `MAGENTO_REMOTE_ORIGIN` lets a test harness (or a worktree with
+// remapped ports) point these bindings at a differently-addressed
+// instance of the same remote without regenerating the file. The
+// env var name derives from the install name (`magento`).
+const ORIGIN = process.env.MAGENTO_REMOTE_ORIGIN ?? "http://localhost:5181"
 const NAMESPACE = "magento"
 
 export const CartSummary = remote({

@@ -3,12 +3,17 @@
  * makes the AppNav disappear.
  */
 
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
-test("nav from /cms-demo to /remote-frame-crossorigin-demo keeps app nav visible", async ({ page }) => {
+test("nav from /cms-demo to /remote-frame-crossorigin-demo keeps app nav visible", async ({
+  page,
+}) => {
   await page.goto("/cms-demo")
+  await waitForPageInteractive(page)
   // App nav has a known link
-  await expect(page.getByRole("link", { name: "Magento Store" })).toBeVisible({ timeout: 10000 })
+  await expect(page.getByRole("link", { name: "Magento Store" })).toBeVisible({
+    timeout: 10000,
+  })
 
   // Click the "Remote (Cross-Origin)" link.
   await page.getByRole("link", { name: "Remote (Cross-Origin)" }).click()
@@ -17,6 +22,8 @@ test("nav from /cms-demo to /remote-frame-crossorigin-demo keeps app nav visible
   await page.waitForURL(/remote-frame-crossorigin-demo/, { timeout: 10000 })
 
   // App nav should still be visible.
-  await expect(page.getByRole("link", { name: "Magento Store" })).toBeVisible({ timeout: 10000 })
+  await expect(page.getByRole("link", { name: "Magento Store" })).toBeVisible({
+    timeout: 10000,
+  })
   await expect(page.getByRole("link", { name: "Cart" })).toBeVisible()
 })

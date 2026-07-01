@@ -25,23 +25,22 @@
  *       Menu fp-skips on a stale entry; tab body stays cached.
  */
 
-import { expect, test, request as apiRequest, waitForRscIdle } from "./fixtures.ts"
+import { clearCaches, expect, test, waitForPageInteractive, waitForRscIdle } from "./fixtures.ts"
 
 test.beforeEach(async ({ baseURL }) => {
   // Clear caches so the registry starts cold each test — frame URLs
   // are session-scoped, and stale draft / session state from a prior
   // run would muddle the assertions about cross-nav fingerprint flow.
-  const ctx = await apiRequest.newContext({ baseURL })
-  await ctx.get("/__test/clear-caches?all=1")
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("browser back from a product detail returns the main list", async ({ page }) => {
   await page.goto("/frames-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
   await expect(page.getByTestId("main-list")).toBeVisible()
 
-  await page.getByTestId("main-open-alpha").click()
+  await page.locator('[data-testid="main-open-alpha"][data-hydrated]').click()
   await waitForRscIdle(page)
   await expect(page.getByTestId("main-detail")).toBeVisible()
   await expect(page.getByTestId("main-detail")).toHaveAttribute("data-sku", "alpha")
@@ -55,16 +54,17 @@ test("browser back from a product detail returns the main list", async ({ page }
 
 test("nested-frame tab nav inside the menu About view swaps the body", async ({ page }) => {
   await page.goto("/frames-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
 
   // Open the menu frame's About view — this places the nested
   // `menu.tab` frame with its `/general` initial body.
-  await page.getByTestId("menu-about-btn").click()
+  await page.locator('[data-testid="menu-about-btn"][data-hydrated]').click()
   await expect(page.getByTestId("menu-about")).toBeVisible()
   await expect(page.getByTestId("menu-tab-general-body")).toBeVisible()
 
   // Move the nested frame to /advanced — body should switch.
-  await page.getByTestId("menu-tab-advanced").click()
+  await page.locator('[data-testid="menu-tab-advanced"][data-hydrated]').click()
   await expect(page.getByTestId("menu-tab-advanced-body")).toBeVisible()
   await expect(page.getByTestId("menu-tab-general-body")).toHaveCount(0)
 
@@ -72,7 +72,7 @@ test("nested-frame tab nav inside the menu About view swaps the body", async ({ 
   // changed (pathname is still `/menu/about`); only the inner tab
   // moved. With a frame-aware descendant fp-fold the menu wrapper's
   // fp shifts when the tab does, so the wrapper re-renders.
-  await page.getByTestId("menu-tab-general").click()
+  await page.locator('[data-testid="menu-tab-general"][data-hydrated]').click()
   await expect(page.getByTestId("menu-tab-general-body")).toBeVisible()
   await expect(page.getByTestId("menu-tab-advanced-body")).toHaveCount(0)
 })

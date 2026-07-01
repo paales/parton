@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * The live-page heartbeat must not tear the page down during a SAME-PAGE
@@ -32,8 +32,11 @@ test("rapid typing keeps the search dialog alive (heartbeat doesn't tear the pag
   })
 
   await page.goto("/?search=url")
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.waitFor({ state: "visible", timeout: 15000 })
+  // Text input is not covered by discrete-event replay — wait for the
+  // interactive marker so the onChange pipeline is live.
+  await waitForPageInteractive(page)
   await input.focus()
 
   // Type into the open dialog while the heartbeat stream is live — each

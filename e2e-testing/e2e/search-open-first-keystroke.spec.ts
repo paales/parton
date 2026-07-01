@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * E2E test: first-keystroke behavior after opening URL-mode search.
@@ -24,9 +24,7 @@ import { test, expect, request } from "./fixtures"
 // the Suspense fallback never has a chance to flash. Clear the caches
 // before each test so every run observes a cold-path stream.
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 type StateEntry = {
@@ -132,7 +130,7 @@ test("URL mode: first keystroke streams stages 2/3 progressively", async ({ page
   })
 
   await page.goto("/pokemon/1?search=url")
-  await page.waitForSelector("input[type=text]", { timeout: 10000 })
+  await page.waitForSelector("input[type=text][data-hydrated]", { timeout: 10000 })
 
   const initial = await page.evaluate(() => ({
     s1: !!document.querySelector('[data-testid="stage-1-content"], input[type=text]'),
@@ -149,19 +147,20 @@ test("URL mode: first keystroke streams stages 2/3 progressively", async ({ page
   expect(initial.s3).toBe(false)
   expect(initial.header).toBe(true)
 
+  // Wait for the interactive marker BEFORE the toggle + keystrokes:
+  // checking the streaming toggle pre-hydration flips the DOM checkbox
+  // without updating React state (the refetch then runs in transition
+  // mode — no fallbacks), and a keystroke fired pre-hydration is
+  // silently lost (text input is not covered by discrete-event
+  // replay).
+  await waitForPageInteractive(page)
   await installTracker(page)
   // Opt into streaming mode so fallbacks flash + chunks commit per
   // stage. Default is startTransition (preserve old results, no
   // fallback) which this test is not about.
-  await page.locator('[data-testid="streaming-toggle"] input').check()
-  const input = page.locator("input[type=text]")
-  // Wait for hydration: click+focus the input before the keypress so the
-  // React onChange handler is attached. Without this, the first keystroke
-  // sometimes lands before hydration completes and the handler's
-  // navigate → dispatch flow never runs, leaving the URL without ?q=.
+  await page.locator('[data-testid="streaming-toggle"] input[data-hydrated]').check()
+  const input = page.locator("input[type=text][data-hydrated]")
   await input.click()
-  await input.focus()
-  await page.waitForTimeout(100)
 
   // Keystroke 1: 'p'
   await startKeystroke(page, 1)

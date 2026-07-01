@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * With `keepalive: true` on every spec (the default), a partial's
@@ -15,9 +15,7 @@ import { test, expect, request } from "./fixtures"
  * Without keepalive, the counter would mount fresh at 0 on return.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("ClickCounter state inside a partial survives nav away and back", async ({ page }) => {
@@ -35,11 +33,7 @@ test("ClickCounter state inside a partial survives nav away and back", async ({ 
   await page.goto("/cache-demo")
   const counter = page.getByTestId("click-counter")
   await expect(counter).toBeVisible({ timeout: 10000 })
-  await page.waitForFunction(
-    () => typeof (window as any).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   // Click the counter three times. Each click bumps the useState
   // counter inside `<ClickCounter>`, which is rendered inside the

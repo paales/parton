@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * Search result ordering + bounded-cache guards.
@@ -40,9 +40,7 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 // ─── Invariant 1: bounded cache (FIXED) ─────────────────────────────
@@ -65,15 +63,14 @@ test("?cached= stays bounded across many distinct queries", async ({ page }) => 
   })
 
   await page.goto("/?search=url")
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.waitFor({ state: "visible", timeout: 15000 })
-  // Wait for hydration: the onChange handler must be wired before we
-  // drive the input, or early fills race the client and the dialog can
-  // tear. Click+focus and a beat is the same guard the other search
-  // specs use.
+  // The onChange handler must be wired before we drive the input, or
+  // early fills race the client and the dialog can tear. Text input is
+  // not covered by discrete-event replay — wait for the interactive
+  // marker.
+  await waitForPageInteractive(page)
   await input.click()
-  await input.focus()
-  await page.waitForTimeout(500)
 
   // Distinct queries, each FULLY SETTLED before the next (3s > the 2s
   // slow stage) so they don't overlap. Overlapping rapid queries hit
@@ -84,7 +81,7 @@ test("?cached= stays bounded across many distinct queries", async ({ page }) => 
   const queries = ["a", "ab", "abc", "abcd", "abcde", "abcdef", "abcdefg", "abcdefgh"]
   for (const q of queries) {
     try {
-      await page.locator("dialog input[type=text]").fill(q, { timeout: 4000 })
+      await page.locator("dialog input[type=text][data-hydrated]").fill(q, { timeout: 4000 })
     } catch {
       // dialog torn this beat — skip; the bound still holds over the
       // refetches that did fire.
@@ -123,73 +120,67 @@ test("?cached= stays bounded across many distinct queries", async ({ page }) => 
 // dev server's real PokeAPI fetches throttle under parallel headless
 // load.
 
-test(
-  "rapid type→backspace must not leave stages on a superseded query",
-  async ({ page }) => {
-    await page.goto("/?search=url")
-    const input = page.locator("dialog input[type=text]")
-    await input.waitFor({ state: "visible", timeout: 15000 })
-    await page.waitForTimeout(300)
-    await input.focus()
+test("rapid type→backspace must not leave stages on a superseded query", async ({ page }) => {
+  await page.goto("/?search=url")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
+  await input.waitFor({ state: "visible", timeout: 15000 })
+  await waitForPageInteractive(page)
+  await input.focus()
 
-    for (const c of "pokem") {
-      await input.press(c)
-      await page.waitForTimeout(40)
-    }
-    for (let i = 0; i < 3; i++) {
-      await input.press("Backspace")
-      await page.waitForTimeout(40)
-    }
-    await page.waitForTimeout(5000)
+  for (const c of "pokem") {
+    await input.press(c)
+    await page.waitForTimeout(40)
+  }
+  for (let i = 0; i < 3; i++) {
+    await input.press("Backspace")
+    await page.waitForTimeout(40)
+  }
+  await page.waitForTimeout(5000)
 
-    const value = await input.inputValue()
-    for (const id of ["stage-1", "stage-2", "stage-3"]) {
-      const stage = page.locator(`[data-testid="${id}"]`)
-      if ((await stage.count()) === 0) continue
-      expect(
-        await stage.getAttribute("data-q"),
-        `${id} shows a stale query after rapid type→backspace`,
-      ).toBe(value)
-    }
-  },
-)
+  const value = await input.inputValue()
+  for (const id of ["stage-1", "stage-2", "stage-3"]) {
+    const stage = page.locator(`[data-testid="${id}"]`)
+    if ((await stage.count()) === 0) continue
+    expect(
+      await stage.getAttribute("data-q"),
+      `${id} shows a stale query after rapid type→backspace`,
+    ).toBe(value)
+  }
+})
 
-test(
-  "a late superseded query response must not clobber the newer result",
-  async ({ page }) => {
-    // Deterministic: delay the `q=pokem` refetch response so it lands
-    // after the final `q=po` one — forcing the late-superseded commit
-    // the rapid-timing case hits only by luck.
-    await page.route(/_\.rsc\?.*partials=search-results/, async (route) => {
-      if (new URL(route.request().url()).searchParams.get("q") === "pokem") {
-        await new Promise((r) => setTimeout(r, 2500))
-      }
-      await route.continue()
-    })
+test("a late superseded query response must not clobber the newer result", async ({ page }) => {
+  // Deterministic: delay the `q=pokem` refetch response so it lands
+  // after the final `q=po` one — forcing the late-superseded commit
+  // the rapid-timing case hits only by luck.
+  await page.route(/_\.rsc\?.*partials=search-results/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("q") === "pokem") {
+      await new Promise((r) => setTimeout(r, 2500))
+    }
+    await route.continue()
+  })
 
-    await page.goto("/?search=url")
-    const input = page.locator("dialog input[type=text]")
-    await input.waitFor({ state: "visible", timeout: 15000 })
-    await page.waitForTimeout(300)
-    await input.focus()
-    for (const c of "pokem") {
-      await input.press(c)
-      await page.waitForTimeout(40)
-    }
-    for (let i = 0; i < 3; i++) {
-      await input.press("Backspace")
-      await page.waitForTimeout(40)
-    }
-    await page.waitForTimeout(5000)
+  await page.goto("/?search=url")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
+  await input.waitFor({ state: "visible", timeout: 15000 })
+  await waitForPageInteractive(page)
+  await input.focus()
+  for (const c of "pokem") {
+    await input.press(c)
+    await page.waitForTimeout(40)
+  }
+  for (let i = 0; i < 3; i++) {
+    await input.press("Backspace")
+    await page.waitForTimeout(40)
+  }
+  await page.waitForTimeout(5000)
 
-    const value = await input.inputValue()
-    for (const id of ["stage-1", "stage-2", "stage-3"]) {
-      const stage = page.locator(`[data-testid="${id}"]`)
-      if ((await stage.count()) === 0) continue
-      expect(
-        await stage.getAttribute("data-q"),
-        `${id} shows a stale query after a late superseded response`,
-      ).toBe(value)
-    }
-  },
-)
+  const value = await input.inputValue()
+  for (const id of ["stage-1", "stage-2", "stage-3"]) {
+    const stage = page.locator(`[data-testid="${id}"]`)
+    if ((await stage.count()) === 0) continue
+    expect(
+      await stage.getAttribute("data-q"),
+      `${id} shows a stale query after a late superseded response`,
+    ).toBe(value)
+  }
+})

@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect } from "./fixtures"
 
 /**
  * Monotonic commit ordering for window-scoped selector refetches.
@@ -23,9 +23,7 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("a superseded same-url selector refetch can't clobber the newer one", async ({ page }) => {
@@ -39,7 +37,9 @@ test("a superseded same-url selector refetch can't clobber the newer one", async
   const product = page.locator('[data-testid="time-product"]')
   await product.waitFor({ state: "visible", timeout: 15000 })
   await page.waitForFunction(
-    () => typeof (window as unknown as { __fireProductReload?: unknown }).__fireProductReload === "function",
+    () =>
+      typeof (window as unknown as { __fireProductReload?: unknown }).__fireProductReload ===
+      "function",
     null,
     { timeout: 10000 },
   )
@@ -69,14 +69,18 @@ test("a superseded same-url selector refetch can't clobber the newer one", async
   )
 
   // Fire #1 (issued first) — its response is parked.
-  await page.evaluate(() => (window as unknown as { __fireProductReload: () => void }).__fireProductReload())
+  await page.evaluate(() =>
+    (window as unknown as { __fireProductReload: () => void }).__fireProductReload(),
+  )
   await heldP
 
   // A beat so #2's server render lands a strictly LATER timestamp than #1.
   await page.waitForTimeout(60)
 
   // Fire #2 (issued second) — passes through and commits the later time.
-  await page.evaluate(() => (window as unknown as { __fireProductReload: () => void }).__fireProductReload())
+  await page.evaluate(() =>
+    (window as unknown as { __fireProductReload: () => void }).__fireProductReload(),
+  )
   await expect(product).not.toHaveText(initial ?? "", { timeout: 10000 })
   const newer = (await product.textContent())?.trim()
   expect(newer, "second refetch should have committed a fresh time").not.toBe(initial)

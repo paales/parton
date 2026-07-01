@@ -1,4 +1,4 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, request, test } from "./fixtures"
 
 /**
  * Regression: on the *second* GET of /magento (when the server-side
@@ -12,9 +12,7 @@ import { expect, request, test } from "./fixtures"
  * SSR pathway through PartialsClient + renderTemplate.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("second /magento render (Cache hit) still produces full body HTML", async ({ baseURL }) => {

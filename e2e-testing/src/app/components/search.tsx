@@ -21,6 +21,19 @@ const Spinner = () => (
  * `<SearchArea/>` is the same component in both modes; its scope
  * decides where `?search=` is read from.
  */
+/**
+ * Callback ref marking an element as React-owned: fires at the commit
+ * that attaches (or hydration-adopts) the element — the same moment
+ * its handlers go live. The search controls live in the header
+ * partial, which is served from the client cache on warm navs and
+ * hydrates AFTER the page shell; e2e specs wait for `data-hydrated`
+ * on the specific control before interacting, because events fired
+ * earlier hit inert DOM and are silently lost.
+ */
+function markHydrated(el: HTMLElement | null): void {
+  el?.setAttribute("data-hydrated", "")
+}
+
 export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   const [pageNavigate, pageProgress] = useNavigation().navigate()
   const pagePending = pageProgress.committed && !pageProgress.finished
@@ -64,7 +77,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
 
   if (urlOpen) {
     return (
-      <Button type="button" size="sm" variant="secondary" onClick={closeUrl}>
+      <Button ref={markHydrated} type="button" size="sm" variant="secondary" onClick={closeUrl}>
         {pagePending ? <Spinner /> : <span>✕</span>}
         Close
       </Button>
@@ -74,6 +87,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   if (frameOpen) {
     return (
       <Button
+        ref={markHydrated}
         type="button"
         size="sm"
         variant="secondary"
@@ -88,11 +102,12 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
 
   return (
     <div className="flex gap-2">
-      <Button type="button" size="sm" variant="outline" onClick={openUrl}>
+      <Button ref={markHydrated} type="button" size="sm" variant="outline" onClick={openUrl}>
         {pagePending ? <Spinner /> : <span>🔍</span>}
         Search (URL)
       </Button>
       <Button
+        ref={markHydrated}
         type="button"
         size="sm"
         variant="outline"
@@ -234,6 +249,7 @@ export function SearchInput({ query }: { query: string }) {
     <div>
       <div className="relative">
         <Input
+          ref={markHydrated}
           type="text"
           value={value}
           onChange={(e) => handleChange(e.target.value)}
@@ -251,6 +267,7 @@ export function SearchInput({ query }: { query: string }) {
           className="inline-flex cursor-pointer select-none items-center gap-2"
         >
           <input
+            ref={markHydrated}
             type="checkbox"
             checked={streaming}
             onChange={(e) => setStreaming(e.target.checked)}

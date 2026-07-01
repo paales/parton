@@ -48,13 +48,7 @@
  * logical clocks for parallel writes are future work.
  */
 
-import {
-  useCallback,
-  useLayoutEffect,
-  useRef,
-  useSyncExternalStore,
-  type ChangeEvent,
-} from "react"
+import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, type ChangeEvent } from "react"
 import { __cellWriteBatch } from "../runtime/cell-actions.ts"
 import type { ResolvedCell } from "./cell.ts"
 import type { ResolvedAction } from "./parton-actions.ts"
@@ -147,10 +141,7 @@ function subscribe(cb: () => void): () => void {
 export interface ClientCell<T> {
   readonly value: T
   readonly serverValue: T
-  readonly set: (
-    value: T,
-    opts?: { vary?: Record<string, unknown> },
-  ) => Promise<void>
+  readonly set: (value: T, opts?: { vary?: Record<string, unknown> }) => Promise<void>
   readonly input: (opts?: CellInputOpts) => CellInputBindings
   /** Read the current input value via the bound ref. Returns the DOM
    *  `<input>`'s `value` when the bindings are attached, falling back
@@ -183,10 +174,7 @@ export interface CellInputOpts {
    *  keystrokes to `cell.set` with no client-side cleanup, and the
    *  server's `write` is the only place the value is canonicalised.
    *  Applies in `'onChange'` mode only. */
-  transform?: (
-    raw: string,
-    caret: number,
-  ) => { value: string; caret: number }
+  transform?: (raw: string, caret: number) => { value: string; caret: number }
   /** Fired after the local transform and after `cell.set` has been
    *  enqueued. Use for cross-cell triggers (e.g. firing a derived
    *  cell's `set` whenever this input changes — see the card-form
@@ -263,8 +251,17 @@ export function useCell<T>(cell: ResolvedCell<T>): ClientCell<T> {
   // Stable callback ref. Spread into either `<input>` or `<textarea>`
   // — React's per-element ref types accept a callback that takes the
   // wider InputishElement union (contravariance).
+  //
+  // `data-hydrated` is the element's own "React owns me" marker: the
+  // callback ref fires at the commit that attaches (or hydration-
+  // adopts) the element, which is also when its `onChange` pipeline
+  // goes live. Out-of-process observers (e2e specs) wait on it before
+  // typing — input events fired earlier hit inert SSR DOM and are
+  // silently lost (React's event replay covers discrete events like
+  // click, not text input).
   const refCallback = useCallback((el: InputishElement | null): void => {
     inputRef.current = el
+    el?.setAttribute("data-hydrated", "")
   }, [])
 
   // The `input` closure captures `set` and the refs. It needs the

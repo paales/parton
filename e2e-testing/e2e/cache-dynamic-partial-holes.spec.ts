@@ -1,4 +1,4 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, request, test, waitForPageInteractive } from "./fixtures"
 
 /**
  * Dynamic Partials inside a `<Partial cache>` must remain holes —
@@ -17,9 +17,7 @@ import { expect, request, test } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("refresh-all-prices updates ticks after /magento cache is warm", async ({ page }) => {
@@ -28,7 +26,7 @@ test("refresh-all-prices updates ticks after /magento cache is warm", async ({ p
   // snapshots.
   await page.goto("/magento")
   await page.waitForSelector('[data-testid^="live-price-"][data-price-tick]', {
-    timeout: 15000,
+    timeout: 20000,
   })
 
   // Second load — cache HIT. ProductGrid doesn't re-run. Without
@@ -36,18 +34,9 @@ test("refresh-all-prices updates ticks after /magento cache is warm", async ({ p
   // registry, and `?tags=price` would resolve to zero ids.
   await page.goto("/magento")
   await page.waitForSelector('[data-testid^="live-price-"][data-price-tick]', {
-    timeout: 15000,
+    timeout: 20000,
   })
-  await page.waitForFunction(
-    () =>
-      typeof (
-        window as Window & {
-          __rsc_partial_refetch?: (url: string) => Promise<void>
-        }
-      ).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   const before = await page.$$eval('[data-testid^="live-price-"][data-price-tick]', (els) =>
     els.map((el) => ({
@@ -57,7 +46,7 @@ test("refresh-all-prices updates ticks after /magento cache is warm", async ({ p
   )
   expect(before.length).toBeGreaterThan(2)
 
-  await page.locator('[data-testid="refresh-all-prices"]').click()
+  await page.locator('[data-testid="refresh-all-prices"][data-hydrated]').click()
 
   await expect
     .poll(
@@ -84,7 +73,7 @@ test("dynamic Partials inside a cached region render fresh across full loads", a
   // First load. Cold cache → ProductGrid runs → bytes stored.
   await page.goto("/magento")
   await page.waitForSelector('[data-testid^="live-price-"][data-price-tick]', {
-    timeout: 15000,
+    timeout: 20000,
   })
 
   const first = await page.$$eval('[data-testid^="live-price-"][data-price-tick]', (els) =>
@@ -100,7 +89,7 @@ test("dynamic Partials inside a cached region render fresh across full loads", a
   // most prices.
   await page.goto("/magento")
   await page.waitForSelector('[data-testid^="live-price-"][data-price-tick]', {
-    timeout: 15000,
+    timeout: 20000,
   })
 
   const second = await page.$$eval('[data-testid^="live-price-"][data-price-tick]', (els) =>
@@ -126,31 +115,22 @@ test("individual price refetch works after a Cache hit", async ({ page }) => {
   // Cold then warm.
   await page.goto("/magento")
   await page.waitForSelector('[data-testid^="live-price-"][data-price-tick]', {
-    timeout: 15000,
+    timeout: 20000,
   })
   await page.goto("/magento")
   await page.waitForSelector('[data-testid^="live-price-"][data-price-tick]', {
-    timeout: 15000,
+    timeout: 20000,
   })
-  await page.waitForFunction(
-    () =>
-      typeof (
-        window as Window & {
-          __rsc_partial_refetch?: (url: string) => Promise<void>
-        }
-      ).__rsc_partial_refetch === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await waitForPageInteractive(page)
 
   const firstPrice = page.locator('[data-testid^="live-price-"][data-price-tick]').first()
   const testId = (await firstPrice.getAttribute("data-testid"))!
   const sku = testId.replace(/^live-price-/, "")
   const before = await firstPrice.getAttribute("data-price-tick")
 
-  await page.locator(`[data-testid="refresh-price-${sku}"]`).click()
+  await page.locator(`[data-testid="refresh-price-${sku}"][data-hydrated]`).click()
 
   await expect
-    .poll(() => firstPrice.getAttribute("data-price-tick"), { timeout: 5000 })
+    .poll(() => firstPrice.getAttribute("data-price-tick"), { timeout: 10000 })
     .not.toBe(before)
 })

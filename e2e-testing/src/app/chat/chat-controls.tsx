@@ -112,6 +112,10 @@ export function ChatOpenPill() {
 
   return (
     <a
+      // `data-hydrated`: React owns the anchor (the intercepting
+      // onClick is live) — the chat overlay island hydrates after the
+      // page shell; e2e specs click via the marker-qualified locator.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       href="?chat=open"
       data-testid="chat-open-pill"
       onClick={onClick}
@@ -145,6 +149,8 @@ export function ChatClosePill() {
 
   return (
     <Button
+      // `data-hydrated` — see ChatOpenPill above.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       data-testid="chat-close-pill"
       onClick={onClick}

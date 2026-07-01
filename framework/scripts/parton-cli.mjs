@@ -102,15 +102,18 @@ function buildIndexFile(name, origin, manifest) {
   }
   lines.push("")
 
-  lines.push(`const ORIGIN = ${JSON.stringify(origin)}`)
+  const envVar = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_REMOTE_ORIGIN`
+  lines.push(`// \`${envVar}\` lets a test harness (or a worktree with`)
+  lines.push(`// remapped ports) point these bindings at a differently-addressed`)
+  lines.push(`// instance of the same remote without regenerating the file. The`)
+  lines.push(`// env var name derives from the install name (\`${name}\`).`)
+  lines.push(`const ORIGIN = process.env.${envVar} ?? ${JSON.stringify(origin)}`)
   lines.push(`const NAMESPACE = ${JSON.stringify(name)}`)
   lines.push("")
 
   for (const spec of manifest.specs) {
     if (spec.capabilityType) {
-      lines.push(
-        `export const ${spec.exportName} = remote<${spec.capabilityType}>({`,
-      )
+      lines.push(`export const ${spec.exportName} = remote<${spec.capabilityType}>({`)
     } else {
       lines.push(`export const ${spec.exportName} = remote({`)
     }
@@ -178,9 +181,7 @@ async function cmdUpdate(args) {
     logError(`no installed remote at ${dir}`)
     process.exit(1)
   }
-  const directive = existing
-    .split("\n")
-    .find((l) => l.startsWith(HEADER_DIRECTIVE_PREFIX))
+  const directive = existing.split("\n").find((l) => l.startsWith(HEADER_DIRECTIVE_PREFIX))
   if (!directive) {
     logError(`no \`${HEADER_DIRECTIVE_PREFIX}\` directive in ${join(dir, "index.ts")}`)
     process.exit(1)

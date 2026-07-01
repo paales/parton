@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * Regression guards for pressing Escape (close) while a search refetch
@@ -24,18 +24,18 @@ import { test, expect, request } from "./fixtures"
  */
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5179"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("a held stale search fetch must not re-open the header toggle after close", async ({
   page,
 }) => {
   await page.goto("/?search=url")
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.waitFor({ state: "visible", timeout: 15000 })
-  await page.waitForTimeout(300)
+  // Text input is not covered by discrete-event replay — wait for the
+  // interactive marker so the input's onChange pipeline is live.
+  await waitForPageInteractive(page)
 
   // Hold the `q=pika` search-results refetch open at the network layer.
   let releaseStale!: () => void
@@ -71,8 +71,12 @@ test("a held stale search fetch must not re-open the header toggle after close",
   // overlay — the stuck state that only a refresh clears. Assert the
   // header toggle FIRST (bounded timeout so the red is fast, not a 30s
   // default-timeout hang) — its absence is the headline symptom.
-  await expect(page.getByRole("button", { name: "Close" })).toHaveCount(0, { timeout: 5000 })
-  await expect(page.getByRole("button", { name: "Search (URL)" })).toBeVisible({ timeout: 5000 })
+  await expect(page.getByRole("button", { name: "Close" })).toHaveCount(0, {
+    timeout: 5000,
+  })
+  await expect(page.getByRole("button", { name: "Search (URL)" })).toBeVisible({
+    timeout: 5000,
+  })
   await expect(page.locator("dialog[open]")).toHaveCount(0)
   expect(new URL(page.url()).searchParams.has("search")).toBe(false)
 })
@@ -88,13 +92,16 @@ test("escape during fetch never tears the page into an error boundary", async ({
   page.on("console", (m) => {
     if (m.type() !== "error") return
     const t = m.text()
-    if (t.includes("BodyStreamBuffer") || t.includes("AbortError")) consoleAborts.push(t.slice(0, 120))
+    if (t.includes("BodyStreamBuffer") || t.includes("AbortError"))
+      consoleAborts.push(t.slice(0, 120))
   })
 
   await page.goto("/?search=url")
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.waitFor({ state: "visible", timeout: 15000 })
-  await page.waitForTimeout(300)
+  // Text input is not covered by discrete-event replay — wait for the
+  // interactive marker so the input's onChange pipeline is live.
+  await waitForPageInteractive(page)
 
   await input.focus()
   await input.pressSequentially("pika", { delay: 25 })
@@ -104,7 +111,12 @@ test("escape during fetch never tears the page into an error boundary", async ({
 
   const cardCount = await page.locator("text=/failed to render/").count()
   if (cardCount > 0) {
-    const pre = (await page.locator("pre").allInnerTexts().catch(() => [])).join(" | ")
+    const pre = (
+      await page
+        .locator("pre")
+        .allInnerTexts()
+        .catch(() => [])
+    ).join(" | ")
     cardErrors.push(pre.slice(0, 160))
   }
 

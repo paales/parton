@@ -21,10 +21,14 @@ export function NavLinkActive({
 }) {
   const nav = useNavigation()
   const { currentEntry } = nav
-  const active =
-    currentEntry?.url != null && isActivePath(new URL(currentEntry.url).pathname, href)
+  const active = currentEntry?.url != null && isActivePath(new URL(currentEntry.url).pathname, href)
   return (
     <a
+      // `data-hydrated`: React owns the anchor — until the app-nav
+      // block hydrates, a click falls through to a full document
+      // navigation; e2e specs that assert client-side nav click via
+      // the marker-qualified locator.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       href={href}
       // Hover-eager preload: warm the destination's partials into the
       // client cache before the click. The click is still an ordinary

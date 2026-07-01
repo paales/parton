@@ -46,6 +46,7 @@ import {
 } from "./state.ts"
 import { CmsEditTreeLink } from "./components/tree-link.tsx"
 import { CmsEditAddBlock } from "./components/add-block.tsx"
+import { HydrationBeacon } from "./components/hydration-beacon.tsx"
 import { EditorCloseLink } from "./components/editor-close-link.tsx"
 import { Icon, SixDot } from "./components/icon.tsx"
 import { PanelTabBar, type PanelTab } from "./components/panel-tab-bar.tsx"
@@ -254,6 +255,7 @@ export const EditorTreePartial = parton(
 
     return (
       <div className="cms-panel-body cms-panel-body--tree">
+        <HydrationBeacon testId="cms-edit-tree-hydrated" />
         {entries.map((entry) => {
           const indent = 6 + entry.depth * 16
           if (entry.kind === "slot") {
@@ -627,6 +629,7 @@ export const EditorFieldPanelPartial = parton(
                 .filter(([, s]) => s.kind === "boolean")
                 .map(([n]) => n)}
             />
+            <HydrationBeacon testId="cms-edit-field-form-hydrated" />
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               <button type="submit" className="cms-btn">
                 Save to draft
@@ -1277,11 +1280,7 @@ export const EditorShell = parton(
               ]}
             />
             <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-              {leftTab === "layers" ? (
-                <EditorTreePartial />
-              ) : (
-                <EditorSettingsPartial />
-              )}
+              {leftTab === "layers" ? <EditorTreePartial /> : <EditorSettingsPartial />}
             </div>
             <ResizeGrip />
           </aside>
@@ -1338,8 +1337,7 @@ export const EditorShell = parton(
       // per-page fingerprint. Parking via a `null` vary is wrong here —
       // keepalive would leave the prior chrome hidden in the DOM, so the
       // close button couldn't clear it.
-      const isPreviewFrameRefetch =
-        editor && url.searchParams.getAll("__frame").includes("preview")
+      const isPreviewFrameRefetch = editor && url.searchParams.getAll("__frame").includes("preview")
       return {
         editor,
         selected: editor ? selectedParam : null,

@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * /cache-demo — server-side Flight-buffer caching.
@@ -91,25 +91,32 @@ test("clock partial stays fresh on every request regardless of cache state", asy
   expect(first).not.toBe(second)
 })
 
-test("cache hit is significantly faster than cold miss", async ({ request }) => {
+test("cache hit skips the slow component's awaited work entirely", async ({ request }) => {
+  // The slow component stamps `computed at <ISO>` AFTER its ~500ms of
+  // awaited work. A warm hit replays the stored Flight bytes, so the
+  // stamp — taken when the work actually ran — must be byte-identical
+  // to the cold render's. That's the direct signal the work was
+  // skipped; wall-clock comparisons only correlate with it.
+  const computedAt = (body: string): string | undefined =>
+    body.match(/computed at[^0-9]*(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/)?.[1]
+
   const uniqueFlavor = `perf-${Date.now()}`
-  const coldStart = Date.now()
-  await request.get(`/cache-demo?flavor=${uniqueFlavor}`)
-  const coldMs = Date.now() - coldStart
+  const coldBody = await (await request.get(`/cache-demo?flavor=${uniqueFlavor}`)).text()
+  const coldStamp = computedAt(coldBody)
+  expect(coldStamp, "cold render must carry a computed-at stamp").toBeDefined()
 
-  const warmStart = Date.now()
-  await request.get(`/cache-demo?flavor=${uniqueFlavor}`)
-  const warmMs = Date.now() - warmStart
-
-  // Cold has ~500ms of awaited work. Warm skips it via cache.
-  // Generous bounds to tolerate CI jitter.
-  expect(coldMs).toBeGreaterThan(400)
-  expect(warmMs).toBeLessThan(coldMs / 3)
+  const warmBody = await (await request.get(`/cache-demo?flavor=${uniqueFlavor}`)).text()
+  expect(computedAt(warmBody), "warm hit must replay the stored stamp").toBe(coldStamp)
+  expect(extractRenderCount(warmBody)).toBe(extractRenderCount(coldBody))
 })
 
 test("client component inside cached subtree hydrates and retains state", async ({ page }) => {
   await page.goto(`/cache-demo?flavor=hydrate-${Date.now()}`)
-  const button = page.locator('[data-testid="click-counter"]')
+  await waitForPageInteractive(page)
+  // The counter lives inside the cached subtree, which hydrates after
+  // the page shell — interact through the hydrated-qualified locator
+  // (the button's own mount marker), or the click hits inert DOM.
+  const button = page.locator('[data-testid="click-counter"][data-hydrated]')
   await expect(button).toHaveText(/clicked 0/)
   await button.click()
   await expect(button).toHaveText(/clicked 1/)
@@ -120,11 +127,8 @@ test("client component inside cached subtree hydrates and retains state", async 
 test("ClickCounter state survives refetch of its cached Partial", async ({ page, request }) => {
   await request.get("/__test/clear-caches")
   await page.goto(`/cache-demo?flavor=retain-${Date.now()}`)
-  const button = page.locator('[data-testid="click-counter"]')
-  await page.waitForFunction(() => {
-    const el = document.querySelector('[data-testid="click-counter"]')
-    return el != null && Object.keys(el).some((k) => k.startsWith("__reactFiber"))
-  })
+  await waitForPageInteractive(page)
+  const button = page.locator('[data-testid="click-counter"][data-hydrated]')
 
   await button.click()
   await button.click()
@@ -139,7 +143,7 @@ test("ClickCounter state survives refetch of its cached Partial", async ({ page,
   const refetchResponse = page.waitForResponse(
     (r) => r.url().includes("_.rsc") && r.url().includes("partials=slow"),
   )
-  await page.getByTestId("refetch-slow").click()
+  await page.locator('[data-testid="refetch-slow"][data-hydrated]').click()
   await refetchResponse
 
   const stamped = await page
@@ -158,15 +162,9 @@ test("client component inside cached subtree remains clickable after cache hit",
   await request.get(`/cache-demo?flavor=${flavor}`)
   // Now navigate in the browser — this hit serves from cache.
   await page.goto(`/cache-demo?flavor=${flavor}`)
-  const button = page.locator('[data-testid="click-counter"]')
+  await waitForPageInteractive(page)
+  const button = page.locator('[data-testid="click-counter"][data-hydrated]')
   await expect(button).toHaveText(/clicked 0/)
-  // Wait for hydration — otherwise the click races the event handler attach.
-  await page.waitForFunction(() => {
-    const el = document.querySelector('[data-testid="click-counter"]')
-    // Rough hydration check: if the element has a React event key,
-    // hydration has happened for this subtree.
-    return el != null && Object.keys(el).some((k) => k.startsWith("__reactFiber"))
-  })
   await button.click()
   await expect(button).toHaveText(/clicked 1/)
 })
@@ -180,16 +178,16 @@ test("Toggle flavor: cached spec re-renders with new flavor on URL change", asyn
   // body lands in the DOM.
   const flavor = `toggle-${Date.now()}`
   await page.goto(`/cache-demo?flavor=${flavor}`)
+  await waitForPageInteractive(page)
   await expect(page.locator('[data-testid="slow-content"]')).toContainText(`flavor: ${flavor}`)
 
-  await page.locator('[data-testid="toggle-flavor"]').click()
+  await page.locator('[data-testid="toggle-flavor"][data-hydrated]').click()
   // Toggle goes vanilla → chocolate when the current flavor isn't
   // exactly "vanilla", the demo flips to "vanilla". Either way, the
   // URL search param changes, the slow body should reflect it.
   const newFlavor = "vanilla"
-  await expect(page.locator('[data-testid="slow-content"]')).toContainText(
-    `flavor: ${newFlavor}`,
-    { timeout: 10000 },
-  )
+  await expect(page.locator('[data-testid="slow-content"]')).toContainText(`flavor: ${newFlavor}`, {
+    timeout: 10000,
+  })
   expect(new URL(page.url()).searchParams.get("flavor")).toBe(newFlavor)
 })

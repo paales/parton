@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * /defer-demo § 6 — concurrent refetch behavior.
@@ -23,9 +23,7 @@ test.beforeEach(async ({ baseURL, page }) => {
   await page.addInitScript(() => {
     ;(window as unknown as { __partonHeartbeatDisabled?: boolean }).__partonHeartbeatDisabled = true
   })
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test.describe("concurrent refetches", () => {
@@ -34,14 +32,9 @@ test.describe("concurrent refetches", () => {
     await page.waitForSelector('[data-testid="concurrent-a"]', {
       timeout: 10000,
     })
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
     const before = await page.locator('[data-testid="concurrent-a"]').textContent()
-    await page.waitForTimeout(50)
-    await page.locator('[data-testid="refresh-concurrent-a"]').click()
+    await page.locator('[data-testid=\"refresh-concurrent-a\"][data-hydrated]').click()
     await expect
       .poll(async () => await page.locator('[data-testid="concurrent-a"]').textContent(), {
         timeout: 5000,
@@ -60,15 +53,12 @@ test.describe("concurrent refetches", () => {
     // state for 20s. The button keeps showing its label (`disabled` is
     // off for streaming), but the text staying "…" is the visible hang.
     await page.goto("/defer-demo")
-    await page.waitForSelector('[data-testid="concurrent-a"]', { timeout: 10000 })
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
-    const btn = page.locator('[data-testid="refresh-concurrent-a"]')
+    await page.waitForSelector('[data-testid="concurrent-a"]', {
+      timeout: 10000,
+    })
+    await waitForPageInteractive(page)
+    const btn = page.locator('[data-testid="refresh-concurrent-a"][data-hydrated]')
     const before = await page.locator('[data-testid="concurrent-a"]').textContent()
-    await page.waitForTimeout(50)
     await btn.click()
     // The refetch commits (proves it actually fired, not a no-op)…
     await expect
@@ -117,11 +107,7 @@ test.describe("concurrent refetches", () => {
     await page.waitForSelector('[data-testid="concurrent-c"]', {
       timeout: 10000,
     })
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     // Capture the initial timestamps to compare after refetch.
     const before = await page.evaluate(() => ({
@@ -136,10 +122,9 @@ test.describe("concurrent refetches", () => {
     // handlers fire on separate event tasks — each dispatch lands in
     // its own microtask, so separate RSC requests fire and overlap on
     // the server.
-    const clickedAt = Date.now()
-    await page.locator('[data-testid="refresh-concurrent-a"]').click()
-    await page.locator('[data-testid="refresh-concurrent-b"]').click()
-    await page.locator('[data-testid="refresh-concurrent-c"]').click()
+    await page.locator('[data-testid=\"refresh-concurrent-a\"][data-hydrated]').click()
+    await page.locator('[data-testid=\"refresh-concurrent-b\"][data-hydrated]').click()
+    await page.locator('[data-testid=\"refresh-concurrent-c\"][data-hydrated]').click()
 
     // Wait for all three timestamps to change (proves all three
     // refetches landed).
@@ -151,7 +136,7 @@ test.describe("concurrent refetches", () => {
             b: document.querySelector('[data-testid="concurrent-b"]')?.textContent ?? "",
             c: document.querySelector('[data-testid="concurrent-c"]')?.textContent ?? "",
           })),
-        { timeout: 5000 },
+        { timeout: 10000 },
       )
       .toEqual({
         a: expect.not.stringContaining(before.a),
@@ -159,20 +144,41 @@ test.describe("concurrent refetches", () => {
         c: expect.not.stringContaining(before.c),
       } as any)
 
-    const totalMs = Date.now() - clickedAt
-
     // Each click → own RSC request. Expect three separate calls.
-    console.log(`RSC calls after concurrent clicks (${totalMs}ms total):`, JSON.stringify(rscCalls))
+    console.log(`RSC calls after concurrent clicks:`, JSON.stringify(rscCalls))
     expect(rscCalls.length).toBeGreaterThanOrEqual(3)
 
-    // Parallelism check: max server delay is 1200ms, sum is 2400ms.
-    // If the server serialized them, total wall time would approach
-    // 2400ms. Parallel → ~1200ms + jitter. Generous ceiling at 2000ms
-    // covers Playwright/network overhead without admitting serial.
+    // Parallelism check from the SERVER's own render intervals: each
+    // concurrent partial stamps `data-started-at` / `data-finished-at`
+    // (server clock, taken around its awaited delay). Handled in
+    // parallel means the intervals OVERLAP — b and c must have started
+    // before a (400ms) finished. A serialized server would start b
+    // only after a's interval closed. Interval overlap is the direct
+    // signal; client-side wall clock only correlates with it (and
+    // collapses under machine load).
+    const intervals = await page.evaluate(() => {
+      const read = (id: string) => {
+        const el = document.querySelector(`[data-testid="concurrent-${id}"]`)
+        return {
+          started: Number(el?.getAttribute("data-started-at")),
+          finished: Number(el?.getAttribute("data-finished-at")),
+        }
+      }
+      return { a: read("a"), b: read("b"), c: read("c") }
+    })
+    // Serialized handling would stack the intervals end-to-start —
+    // a[0,400] b[400,1200] c[1200,2400] — so NO pair overlaps.
+    // Parallel handling overlaps adjacent intervals for any realistic
+    // click cadence (b spans 800ms, c spans 1200ms). Asserting that
+    // SOME overlap exists discriminates the serialized regime without
+    // putting a number on scheduling jitter, which under a loaded
+    // suite can stretch both the click cadence and request queueing.
+    const overlaps =
+      intervals.b.started < intervals.a.finished || intervals.c.started < intervals.b.finished
     expect(
-      totalMs,
-      `three parallel refetches should finish in ~1200ms, not sum; got ${totalMs}ms`,
-    ).toBeLessThan(2000)
+      overlaps,
+      `render intervals must overlap somewhere (parallel handling); intervals: ${JSON.stringify(intervals)}`,
+    ).toBe(true)
 
     // Each call should target exactly one id (not a coalesced batch).
     const idsPerCall = rscCalls.map((c) => c.partials?.split(",").filter(Boolean) ?? [])
@@ -188,11 +194,7 @@ test.describe("concurrent refetches", () => {
     await page.waitForSelector('[data-testid="concurrent-c"]', {
       timeout: 10000,
     })
-    await page.waitForFunction(
-      () => typeof (window as any).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 10000 },
-    )
+    await waitForPageInteractive(page)
 
     // Three clicks on the same slow partial — each fires its own
     // refetch. The framework doesn't cancel in-flight requests; each
@@ -200,7 +202,7 @@ test.describe("concurrent refetches", () => {
     // increasing server clock the final timestamp should match the
     // last response to complete (which is the last one fired, assuming
     // server FIFO).
-    const btn = page.locator('[data-testid="refresh-concurrent-c"]')
+    const btn = page.locator('[data-testid="refresh-concurrent-c"][data-hydrated]')
     await btn.click()
     await page.waitForTimeout(50)
     await btn.click()

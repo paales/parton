@@ -1,28 +1,8 @@
 "use client"
 
-import { useEffect } from "react"
 import type { ResolvedCell } from "@parton/framework"
 import { Button } from "@parton/copies/components/ui/button"
 import { pushSeq } from "../pages/streaming-demo-actions.ts"
-
-/**
- * Stamps `<body data-streaming-demo-ready>` on hydration so the
- * Playwright spec can wait for React 19's event-replay to be
- * installed before clicking. Without this, fast Playwright clicks
- * land on the SSR DOM before `hydrateRoot` attached its delegated
- * root listener and the click is a no-op.
- *
- * The previous design also kicked the live-tick stream open here.
- * That's now framework-owned (the auto-injected `<LivePageHeartbeat>`
- * inside `PartialsClient`), so this component is only a hydration
- * signal for the test harness.
- */
-export function StreamingDemoReady() {
-  useEffect(() => {
-    document.body.setAttribute("data-streaming-demo-ready", "1")
-  }, [])
-  return null
-}
 
 /**
  * Bump button — receives the resolved `bumps` cell via Flight prop
@@ -35,6 +15,8 @@ export function StreamingDemoReady() {
 export function BumpButton({ bumps }: { bumps: ResolvedCell<number> }) {
   return (
     <Button
+      // `data-hydrated` — see PushUrlButton below.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       variant="outline"
       size="sm"
@@ -52,6 +34,10 @@ export function BumpButton({ bumps }: { bumps: ResolvedCell<number> }) {
 export function PushUrlButton() {
   return (
     <Button
+      // `data-hydrated`: React owns the button (onClick live) — the
+      // demo partials hydrate after the page shell; e2e specs click
+      // via the marker-qualified locator.
+      ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       variant="outline"
       size="sm"

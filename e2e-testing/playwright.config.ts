@@ -1,5 +1,29 @@
 import { defineConfig } from "@playwright/test"
 
+// Single source for both dev-server ports. A worktree remap (see
+// CLAUDE.md § Working in a worktree) changes only these two
+// constants; everything below — baseURL, webServer commands and
+// readiness URLs, the remote-binding origin, the cross-origin spec —
+// derives from them.
+const PORT = 5179
+const MAGENTO_PORT = 5181
+const MAGENTO_ORIGIN = `http://localhost:${MAGENTO_PORT}`
+
+// Thread the magento origin to everything that needs it: the host dev
+// server (the generated remote bindings in `src/remote/magento/` read
+// it), and the spec workers (`remote-frame-crossorigin.spec.ts` reads
+// it for direct wire-level fetches). Playwright spawns both the
+// webServer commands and the worker processes from this process, so
+// they inherit it.
+process.env.MAGENTO_REMOTE_ORIGIN = MAGENTO_ORIGIN
+
+// Record/replay for PokeAPI queries (see `src/app/gql-disk-cache.ts`):
+// the suite's query set is deterministic, and PokeAPI rate-limits by
+// IP under repeated full-suite runs — a mid-spec 429 is
+// indistinguishable from an app bug. The spawned dev server inherits
+// this; a plain `yarn dev` stays live.
+process.env.GQL_DISK_CACHE = "1"
+
 export default defineConfig({
   testDir: "./e2e",
   // Preview-tier specs live under `e2e/preview/` and run via the
@@ -9,40 +33,65 @@ export default defineConfig({
   // streaming wouldn't hold against the dev server.
   testIgnore: ["preview/**"],
   timeout: 30000,
-  // Tolerate a handful of known dev-mode flakes (Vite cold dep-
-  // optimization rounds, segment-loop teardown races,
-  // console-error-vs-pageerror ordering on the error-boundary
-  // specs). A test that flips between pass and fail across runs
-  // gets two retries before being declared failed; tests that fail
-  // every retry are real bugs.
-  retries: 2,
-  // Workers > 1 is safe now: `e2e/fixtures.ts` stamps every request with
+  // Give-up bound for `expect` polls. Every wait in the suite is on a
+  // real signal (a marker, a locator, a server-stamped value) — this
+  // only sets how long a signal gets to arrive before the test is
+  // declared red. The 5s default is calibrated for an idle machine; a
+  // saturated dev box (parallel workers + two dev servers) can push a
+  // legitimate roundtrip past it without anything being wrong.
+  expect: { timeout: 10_000 },
+  retries: 0,
+  // Workers > 1 is safe: `e2e/fixtures.ts` stamps every request with
   // a per-worker `x-test-scope` header, and the framework (see
   // `framework/src/runtime/context.ts` — `deriveScope`) routes each
   // request to its own bucket of process-wide state (<Cache>, registry,
-  // session, GraphQL cache). Default (`undefined`) lets Playwright pick
-  // based on CPU count.
+  // session, GraphQL cache). Capped at 6 rather than Playwright's
+  // CPU-count default: every worker renders through ONE dev-server
+  // process, and past ~6 concurrent heavy RSC renders (the browse
+  // page alone is ~100 sections) the server's p99 latency blows past
+  // the specs' give-up bounds without anything being wrong.
   fullyParallel: true,
+  workers: 6,
   use: {
-    baseURL: "http://localhost:5179",
+    baseURL: `http://localhost:${PORT}`,
     headless: true,
   },
-  webServer: {
-    // Resolved within the e2e-testing workspace — `yarn dev` runs
-    // `vite` here.
-    command: "yarn dev --port 5179",
-    url: "http://localhost:5179",
-    reuseExistingServer: true,
-    timeout: 60000,
-  },
-  // NOTE: cross-origin tests in `remote-frame-crossorigin.spec.ts`
-  // require `e2e-magento` running on port 5181. The spec's
-  // `beforeAll` skips cleanly when magento isn't reachable. We
-  // don't auto-start magento here because vite-rsc emits unstable
-  // client-reference IDs across cold dev starts (sometimes
-  // `/@fs/...` paths the host can resolve, sometimes hash IDs that
-  // only exist in the remote's vite session and that the host's
-  // vite-rsc rejects as invalid cross-origin client references).
-  // Manual workflow: run `yarn dev:magento` in a separate terminal
-  // and the cross-origin specs run.
+  projects: [
+    // Serial pre-pass that visits every route once (see
+    // `e2e/warmup.setup.ts`). A fresh dev server compiles each page's
+    // module graph on first hit and discovers optimizer deps lazily;
+    // without the warmup, the parallel spec storm pays those costs
+    // mid-assertion (slow first paints, optimizer-triggered reloads).
+    // The warmup absorbs them before any spec runs.
+    {
+      name: "warmup",
+      testMatch: /warmup\.setup\.ts/,
+    },
+    {
+      name: "chromium",
+      testMatch: /.*\.spec\.ts/,
+      dependencies: ["warmup"],
+    },
+  ],
+  webServer: [
+    {
+      // Resolved within the e2e-testing workspace — `yarn dev` runs
+      // `vite` here.
+      command: `yarn dev --port ${PORT}`,
+      url: `http://localhost:${PORT}`,
+      reuseExistingServer: true,
+      timeout: 60000,
+    },
+    {
+      // The e2e-magento companion app — hosts the remote partons the
+      // cross-origin `<RemoteFrame>` specs (and /remote-frame-
+      // crossorigin-demo) fetch at `/__remote/<id>`. The readiness URL
+      // is a real remote endpoint rather than `/`, so the first parton
+      // compile happens here instead of inside a spec's timeout.
+      command: `yarn workspace @parton/e2e-magento dev --port ${MAGENTO_PORT}`,
+      url: `${MAGENTO_ORIGIN}/__remote/magento-greeting`,
+      reuseExistingServer: true,
+      timeout: 120000,
+    },
+  ],
 })

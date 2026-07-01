@@ -73,14 +73,6 @@ export function FormsDemoForm({
   const [lastResult, setLastResult] = useState<"idle" | "pending" | "ok" | "failed">("idle")
   const [lastError, setLastError] = useState<string>("")
 
-  // Hydration signal for the e2e harness — Playwright waits for this
-  // before interacting, so a click doesn't land on the SSR DOM before
-  // hydrateRoot installs its delegated listener (a no-op otherwise).
-  // Mirrors StreamingDemoReady.
-  useEffect(() => {
-    document.body.setAttribute("data-forms-demo-ready", "1")
-  }, [])
-
   const inputClass =
     "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
 
@@ -98,10 +90,8 @@ export function FormsDemoForm({
           className="cursor-pointer"
         />
         <span data-testid="forms-fail-chance-label">
-          Simulated failure chance:{" "}
-          <code>{(failChanceView.value * 100).toFixed(0)}%</code>{" "}
-          (server throws this often; transaction rolls back, optimistic
-          UI rewinds)
+          Simulated failure chance: <code>{(failChanceView.value * 100).toFixed(0)}%</code> (server
+          throws this often; transaction rolls back, optimistic UI rewinds)
         </span>
       </label>
 
@@ -145,8 +135,8 @@ export function FormsDemoForm({
           <label htmlFor="forms-notes" className="text-xs">
             Notes{" "}
             <span className="text-muted-foreground">
-              (onChange mode — directly bound to the cell, every
-              keystroke writes; persists across the session)
+              (onChange mode — directly bound to the cell, every keystroke writes; persists across
+              the session)
             </span>
           </label>
           <textarea
@@ -185,20 +175,16 @@ export function FormsDemoForm({
         </div>
         <div className="grid grid-cols-2 gap-2 font-mono">
           <div data-testid="forms-optimistic-name">
-            <span className="text-muted-foreground">optimistic name:</span>{" "}
-            {name.value || "—"}
+            <span className="text-muted-foreground">optimistic name:</span> {name.value || "—"}
           </div>
           <div data-testid="forms-server-name">
-            <span className="text-muted-foreground">server name:</span>{" "}
-            {name.serverValue || "—"}
+            <span className="text-muted-foreground">server name:</span> {name.serverValue || "—"}
           </div>
           <div data-testid="forms-optimistic-cvc">
-            <span className="text-muted-foreground">optimistic cvc:</span>{" "}
-            {cvc.value || "—"}
+            <span className="text-muted-foreground">optimistic cvc:</span> {cvc.value || "—"}
           </div>
           <div data-testid="forms-server-cvc">
-            <span className="text-muted-foreground">server cvc:</span>{" "}
-            {cvc.serverValue || "—"}
+            <span className="text-muted-foreground">server cvc:</span> {cvc.serverValue || "—"}
           </div>
         </div>
       </div>
@@ -213,9 +199,7 @@ export function FormsDemoForm({
       </div>
 
       <div className="rounded border border-border bg-muted/40 p-2 text-xs">
-        <div className="mb-1 font-semibold text-muted-foreground">
-          Last save snapshot (JSON):
-        </div>
+        <div className="mb-1 font-semibold text-muted-foreground">Last save snapshot (JSON):</div>
         <div className="font-mono break-all" data-testid="forms-saves-json">
           {savesView.value || "—"}
         </div>

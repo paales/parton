@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request, waitForPageInteractive } from "./fixtures"
 
 /**
  * `useNavigation().preload(target)` — hover-eager warm of a
@@ -21,9 +21,7 @@ import { test, expect, request } from "./fixtures"
  * is unit-tested in `framework/src/lib/__tests__/preload-warm-cache.test.tsx`.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("hovering a nav link preloads its destination without navigating", async ({ page }) => {
@@ -42,12 +40,10 @@ test("hovering a nav link preloads its destination without navigating", async ({
   })
 
   await page.goto("/cache-demo")
-  await expect(page.getByTestId("click-counter")).toBeVisible({ timeout: 15000 })
-  await page.waitForFunction(
-    () => typeof (window as unknown as { __rsc_partial_preload?: unknown }).__rsc_partial_preload === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await expect(page.getByTestId("click-counter")).toBeVisible({
+    timeout: 15000,
+  })
+  await waitForPageInteractive(page)
 
   // Only care about traffic triggered from here on.
   rscRequests.length = 0
@@ -78,13 +74,13 @@ test("hovering a nav link preloads its destination without navigating", async ({
 
   // No regression: the click still navigates normally (now warm).
   await page.getByRole("link", { name: /Defer Demo/ }).click()
-  await expect(page.getByTestId("activate-manual")).toBeVisible({ timeout: 10000 })
+  await expect(page.getByTestId("activate-manual")).toBeVisible({
+    timeout: 10000,
+  })
   expect(new URL(page.url()).pathname).toBe("/defer-demo")
 })
 
-test("clicking immediately after the hover-preload still navigates (no race)", async ({
-  page,
-}) => {
+test("clicking immediately after the hover-preload still navigates (no race)", async ({ page }) => {
   // The race guard: a single `.click()` fires pointer-enter (→ preload)
   // then the click (→ nav) back-to-back, so the warm fetch is still in
   // flight when the navigation commits. The warm walk is per-partial
@@ -92,16 +88,16 @@ test("clicking immediately after the hover-preload still navigates (no race)", a
   // entry — the destination must paint normally, not stick on the prior
   // page. Regression guard for preload-in-flight-during-nav.
   await page.goto("/cache-demo")
-  await expect(page.getByTestId("click-counter")).toBeVisible({ timeout: 15000 })
-  await page.waitForFunction(
-    () => typeof (window as unknown as { __rsc_partial_preload?: unknown }).__rsc_partial_preload === "function",
-    null,
-    { timeout: 10000 },
-  )
+  await expect(page.getByTestId("click-counter")).toBeVisible({
+    timeout: 15000,
+  })
+  await waitForPageInteractive(page)
 
   // No prior hover / poll — the preload has no head start, so it's
   // genuinely mid-flight at nav time.
   await page.getByRole("link", { name: /Defer Demo/ }).click()
-  await expect(page.getByTestId("activate-manual")).toBeVisible({ timeout: 10000 })
+  await expect(page.getByTestId("activate-manual")).toBeVisible({
+    timeout: 10000,
+  })
   expect(new URL(page.url()).pathname).toBe("/defer-demo")
 })

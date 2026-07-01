@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test"
+import { waitForLiveConnection, waitForPageInteractive } from "./fixtures"
 
 /**
  * Regression: opening the chat overlay on a page made the WHOLE page
@@ -36,7 +37,9 @@ const KEEPALIVE_CLOSE_TIMEOUT = 30_000
  *  nodes) is detectable — the marker only survives if the node does. */
 async function markStableNodes(page: Page): Promise<void> {
   await page.evaluate(() => {
-    const w = window as unknown as { __marks: Record<string, "alive" | "missing"> }
+    const w = window as unknown as {
+      __marks: Record<string, "alive" | "missing">
+    }
     w.__marks = {}
     const mark = (sel: string, name: string) => {
       const el = document.querySelector(sel) as (Element & { __mark?: string }) | null
@@ -60,7 +63,10 @@ async function markStableNodes(page: Page): Promise<void> {
         }
       }
     })
-    observed.observe(document.documentElement, { childList: true, subtree: true })
+    observed.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    })
   })
 }
 
@@ -93,12 +99,12 @@ test("opening the chat overlay does not remount the page while notes stream", as
     // read as a (spurious) remount. After this, the measured run is
     // reload-free.
     await page.goto("/inspect")
-    await page.waitForFunction(
-      () => typeof (window as unknown as { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 15_000 },
-    )
-    await page.locator('[data-testid="chat-open-pill"]').click()
+    await waitForPageInteractive(page)
+    // Settle the live stream's first segment: its initial-load
+    // re-commit (cold→warm fp drift) may replace nodes, which is not
+    // the overlay-open remount this spec guards against.
+    await waitForLiveConnection(page)
+    await page.locator('[data-testid=\"chat-open-pill\"][data-hydrated]').click()
     await page.locator('[data-testid="chat-box"]').waitFor({ state: "visible", timeout: 10_000 })
     await page.waitForTimeout(500)
 
@@ -118,25 +124,25 @@ test("opening the chat overlay does not remount the page while notes stream", as
     })
 
     await page.goto("/inspect")
-    await page.waitForFunction(
-      () => typeof (window as unknown as { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch === "function",
-      null,
-      { timeout: 15_000 },
-    )
+    await waitForPageInteractive(page)
+    // Settle the live stream's first segment: its initial-load
+    // re-commit (cold→warm fp drift) may replace nodes, which is not
+    // the overlay-open remount this spec guards against.
+    await waitForLiveConnection(page)
 
     await markStableNodes(page)
 
     // Wait for the chat-closed heartbeat connection to idle out, so its
     // reopen (chat-aware) overlaps the frame long-poll we start next.
-    await expect
-      .poll(() => streamingClosed, { timeout: KEEPALIVE_CLOSE_TIMEOUT })
-      .toBe(true)
+    await expect.poll(() => streamingClosed, { timeout: KEEPALIVE_CLOSE_TIMEOUT }).toBe(true)
 
     // Open the chat via the client frame-nav path (markConnectionLive
     // long-poll). The producer starts streaming; within ~5s the heartbeat
     // reopens chat-aware and the two connections run concurrently.
-    await page.locator('[data-testid="chat-open-pill"]').click()
-    await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({ timeout: 10_000 })
+    await page.locator('[data-testid=\"chat-open-pill\"][data-hydrated]').click()
+    await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({
+      timeout: 10_000,
+    })
 
     // Let the overlap run and notes accumulate.
     const chunks = page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]')

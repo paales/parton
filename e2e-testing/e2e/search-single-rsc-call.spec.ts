@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * Regression guard: typing a single character in the search input must
@@ -35,10 +35,12 @@ test("single keystroke in search dispatches exactly one RSC call", async ({ page
   //    LoadMore's IntersectionObserver has finished its self-propagating
   //    firings on the underlying product list.
   await page.goto("/?search=url")
-  const input = page.locator("input[type=text]")
+  const input = page.locator("input[type=text][data-hydrated]")
   await input.waitFor({ state: "visible", timeout: 15000 })
-  // Give hydration a beat so React event handlers are wired.
-  await page.waitForTimeout(300)
+  // Wait for the interactive marker so the input's onChange pipeline
+  // is wired — a keystroke fired earlier is silently lost (text input
+  // is not covered by React's discrete-event replay).
+  await waitForPageInteractive(page)
 
   // 2. Reset the counter — observe only calls from the keystroke onward.
   rscCalls.length = 0

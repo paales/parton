@@ -14,7 +14,7 @@
  * loses the field form"). These tests pin the expansion behaviour so
  * any regression that breaks it shows up here first.
  */
-import { expect, test, request as apiRequest, waitForRscIdle } from "./fixtures.ts"
+import { clearCaches, expect, test, waitForPageInteractive, waitForRscIdle } from "./fixtures.ts"
 
 // All blocks that should be visible on /cms-demo and /cms-demo/:slug.
 // If a partial cache entry gets pruned mid-nav, one of these blanks
@@ -49,9 +49,7 @@ test.beforeEach(async ({ baseURL }) => {
   // Each worker gets a clean partial registry / cache snapshot so
   // residue from earlier specs in the same worker can't influence
   // assertions about the prune.
-  const ctx = await apiRequest.newContext({ baseURL })
-  await ctx.get("/__test/clear-caches")
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 async function clickSlug(
@@ -73,6 +71,7 @@ async function clickSlug(
 
 test("alpha → beta → gamma keeps every block (fp-skipped outer regression)", async ({ page }) => {
   await page.goto("/cms-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
   await expectAllBlocks(page)
 
@@ -98,6 +97,7 @@ test("alpha → beta → gamma keeps every block (fp-skipped outer regression)",
 
 test("long sequential nav cycle keeps every block at every step", async ({ page }) => {
   await page.goto("/cms-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
   await expectAllBlocks(page)
 
@@ -126,6 +126,7 @@ test("long sequential nav cycle keeps every block at every step", async ({ page 
 
 test("browser back/forward through history keeps every block", async ({ page }) => {
   await page.goto("/cms-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
   await clickSlug(page, "alpha")
   await clickSlug(page, "beta")
@@ -165,6 +166,7 @@ test("mixing app-level cross-page nav with cms-demo nav keeps cms-demo intact", 
   // ids; nothing on cms-demo should be missing because of leftover
   // entries from prior routes.
   await page.goto("/cache-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
   await page.getByRole("link", { name: /CMS Demo/ }).click()
   await expect(page).toHaveURL(/\/cms-demo$/)
@@ -184,6 +186,7 @@ test("mixing app-level cross-page nav with cms-demo nav keeps cms-demo intact", 
 
 test("rapid multi-click survives — last URL wins, blocks all present", async ({ page }) => {
   await page.goto("/cms-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
 
   // Fire alpha + beta + gamma clicks back-to-back without awaiting.
@@ -204,6 +207,7 @@ test("editor preview nav preserves tree + field-form across slug switches", asyn
 }) => {
   await context.addCookies([{ name: "__editor", value: "1", url: baseURL! }])
   await page.goto("/cms-demo")
+  await waitForPageInteractive(page)
   await waitForRscIdle(page)
 
   // Select a node — sidebar URL becomes ?select=... and the field

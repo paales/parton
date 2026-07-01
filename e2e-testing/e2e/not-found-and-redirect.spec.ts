@@ -1,4 +1,4 @@
-import { test, expect, request } from "./fixtures"
+import { clearCaches, test, expect, request } from "./fixtures"
 
 /**
  * /not-found-demo throws `notFound()` → HTTP 404 + <NotFoundPage/>.
@@ -6,9 +6,7 @@ import { test, expect, request } from "./fixtures"
  * or a payload marker for RSC fetches that the client acts on.
  */
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test.describe("notFound + redirect", () => {

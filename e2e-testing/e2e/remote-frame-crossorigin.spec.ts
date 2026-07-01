@@ -1,39 +1,20 @@
-import { expect, request, test } from "./fixtures"
+import { clearCaches, expect, request, test } from "./fixtures"
 
 /**
  * /remote-frame-crossorigin-demo — true cross-origin `<RemoteFrame>`.
  *
- * The remote app (`e2e-magento`) must be running on port 5181 in
- * parallel with the host (`e2e-testing` on 5173). The Playwright
- * web-server config starts the host but not the remote — if the
- * remote isn't up, these tests skip cleanly with a clear error.
+ * The remote app (`e2e-magento`) runs alongside the host: both are
+ * Playwright-managed webServers (see `playwright.config.ts`), so no
+ * manual `yarn dev:magento` terminal is needed. The config exports
+ * the remote's origin as `MAGENTO_REMOTE_ORIGIN` — the same env var
+ * the host's generated bindings (`src/remote/magento/`) read — so a
+ * port remap stays a single-constant change in the config.
  */
 
-const REMOTE_ORIGIN = "http://localhost:5181"
-
-test.beforeAll(async () => {
-  // Skip the suite if e2e-magento isn't running. The user can
-  // start it with `yarn dev:magento` in a separate terminal.
-  // 15s timeout — vite's first hit on `/__remote/<id>` forces a
-  // cold compile of the parton module, which on a clean dep cache
-  // can take several seconds.
-  const ctx = await request.newContext()
-  try {
-    const probe = await ctx.get(`${REMOTE_ORIGIN}/__remote/magento-greeting`, {
-      timeout: 15000,
-    })
-    if (!probe.ok()) test.skip(true, "e2e-magento returned non-2xx")
-  } catch {
-    test.skip(true, `e2e-magento not running at ${REMOTE_ORIGIN}; run yarn dev:magento`)
-  } finally {
-    await ctx.dispose()
-  }
-})
+const REMOTE_ORIGIN = process.env.MAGENTO_REMOTE_ORIGIN ?? "http://localhost:5181"
 
 test.beforeEach(async ({ baseURL }) => {
-  const ctx = await request.newContext()
-  await ctx.get(`${baseURL ?? "http://localhost:5173"}/__test/clear-caches?all=1`)
-  await ctx.dispose()
+  await clearCaches(baseURL)
 })
 
 test("host renders cross-origin magento-greeting", async ({ page }) => {
@@ -44,16 +25,18 @@ test("host renders cross-origin magento-greeting", async ({ page }) => {
   await expect(page.getByTestId("rfxd-header")).toBeVisible({ timeout: 10000 })
 
   // Both cross-origin frames arrive after their respective delays.
-  await expect(page.getByTestId("magento-greeting")).toBeVisible({ timeout: 15000 })
-  await expect(page.getByTestId("magento-stocks")).toBeVisible({ timeout: 15000 })
+  await expect(page.getByTestId("magento-greeting")).toBeVisible({
+    timeout: 15000,
+  })
+  await expect(page.getByTestId("magento-stocks")).toBeVisible({
+    timeout: 15000,
+  })
 
   // The greeting card carries text identifying its origin.
   await expect(page.getByTestId("magento-greeting")).toContainText("e2e-magento")
 })
 
-test("cross-origin remote endpoint returns Flight + snapshot trailer", async ({
-  request,
-}) => {
+test("cross-origin remote endpoint returns Flight + snapshot trailer", async ({ request }) => {
   const response = await request.get(`${REMOTE_ORIGIN}/__remote/magento-greeting`)
   expect(response.status()).toBe(200)
   expect(response.headers()["content-type"]).toMatch(/^text\/x-component/)
@@ -71,9 +54,7 @@ test("cross-origin remote endpoint returns Flight + snapshot trailer", async ({
   // through `.buffer`, which types as `ArrayBufferLike` (possibly a
   // SharedArrayBuffer) and breaks the `Uint8Array` ctor overload.
   const text = new TextDecoder("utf-8", { fatal: false }).decode(await response.body())
-  expect(text, "snapshot trailer marker must be present").toMatch(
-    /\[parton:snapshots:\d+\]/,
-  )
+  expect(text, "snapshot trailer marker must be present").toMatch(/\[parton:snapshots:\d+\]/)
 })
 
 test("capability-scoped remote reads host-declared values", async ({ page }) => {
@@ -137,9 +118,7 @@ test("selector refetch routes back to the cross-origin remote (server wire)", as
   expect(Number(refetchTick)).toBeGreaterThan(Number(initialTick))
 })
 
-test("nested cross-origin partial is refetchable via namespaced selector", async ({
-  request,
-}) => {
+test("nested cross-origin partial is refetchable via namespaced selector", async ({ request }) => {
   // `MagentoStockTicker` (rendered on magento) embeds an addressable
   // child `MagentoCartSummary` with selector "cart-summary". The
   // child's snapshot only ever reaches the host's registry through
@@ -155,9 +134,7 @@ test("nested cross-origin partial is refetchable via namespaced selector", async
   )
   expect(initial.status()).toBe(200)
   const initialBody = await initial.text()
-  expect(initialBody, "expected cache-mode for nested refetch").toContain(
-    '"mode":"cache"',
-  )
+  expect(initialBody, "expected cache-mode for nested refetch").toContain('"mode":"cache"')
   const initialTickMatch = initialBody.match(/"data-tick":"(\d+)"/)
   expect(initialTickMatch, "nested partial must render in the refetch").not.toBeNull()
 
@@ -171,14 +148,10 @@ test("nested cross-origin partial is refetchable via namespaced selector", async
   const refetchBody = await refetch.text()
   const refetchTickMatch = refetchBody.match(/"data-tick":"(\d+)"/)
   expect(refetchTickMatch).not.toBeNull()
-  expect(Number(refetchTickMatch?.[1])).toBeGreaterThan(
-    Number(initialTickMatch?.[1]),
-  )
+  expect(Number(refetchTickMatch?.[1])).toBeGreaterThan(Number(initialTickMatch?.[1]))
 })
 
-test("namespacing prevents collisions: bare selector doesn't hit remote", async ({
-  request,
-}) => {
+test("namespacing prevents collisions: bare selector doesn't hit remote", async ({ request }) => {
   // The remote's spec is registered locally as `magento:magento-stocks`.
   // A refetch URL that targets the bare id `magento-stocks` (without
   // the namespace prefix) must NOT route to the remote — the host's
@@ -187,17 +160,13 @@ test("namespacing prevents collisions: bare selector doesn't hit remote", async 
   // accidentally returning the remote's bytes.
   await request.get("/remote-frame-crossorigin-demo")
 
-  const bare = await request.get(
-    "/remote-frame-crossorigin-demo_.rsc?partials=magento-stocks",
-  )
+  const bare = await request.get("/remote-frame-crossorigin-demo_.rsc?partials=magento-stocks")
   const body = await bare.text()
   // No cache-mode marker → fell through to streaming-mode (full
   // Root render), which is the correct behavior for an unknown
   // selector. The bare id doesn't accidentally collide with the
   // namespaced remote registration.
-  expect(body, "bare id must not resolve to the namespaced remote").not.toContain(
-    '"mode":"cache"',
-  )
+  expect(body, "bare id must not resolve to the namespaced remote").not.toContain('"mode":"cache"')
 })
 
 test("frame navigation within a cross-origin RemoteFrame", async ({ page }) => {
@@ -231,9 +200,7 @@ test("remote without capability sees no host values", async ({ request }) => {
   // returns {} on the remote side, so the body falls back to defaults
   // (cart_id=<missing>, USD, 0). Response is Flight bytes (JSON-ish),
   // not HTML — angle brackets are raw, not entity-escaped.
-  const response = await request.get(
-    `${REMOTE_ORIGIN}/__remote/magento-payment-summary`,
-  )
+  const response = await request.get(`${REMOTE_ORIGIN}/__remote/magento-payment-summary`)
   expect(response.status()).toBe(200)
   const text = await response.text()
   expect(text).toContain("<missing>")

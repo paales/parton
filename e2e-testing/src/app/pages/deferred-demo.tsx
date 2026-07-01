@@ -22,7 +22,7 @@
 
 import { localCell, parton, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
-import { DeferredDemoReady, PingButton } from "../components/deferred-demo-ping.tsx"
+import { PingButton } from "../components/deferred-demo-ping.tsx"
 
 // Global, deferred broadcast counter. `vary: () => ({})` → one shared
 // partition across all viewers; `deferred: true` → writes ride the
@@ -61,11 +61,10 @@ export const DeferredDemoPage = parton(
         <title>Deferred cell writes</title>
         <h1 className="text-2xl font-semibold">Deferred (stream-only) writes</h1>
         <p className="text-sm text-muted-foreground">
-          A <code>deferred</code> cell's write returns no re-render on the
-          action POST — the new value reaches the page only through the
-          open streaming connection. Open the network panel: the Ping POST
-          comes back with an empty root, and <code>Pings:</code> updates on
-          the next rolling segment of the heartbeat stream instead.
+          A <code>deferred</code> cell's write returns no re-render on the action POST — the new
+          value reaches the page only through the open streaming connection. Open the network panel:
+          the Ping POST comes back with an empty root, and <code>Pings:</code> updates on the next
+          rolling segment of the heartbeat stream instead.
         </p>
 
         <Card className="p-5">
@@ -74,17 +73,14 @@ export const DeferredDemoPage = parton(
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
             <p className="text-xs text-muted-foreground">
-              <code>Pings:</code> is the server value; <code>sent:</code> is
-              client state that ticks the instant the write round-trips. They
-              move a beat apart — the write completes, then the stream carries
-              the value back. With the heartbeat off, <code>Pings:</code>{" "}
-              freezes while <code>sent:</code> keeps climbing.
+              <code>Pings:</code> is the server value; <code>sent:</code> is client state that ticks
+              the instant the write round-trips. They move a beat apart — the write completes, then
+              the stream carries the value back. With the heartbeat off, <code>Pings:</code> freezes
+              while <code>sent:</code> keeps climbing.
             </p>
             <DeferredBroadcast />
           </CardContent>
         </Card>
-
-        <DeferredDemoReady />
       </main>
     )
   },

@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures"
+import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * Regression guard for the manual flow that double-loaded in
@@ -23,7 +23,11 @@ import { test, expect } from "./fixtures"
  *    keystroke (no second "load" repaint).
  */
 test("opening the overlay then typing loads the results exactly once", async ({ page }) => {
-  const rscCalls: Array<{ url: string; partials: string | null; time: number }> = []
+  const rscCalls: Array<{
+    url: string
+    partials: string | null
+    time: number
+  }> = []
   const t0 = Date.now()
   page.on("request", (req) => {
     const url = req.url()
@@ -32,26 +36,34 @@ test("opening the overlay then typing loads the results exactly once", async ({ 
     // Ignore the live-update heartbeat — it holds a long-lived
     // `?streaming=1` connection that is not a "load".
     if (u.searchParams.get("streaming") === "1") return
-    rscCalls.push({ url, partials: u.searchParams.get("partials"), time: Date.now() - t0 })
+    rscCalls.push({
+      url,
+      partials: u.searchParams.get("partials"),
+      time: Date.now() - t0,
+    })
   })
 
   // 1. Land on the overview with search closed.
   await page.goto("/")
-  const openButton = page.getByRole("button", { name: "Search (URL)" })
+  const openButton = page
+    .getByRole("button", { name: "Search (URL)" })
+    .and(page.locator("[data-hydrated]"))
   await openButton.waitFor({ state: "visible", timeout: 15000 })
-  // Give hydration a beat so the click handler is wired.
-  await page.waitForTimeout(300)
+  // Wait for the interactive marker so the click handler is wired.
+  await waitForPageInteractive(page)
 
   // 2. Open the overlay the way a user does — by clicking the button.
   await openButton.click()
-  const input = page.locator("dialog input[type=text]")
+  const input = page.locator("dialog input[type=text][data-hydrated]")
   await input.waitFor({ state: "visible", timeout: 15000 })
 
   // 3. Install a DOM tracker that counts every time a fresh stage-1
   //    results grid is inserted. One keystroke → one mount. A second
   //    insertion is the "results loaded twice" symptom.
   await page.evaluate(() => {
-    const w = window as unknown as { __load: { mounts: number; armed: boolean } }
+    const w = window as unknown as {
+      __load: { mounts: number; armed: boolean }
+    }
     w.__load = { mounts: 0, armed: false }
     const isGrid = (node: Node): boolean =>
       node instanceof HTMLElement &&
