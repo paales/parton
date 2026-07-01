@@ -1020,13 +1020,36 @@ function invalidationKeyFromSnap(snap: PartialSnapshot): string {
 }
 
 /**
- * Every URLPattern any spec was constructed with. Populated as a
- * side effect of `parton(..., { match: ... })`. Consumed
- * by `getRegisteredMatchPatterns()` so authors can wire a 404
- * fallback that fires only when no registered pattern matches the
- * request URL.
+ * Every distinct URLPattern any spec was constructed with. Populated
+ * as a side effect of `parton(..., { match: ... })` via
+ * `registerMatchPattern`. Consumed by `getRegisteredMatchPatterns()`
+ * so authors can wire a 404 fallback that fires only when no
+ * registered pattern matches the request URL, and by
+ * `computeRouteKey` as the matched-set hash input.
  */
 const registeredMatchPatterns: URLPattern[] = []
+
+/** Signatures of every registered pattern — the dedup gate for
+ *  `registerMatchPattern`. */
+const registeredPatternSignatures = new Set<string>()
+
+/**
+ * Register a spec's compiled URLPattern, deduplicated by signature.
+ * HMR re-executes a spec module and runs the constructor again with
+ * the same pattern; appending a duplicate would change the
+ * matched-signature list `computeRouteKey` hashes, shifting every
+ * affected routeKey across the edit and orphaning the registry's
+ * per-routeKey hints.
+ */
+function registerMatchPattern(pattern: URLPattern): void {
+  const signature = patternSignature(pattern)
+  if (registeredPatternSignatures.has(signature)) return
+  registeredPatternSignatures.add(signature)
+  registeredMatchPatterns.push(pattern)
+  // Adding a pattern invalidates the routeKey cache — a URL whose
+  // matched-set previously excluded this pattern may now include it.
+  routeKeyCache.clear()
+}
 
 /**
  * Compile a `MatchPattern` into a URLPattern with strict semantics:
@@ -1072,51 +1095,61 @@ function patternSignature(pattern: URLPattern): string {
 
 /**
  * Compute a routeKey from a URL: a stable hash of WHICH registered
- * URLPatterns match. Two URLs that match the same set of patterns
- * collapse to one routeKey, so the variant-hint table scales with
- * pattern combinations (a small finite space) instead of distinct
- * pathnames. 50k product URLs that all match `/p/:slug` share one
- * hint entry instead of evicting each other from the LRU; spam
- * traffic to junk URLs that all match the same pattern can't displace
- * real hot routes.
+ * URLPatterns match the URL's BASE — scheme + host + pathname, with
+ * search and hash stripped BEFORE matching. Two URLs that share a
+ * base collapse to one routeKey, so the variant-hint table scales
+ * with pattern combinations (a small finite space) instead of
+ * distinct pathnames. 50k product URLs that all match `/p/:slug`
+ * share one hint entry instead of evicting each other from the LRU;
+ * spam traffic to junk URLs that all match the same pattern can't
+ * displace real hot routes.
+ *
+ * Search and hash are request dimensions WITHIN a page — `vary`,
+ * matchKeys, and fingerprints carry them — not part of the page's
+ * addressable identity. A pattern that constrains them (`match:
+ * { search: "*q=:query" }`) gates its SPEC's rendering against the
+ * full URL as always, but never splits its page's registry bucket:
+ * a search overlay's `?q=` refetch must find the snapshots, hints,
+ * and fold base the page's earlier renders committed, and the
+ * fp-trailer must keep the client's warm fps in lockstep across
+ * those refetches. Matching the base also makes the routeKey a pure
+ * function of the URL — never of request arrival order.
  *
  * Returns `__no-pattern` when nothing matches — those requests don't
  * commit to the registry anyway (`notFound()` throws past the commit),
  * so the sentinel just keeps lookups deterministic on the read side.
  */
-/** Pathname → routeKey cache. Per-segment streaming responses change
- *  only the `?cached=` query each tick; the matched-pattern set is
- *  invariant under query/fragment changes because every registered
- *  pattern in this framework is pathname-only (`compileMatchPattern`
- *  emits `new URLPattern({pathname})` for the string form). Keying
- *  the cache by pathname (instead of full URL) is what lets one
- *  streaming request's N segments share one routeKey computation
- *  instead of N. Invalidated by pattern registration so a new pattern
- *  can shift the matched-set for previously-seen pathnames. */
+/** URL base → routeKey cache. Sound by construction: the matched set
+ *  is computed from the base, which is the cache key. Per-segment
+ *  streaming responses change only the `?cached=` query each tick;
+ *  keying by base lets one streaming request's N segments share one
+ *  routeKey computation instead of N. Invalidated by pattern
+ *  registration so a new pattern can shift the matched-set for
+ *  previously-seen bases. */
 const routeKeyCache = new Map<string, string>()
 const ROUTE_KEY_CACHE_MAX = 2048
 
-function extractPathname(url: string): string {
-  // Hand-rolled path extraction — `new URL(url).pathname` is the
-  // hot path here; this memoization exists to avoid URL parsing.
+/** Slice a URL down to its base — everything before `?` or `#` —
+ *  without paying for `new URL()` on the hot path. */
+function extractUrlBase(url: string): string {
   const schemeIdx = url.indexOf("//")
   const pathStart = schemeIdx >= 0 ? url.indexOf("/", schemeIdx + 2) : 0
-  if (pathStart < 0) return "/"
+  const from = pathStart < 0 ? 0 : pathStart
   let end = url.length
-  const qIdx = url.indexOf("?", pathStart)
+  const qIdx = url.indexOf("?", from)
   if (qIdx >= 0 && qIdx < end) end = qIdx
-  const hashIdx = url.indexOf("#", pathStart)
+  const hashIdx = url.indexOf("#", from)
   if (hashIdx >= 0 && hashIdx < end) end = hashIdx
-  return url.slice(pathStart, end) || "/"
+  return url.slice(0, end)
 }
 
 export function computeRouteKey(url: string): string {
-  const pathname = extractPathname(url)
-  const cached = routeKeyCache.get(pathname)
+  const base = extractUrlBase(url)
+  const cached = routeKeyCache.get(base)
   if (cached !== undefined) return cached
   const matched: string[] = []
   for (const pattern of registeredMatchPatterns) {
-    if (pattern.exec(url) !== null) {
+    if (pattern.exec(base) !== null) {
       matched.push(patternSignature(pattern))
     }
   }
@@ -1127,19 +1160,27 @@ export function computeRouteKey(url: string): string {
     matched.sort()
     result = hash(matched.join(""))
   }
-  // Simple FIFO bound. The streaming case repeats one pathname so the
-  // cap is mostly defensive against pathological pathname diversity.
+  // Simple FIFO bound. The streaming case repeats one base so the
+  // cap is mostly defensive against pathological URL diversity.
   if (routeKeyCache.size >= ROUTE_KEY_CACHE_MAX) {
     const oldest = routeKeyCache.keys().next().value
     if (oldest !== undefined) routeKeyCache.delete(oldest)
   }
-  routeKeyCache.set(pathname, result)
+  routeKeyCache.set(base, result)
   return result
 }
 
 /** Clear the routeKey cache. Used by HMR / test helpers; the framework
  *  itself only clears on pattern registration. */
 export function _clearRouteKeyCache(): void {
+  routeKeyCache.clear()
+}
+
+/** Test-only: wipe the registered-pattern set (and with it the
+ *  routeKey cache). Production never unregisters a pattern. */
+export function _resetMatchPatterns(): void {
+  registeredMatchPatterns.length = 0
+  registeredPatternSignatures.clear()
   routeKeyCache.clear()
 }
 
@@ -2080,12 +2121,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   options: InternalSpecConfig<V>,
 ): SpecComponent<Extra, Prettify<V & RenderArgs>> {
   const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
-  if (matchPattern) {
-    registeredMatchPatterns.push(matchPattern)
-    // Adding a pattern invalidates the routeKey cache — a URL whose
-    // matched-set previously excluded this pattern may now include it.
-    routeKeyCache.clear()
-  }
+  if (matchPattern) registerMatchPattern(matchPattern)
 
   // Selector parsing: flat labels, no unique/shared distinction. The
   // spec catalog id (`spec.id`) is the FIRST label. Auto-derives from
