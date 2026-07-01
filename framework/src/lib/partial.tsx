@@ -1020,13 +1020,36 @@ function invalidationKeyFromSnap(snap: PartialSnapshot): string {
 }
 
 /**
- * Every URLPattern any spec was constructed with. Populated as a
- * side effect of `parton(..., { match: ... })`. Consumed
- * by `getRegisteredMatchPatterns()` so authors can wire a 404
- * fallback that fires only when no registered pattern matches the
- * request URL.
+ * Every distinct URLPattern any spec was constructed with. Populated
+ * as a side effect of `parton(..., { match: ... })` via
+ * `registerMatchPattern`. Consumed by `getRegisteredMatchPatterns()`
+ * so authors can wire a 404 fallback that fires only when no
+ * registered pattern matches the request URL, and by
+ * `computeRouteKey` as the matched-set hash input.
  */
 const registeredMatchPatterns: URLPattern[] = []
+
+/** Signatures of every registered pattern — the dedup gate for
+ *  `registerMatchPattern`. */
+const registeredPatternSignatures = new Set<string>()
+
+/**
+ * Register a spec's compiled URLPattern, deduplicated by signature.
+ * HMR re-executes a spec module and runs the constructor again with
+ * the same pattern; appending a duplicate would change the
+ * matched-signature list `computeRouteKey` hashes, shifting every
+ * affected routeKey across the edit and orphaning the registry's
+ * per-routeKey hints.
+ */
+function registerMatchPattern(pattern: URLPattern): void {
+  const signature = patternSignature(pattern)
+  if (registeredPatternSignatures.has(signature)) return
+  registeredPatternSignatures.add(signature)
+  registeredMatchPatterns.push(pattern)
+  // Adding a pattern invalidates the routeKey cache — a URL whose
+  // matched-set previously excluded this pattern may now include it.
+  routeKeyCache.clear()
+}
 
 /**
  * Compile a `MatchPattern` into a URLPattern with strict semantics:
@@ -1140,6 +1163,14 @@ export function computeRouteKey(url: string): string {
 /** Clear the routeKey cache. Used by HMR / test helpers; the framework
  *  itself only clears on pattern registration. */
 export function _clearRouteKeyCache(): void {
+  routeKeyCache.clear()
+}
+
+/** Test-only: wipe the registered-pattern set (and with it the
+ *  routeKey cache). Production never unregisters a pattern. */
+export function _resetMatchPatterns(): void {
+  registeredMatchPatterns.length = 0
+  registeredPatternSignatures.clear()
   routeKeyCache.clear()
 }
 
@@ -2080,12 +2111,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   options: InternalSpecConfig<V>,
 ): SpecComponent<Extra, Prettify<V & RenderArgs>> {
   const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
-  if (matchPattern) {
-    registeredMatchPatterns.push(matchPattern)
-    // Adding a pattern invalidates the routeKey cache — a URL whose
-    // matched-set previously excluded this pattern may now include it.
-    routeKeyCache.clear()
-  }
+  if (matchPattern) registerMatchPattern(matchPattern)
 
   // Selector parsing: flat labels, no unique/shared distinction. The
   // spec catalog id (`spec.id`) is the FIRST label. Auto-derives from
