@@ -3,6 +3,16 @@
 A few RSC-specific quirks the framework works around. They live one
 level below the API surface.
 
+The wire-format facts the byte-level rewriters bake in — row framing,
+`$` / `$L` / `$@` ref shapes with `:deref` suffixes, `$$` escaping,
+`$undefined`, `I` / `$S` row shapes and their flush order, composite
+keys, UTF-8 validity — are pinned by the conformance canary
+`framework/src/lib/__tests__/flight-format-canary.rsc.test.tsx`. It
+renders fixtures through the real Flight runtime and asserts each fact
+against the emitted bytes, so a React / `@vitejs/plugin-rsc` upgrade
+that changes the format breaks that file with the moved assumption
+named, instead of silently mis-splicing a cached payload.
+
 ## Composite keys on dynamic partials
 
 Flight composites the outer `.map()` key with a client-component's

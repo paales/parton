@@ -74,6 +74,14 @@ rewrite can't be a regex over the text).
   map) ride in the entry as `SpliceMeta` so the splice never has to
   rebuffer the scaffold.
 
+Every wire fact this machinery assumes (row framing, ref grammar,
+`$$` escaping, `I` / `$S` row shapes and their flush order, hex row
+ids) is asserted against the real Flight runtime's output by the
+conformance canary
+`framework/src/lib/__tests__/flight-format-canary.rsc.test.tsx` — a
+format change in a React upgrade fails there by name before it can
+corrupt a splice.
+
 ## Entry shape
 
 ```ts
