@@ -24,9 +24,12 @@ exact mechanism that already makes reads reliable, because an ALS store follows
 the JS engine's post-`await` continuation.
 
 The unit threaded through the ALS is a per-render **frame** —
-`{ ctx, parton? }`:
+`{ ctx, settle?, parton? }`:
 
 - `ctx` is the immutable context map this subtree READS (`getServerContext`).
+- `settle` is the nearest enclosing parton's settlement scope — the refcount
+  of unfinished Flight tasks in that parton's subtree, behind
+  `_onPartonSettled` (see [`../notes/task-settle.md`](../notes/task-settle.md)).
 - `parton` is the rendering parton's self-identity (`getCurrentParton`),
   read-your-own and not inherited — see [`current-parton.ts`](../../framework/src/lib/current-parton.ts).
 
@@ -38,23 +41,34 @@ isolated.
 ## The patch
 
 Authored by `scripts/patch-plugin-rsc-server-context.mjs`; each edit asserts a
-unique anchor, so an upstream change fails loudly. Five edits per build (dev +
-prod edge):
+unique anchor, so an upstream change fails loudly. Six groups of edits per
+build (dev + prod edge):
 
-1. **Declare** `partonStorage` (the ALS) and `PARTON_CTX` (a `Symbol.for`
-   sentinel shared with `server-context.ts`) alongside React's own storages.
+1. **Declare** `partonStorage` (the ALS), `PARTON_CTX` (a `Symbol.for`
+   sentinel shared with `server-context.ts`), and the settle-refcount helpers
+   (`__partonSettleUp` / `__partonSettleDown`) alongside React's own storages.
 2. **`createTask`** snapshots the current frame's `ctx` onto the new task
    (`task.serverCtx`) — an immutable snapshot taken WHEN the task is created, so
    a deferred or outlined child renders in the context active where its element
-   appeared, not whatever a sibling wrote later.
+   appeared, not whatever a sibling wrote later. It also snapshots the frame's
+   settle scope (`task.settleScope`) and increments the scope chain's pending
+   counts.
 3. **`retryTask`** runs the whole task render inside
-   `partonStorage.run({ ctx: task.serverCtx }, …)` — so reads, child
-   `createTask`s, and post-`await` continuations all see that context.
+   `partonStorage.run({ ctx: task.serverCtx, settle: task.settleScope }, …)` —
+   so reads, child `createTask`s, and post-`await` continuations all see that
+   context.
 4. **The render site** runs each component in a FRESH frame inheriting the
-   parent `ctx` (`partonStorage.run(__frame, Component, …)`). That frame is
-   where a parton stamps its self-identity and where a read resolves `ctx`. The
-   ALS is exposed as `ReactSharedInternalsServer.__partonStorage` for the shim.
+   parent `ctx` + `settle` (`partonStorage.run(__frame, Component, …)`). That
+   frame is where a parton stamps its self-identity and where a read resolves
+   `ctx`. The ALS is exposed as
+   `ReactSharedInternalsServer.__partonStorage` for the shim.
 5. **`renderModelDestructive`** recognises a `PARTON_CTX` marker (below).
+6. **Every terminal task transition** — `retryTask` success, `erroredTask`,
+   `abortTask`/`haltTask`, and the two stream done-sites — decrements the
+   task's scope chain; a scope draining to zero fires its `onSettled` exactly
+   once. This is the per-parton subtree-settlement signal behind
+   `_onPartonSettled` — lifecycle map, refcount design, and edge cases in
+   [`../notes/task-settle.md`](../notes/task-settle.md).
 
 The edge build never imports `AsyncLocalStorage` (edge runtimes lack
 `async_hooks`). `@vitejs/plugin-rsc` injects `globalThis.AsyncLocalStorage`
@@ -76,7 +90,7 @@ So `createServerContext`'s provider is **synchronous** and returns a marker
 instead of children:
 
 ```ts
-return { $$typeof: PARTON_CTX, _ctx: overlay, _node: children }
+return { $$typeof: PARTON_CTX, _ctx: overlay, _node: children, _scope: settle }
 ```
 
 The patch's `renderModelDestructive`, on seeing `PARTON_CTX`, **outlines**
@@ -84,6 +98,10 @@ The patch's `renderModelDestructive`, on seeing `PARTON_CTX`, **outlines**
 inside `partonStorage.run({ ctx: _ctx }, …)`, then `pingTask`). The whole
 subtree — including arrays, client props, and suspending children — then renders
 *and serialises* through that task's `retryTask`, which re-establishes `_ctx`.
+`_scope` rides the same way: a parton hands its settlement scope to its
+`ParentContext` provider (`_settle` prop), the marker seeds it into the
+outlined task, and providers without one pass the ambient scope through so
+the settle chain doesn't break at intermediate providers.
 
 Cost: one outlined task (one referenced Flight row) per provider. Since
 `ParentContext` wraps every parton, that's ~+1 row per parton — the parton's

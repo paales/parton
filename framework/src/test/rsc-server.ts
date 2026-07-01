@@ -55,8 +55,21 @@ const SERVER_MANIFEST = {
   moduleMap: CONSUMER_MANIFEST,
 }
 
-function renderToReadableStream<T>(data: T): ReadableStream<Uint8Array> {
-  return ReactServer.renderToReadableStream(data, CLIENT_MANIFEST)
+/** Options forwarded to the Flight server's `renderToReadableStream`.
+ *  `signal` aborts the render mid-flight (pending tasks emit error rows and
+ *  the stream closes); `onError` overrides the default `console.error` for
+ *  recoverable render errors — pass a no-op in tests that assert error
+ *  handling so expected throws don't pollute the output. */
+export interface RenderOptions {
+  signal?: AbortSignal
+  onError?: (error: unknown) => void
+}
+
+function renderToReadableStream<T>(
+  data: T,
+  options: RenderOptions = {},
+): ReadableStream<Uint8Array> {
+  return ReactServer.renderToReadableStream(data, CLIENT_MANIFEST, options)
 }
 
 function createFromReadableStream<T>(stream: ReadableStream<Uint8Array>): Promise<T> {
@@ -68,8 +81,8 @@ function createFromReadableStream<T>(stream: ReadableStream<Uint8Array>): Promis
 export type FlightBytes = ReadableStream<Uint8Array>
 
 /** Render a server tree to raw Flight bytes. Nothing is mounted. */
-export function renderServerToFlight(node: ReactNode): FlightBytes {
-  return renderToReadableStream(node)
+export function renderServerToFlight(node: ReactNode, options: RenderOptions = {}): FlightBytes {
+  return renderToReadableStream(node, options)
 }
 
 /**
@@ -119,7 +132,7 @@ export async function renderAndInspect<T>(node: ReactNode): Promise<{
 export async function renderWithRequest(
   url: string,
   node: ReactNode,
-  options: { headers?: Record<string, string> } = {},
+  options: { headers?: Record<string, string> } & RenderOptions = {},
 ): Promise<{ stream: FlightBytes; cookies: string[] }> {
   const request = new Request(url, { headers: options.headers })
   // `runWithRequestAsync` expects an async fn; wrap the sync render
@@ -145,7 +158,7 @@ export async function renderWithRequest(
   // The other tee side stays buffered for the caller to consume —
   // it's effectively a frozen recording at that point.
   const { result, cookies } = await runWithRequestAsync(request, async () => {
-    const stream = renderServerToFlight(node)
+    const stream = renderServerToFlight(node, { signal: options.signal, onError: options.onError })
     const [forCaller, forDrain] = stream.tee()
     await new Response(forDrain).arrayBuffer()
     return forCaller
