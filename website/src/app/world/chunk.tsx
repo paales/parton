@@ -1,5 +1,5 @@
 import type { RenderArgs } from "@parton/framework"
-import { parton } from "@parton/framework"
+import { parton, visible } from "@parton/framework"
 import { ActivityLight } from "./activity-light.tsx"
 import { CHUNK_PX, BIG_CHUNKS } from "./constants.ts"
 
@@ -7,24 +7,35 @@ import { CHUNK_PX, BIG_CHUNKS } from "./constants.ts"
 const inBig = (c: number): number => (((c % BIG_CHUNKS) + BIG_CHUNKS) % BIG_CHUNKS) * CHUNK_PX
 
 /**
- * One 512px world chunk — the content parton. Per-instance identity
- * from its `{cx, cy}` props: each placement is individually
- * refetchable and cacheable, and its network light flashes when ITS
- * bytes arrive — not on a timer.
+ * One 512px world chunk — the content parton, cullable at its own
+ * grain. The owning bigChunk windows STRUCTURE (does this region
+ * exist in the DOM); the chunk windows CONTENT: out of view it
+ * renders its shell — coordinate + light, the nodes the visibility
+ * observer measures — and its content fills only near the viewport
+ * (a tight 100px runway, so you can watch chunks pop in as you
+ * scroll). Per-instance identity from `{cx, cy}`: each placement is
+ * individually refetchable and cacheable, and its light flashes when
+ * ITS bytes arrive — shell and content arrivals both, never a timer.
+ *
+ * Cold seed: no client report yet → the origin neighborhood renders
+ * with content so the initial viewport is filled at first paint.
  */
 export const WorldChunk = parton(
   function WorldChunkRender({ cx, cy }: { cx: number; cy: number } & RenderArgs) {
+    const vis = visible({ rootMargin: "100px" })
+    const show = vis ?? (Math.abs(cx) <= 2 && Math.abs(cy) <= 2)
     return (
       <div
         className="chunk"
         data-testid={`chunk-${cx},${cy}`}
+        data-loaded={show || undefined}
         style={{ left: inBig(cx), top: inBig(cy) }}
       >
         <span className="chunk__coord">
           {cx},{cy}
         </span>
         <ActivityLight ck={`${cx},${cy}`} />
-        {cx === 0 && cy === 0 ? <OriginCard /> : null}
+        {show && cx === 0 && cy === 0 ? <OriginCard /> : null}
       </div>
     )
   },
