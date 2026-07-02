@@ -3,7 +3,7 @@
  *
  * Cells are declared inline in the parton's `Render` via the
  * `localCell("key", …)` server-hook, each partitioned per session
- * (`vary: ({session}) => ({sid: session.id})`) so every session sees its
+ * (`partition: ({session}) => ({sid: session.id})`) so every session sees its
  * own draft, notes, save history, and failure setting. The render calls
  * `ensureSessionId()` first to mint the `__frame_sid` cookie, so each
  * visitor has a stable, non-empty `session.id` and the cells land in
@@ -32,7 +32,7 @@ import {
   localCell,
   parton,
   session,
-  type CellVaryScope,
+  type CellPartitionScope,
   type RenderArgs,
   type ResolvedAction,
   type ResolvedCell,
@@ -42,7 +42,7 @@ import { FormsDemoForm } from "../components/forms-demo-form.tsx"
 
 // Per-session partition for every cell on this page — re-derived in the
 // action's request too, so a session resolves its own slot there.
-const bySession = ({ session }: CellVaryScope) => ({ sid: session.id })
+const bySession = ({ session }: CellPartitionScope) => ({ sid: session.id })
 
 export const FormsDemoPage = parton(
   async function FormsDemoRender({
@@ -61,11 +61,11 @@ export const FormsDemoPage = parton(
     // Fold the session into the fp so the parton re-renders when the
     // session changes (the cells partition by it).
     session()
-    const cardName = await localCell("cardName", { shape: "string", initial: "", vary: bySession })
-    const cardCvc = await localCell("cardCvc", { shape: "string", initial: "", vary: bySession })
-    const notes = await localCell("notes", { shape: "string", initial: "", vary: bySession })
-    const saves = await localCell("saves", { shape: "string", initial: "", vary: bySession })
-    const failChance = await localCell("failChance", { shape: "number", initial: 0, vary: bySession })
+    const cardName = await localCell("cardName", { shape: "string", initial: "", partition: bySession })
+    const cardCvc = await localCell("cardCvc", { shape: "string", initial: "", partition: bySession })
+    const notes = await localCell("notes", { shape: "string", initial: "", partition: bySession })
+    const saves = await localCell("saves", { shape: "string", initial: "", partition: bySession })
+    const failChance = await localCell("failChance", { shape: "number", initial: 0, partition: bySession })
     return (
       <main className="py-4 space-y-4">
         <title>Forms demo — scoped cells + actions</title>

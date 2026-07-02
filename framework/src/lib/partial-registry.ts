@@ -20,7 +20,7 @@
  * The snapshot does NOT capture the spec's `varyResult` — vary is
  * recomputed per-request inside the spec component, and no consumer of
  * the snapshot reads it. Per-user variation (A/B tests, cookie-based
- * personalization) flows through `vary`, not through the registry.
+ * personalization) flows through tracked reads, not the registry.
  *
  * Per-request transactional view: pendingWrites + pendingHints +
  * invalidations isolated per ALS context, atomic commit at end of
@@ -36,6 +36,7 @@ import {
   getScope,
 } from "../runtime/context.ts"
 import type { CacheOptions } from "./cache-options.ts"
+import type { WakeHints } from "./current-parton.ts"
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
 
@@ -88,7 +89,7 @@ export interface PartialSnapshot {
    *  `"cookie:cart_id"`. The auto-tracked analogue of `varyKey`: the
    *  next render (own fp) and the descendant fold re-read each key's
    *  current value and fold it, so a tracked read moves the fp without
-   *  an explicit `vary`. The live Set is stored, so reads after the
+   *  a declaration. The live Set is stored, so reads after the
    *  render's awaits are captured by the time the next render reads it.
    *  Absent/empty for any spec that never calls a tracked hook. */
   deps?: ReadonlySet<string>
@@ -128,25 +129,31 @@ export interface PartialSnapshot {
    *  over the wire (the host stamps it when consuming a remote's
    *  trailer). */
   source?: SnapshotSource
-  /** Wall-clock timestamp after which this rendered output is no
-   *  longer fresh. Read from `vary`'s return — the framework
-   *  strips it from `varyResult` before fp/Render so it doesn't
-   *  shift the fingerprint every ms. Two consumers:
-   *
-   *    - The segment driver: races against `min(expiresAt across
-   *      route snapshots)` so live connections wake at the right
-   *      time without an external trigger.
-   *    - The byte cache: written entries store `expiresAt` and
-   *      serve cached bytes only while `now < expiresAt`.
-   *
-   *  Absent or `+Infinity` → no time-based wake; fp moves only
-   *  via `refreshSelector` (CRUD path). */
-  expiresAt?: number
-  /** Optional stale-while-revalidate boundary. When set, cached
-   *  bytes between `expiresAt` and `staleUntil` are served stale
-   *  while a background refresh runs. Absent → strict freshness
-   *  (no stale window). */
-  staleUntil?: number
+  /** Live wake-hint box written by the `expires()` / `staleUntil()`
+   *  hooks during this render. Render-body writes land AFTER the
+   *  boundary registered this snapshot, so wake consumers read through
+   *  `effectiveExpiresAt` / `effectiveStaleUntil` at arm/decision
+   *  time. Two consumers: the segment driver (races against
+   *  `min(expiresAt)` across route snapshots so live connections wake
+   *  on time) and the fp-skip TTL gate (a snapshot past its boundary
+   *  is never served from the client's cache). On a pass where Render
+   *  didn't run (fp-skip, defer), the boundary threads the PRIOR
+   *  snapshot's box through, so a hook-declared wake survives the
+   *  skip. Absent boundary → no time-based wake; fp moves only via
+   *  `refreshSelector` (CRUD path). */
+  wakeHints?: WakeHints
+}
+
+/** This snapshot's freshness boundary — the live box `expires()` wrote
+ *  during the render. Absent → no time-based wake. */
+export function effectiveExpiresAt(snap: PartialSnapshot): number | undefined {
+  return snap.wakeHints?.expiresAt
+}
+
+/** This snapshot's stale-while-revalidate boundary — the live box
+ *  `staleUntil()` wrote. See `effectiveExpiresAt`. */
+export function effectiveStaleUntil(snap: PartialSnapshot): number | undefined {
+  return snap.wakeHints?.staleUntil
 }
 
 /** Per-snapshot origin annotation. See `PartialSnapshot.source`. */
@@ -401,6 +408,35 @@ export function lookupPartial(id: string): PartialSnapshot | undefined {
   const variantKey = hint?.get(id)
   if (!variantKey) return undefined
   return store.partials.get(id)?.get(variantKey)
+}
+
+/**
+ * Committed tracked-read evidence for a spec id, across EVERY variant
+ * in the scope's canonical store (all routes):
+ *
+ *   - `"unknown"` — no committed variant anywhere (cold process, or the
+ *     id has never rendered). The spec's read set is unknowable.
+ *   - `"deps"`    — some committed variant recorded tracked reads. The
+ *     spec's fp is only trustworthy when computed against a dep record.
+ *   - `"depless"` — every committed variant recorded an EMPTY read set.
+ *     Under the tracking invariant (reads are conditioned only on
+ *     tracked inputs), an empty read set is a fixed point — no tracked
+ *     input exists that could make a future render start reading — so
+ *     a dep-less fp for this spec is complete evidence.
+ *
+ * Consumed by the fp-skip cold-record gate in partial.tsx: a spec
+ * may only skip against a dep-less fp when
+ * the evidence says `"depless"`.
+ */
+export function committedDepsEvidence(id: string): "unknown" | "depless" | "deps" {
+  const ctx = registryAls.getStore()
+  const scope = ctx?.scope ?? getScope()
+  const variants = canonical.get(scope)?.partials.get(id)
+  if (!variants || variants.size === 0) return "unknown"
+  for (const snap of variants.values()) {
+    if (snap.deps && snap.deps.size > 0) return "deps"
+  }
+  return "depless"
 }
 
 function buildHintSnapshots(

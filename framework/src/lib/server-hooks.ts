@@ -1,14 +1,14 @@
 /**
- * Server-hooks — free functions a parton's `Render` calls to read a
- * request dimension AND record the dependency, so it folds into the
- * fingerprint without an explicit `vary`. The auto-tracked replacement
- * for `vary`'s request reads: `cookie("cart_id")` returns the value and
+ * Server-hooks — free functions a parton's `schema` or `Render` calls
+ * to read a request dimension AND record the dependency, so it folds
+ * into the fingerprint: `cookie("cart_id")` returns the value and
  * records `"cookie:cart_id"`, so a change to that cookie moves the
- * parton's fp on the next navigation.
+ * parton's fp on the next navigation. The read IS the dependency,
+ * exactly like a cell.
  *
  * The recording rides the parton self-context ([[current-parton]]); the
  * value is read from the parton's frame-resolved request, so a framed
- * spec tracks its frame's URL/cookies (as `vary` did). Reads outside a
+ * spec tracks its frame's URL/cookies. Reads outside a
  * parton body are a no-op that returns the empty value.
  *
  * Timing: a tracked read in `Render` is recorded during the render, but
@@ -17,13 +17,121 @@
  * (store-and-reread, see `evalDepKeys`). The first render of a variant
  * has no prior record and folds nothing; it's cold (no fp-skip relies on
  * it), and the record it captures makes every subsequent render
- * fp-accurate. See `docs/notes/server-hooks.md`.
+ * fp-accurate. See `docs/reference/partial.md`.
  */
 
 import { getCurrentParton, type VisibleOptions } from "./current-parton.ts"
 import { parseCookies } from "../runtime/context.ts"
 import { getSessionId } from "../runtime/session.ts"
 import { parseSelector, queryMatchingTs } from "../runtime/invalidation-registry.ts"
+import { buildTimeScope, type TimeScope } from "./time.ts"
+import type { ParseRoute } from "./partial.tsx"
+
+type Prettify<T> = { [K in keyof T]: T[K] } & {}
+
+/**
+ * Control signal thrown by `park()`. The parton wrapper catches it
+ * around the schema callback and returns the parked keepalive emission
+ * instead of a boundary — the thrown form is what lets a park decision
+ * live inside helper functions and exit the schema unconditionally.
+ * Deliberately NOT `__framework`-branded: it must never bubble past the
+ * wrapper (a stray one becomes the parton's error card, not a page
+ * crash).
+ */
+class ParkSignal extends Error {
+  readonly __parkSignal = true
+  constructor(id: string) {
+    super(
+      `park() escaped the schema phase of "${id}" — the parton wrapper should have caught this`,
+    )
+  }
+}
+
+/** Wrapper-internal: is this thrown value a `park()` signal? */
+export function _isParkSignal(err: unknown): boolean {
+  return (
+    err instanceof Error && (err as { __parkSignal?: boolean }).__parkSignal === true
+  )
+}
+
+/**
+ * Park this parton for the current request: stop the schema phase and
+ * emit the parked keepalive (hidden `<Activity>` per cached variant, no
+ * snapshot registration, no fingerprint) instead of rendering. The
+ * value-conditional gate `match` can't express:
+ *
+ *     schema: () => {
+ *       const pages = Math.max(1, Number(searchParam("pages")) || 1)
+ *       if (page > pages) park()
+ *       return { page }
+ *     }
+ *
+ * Schema-phase only — parking must happen BEFORE the fingerprint is
+ * computed (the parked path replaces the boundary emission entirely).
+ * Prefer `return null` from Render for "render nothing" WITHOUT park
+ * semantics: that registers the spec (deps recorded, fp emitted) and
+ * replaces the client's cached variant with an empty body; `park()`
+ * preserves the parked client state. The decision re-evaluates on every
+ * parent render pass from live reads, so no dep record is needed for
+ * un-parking. Throws; never returns.
+ */
+export function park(): never {
+  const cp = getCurrentParton()
+  if (!cp) {
+    throw new Error("park() called outside a parton — it is a schema-phase hook")
+  }
+  if (cp.phase !== "schema") {
+    throw new Error(
+      `park() called in the render body of "${cp.id}" — parking must happen before ` +
+        `the fingerprint is computed, so call it from the schema callback`,
+    )
+  }
+  throw new ParkSignal(cp.id)
+}
+
+/**
+ * Declare a freshness boundary for this render: after `at`
+ * (epoch ms), this parton's output is no longer fresh. Two consumers:
+ * the live segment driver arms its expiry timer on the earliest
+ * boundary across the route's snapshots (so a live connection wakes
+ * and re-renders this parton on time), and fp-skip declines to serve
+ * a snapshot past its boundary. A wake hint, never an fp dependency —
+ * reading the clock is not a dependency; only the declared boundary
+ * matters. Multiple calls keep the EARLIEST boundary. Callable
+ * anywhere in schema or Render (the boundary carries a live box, so
+ * post-await calls land before the driver consults the snapshot).
+ *
+ *     expires(time().nextSecond)   // live ticker
+ *     expires(time().in(60_000))   // one-minute TTL
+ */
+export function expires(at: number): void {
+  const cp = getCurrentParton()
+  if (!cp) return
+  const h = cp.wakeHints
+  h.expiresAt = h.expiresAt === undefined ? at : Math.min(h.expiresAt, at)
+}
+
+/**
+ * Declare a stale-while-revalidate boundary: between `expires()` and
+ * `at`, cached output may be served stale while a refresh runs.
+ * Multiple calls keep the earliest boundary. See `expires()`.
+ */
+export function staleUntil(at: number): void {
+  const cp = getCurrentParton()
+  if (!cp) return
+  const h = cp.wakeHints
+  h.staleUntil = h.staleUntil === undefined ? at : Math.min(h.staleUntil, at)
+}
+
+/**
+ * The render clock — quantized timestamps for deriving wake
+ * boundaries without calling `Date.now()` math inline:
+ * `expires(time().nextSecond)`, `expires(time().in(5_000))`. Reading
+ * the clock records nothing; it is not a dependency.
+ */
+export function time(): TimeScope {
+  return buildTimeScope()
+}
 
 /** Read a cookie and record it as an fp dependency. */
 export function cookie(name: string): string | undefined {
@@ -33,12 +141,53 @@ export function cookie(name: string): string | undefined {
   return parseCookies(cp.request)[name]
 }
 
-/** Read a URL search param and record it as an fp dependency. */
-export function searchParam(name: string): string | null {
+/**
+ * Read a URL search param and record it as an fp dependency. The
+ * two-argument form supplies a default for an ABSENT param, so the
+ * ubiquitous read-with-default is a default, not a null-dance:
+ * `searchParam("q", "")`. A present-but-empty param (`?q=`) still
+ * returns `""` — absence is a value, and the fp folds the two
+ * distinctly either way.
+ */
+export function searchParam(name: string): string | null
+export function searchParam(name: string, fallback: string): string
+export function searchParam(name: string, fallback?: string): string | null {
   const cp = getCurrentParton()
-  if (!cp) return null
+  if (!cp) return fallback ?? null
   cp.deps.add(`search:${name}`)
-  return new URL(cp.request.url).searchParams.get(name)
+  return new URL(cp.request.url).searchParams.get(name) ?? fallback ?? null
+}
+
+/**
+ * Read a request header and record it as an fp dependency. Names are
+ * lowercased per HTTP semantics (`header("Accept-Language")` and
+ * `header("accept-language")` are the same read and the same dep key).
+ * Framework-internal `x-parton-*` headers are invisible here — they
+ * never reach a spec's dependency surface, so the read returns
+ * `undefined` and records nothing.
+ */
+export function header(name: string): string | undefined {
+  const cp = getCurrentParton()
+  if (!cp) return undefined
+  const lower = name.toLowerCase()
+  if (lower.startsWith("x-parton-")) return undefined
+  cp.deps.add(`header:${lower}`)
+  return cp.request.headers.get(lower) ?? undefined
+}
+
+/**
+ * Read the (frame-resolved) request pathname and record it as an fp
+ * dependency — the whole-pathname axis for specs that genuinely depend
+ * on parts of the path their `match` doesn't name (a wildcard tail, a
+ * breadcrumb built from the full path). Prefer `match()` / `param()`
+ * when a named segment is enough: a pathname dep moves the fp on EVERY
+ * path change, which defeats fp-skip across unrelated navigations.
+ */
+export function pathname(): string {
+  const cp = getCurrentParton()
+  if (!cp) return ""
+  cp.deps.add("pathname:")
+  return new URL(cp.request.url).pathname
 }
 
 /**
@@ -54,10 +203,9 @@ export function param(name: string): string | undefined {
 
 /**
  * Read the current session identity and record it as an fp dependency,
- * so the parton re-renders when the session changes — the inline-tracking
- * analogue of `vary: ({session}) => ({sid: session.id})`. The value is
+ * so the parton re-renders when the session changes. The value is
  * the `__frame_sid`-cookie-backed id, or `""` for an anon request with no
- * session yet. Pair with a cell's `vary: ({session}) => ({sid})` to give
+ * session yet. Pair with a cell's `partition: ({session}) => ({sid})` to give
  * each session its own partition.
  */
 export function session(): { readonly id: string } {
@@ -143,14 +291,62 @@ function namedGroups(result: URLPatternResult): Record<string, string> {
  * only the MATCHED PARAMS, not the whole pathname: the spec varies when
  * its captured segment changes, never on every navigation.
  *
- *     const { slug } = match("/p/:slug") ?? {}
+ * A string pattern types its params like the `match` OPTION does
+ * (`ParseRoute`), so inline reads are fully typed:
+ *
+ *     const { slug } = match("/p/:slug") ?? {}   // slug: string
+ *
+ * A `URLPatternInit` pattern (for hash/port/hostname dimensions)
+ * returns an untyped param record.
  */
+export function match<P extends string>(pattern: P): Prettify<ParseRoute<P>> | null
+export function match(pattern: URLPatternInit): Record<string, string> | null
 export function match(pattern: string | URLPatternInit): Record<string, string> | null {
   const cp = getCurrentParton()
   if (!cp) return null
   cp.deps.add(`match:${typeof pattern === "string" ? pattern : JSON.stringify(pattern)}`)
   const result = compilePattern(pattern).exec(cp.request.url)
   return result ? namedGroups(result) : null
+}
+
+/** Evaluators for dep kinds owned by OTHER layers (the CMS layer's
+ *  `cms:<contentKey>` content-hash kind, an app's file-mtime kind).
+ *  Registered at module scope by the owning layer, so `evalDepKeys`
+ *  stays import-cycle-free. */
+const depKindEvaluators = new Map<
+  string,
+  (name: string, request: Request) => string | null | undefined
+>()
+
+/**
+ * Register a custom dependency kind — the extension point for external
+ * re-readable dependencies the built-in hooks don't cover (a CMS row's
+ * content hash, a file's mtime). `evaluate` must be a pure sync read of
+ * `(name, request)` whose string encoding is injective over its
+ * observable value space; every fingerprint fold re-reads it
+ * (store-and-reread), so a changed value moves the fp like any tracked
+ * read.
+ *
+ * Returns the kind's tracked-read hook: calling it inside a parton body
+ * records `<kind>:<name>` on the dep set and returns the evaluated
+ * value — the same read-IS-the-dependency shape as `cookie()`.
+ *
+ *     const docMtime = registerDepKind("docmtime", (abs) =>
+ *       String(statSync(abs).mtimeMs))
+ *     // in a Render:
+ *     docMtime(resolved.abs)
+ */
+export function registerDepKind(
+  kind: string,
+  evaluate: (name: string, request: Request) => string | null | undefined,
+): (name: string) => string | null | undefined {
+  depKindEvaluators.set(kind, evaluate)
+  return (name: string) => {
+    const cp = getCurrentParton()
+    if (!cp) return undefined
+    cp.deps.add(`${kind}:${name}`)
+    return evaluate(name, cp.request)
+  }
 }
 
 /**
@@ -178,6 +374,8 @@ export function evalDepKeys(
     let value: string | null | undefined
     if (kind === "cookie") value = cookies[name]
     else if (kind === "search") value = url.searchParams.get(name)
+    else if (kind === "header") value = request.headers.get(name)
+    else if (kind === "pathname") value = url.pathname
     else if (kind === "match") {
       // `name` is the pattern (string) or its JSON (dict). Re-run it and
       // fold the NAMED params only — so a spec varies when its captured
@@ -187,12 +385,19 @@ export function evalDepKeys(
       value = result ? JSON.stringify(namedGroups(result)) : "nomatch"
     } else if (kind === "session") {
       value = getSessionId() ?? ""
+    } else if (kind === "tag") {
+      // A render-body `tag()` folds as its matching invalidation
+      // timestamp — same "fold the tag, not the value" rule as cells: a
+      // `refreshSelector(name)` bumps the ts, the fp shifts, the parton
+      // re-renders on the next pass. `name` may carry `?k=v` constraints.
+      const sel = parseSelector(name)
+      value = String(queryMatchingTs([sel.name], sel.constraints))
     } else if (kind === "cell") {
       // An inline cell folds as its invalidation timestamp, not its
       // value: a write fires `reload(cell:<id>?<partition>)`, bumping the
       // ts so the parton re-renders next nav. The value isn't re-derivable
       // later (it's loaded), so the tag drives freshness — see
-      // docs/notes/server-hooks.md "fold the tag, not the value". `key` is
+      // "fold the tag, not the value" (docs/reference/cells.md). `key` is
       // the partition-scoped selector; parse it and query with the
       // partition so a partition-scoped bump is matched, not only a bare
       // one.
@@ -205,8 +410,15 @@ export function evalDepKeys(
       // first client report each move the fp.
       const v = readVisible(url.searchParams, name)
       value = v === undefined ? "u" : v ? "1" : "0"
-    } else value = undefined
-    parts.push(`${key}=${value ?? ""}`)
+    } else {
+      const custom = depKindEvaluators.get(kind)
+      value = custom ? custom(name, request) : undefined
+    }
+    // Absence is a VALUE: `?search=` (empty string, dialog open) and no
+    // `?search` at all (dialog closed) must fold differently — the hooks
+    // return `""` vs `null` and Renders branch on it. Encode absent as
+    // the bare key (no `=`), which no present value can collide with.
+    parts.push(value == null ? key : `${key}=${value}`)
   }
   return `|deps=${parts.join("&")}`
 }

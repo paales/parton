@@ -22,7 +22,7 @@ interface StackedDrawerProps {
   level: number
   /** Slide-in side. */
   direction: DrawerDirection
-  /** Open state — controlled by URL match in the host Partial's `vary`. */
+  /** Open state — controlled by the host Partial's URL reads. */
   open: boolean
   /** Pathname to navigate to when this drawer is dismissed. */
   closeUrl: string
@@ -73,11 +73,11 @@ export function closeToParent(
  * Vaul drawer wrapped to participate in a URL-driven stack.
  *
  * Open/close is driven entirely by the URL: a host Partial computes
- * `open` from `pathname` in its `vary`. Opening is therefore a normal
+ * `open` from a tracked `pathname()` read. Opening is therefore a normal
  * `<a href="…">` push — the framework's anchor interception turns it
- * into a targeted refetch and the drawer's Partial's vary flips
+ * into a targeted refetch and the drawer's Partial's URL read flips
  * `open` from `false` to `true`. Vaul animates because the Partial
- * stays mounted (its `vary` returns a non-null value while we're on
+ * stays mounted (it renders content while we're on
  * `/inspect…`).
  *
  * Dismiss path (escape, overlay click, close button) calls

@@ -3,7 +3,7 @@
  *
  * An action is a server function that:
  *   - Receives the same `scope` prop bag as the parton's Render (resolved
- *     schema + vary output + parent).
+ *     schema + match params).
  *   - Receives caller-supplied `args`, auto-typed as `Partial<{cellName:
  *     cellType}>` from the schema's cells.
  *   - Runs inside `runInvalidationTransaction`, so its writes (cell.set
@@ -22,7 +22,7 @@
  *     against, regardless of URL changes between render and click.
  *   - **Module-level**: `Spec.actions.X` is the same dispatch, partition
  *     NOT bound — resolves from the active request URL or via explicit
- *     `{vary}` override. Use for cross-context calls fired from outside
+ *     `{partition}` override. Use for cross-context calls fired from outside
  *     the owning parton's render tree.
  *
  * `usePartonAction(actionProp)` wraps the prop ref with optimistic-aware
@@ -35,9 +35,9 @@
 
 /**
  * Action handler. The framework calls this with `(scope, args)` after
- * resolving the parton's vary + schema for the current request.
+ * resolving the parton's schema for the current request.
  *
- * `scope` shape: `vary output + resolved schema + {parent}`. Same prop
+ * `scope` shape: `match params + resolved schema`. Same prop
  * bag Render receives, minus `children`.
  *
  * `args` shape: caller-supplied. The framework iterates `args` keys
@@ -75,7 +75,7 @@ export function _clearActionRegistry(): void {
 // The action dispatcher needs to re-run a parton's schema callback to
 // resolve cells against the bound partition. The schema callback is
 // captured at parton-construction time and stored here keyed by
-// partonId. Mirrors the spec catalog's vary storage but lives outside
+// partonId. Mirrors the spec catalog's structure but lives outside
 // it so partial.tsx's catalog stays minimal.
 
 /**
@@ -84,7 +84,7 @@ export function _clearActionRegistry(): void {
  * returns a record of cells + plain values.
  *
  * Loose typing here because the registry stores callbacks across all
- * partons regardless of their specific vary / schema types. The render
+ * partons regardless of their specific schema types. The render
  * path narrows via the public types in `partial.tsx`.
  */
 export type SchemaCallback = (

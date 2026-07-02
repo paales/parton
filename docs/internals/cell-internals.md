@@ -39,17 +39,17 @@ bumps — observers can't see a partial commit.
 
 The emitted selector is **partition-scoped**: args are URL-encoded
 as `key1=value1&key2=value2` (keys sorted). Selector matching
-against the registry uses `queryMatchingTs(labels, vary ∪ boundArgs)`
-— a `cell:<id>?uid=X` write only refreshes placements whose
-effective constraints contain `uid=X`. Empty args fall back to bare
-`cell:<id>` (matches every placement of that cell, used for cells
-with no `vary` and no `.with()`).
+against the registry uses `queryMatchingTs(labels, matchParams ∪
+boundArgs)` — a `cell:<id>?uid=X` write only refreshes placements
+whose effective constraints contain `uid=X`. Empty args fall back to
+bare `cell:<id>` (matches every placement of that cell, used for
+cells with no `partition` and no `.with()`).
 
 **Partition derivation in `writeOneCell`.** The args come from, in
-priority order: an explicit `partitionOverride.vary` (the
+priority order: an explicit `partitionOverride.partition` (the
 `.with(args).set` path) → the cell's `keyOf(value)` if present (value-keyed
 fragment cells: the identity lives in the value, so `cell.set(value)`
-needs no restated args) → `cell.vary(scope)` (request-derived). `keyOf` is
+needs no restated args) → `cell.partition(scope)` (request-derived). `keyOf` is
 set by `fragmentCell` from its `key` option and runs against the validated
 + `write`-transformed value.
 
@@ -133,7 +133,7 @@ fp of every parton reading the cell on the next render.
 The cell module handle (the module-singleton thing constructed via
 `localCell(...)`, `gqlCell(...)`, or `fragmentCell(...)`) is
 **distinct** from `ResolvedCell<T>`. The module handle carries
-`vary`, `defaultValue`, `validate`, `write`, `load`, `storage` (a
+`partition`, `defaultValue`, `validate`, `write`, `load`, `storage` (a
 lazy getter, see below), plus `with(args)` returning a
 `BoundCell<T>`. The resolved cell carries `value` (and `set`, the
 bound action ref the module handle also exposes). A `BoundCell<T>`
@@ -207,32 +207,36 @@ app policy, not framework default.
 On each render the wrapper:
 
 1. **match phase** — URLPattern gate. Mismatch → parked keepalive.
-2. **vary phase** — sync callback, output drives fp's vary axis.
-3. **schema phase** — for each entry in the schema record:
-   - **Module cell**: run `cell.vary(scope)` → args; await
+2. **schema phase** — tracked hooks record onto the parton's dep set
+   (folding into THIS render's fp); a `park()` exits to the parked
+   keepalive. For each entry in the schema record:
+   - **Module cell**: run `cell.partition(scope)` → args; await
      `resolveCellValue(cell, args)` (storage hit returns sync;
      storage miss + `load` defined runs loader). Build
      `ResolvedCell`. Stamp `cell:<id>` label. Add args to
      `boundArgsMerged`.
    - **Scoped descriptor**: finalize → compute partition from
-     descriptor's `vary` over the parton's vary output → resolve.
+     descriptor's `partition` over the parton's match params → resolve.
    - **Bound cell** (a `BoundCell<T>` in the schema record): use
      baked args directly. Same resolution.
-4. **Props phase** — walk top-level JSX props:
+3. **Props phase** — walk top-level JSX props:
    - For each prop whose value is a `Cell<T>` or `BoundCell<T>`,
      resolve as above, replace the prop with `ResolvedCell<T>`,
      stamp label, add args.
-5. **Constraint surface** — `effectiveConstraints = vary ∪
+4. **Constraint surface** — `effectiveConstraints = matchParams ∪
    boundArgsMerged`. Passed to `queryMatchingTs(labels, surface)` →
    `inv` fold. Matching is type-aware: non-string partition values
    (number, boolean, null) match type-exactly, so `{uid:123}` and
    `{uid:"123"}` stay distinct — mirroring the partition key
    (`hash(stableStringify(args))`). Bare string tokens still match
-   loosely, so a hand-authored `cart_id=1234` matches a string vary
-   input `"1234"`.
-6. **fp** = `id|matchKey|vary|schema=<cellHashes>|props|inv`.
-7. **Render** with the assembled prop bag (resolved cells, vary
-   output, schema-resolved entries).
+   loosely, so a hand-authored `cart_id=1234` matches a string
+   constraint value `"1234"`.
+5. **fp** = `id|matchKey|schema=<cellHashes>|props|inv|deps` —
+   `deps` re-reads the prior render's recorded dep keys at the
+   current request (store-and-reread).
+6. **Render** with the assembled prop bag (match params, resolved
+   cells, schema-resolved entries); render-body tracked reads record
+   for the NEXT fp.
 
 The wrapper is `async`. Cold-load paths await; hot paths (storage
 warm) settle in a microtask — sync-equivalent in practice.
@@ -459,7 +463,7 @@ and disappear when the process exits.
 ```json
 {
   "demo.bumps": {
-    "<hash-of-empty-vary>": 5
+    "<hash-of-empty-partition>": 5
   },
   "palette": {
     "<hash-of-{sid:abc123}>": "dark",
@@ -473,8 +477,9 @@ and disappear when the process exits.
 ```
 
 Top-level keys = cell ids. Inner keys =
-`hash(stableStringify(cell.vary(scope)))` — so `vary: () => ({})`
-collapses to one constant partition slot.
+`hash(stableStringify(cell.partition(scope)))` — so an omitted
+`partition` (or a fixed `partition: {}`) collapses to one constant
+partition slot.
 
 ### Debounced flush
 

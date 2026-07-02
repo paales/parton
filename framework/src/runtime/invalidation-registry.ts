@@ -16,8 +16,9 @@
  *   "price?sku=A&zone=EU"    → name="price", constraints={sku:"A",zone:"EU"}
  *
  * Bare name = unconstrained = matches every partial declaring that
- * label, regardless of vary. Query-string constraints scope down to
- * partials whose vary inputs satisfy the key=value pairs as a subset.
+ * label, regardless of constraints. Query-string constraints scope
+ * down to partials whose constraint surface (match params + bound
+ * cell args) satisfies the key=value pairs as a subset.
  *
  * ── Transactional bumps ─────────────────────────────────────────────
  *
@@ -40,7 +41,7 @@ import { stableStringify } from "../lib/stable-stringify.ts"
 export interface InvalidationEntry {
   name: string
   /** Key→value constraints; entry only matches when every pair
-   *  appears in the partial's vary inputs (string-loose for bare
+   *  appears in the partial's constraint surface (string-loose for bare
    *  tokens, type-exact for tagged ones — see `matchesConstraints`).
    *  Empty object matches any partial with the given name. */
   constraints: Record<string, unknown>
@@ -50,7 +51,7 @@ export interface InvalidationEntry {
 export interface ParsedSelector {
   name: string
   /** Decoded constraint values. Hand-authored tokens (`cart_id=1234`)
-   *  decode to strings — matched type-loosely against vary inputs.
+   *  decode to strings — matched type-loosely against the constraint surface.
    *  Type-tagged tokens (emitted by `encodeArgsForSelector` for
    *  non-string partition values) decode to their original JS type and
    *  match type-exactly, so a number partition `{uid:123}` and a string
@@ -340,12 +341,12 @@ function matchesConstraints(
     const c = constraints[k]
     if (typeof c === "string") {
       // Bare (hand-authored or string-partition) constraint — match
-      // any vary input whose string form is equal. Keeps `cart_id=1234`
-      // matching a string vary `"1234"`.
+      // any constraint value whose string form is equal. Keeps
+      // `cart_id=1234` matching a string constraint `"1234"`.
       if (String(v) !== c) return false
     } else {
       // Type-tagged constraint — match type-exactly, the same identity
-      // the partition key uses. A string vary `"123"` does NOT satisfy a
+      // the partition key uses. A string constraint `"123"` does NOT satisfy a
       // number constraint `123`.
       if (stableStringify(v) !== stableStringify(c)) return false
     }

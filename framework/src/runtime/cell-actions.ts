@@ -19,7 +19,7 @@
  *      - Explicit `partition` argument wins (used for cross-context
  *        mutations: action fired from /cart updating notes for a
  *        product not in the URL).
- *      - Otherwise run `cell.vary` against a `CellVaryScope` built
+ *      - Otherwise run `cell.vary` against a `CellPartitionScope` built
  *        from the current request. `params` is populated from any
  *        registered URLPattern that matches the request URL — same
  *        derivation pass `partial.tsx` does for spec match.
@@ -31,7 +31,7 @@
  *      `cell:<id>` is emitted only when args are empty.
  */
 
-import { cellStorageForArgs, getCellById, type CellVaryScope } from "../lib/cell.ts"
+import { cellStorageForArgs, getCellById, type CellPartitionScope } from "../lib/cell.ts"
 import { hash } from "../lib/hash.ts"
 import { stableStringify } from "../lib/stable-stringify.ts"
 import { getRegisteredMatchPatterns } from "../lib/partial.tsx"
@@ -76,10 +76,10 @@ function deriveParamsForActionRequest(url: string): Record<string, string> {
   return out
 }
 
-/** Build a `CellVaryScope` from the current request context. Used
+/** Build a `CellPartitionScope` from the current request context. Used
  *  inside the write action when no explicit partition override was
  *  supplied. */
-function buildCellVaryScope(): CellVaryScope {
+function buildCellPartitionScope(): CellPartitionScope {
   const request = getRequest()
   const url = new URL(request.url)
   return {
@@ -112,7 +112,7 @@ function buildCellVaryScope(): CellVaryScope {
 export async function __cellWrite(
   cellId: string,
   value: unknown,
-  partitionOverride?: { vary?: Record<string, unknown> },
+  partitionOverride?: { partition?: Record<string, unknown> },
 ): Promise<void> {
   await runInvalidationTransaction(async () => {
     writeOneCell(cellId, value, partitionOverride)
@@ -140,7 +140,7 @@ export async function __scopedCellWrite(
   value: unknown,
 ): Promise<void> {
   await runInvalidationTransaction(async () => {
-    writeOneCell(cellId, value, { vary: partitionVary })
+    writeOneCell(cellId, value, { partition: partitionVary })
   })
 }
 
@@ -165,7 +165,7 @@ export async function __cellWriteBatch(
   updates: ReadonlyArray<{
     id: string
     value: unknown
-    partition?: { vary?: Record<string, unknown> }
+    partition?: { partition?: Record<string, unknown> }
   }>,
 ): Promise<void> {
   if (updates.length === 0) return
@@ -193,7 +193,7 @@ export async function __cellWriteBatch(
  *  rolls back the whole batch.
  *
  *  Selector emission is partition-scoped: if args are available (via
- *  `partitionOverride.vary` or `cell.vary(scope)`), the emitted
+ *  `partitionOverride.partition` or `cell.partition(scope)`), the emitted
  *  selector carries them as constraints (`cell:<id>?key=value`).
  *  Only partons whose effective constraint surface includes the same
  *  args match — other placements of the same cell at different
@@ -201,23 +201,23 @@ export async function __cellWriteBatch(
 function writeOneCell(
   cellId: string,
   value: unknown,
-  partitionOverride: { vary?: Record<string, unknown> } | undefined,
+  partitionOverride: { partition?: Record<string, unknown> } | undefined,
 ): void {
   const cell = getCellById(cellId)
   if (!cell) throw new Error(`cell-write: unknown cell id "${cellId}"`)
   const validated = cell.validate(value)
   const stored = cell.write ? cell.write(validated) : validated
   let args: Record<string, unknown>
-  if (partitionOverride?.vary) {
-    args = partitionOverride.vary
+  if (partitionOverride?.partition) {
+    args = partitionOverride.partition
   } else if (cell.keyOf) {
     // Value-keyed cell (fragment cells): the partition lives in the
     // value itself. `cell.set(value)` routes to `keyOf(value)`'s
     // partition without the caller restating the identity in `.with()`.
     args = cell.keyOf(stored)
   } else {
-    const scope = buildCellVaryScope()
-    args = cell.vary(scope)
+    const scope = buildCellPartitionScope()
+    args = cell.partition(scope)
   }
   const partitionKey = hash(stableStringify(args))
   cellStorageForArgs(cell, args).write(getScope(), cellId, partitionKey, stored)

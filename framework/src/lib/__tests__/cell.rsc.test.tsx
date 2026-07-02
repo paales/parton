@@ -54,7 +54,7 @@ describe("cell — schema resolution", () => {
     const flag = localCell({
       id: "test.flag",
       shape: "boolean",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: false,
     })
     const Page = parton(
@@ -74,7 +74,7 @@ describe("cell — schema resolution", () => {
     const palette = localCell({
       id: "test.palette",
       shape: { enum: ["light", "dark"] as const },
-      vary: () => ({}),
+      partition: () => ({}),
       initial: "light",
     })
     seedCell(palette.id, {}, "dark")
@@ -96,7 +96,7 @@ describe("cell — schema resolution", () => {
     const counter = localCell({
       id: "test.counter",
       shape: "number",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: 0,
     })
     const Page = parton(
@@ -127,7 +127,7 @@ describe("cell — schema resolution", () => {
     const notes = localCell({
       id: "test.notes",
       shape: "string",
-      vary: ({ params }) => ({ productId: params.id ?? "" }),
+      partition: ({ params }) => ({ productId: params.id ?? "" }),
       initial: "",
     })
     seedCell(notes.id, { productId: "42" }, "notes for 42")
@@ -153,7 +153,7 @@ describe("cell — runtime validation", () => {
     const bumps = localCell({
       id: "test.bumps",
       shape: "number",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: 0,
     })
     expect(() => bumps.validate("not a number")).toThrow(/expected number/)
@@ -163,7 +163,7 @@ describe("cell — runtime validation", () => {
     const palette = localCell({
       id: "test.palette2",
       shape: { enum: ["light", "dark"] as const },
-      vary: () => ({}),
+      partition: () => ({}),
       initial: "light",
     })
     expect(() => palette.validate("midnight")).toThrow(/expected one of/)
@@ -175,7 +175,7 @@ describe("cell — fp transitive on partition change", () => {
     const notes = localCell({
       id: "test.notes-fp",
       shape: "string",
-      vary: ({ params }) => ({ productId: params.id ?? "" }),
+      partition: ({ params }) => ({ productId: params.id ?? "" }),
       initial: "default",
     })
     seedCell(notes.id, { productId: "A" }, "A-notes")

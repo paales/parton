@@ -15,7 +15,7 @@
  *   cookies don't leak to the remote even on same-origin
  *   embeddings. The only context the remote sees from the host
  *   is what came through the capability header.
- * - The remote's `vary({session, cookies, headers})` sees only
+ * - The remote's tracked reads (`session()`, `cookie()`, `header()`) see only
  *   what the FETCH request carried — usually nothing from the
  *   host's session. The capability is the explicit channel.
  *

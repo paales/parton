@@ -10,8 +10,9 @@
  *   - Calls the author's `schema({cms})` with a read surface bound
  *     to that row, merges the result into the props passed to the
  *     author's Render.
- *   - Folds the resolved CMS content hash into the spec's `vary`
- *     return so the partial's fingerprint moves on CMS edits.
+ *   - Records the row as a `cms:<contentKey>` tracked dependency, so
+ *     the partial's fingerprint re-reads the content hash on every
+ *     fold and moves on CMS edits.
  *   - Registers as a slot block (`registerSlotBlockMeta`) so the
  *     editor catalog manifest can enumerate it and slot lookups
  *     can resolve `entry.type` to this Component.
@@ -24,18 +25,17 @@ import {
   type RenderArgs,
   type SpecComponent,
   type SpecExtraProps,
-  type VaryScope,
 } from "../lib/partial.tsx"
+import { getCurrentParton } from "../lib/current-parton.ts"
 import {
-  cmsFingerprintContribution,
   createCmsReadSurface,
   registerSlotBlockMeta,
   type CmsReadSurface,
 } from "./cms-runtime.ts"
 import { getRequest } from "./context.ts"
 
-/** Scope passed into `schema` callbacks. CMS reads live here; vary
- *  is request-dimensions-only. */
+/** Scope passed into `schema` callbacks. CMS reads live here;
+ *  request dimensions are tracked-hook reads. */
 export interface SchemaScope {
   cms: CmsReadSurface
 }
@@ -47,12 +47,12 @@ export interface SchemaScope {
  *  Omits PartialOptions.schema so block's CMS-shaped schema
  *  (`(scope) => S`) doesn't collide with the parton-level
  *  no-arg schema (`() => Record<string, unknown>`). Block's
- *  schema runs inside the cms-block wrapper's vary; parton-level
+ *  schema runs inside the cms-block wrapper's Render; parton-level
  *  schema would be redundant here. */
 export type BlockOptions<V, S> = Omit<PartialOptions<V>, "schema"> & {
   /** CMS field reads + child slots. Runs at render time with a real
    *  `cms` surface; the result is merged into Render's prop bag
-   *  alongside `vary`'s. The editor's catalog prerender invokes it
+   *  alongside the match params. The editor's catalog prerender invokes it
    *  with a tracking surface to discover content fields + child slot
    *  declarations. */
   schema?: (scope: SchemaScope) => S
@@ -117,18 +117,23 @@ export function block<
   // the wrapper resolves the per-instance content row, invokes the
   // schema, and forwards the merged props to the author's Render.
   function BlockRender(props: V & RenderArgs & { __instanceId?: string }): ReactNode {
-    const {
-      __instanceId,
-      __cmsFp: _cmsFp,
-      children,
-      ...rest
-    } = props as V &
+    const { __instanceId, children, ...rest } = props as V &
       RenderArgs & {
         __instanceId?: string
-        __cmsFp?: string
       } & Record<string, unknown>
-    void _cmsFp
     const contentKey = __instanceId ?? specId
+    // Record the content row as a tracked dependency (`cms:<key>` —
+    // evaluated by the dep kind cms-runtime registers): every fp fold
+    // re-reads the row's CURRENT hash, so a CMS edit moves the fp —
+    // both for schema edits (fields the schema reads) and for
+    // slot-subtree edits (which schema doesn't directly observe but
+    // the hash's `contributionForNode` folds in). The key is
+    // per-instance (`__instanceId ?? spec.id`): keying on `specId`
+    // would give every multi-instance placement the same
+    // contribution, so cascade-resolution changes (`/cms-demo/alpha`
+    // → `/cms-demo/beta`) wouldn't move the fp and the spec would
+    // fp-skip with stale cached content.
+    getCurrentParton()?.deps.add(`cms:${contentKey}`)
     const cms = createCmsReadSurface(contentKey, getRequest())
     let schemaResult: S | object = {}
     if (opts.schema) {
@@ -143,30 +148,6 @@ export function block<
       ...(schemaResult as S),
       children,
     })
-  }
-
-  // Fold the CMS content fingerprint into `vary` so the spec's fp
-  // moves whenever the rendered instance's CMS row changes shape —
-  // both for schema edits (fields the schema reads) and for slot-
-  // subtree edits (which schema doesn't directly observe but
-  // `contributionForNode` folds in).
-  //
-  // We resolve the per-instance content row from `scope.instanceId`,
-  // which the framework derives from `__instanceId ?? spec.id` (slot
-  // wiring sets `__instanceId` to the slot entry's id; singletons
-  // fall back to `spec.id` which matches the singleton's CMS row).
-  // Using `specId` here would give every multi-instance block
-  // placement the same `cmsContribution`, so cascade-resolution
-  // changes (e.g. `/cms-demo/alpha` → `/cms-demo/beta`) wouldn't
-  // move the fp and the spec would fp-skip with stale cached
-  // content.
-  const augmentedVary = (scope: VaryScope) => {
-    const userResult = opts.vary?.(scope) ?? null
-    if (userResult === null && opts.vary != null) return null
-    const baseVary = (userResult ?? {}) as Record<string, unknown>
-    const contentKey = scope.instanceId
-    const cmsContribution = cmsFingerprintContribution(contentKey, getRequest())
-    return { ...baseVary, __cmsFp: cmsContribution }
   }
 
   // Build the selector passed to `_buildPartial` so that the first
@@ -193,7 +174,6 @@ export function block<
     fallback: opts.fallback,
     keepalive: opts.keepalive,
     selector: allLabels,
-    vary: augmentedVary as PartialOptions<V & S>["vary"],
   }
 
   const spec = _buildPartial(BlockRender as never, partialOptions)

@@ -3,16 +3,16 @@
  *
  * Two construction paths:
  *
- *   - `localCell({id, shape, vary?, initial, write?, load?})` —
+ *   - `localCell({id, shape, partition?, initial, write?, load?})` —
  *     module-scope, backed by the active `CellStorage` adapter.
- *     `vary` (optional) derives partition from request scope; `.with(args)`
+ *     `partition` (optional) derives the slot from request scope; `.with(args)`
  *     binds explicit placement-derived args.
  *
  *   - `gqlCell(typedDoc)` (in cell-gql.ts) — same `CellInterface<T>` shape with
  *     `load` auto-synthesized from a gql.tada-typed document.
  *
  * Partitioning sources:
- *   - `vary` callback (request-derived, optional)
+ *   - `partition` (fixed record or request-derived callback, optional)
  *   - `.with(args)` bound at the call site (placement-derived)
  *   - Both can compose into a single partition object.
  *
@@ -46,19 +46,35 @@ import { getRequest, getScope, parseCookies } from "../runtime/context.ts"
 import { createSessionReadSurface } from "../runtime/session.ts"
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
-import { buildTimeScope } from "./time.ts"
-import type { VaryScope } from "./partial.tsx"
+import { buildTimeScope, type TimeScope } from "./time.ts"
 import type { SessionId } from "../runtime/session.ts"
 
 // ─── Public types ─────────────────────────────────────────────────────
 
 /**
- * Sync request scope a cell's `vary` callback sees. Same shape as a
- * parton's `VaryScope` minus `instanceId` (cells aren't per-placement)
- * and with the narrower `SessionId`.
+ * Sync request scope a cell's `partition` callback sees. Cells keep a
+ * declared partition callback — unlike partons, a partition must be
+ * re-derivable OUTSIDE a render (action dispatch resolves cells
+ * against the caller's request), so it can't be an in-body read.
  */
-export type CellVaryScope = Omit<VaryScope, "instanceId" | "session"> & {
+export interface CellPartitionScope {
+  /** The (frame-resolved) request URL, already parsed. */
+  url: URL
+  /** Shortcut for `url.pathname`. */
+  pathname: string
+  /** Search params as a destructurable record. Missing keys are
+   *  `undefined`. Multi-valued keys carry only their first value. */
+  search: Partial<Record<string, string>>
+  /** Cookies parsed from the request's `Cookie` header. */
+  cookies: Partial<Record<string, string>>
+  /** Request headers as a destructurable record, lowercased keys. */
+  headers: Partial<Record<string, string>>
+  /** Match params of the enclosing parton, when resolved inside one. */
+  params: Record<string, string>
+  /** Session identity — the partition axis for per-user cells. */
   session: SessionId
+  /** Wall-clock snapshot for the current request. */
+  time: TimeScope
 }
 
 /** Args object — the placement/partition inputs that hash to a
@@ -97,12 +113,12 @@ export type ValueOfShape<S> =
  * Module-scope cell handle. Constructed via `localCell({...})` or
  * `gqlCell(...)` and held as a module export.
  *
- * Carries the static decisions (id, shape, vary, defaultValue, load)
+ * Carries the static decisions (id, shape, partition, defaultValue, load)
  * plus methods for binding and mutating partitions:
  *
  *   - `with(args)` returns a `BoundCell<T>` with partition baked.
  *   - `set(value, opts?)` writes the partition derived from
- *     `cell.vary(request)` (or the explicit `opts.vary` override).
+ *     `cell.partition(request)` (or the explicit `opts.partition` override).
  *   - `peek()` sync-reads the current stored value at the partition
  *     derived from request scope.
  */
@@ -120,13 +136,13 @@ export interface CellInterface<T, A extends CellArgs = CellArgs> {
   readonly storage: () => CellStorage
   /** Vary callback. Runs against the request scope; the hashed output
    *  is part of the storage partition key. Default: `() => ({})`. */
-  readonly vary: (scope: CellVaryScope) => CellArgs
+  readonly partition: (scope: CellPartitionScope) => CellArgs
   /** Optional async loader — runs on cold-start (storage miss) at the
    *  partition, result populates storage. */
   readonly load?: (args: CellArgs) => Promise<T>
   /** Optional value→partition extractor. When present, `cell.set(value)`
    *  with no explicit `.with()` partition derives the partition from
-   *  `keyOf(value)` rather than the `vary` callback — the identity lives
+   *  `keyOf(value)` rather than the `partition` callback — the identity lives
    *  in the value itself (fragment cells keyed by `id`/`uid`). Set by
    *  `fragmentCell` from its `key` option. */
   readonly keyOf?: (value: T) => CellArgs
@@ -146,19 +162,19 @@ export interface CellInterface<T, A extends CellArgs = CellArgs> {
    * server reference; partition resolves from the action's request
    * scope on the server.
    *
-   * Optional `opts.vary` overrides the cell's own vary callback —
+   * Optional `opts.partition` overrides the cell's own partition callback —
    * useful for cross-context mutations.
    */
-  set(value: T, opts?: { vary?: CellArgs }): Promise<void>
+  set(value: T, opts?: { partition?: CellArgs }): Promise<void>
   /** Synchronous server-side read of the stored value. The partition
    *  is `args` when given, otherwise derived from
-   *  `cell.vary(currentRequest)`. Returns `defaultValue` on miss.
+   *  `cell.partition(currentRequest)`. Returns `defaultValue` on miss.
    *  Does NOT trigger the loader.
    *
    *  Scoped cells (schema / inline `localCell`) partition storage by
-   *  the owning parton's vary output, which `peek` can't re-derive
+   *  the owning parton's match params, which `peek` can't re-derive
    *  without a render — their no-arg `peek()` reads the `{}` partition
-   *  (the slot a vary-less, match-param-less parton resolves), and
+   *  (the slot a match-param-less parton resolves), and
    *  reading a narrower partition requires naming it explicitly:
    *  `peek(partitionArgs)`. */
   peek(args?: CellArgs): T
@@ -235,7 +251,7 @@ export interface ResolvedCell<T> {
   readonly id: string
   readonly value: T
   readonly partition?: CellArgs
-  set(value: T, opts?: { vary?: CellArgs }): Promise<void>
+  set(value: T, opts?: { partition?: CellArgs }): Promise<void>
 }
 
 /**
@@ -261,7 +277,7 @@ export function isCellHandle(value: unknown): value is CellInterface<unknown> | 
 }
 
 export function isModuleCell(value: unknown): value is CellInterface<unknown> {
-  return isCellHandle(value) && typeof (value as CellInterface<unknown>).vary === "function"
+  return isCellHandle(value) && typeof (value as CellInterface<unknown>).partition === "function"
 }
 
 export function isBoundCell(value: unknown): value is BoundCell<unknown> {
@@ -273,8 +289,8 @@ export function isBoundCell(value: unknown): value is BoundCell<unknown> {
 }
 
 /** Compute the partition key for a cell against a request scope. */
-export function computeCellPartitionKey(cell: CellInterface<unknown>, scope: CellVaryScope): string {
-  const out = cell.vary(scope)
+export function computeCellPartitionKey(cell: CellInterface<unknown>, scope: CellPartitionScope): string {
+  const out = cell.partition(scope)
   return hash(stableStringify(out))
 }
 
@@ -405,8 +421,18 @@ function makeValidator<T>(id: string, shape: CellShape): (v: unknown) => T {
   }
 }
 
-function constantVary(): CellArgs {
+function constantPartition(): CellArgs {
   return {}
+}
+
+/** Normalize the `partition` option (fixed record | callback | absent)
+ *  to the canonical callback form the handle stores. */
+function normalizePartition(
+  p: CellArgs | ((scope: CellPartitionScope) => CellArgs) | undefined,
+): (scope: CellPartitionScope) => CellArgs {
+  if (p === undefined) return constantPartition
+  if (typeof p === "function") return p
+  return () => p
 }
 
 function registerCell<T>(handle: CellInterface<T>): CellInterface<T> {
@@ -422,17 +448,17 @@ function bindSetter(id: string): CellInterface<unknown>["set"] {
 }
 
 /** Per-cell `peek` — sync server-side read. Explicit `args` name the
- *  partition directly; otherwise it derives from the cell's own vary
+ *  partition directly; otherwise it derives from the cell's own partition callback
  *  against the active ALS request context. */
 function buildPeek<T>(
   id: string,
   storage: () => CellStorage,
   validate: (v: unknown) => T,
   defaultValue: T,
-  varyFn: (scope: CellVaryScope) => CellArgs,
+  partitionFn: (scope: CellPartitionScope) => CellArgs,
 ): CellInterface<T>["peek"] {
   return (args?: CellArgs) => {
-    const partition = args ?? varyFn(buildCellVaryScopeFromRequest())
+    const partition = args ?? partitionFn(buildCellPartitionScopeFromRequest())
     const partitionKey = hash(stableStringify(partition))
     let readStorage = storage()
     if (isUnresolvedPartition(partition)) {
@@ -449,7 +475,7 @@ function buildPeek<T>(
   }
 }
 
-function buildCellVaryScopeFromRequest(): CellVaryScope {
+function buildCellPartitionScopeFromRequest(): CellPartitionScope {
   const request = getRequest()
   const url = new URL(request.url)
   const search: Record<string, string> = {}
@@ -556,11 +582,15 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
   id: string
   shape: S
   initial: T
-  /** Sync callback `(scope) => CellArgs`. Output hashes into the
-   *  storage partition key. Omit for a cell whose partition comes
+  /** Storage partition — a fixed args record, or a sync callback
+   *  `(scope) => CellArgs` for request-derived partitions
+   *  (`partition: ({session}) => ({sid: session.id})`). The output
+   *  hashes into the storage partition key; a callback re-runs in the
+   *  ACTION's request too, so a per-session cell resolves at the
+   *  caller's partition there. Omit for a cell whose partition comes
    *  entirely from `.with()` at call sites (or for a single-slot
    *  cell when nothing binds args). */
-  vary?: (scope: CellVaryScope) => CellArgs
+  partition?: CellArgs | ((scope: CellPartitionScope) => CellArgs)
   /** Async loader — runs on storage miss at a partition. Result is
    *  validated, run through `write` if present, then stored. */
   load?: (args: CellArgs) => Promise<T>
@@ -590,7 +620,7 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
  *     export const palette = localCell({
  *       id: "palette",
  *       shape: { enum: ["light", "dark"] as const },
- *       vary: ({session}) => ({sid: session.id}),
+ *       partition: ({session}) => ({sid: session.id}),
  *       initial: "dark",
  *     })
  *
@@ -604,15 +634,13 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
 export interface InlineLocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
   shape: S
   initial: T
-  /** Request-derived partition callback, e.g.
-   *  `vary: ({session}) => ({sid: session.id})`. Re-run at render AND in
-   *  the action's request — so a per-session cell resolves at the caller's
-   *  partition in the action too, never a stale recorded one. Mirrors the
-   *  module-cell `vary`; takes precedence over `partition`. */
-  vary?: (scope: CellVaryScope) => CellArgs
-  /** Fixed storage partition (placement-derived). Defaults to a single
-   *  slot (`{}`). Use `vary` instead for request-derived partitions. */
-  partition?: CellArgs
+  /** Storage partition — a fixed args record (placement-derived), or
+   *  a request-derived callback, e.g.
+   *  `partition: ({session}) => ({sid: session.id})`. A callback is
+   *  re-run at render AND in the action's request — so a per-session
+   *  cell resolves at the caller's partition in the action too, never
+   *  a stale recorded one. Defaults to a single slot (`{}`). */
+  partition?: CellArgs | ((scope: CellPartitionScope) => CellArgs)
   write?: (value: T) => T
   load?: (args: CellArgs) => Promise<T>
 }
@@ -644,7 +672,7 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
   const opts = keyOrOpts
   const shape = shapeFromSpec(opts.shape)
   const validate = makeValidator<T>(opts.id, shape)
-  const varyFn = opts.vary ?? constantVary
+  const partitionFn = normalizePartition(opts.partition)
   const storage: () => CellStorage = !opts.storage
     ? getCellStorage
     : typeof opts.storage === "function"
@@ -656,11 +684,11 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
     shape,
     defaultValue: opts.initial,
     storage,
-    vary: varyFn,
+    partition: partitionFn,
     load: opts.load,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     set: bindSetter(opts.id) as CellInterface<T>["set"],
-    peek: buildPeek(opts.id, storage, validate, opts.initial, varyFn),
+    peek: buildPeek(opts.id, storage, validate, opts.initial, partitionFn),
     validate,
     write: opts.write,
     deferred: opts.deferred,
@@ -677,12 +705,13 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
     throw new Error(`localCell(${JSON.stringify(key)}, …): must be called inside a parton's Render`)
   }
   const id = `${cp.id}/${key}`
-  // Partition: a `vary` callback (re-derivable — re-run in the action's
-  // request so a per-session cell resolves at the caller's partition there
-  // too) or a fixed value, default single-slot.
-  const partition: CellArgs = opts.vary
-    ? opts.vary(buildCellVaryScopeFromRequest())
-    : (opts.partition ?? {})
+  // Partition: a callback (re-derivable — re-run in the action's
+  // request so a per-session cell resolves at the caller's partition
+  // there too) or a fixed value, default single-slot.
+  const partition: CellArgs =
+    typeof opts.partition === "function"
+      ? opts.partition(buildCellPartitionScopeFromRequest())
+      : (opts.partition ?? {})
   const shape = shapeFromSpec(opts.shape)
   // The descriptor is the rebuild input: `finalizeScopedCell` turns it
   // into a handle (registered in the cell registry by id so the client
@@ -692,7 +721,7 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
     __scopedCellDescriptor: true,
     shape,
     defaultValue: opts.initial,
-    varyFn: undefined,
+    partitionFn: undefined,
     write: opts.write,
     load: opts.load,
     validate: makeValidator<T>(id, shape),
@@ -715,7 +744,7 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
   registerInlineCell(cp.id, key, {
     partition,
     descriptor: descriptor as ScopedCellDescriptor<unknown>,
-    varyFn: opts.vary,
+    partitionFn: typeof opts.partition === "function" ? opts.partition : undefined,
   })
   return buildResolvedCell(handle, value, partition)
 }
@@ -745,12 +774,12 @@ export function buildEphemeralCell<T>(
     // Lazy getter — ephemeral storage is request-scoped, can't be
     // resolved at module-init time.
     storage: getEphemeralCellStorage,
-    vary: constantVary,
+    partition: constantPartition,
     load,
     keyOf,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     set: bindSetter(id) as CellInterface<T>["set"],
-    peek: buildPeek(id, getEphemeralCellStorage, validate, initial, constantVary),
+    peek: buildPeek(id, getEphemeralCellStorage, validate, initial, constantPartition),
     validate,
     write,
   }
@@ -806,8 +835,8 @@ export function _clearCellRegistry(): void {
 // A scoped cell is declared inline inside a parton's `schema` callback,
 // not as a module-scope export. It has no author-supplied `id`; the
 // framework derives `<partonId>/<schemaKey>` when the schema's return
-// record is processed. Its `vary` callback receives the parton's
-// resolved vary output — partition can NARROW the parton's dependency
+// record is processed. Its `partition` callback receives the parton's
+// match params — partition can NARROW the parton's dependency
 // surface but not expand beyond it.
 
 /**
@@ -819,7 +848,7 @@ export interface ScopedCellDescriptor<T> {
   readonly __scopedCellDescriptor: true
   readonly shape: CellShape
   readonly defaultValue: T
-  readonly varyFn?: (partonVary: never) => CellArgs
+  readonly partitionFn?: (partonVary: never) => CellArgs
   readonly write?: (value: T) => T
   readonly load?: (args: CellArgs) => Promise<T>
   readonly validate: (value: unknown) => T
@@ -839,7 +868,7 @@ export interface InlineCellRecord {
    *  so a per-session cell resolves at the caller's partition there. When
    *  present, the action re-derives the partition rather than using the
    *  recorded `partition` value. */
-  readonly varyFn?: (scope: CellVaryScope) => CellArgs
+  readonly partitionFn?: (scope: CellPartitionScope) => CellArgs
 }
 
 export function isScopedCellDescriptor(
@@ -856,7 +885,9 @@ export function isScopedCellDescriptor(
 export interface ScopedLocalCellOpts<S extends CellShapeSpec, PV, T = ValueOfShape<S>> {
   shape: S
   initial: T
-  vary?: (partonVary: PV) => CellArgs
+  /** Narrow the partition from the parton's match params — one slot per
+   *  named dimension instead of one per full params record. */
+  partition?: (partonParams: PV) => CellArgs
   write?: (value: T) => T
   load?: (args: CellArgs) => Promise<T>
 }
@@ -877,7 +908,7 @@ export function makeScopedCellFactories<PV>(): ScopedCellFactories<PV> {
         __scopedCellDescriptor: true,
         shape,
         defaultValue: opts.initial,
-        varyFn: opts.vary as ((pv: never) => CellArgs) | undefined,
+        partitionFn: opts.partition as ((pv: never) => CellArgs) | undefined,
         write: opts.write,
         load: opts.load,
         validate: makeValidator<T>("scoped-cell", shape),
@@ -902,8 +933,8 @@ export function finalizeScopedCell<T>(
   // tied to parton state like form drafts that authors want to keep
   // across renders. Override via a future `storage` option on the
   // descriptor if needed.
-  // The handle's own `vary` is constant — a scoped cell's partition
-  // comes from the OWNING PARTON's vary output at schema-resolution
+  // The handle's own `partition` is constant — a scoped cell's partition
+  // comes from the OWNING PARTON's match params at schema-resolution
   // time (see partial.tsx's schema phase), not from request scope.
   // `peek` follows the same rule: no-arg reads the `{}` partition;
   // callers that need a parton-partitioned slot pass its args
@@ -914,11 +945,11 @@ export function finalizeScopedCell<T>(
     shape: descriptor.shape,
     defaultValue: descriptor.defaultValue,
     storage: getCellStorage,
-    vary: constantVary,
+    partition: constantPartition,
     load: descriptor.load,
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     set: bindSetter(id) as CellInterface<T>["set"],
-    peek: buildPeek(id, getCellStorage, validate, descriptor.defaultValue, constantVary),
+    peek: buildPeek(id, getCellStorage, validate, descriptor.defaultValue, constantPartition),
     validate,
     write: descriptor.write,
   }
@@ -928,15 +959,15 @@ export function finalizeScopedCell<T>(
 
 /**
  * Compute the storage partition key for a scoped cell given the
- * parton's resolved vary output.
+ * parton's match params.
  */
 export function computeScopedCellPartitionKey(
   descriptor: ScopedCellDescriptor<unknown>,
   partonVary: CellArgs | null | undefined,
 ): string {
   const base = partonVary ?? {}
-  const out = descriptor.varyFn
-    ? descriptor.varyFn(base as never)
+  const out = descriptor.partitionFn
+    ? descriptor.partitionFn(base as never)
     : base
   return hash(stableStringify(out))
 }

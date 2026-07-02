@@ -7,7 +7,7 @@
  * whose match is satisfied by the current request, scores by
  * matched-dimension count, and cascade-merges fields.
  *
- * Read surface for `vary` callbacks:
+ * Sync read surface for block `schema` callbacks:
  *
  *   const cms = createCmsReadSurface(id, request)
  *   cms.text("headline")                       // "Welcome"
@@ -15,8 +15,8 @@
  *   cms.reference("featured", "product")       // string id | null
  *
  * Pure function of `(id, request)`. No ALS, no scope cells, no
- * tracking — the sync surface is what `vary` returns; that result IS
- * the dependency surface.
+ * tracking — the `cms:<contentKey>` dep re-reads the content hash per
+ * fold, so the read IS the dependency surface.
  */
 
 import React, { type ReactNode } from "react"
@@ -24,6 +24,7 @@ import { matchRoutePattern } from "./context.ts"
 import { getCmsStorage, type LoadedStore } from "./cms-storage.ts"
 import { CMS_DRAFT_COOKIE, EDITOR_COOKIE } from "./cms-constants.ts"
 import { getSpecById } from "../lib/spec-catalog.ts"
+import { registerDepKind } from "../lib/server-hooks.ts"
 
 export { CMS_DRAFT_COOKIE, EDITOR_COOKIE }
 
@@ -463,6 +464,15 @@ export function cmsFingerprintContribution(id: string, request: Request): string
   return `|cms=${id}:${contributionForNode(node, request, new Set([node.id]))}`
 }
 
+// The `cms:<contentKey>` dep kind — how a block's fingerprint tracks
+// its content row. The block wrapper records the key on the live dep
+// set at render; every fold re-reads the CURRENT hash here (committed
+// store + the requester's draft overlay), so a CMS edit moves the fp
+// with no lag and per-author drafts fold per request.
+registerDepKind("cms", (contentKey, request) =>
+  cmsFingerprintContribution(contentKey, request),
+)
+
 function contributionForNode(node: CmsNode, request: Request, ancestors: Set<string>): string {
   const fields = mergeMatchingConfigs(node.configs, request)
   const base = stableStringify(fields)
@@ -587,7 +597,7 @@ function readCookieRaw(request: Request, name: string): string | undefined {
   return match?.[1]
 }
 
-// ─── Sync read surface (passed into vary callbacks) ───────────────────
+// ─── Sync read surface (passed into block schema callbacks) ───────────
 
 const EMPTY_IMAGE = Object.freeze({ src: "", alt: "" })
 

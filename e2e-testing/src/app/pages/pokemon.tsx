@@ -12,6 +12,8 @@
 
 import {
   parton,
+  park,
+  searchParam,
   type RenderArgs,
   type ResolvedCell,
   type BoundCell,
@@ -36,10 +38,11 @@ export function extractSprite(sprites: unknown): string | null {
 }
 
 export const HeaderPartial = parton(
-  function HeaderRender({
-    showControls,
-    search,
-  }: { showControls: boolean; search: string | undefined } & RenderArgs) {
+  function HeaderRender({ showControls }: { showControls: boolean } & RenderArgs) {
+    // Tracked read: the header re-renders when the search dialog's URL
+    // presence flips. `?search=` (present, empty) and no `?search` at
+    // all fold distinctly — absence is a value.
+    const search = searchParam("search") ?? undefined
     return (
       <header className="mb-4">
         <div className="flex items-center justify-between">
@@ -50,9 +53,8 @@ export const HeaderPartial = parton(
       </header>
     )
   },
-  {
-    vary: ({ search: { search } }) => ({ search }),
-  },
+  // Explicit selector keeps the spec addressable (fp on the wire).
+  { selector: "#header" },
 )
 
 // ─── Search areas (page + frame scopes) ────────────────────────────────
@@ -147,9 +149,10 @@ function makeSearchArea(scope: "page" | "frame") {
   //     (`*-stage-1:<hash>`), so each query is a fresh instance id; the
   //     prior id unmounts and is pruned. (Per-query remount — fine for
   //     ephemeral results.)
-  //   Stage 2 — vary + cell via SCHEMA. `vary` reads `q` from request
-  //     scope; `schema` binds the cell. Stable id; `q` moves the
-  //     fingerprint within one identity (fp-cap bounds it).
+  //   Stage 2 — TRACKED SCHEMA READ + cell. `schema` reads `q` via
+  //     `searchParam()` (a tracked read, folded into the fp) and binds
+  //     the cell in one place. Stable id; `q` moves the fingerprint
+  //     within one identity (fp-cap bounds it).
   //   Stage 3 — MATCH on the query. `match` names `?q=` so each query is
   //     a distinct matchKey of a stable id. `keepalive: false` so a
   //     superseded query's variant is NOT parked (an ephemeral search
@@ -208,7 +211,7 @@ function makeSearchArea(scope: "page" | "frame") {
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
         <div data-testid="stage-2" data-q={q} data-count={list.length}>
-          <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay (vary + cell)</h3>
+          <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay (tracked schema read)</h3>
           <PokemonCardGrid items={list} compact testId="stage-2-content" />
         </div>
       )
@@ -216,8 +219,14 @@ function makeSearchArea(scope: "page" | "frame") {
     {
       selector: `#${scope}-stage-2`,
       cache: {},
-      vary: ({ search: { q = "" } }) => ({ q }),
-      schema: (_f, vary) => ({ results: stageCell(2, (vary as { q: string }).q) }),
+      // Tracked read in `schema` (pre-fp): `q` folds into the fp — and
+      // the byte-cache key — from render 1, and binds the cell in the
+      // same breath. The frame-scope placement reads the FRAME's url
+      // (tracked hooks see the frame-resolved request, as `vary` did).
+      schema: () => {
+        const q = searchParam("q") ?? ""
+        return { q, results: stageCell(2, q) }
+      },
       fallback: (
         <div data-testid="stage-2-fallback" className="p-2 text-muted-foreground">
           Loading stage 2...
@@ -230,8 +239,8 @@ function makeSearchArea(scope: "page" | "frame") {
   // `?q=` so each query is a distinct matchKey of the stable
   // `*-stage-3` id; `keepalive: false` means a superseded query's
   // variant leaves the tree (not parked) and is pruned, keeping
-  // matchKeys bounded. `vary` reads `q` to bind the cell + label the
-  // render (the matched param drives identity, vary drives data).
+  // matchKeys bounded. A tracked `searchParam("q")` in `schema` binds
+  // the cell (the matched param drives identity, the read drives data).
   const Stage3 = parton(
     async function Stage3Render({
       results,
@@ -258,10 +267,14 @@ function makeSearchArea(scope: "page" | "frame") {
       // captures it; absent `q` → no match → parks out). In a FRAME the
       // query lives on the frame url, which `match` can't see, so the
       // page-search `match` is omitted there and identity falls back to
-      // the stable id (data still flows via `vary`/`schema` below).
+      // the stable id (data still flows via the schema read below).
       ...(scope === "page" ? { match: { search: "*q=:query" } } : {}),
-      vary: ({ search: { q = "" } }) => ({ q }),
-      schema: (_f, vary) => ({ results: stageCell(3, (vary as { q: string }).q) }),
+      // Same tracked-schema pattern as Stage 2 — the matched `:query`
+      // drives IDENTITY (matchKey); the tracked read drives DATA.
+      schema: () => {
+        const q = searchParam("q") ?? ""
+        return { q, results: stageCell(3, q) }
+      },
       fallback: (
         <div data-testid="stage-3-fallback" className="p-2 text-muted-foreground">
           Loading stage 3...
@@ -270,14 +283,18 @@ function makeSearchArea(scope: "page" | "frame") {
     },
   )
 
-  function SearchBodyRender({
-    search,
-    q,
-  }: { search: string | undefined; q: string } & RenderArgs) {
+  function SearchBodyRender(_: RenderArgs) {
+    // Tracked reads — the wrapper's own dependency surface is exactly
+    // what its body reads: `?search` gates the dialog, `?q` feeds the
+    // input + stage 1's props. Its DESCENDANTS' `?q` dependence rides
+    // the descendant fold (their recorded deps re-read per request),
+    // not this wrapper's reads.
+    const search = searchParam("search")
+    const q = searchParam("q") ?? ""
     if (search == null) return null
     // Three data-passing methods, one per stage (see definitions above):
     //   Stage 1 — call-site props: pass `results`/`q` here.
-    //   Stage 2 — vary + cell: self-sources `q`, no query props.
+    //   Stage 2 — tracked schema read: self-sources `q`, no query props.
     //   Stage 3 — match: self-sources `q`, no query props.
     return (
       <SearchDialog open>
@@ -292,7 +309,6 @@ function makeSearchArea(scope: "page" | "frame") {
 
   return parton(SearchBodyRender, {
     selector: scope === "page" ? "#search-page .search-results" : "#search .search-results",
-    vary: ({ search: { search, q = "" } }) => ({ search, q }),
   })
 }
 
@@ -331,9 +347,9 @@ function makeListPagePartial(page: number) {
     },
     {
       selector: `#page-${page}` as const,
-      vary: ({ search: { pages: pagesRaw } }) => {
-        const pages = Math.max(1, Number(pagesRaw) || 1)
-        if (page > pages) return null
+      schema: () => {
+        const pages = Math.max(1, Number(searchParam("pages")) || 1)
+        if (page > pages) park()
         return { page, isFirst: page === 1 }
       },
     },
@@ -346,14 +362,12 @@ const ListPagePartials = Array.from({ length: MAX_LIST_PAGES }, (_, i) =>
 )
 
 const LoadMorePartial = parton(
-  function LoadMoreRender({ nextPage }: { nextPage: number } & RenderArgs) {
+  function LoadMoreRender(_: RenderArgs) {
+    const nextPage = Math.max(1, Number(searchParam("pages")) || 1) + 1
     return <LoadMoreClient nextPage={nextPage} />
   },
-  {
-    vary: ({ search: { pages } }) => ({
-      nextPage: Math.max(1, Number(pages) || 1) + 1,
-    }),
-  },
+  // Explicit selector keeps the spec addressable (fp on the wire).
+  { selector: "#load-more" },
 )
 
 // ─── Outer wrapper — matches /, composes the overview ─────────────────

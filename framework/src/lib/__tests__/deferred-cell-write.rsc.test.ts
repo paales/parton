@@ -32,7 +32,7 @@ describe("deferred cell writes — action-commit accounting", () => {
     const ping = localCell({
       id: "test.deferred-ping",
       shape: "number",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: 0,
       deferred: true,
     })
@@ -53,7 +53,7 @@ describe("deferred cell writes — action-commit accounting", () => {
     const bump = localCell({
       id: "test.plain-bump",
       shape: "number",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: 0,
     })
     await runWithRequestAsync(new Request("http://t/x"), async () => {
@@ -66,14 +66,14 @@ describe("deferred cell writes — action-commit accounting", () => {
     const ping = localCell({
       id: "test.mix-ping",
       shape: "number",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: 0,
       deferred: true,
     })
     const bump = localCell({
       id: "test.mix-bump",
       shape: "number",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: 0,
     })
     await runWithRequestAsync(new Request("http://t/x"), async () => {
@@ -87,7 +87,7 @@ describe("deferred cell writes — action-commit accounting", () => {
     const ping = localCell({
       id: "test.fresh-ping",
       shape: "number",
-      vary: () => ({}),
+      partition: () => ({}),
       initial: 0,
       deferred: true,
     })
