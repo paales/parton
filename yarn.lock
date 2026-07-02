@@ -3970,7 +3970,7 @@ __metadata:
 
 "@vitejs/plugin-rsc@patch:@vitejs/plugin-rsc@npm%3A0.5.24#~/.yarn/patches/@vitejs-plugin-rsc-npm-0.5.24-0a8431f84b.patch":
   version: 0.5.24
-  resolution: "@vitejs/plugin-rsc@patch:@vitejs/plugin-rsc@npm%3A0.5.24#~/.yarn/patches/@vitejs-plugin-rsc-npm-0.5.24-0a8431f84b.patch::version=0.5.24&hash=15fc3b"
+  resolution: "@vitejs/plugin-rsc@patch:@vitejs/plugin-rsc@npm%3A0.5.24#~/.yarn/patches/@vitejs-plugin-rsc-npm-0.5.24-0a8431f84b.patch::version=0.5.24&hash=6b3f54"
   dependencies:
     "@rolldown/pluginutils": "npm:1.0.0-rc.15"
     es-module-lexer: "npm:^2.0.0"
@@ -3988,7 +3988,7 @@ __metadata:
   peerDependenciesMeta:
     react-server-dom-webpack:
       optional: true
-  checksum: 10c0/0d0d25625a50915c87877b5fd9e211c7ee7491a5e1469ee8bc9efe462e60c6d241a7793cce6b28b133c06b1db387288d204bd21bb6857daa47fd1ef0987ceceb
+  checksum: 10c0/9484a56abf9a34c2050e9f6b39164edc4c03c404fb1a0507a10ec6acc41bc217a7db725372e088ae54ddc733feb63a8ec1dcc91aab8c9d61778a9083fbe7d646
   languageName: node
   linkType: hard
 

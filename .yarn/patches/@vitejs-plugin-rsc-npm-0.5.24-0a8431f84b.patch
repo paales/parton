@@ -1,21 +1,37 @@
 diff --git a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js
-index e70ceca585a39736991445d1411843aa956bf702..b11602b219899115c7ffcacab761f434d86d4f61 100644
+index e70ceca585a39736991445d1411843aa956bf702..7d6454cd347b2f3555e04ce29bae1b19ed5f2cec 100644
 --- a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js
 +++ b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.development.js
-@@ -1621,7 +1621,11 @@
+@@ -1289,6 +1289,7 @@
+         if (0 === streamTask.status)
+           if (entry.done)
+             (streamTask.status = 1),
++              __partonSettleDown(streamTask),
+               (entry = streamTask.id.toString(16) + ":C\n"),
+               request.completedRegularChunks.push(stringToChunk(entry)),
+               request.abortableTasks.delete(streamTask),
+@@ -1365,6 +1366,7 @@
+         if (0 === streamTask.status)
+           if (entry.done) {
+             streamTask.status = 1;
++            __partonSettleDown(streamTask);
+             if (void 0 === entry.value)
+               var endStreamRow = streamTask.id.toString(16) + ":C\n";
+             else
+@@ -1621,7 +1623,11 @@
        thenableIndexCounter = 0;
        thenableState = prevThenableState;
        currentComponentDebugInfo = componentDebugInfo;
 -      props = supportsComponentStorage
 +      ReactSharedInternalsServer.__partonStorage = partonStorage;
 +      var __pf = partonStorage.getStore();
-+      var __frame = { ctx: __pf ? __pf.ctx : null };
++      var __frame = { ctx: __pf ? __pf.ctx : null, settle: __pf ? __pf.settle : null };
 +      props = partonStorage.run(__frame, function () {
 +        return supportsComponentStorage
          ? task.debugTask
            ? task.debugTask.run(
                componentStorage.run.bind(
-@@ -1650,6 +1654,7 @@
+@@ -1650,6 +1656,7 @@
                )
              )
            : callComponentInDEV(Component, props, componentDebugInfo);
@@ -23,31 +39,54 @@ index e70ceca585a39736991445d1411843aa956bf702..b11602b219899115c7ffcacab761f434
        if (request.status === ABORTING)
          throw (
            ("object" !== typeof props ||
-@@ -1994,6 +1999,7 @@
+@@ -1994,6 +2001,7 @@
          keyPath: keyPath,
          implicitSlot: implicitSlot,
          formatContext: formatContext,
-+        serverCtx: partonStorage.getStore() ? partonStorage.getStore().ctx : null,
++        serverCtx: partonStorage.getStore() ? partonStorage.getStore().ctx : null, settleScope: partonStorage.getStore() ? partonStorage.getStore().settle : null, settleDone: !1,
          ping: function () {
            return pingTask(request, task);
          },
-@@ -2394,6 +2400,7 @@
+@@ -2032,6 +2040,7 @@
+       task.debugStack = debugStack;
+       task.debugTask = debugTask;
+       abortSet.add(task);
++      __partonSettleUp(task);
+       return task;
+     }
+     function serializeByValueID(id) {
+@@ -2394,6 +2403,7 @@
        if (value === REACT_ELEMENT_TYPE) return "$";
        if (null === value) return null;
        if ("object" === typeof value) {
-+        if (value.$$typeof === PARTON_CTX) { var __ct = partonStorage.run({ ctx: value._ctx }, createTask, request, value._node, task.keyPath, task.implicitSlot, task.formatContext, request.abortableTasks, task.time, task.debugOwner, task.debugStack, task.debugTask); pingTask(request, __ct); return serializeLazyID(__ct.id); }
++        if (value.$$typeof === PARTON_CTX) { var __ct = partonStorage.run({ ctx: value._ctx, settle: null != value._scope ? value._scope : partonStorage.getStore() ? partonStorage.getStore().settle : null }, createTask, request, value._node, task.keyPath, task.implicitSlot, task.formatContext, request.abortableTasks, task.time, task.debugOwner, task.debugStack, task.debugTask); pingTask(request, __ct); return serializeLazyID(__ct.id); }
          switch (value.$$typeof) {
            case REACT_ELEMENT_TYPE:
              var elementReference = null,
-@@ -3496,6 +3503,7 @@
+@@ -3490,12 +3500,14 @@
+     function erroredTask(request, task, error) {
+       task.timed && markOperationEndTime(request, task, performance.now());
+       task.status = 4;
++      __partonSettleDown(task);
+       var digest = logRecoverableError(request, error, task);
+       emitErrorChunk(request, task.id, digest, error, !1, task.debugOwner);
+       request.abortableTasks.delete(task);
        callOnAllReadyIfReady(request);
      }
      function retryTask(request, task) {
-+      partonStorage.run({ ctx: task.serverCtx }, function () {
++      partonStorage.run({ ctx: task.serverCtx, settle: task.settleScope }, function () {
        if (0 === task.status) {
          var prevCanEmitDebugInfo = canEmitDebugInfo;
          task.status = 5;
-@@ -3566,6 +3574,7 @@
+@@ -3530,6 +3542,7 @@
+             emitModelChunk(request, task.id, json);
+           }
+           task.status = 1;
++          __partonSettleDown(task);
+           request.abortableTasks.delete(task);
+           callOnAllReadyIfReady(request);
+         } catch (thrownValue) {
+@@ -3566,6 +3579,7 @@
              (serializedSize = parentSerializedSize);
          }
        }
@@ -55,65 +94,127 @@ index e70ceca585a39736991445d1411843aa956bf702..b11602b219899115c7ffcacab761f434
      }
      function tryStreamTask(request, task) {
        var prevCanEmitDebugInfo = canEmitDebugInfo;
-@@ -5354,6 +5363,8 @@
+@@ -3598,7 +3612,7 @@
+       }
+     }
+     function abortTask(task) {
+-      0 === task.status && (task.status = 3);
++      0 === task.status && ((task.status = 3), __partonSettleDown(task));
+     }
+     function finishAbortedTask(task, request, errorId) {
+       3 === task.status &&
+@@ -3609,7 +3623,7 @@
+         request.completedErrorChunks.push(task));
+     }
+     function haltTask(task) {
+-      0 === task.status && (task.status = 3);
++      0 === task.status && ((task.status = 3), __partonSettleDown(task));
+     }
+     function finishHaltedTask(task, request) {
+       3 === task.status &&
+@@ -5354,6 +5368,10 @@
        componentStorage = supportsComponentStorage
          ? new AsyncLocalStorage()
          : null,
 +      partonStorage = (typeof globalThis !== "undefined" && typeof globalThis.AsyncLocalStorage === "function") ? new globalThis.AsyncLocalStorage() : new (require("node:async_hooks").AsyncLocalStorage)(),
 +      PARTON_CTX = Symbol.for("parton.serverContext"),
++      __partonSettleUp = function (task) { for (var s = task.settleScope; null != s; s = s.parent) s.pending++; },
++  __partonSettleDown = function (task) { if (null != task.settleScope && !task.settleDone) { task.settleDone = !0; for (var s = task.settleScope; null != s; s = s.parent) if (0 === --s.pending && !s.settled) { s.settled = !0; null != s.onSettled && s.onSettled(); } } },
        TEMPORARY_REFERENCE_TAG = Symbol.for("react.temporary.reference"),
        proxyHandlers = {
          get: function (target, name) {
 diff --git a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js
-index 087f238c1a0ec9cc1003b2bcb9ea024ba762f2b8..7a260aff0658869fc9072c8872ad837ce6346df4 100644
+index 087f238c1a0ec9cc1003b2bcb9ea024ba762f2b8..78a5375f4817cddd990c4f0a0e01928368eb926b 100644
 --- a/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js
 +++ b/dist/vendor/react-server-dom/cjs/react-server-dom-webpack-server.edge.production.js
-@@ -497,6 +497,8 @@ function getChildFormatContext(parentContext, type, props) {
+@@ -497,6 +497,10 @@ function getChildFormatContext(parentContext, type, props) {
  }
  var supportsRequestStorage = "function" === typeof AsyncLocalStorage,
    requestStorage = supportsRequestStorage ? new AsyncLocalStorage() : null,
 +  partonStorage = (typeof globalThis !== "undefined" && typeof globalThis.AsyncLocalStorage === "function") ? new globalThis.AsyncLocalStorage() : new (require("node:async_hooks").AsyncLocalStorage)(),
 +  PARTON_CTX = Symbol.for("parton.serverContext"),
++  __partonSettleUp = function (task) { for (var s = task.settleScope; null != s; s = s.parent) s.pending++; },
++  __partonSettleDown = function (task) { if (null != task.settleScope && !task.settleDone) { task.settleDone = !0; for (var s = task.settleScope; null != s; s = s.parent) if (0 === --s.pending && !s.settled) { s.settled = !0; null != s.onSettled && s.onSettled(); } } },
    TEMPORARY_REFERENCE_TAG = Symbol.for("react.temporary.reference"),
    proxyHandlers = {
      get: function (target, name) {
-@@ -1150,7 +1152,10 @@ function renderFunctionComponent(request, task, key, Component, props) {
+@@ -937,6 +941,7 @@ function serializeReadableStream(request, task, stream) {
+     if (0 === streamTask.status)
+       if (entry.done)
+         (streamTask.status = 1),
++          __partonSettleDown(streamTask),
+           (entry = streamTask.id.toString(16) + ":C\n"),
+           request.completedRegularChunks.push(stringToChunk(entry)),
+           request.abortableTasks.delete(streamTask),
+@@ -1005,6 +1010,7 @@ function serializeAsyncIterable(request, task, iterable, iterator) {
+     if (0 === streamTask.status)
+       if (entry.done) {
+         streamTask.status = 1;
++        __partonSettleDown(streamTask);
+         if (void 0 === entry.value)
+           var endStreamRow = streamTask.id.toString(16) + ":C\n";
+         else
+@@ -1150,7 +1156,10 @@ function renderFunctionComponent(request, task, key, Component, props) {
    task.thenableState = null;
    thenableIndexCounter = 0;
    thenableState = prevThenableState;
 -  props = Component(props, void 0);
 +  ReactSharedInternalsServer.__partonStorage = partonStorage;
 +  var __pf = partonStorage.getStore();
-+  var __frame = { ctx: __pf ? __pf.ctx : null };
++  var __frame = { ctx: __pf ? __pf.ctx : null, settle: __pf ? __pf.settle : null };
 +  props = partonStorage.run(__frame, Component, props, void 0);
    if (12 === request.status)
      throw (
        ("object" === typeof props &&
-@@ -1287,6 +1292,7 @@ function createTask(
+@@ -1287,6 +1296,7 @@ function createTask(
      keyPath: keyPath,
      implicitSlot: implicitSlot,
      formatContext: formatContext,
-+    serverCtx: partonStorage.getStore() ? partonStorage.getStore().ctx : null,
++    serverCtx: partonStorage.getStore() ? partonStorage.getStore().ctx : null, settleScope: partonStorage.getStore() ? partonStorage.getStore().settle : null, settleDone: !1,
      ping: function () {
        return pingTask(request, task);
      },
-@@ -1509,6 +1515,7 @@ function renderModelDestructive(
+@@ -1365,6 +1375,7 @@ function createTask(
+     thenableState: null
+   };
+   abortSet.add(task);
++  __partonSettleUp(task);
+   return task;
+ }
+ function serializeByValueID(id) {
+@@ -1509,6 +1520,7 @@ function renderModelDestructive(
    if (value === REACT_ELEMENT_TYPE) return "$";
    if (null === value) return null;
    if ("object" === typeof value) {
-+    if (value.$$typeof === PARTON_CTX) { var __ct = partonStorage.run({ ctx: value._ctx }, createTask, request, value._node, task.keyPath, task.implicitSlot, task.formatContext, request.abortableTasks); pingTask(request, __ct); return serializeLazyID(__ct.id); }
++    if (value.$$typeof === PARTON_CTX) { var __ct = partonStorage.run({ ctx: value._ctx, settle: null != value._scope ? value._scope : partonStorage.getStore() ? partonStorage.getStore().settle : null }, createTask, request, value._node, task.keyPath, task.implicitSlot, task.formatContext, request.abortableTasks); pingTask(request, __ct); return serializeLazyID(__ct.id); }
      switch (value.$$typeof) {
        case REACT_ELEMENT_TYPE:
          var elementReference = null,
-@@ -1911,6 +1918,7 @@ function erroredTask(request, task, error) {
+@@ -1904,6 +1916,7 @@ function emitChunk(request, task, value) {
+ }
+ function erroredTask(request, task, error) {
+   task.status = 4;
++  __partonSettleDown(task);
+   error = logRecoverableError(request, error, task);
+   emitErrorChunk(request, task.id, error);
+   request.abortableTasks.delete(task);
+@@ -1911,6 +1924,7 @@ function erroredTask(request, task, error) {
  }
  var emptyRoot = {};
  function retryTask(request, task) {
-+  partonStorage.run({ ctx: task.serverCtx }, function () {
++  partonStorage.run({ ctx: task.serverCtx, settle: task.settleScope }, function () {
    if (0 === task.status) {
      task.status = 5;
      var parentSerializedSize = serializedSize;
-@@ -1969,6 +1977,7 @@ function retryTask(request, task) {
+@@ -1934,6 +1948,7 @@ function retryTask(request, task) {
+         emitModelChunk(request, task.id, json);
+       }
+       task.status = 1;
++      __partonSettleDown(task);
+       request.abortableTasks.delete(task);
+       callOnAllReadyIfReady(request);
+     } catch (thrownValue) {
+@@ -1969,6 +1984,7 @@ function retryTask(request, task) {
        serializedSize = parentSerializedSize;
      }
    }
@@ -121,3 +222,21 @@ index 087f238c1a0ec9cc1003b2bcb9ea024ba762f2b8..7a260aff0658869fc9072c8872ad837c
  }
  function tryStreamTask(request, task) {
    var parentSerializedSize = serializedSize;
+@@ -1998,7 +2014,7 @@ function performWork(request) {
+   }
+ }
+ function abortTask(task) {
+-  0 === task.status && (task.status = 3);
++  0 === task.status && ((task.status = 3), __partonSettleDown(task));
+ }
+ function finishAbortedTask(task, request, errorId) {
+   3 === task.status &&
+@@ -2007,7 +2023,7 @@ function finishAbortedTask(task, request, errorId) {
+     request.completedErrorChunks.push(task));
+ }
+ function haltTask(task) {
+-  0 === task.status && (task.status = 3);
++  0 === task.status && ((task.status = 3), __partonSettleDown(task));
+ }
+ function finishHaltedTask(task, request) {
+   3 === task.status && request.pendingChunks--;

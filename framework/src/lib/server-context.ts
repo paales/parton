@@ -6,14 +6,16 @@
  * patch enters per component (`partonStorage`; see `.yarn/patches/` and
  * `docs/internals/server-context.md`) — the SAME store the reader uses, so the
  * carrier follows post-`await` continuations as reliably as a read does. The
- * unit in the store is a per-render FRAME `{ ctx, parton? }`, where `ctx` is the
- * immutable map this subtree reads. Each context is one keyed entry — every
+ * unit in the store is a per-render FRAME `{ ctx, settle?, parton? }`, where
+ * `ctx` is the immutable map this subtree reads and `settle` the nearest
+ * enclosing parton's settlement scope. Each context is one keyed entry — every
  * `createServerContext` value, and the framework's own parton parent
  * ([[partial-context]]).
  *
  * A provider scopes its descendants by returning a `PARTON_CTX` MARKER
- * (`{ $$typeof, _ctx, _node }`): the Flight patch's `renderModelDestructive`
- * renders `_node` inside `partonStorage.run({ ctx: _ctx }, …)`. Because the
+ * (`{ $$typeof, _ctx, _node, _scope }`): the Flight patch's
+ * `renderModelDestructive` renders `_node` inside
+ * `partonStorage.run({ ctx: _ctx, settle: _scope ?? inherited }, …)`. Because the
  * marker lives in the model, it re-establishes the overlay every time the
  * subtree is walked — including React's deferred serialization pass — instead
  * of relying on a render-time scope that wouldn't survive it. Nothing mutates a
@@ -30,10 +32,37 @@ import type { ReactNode } from "react"
  *  the subtree. */
 const PARTON_CTX = Symbol.for("parton.serverContext")
 
+/**
+ * A subtree settlement scope — the refcount of unfinished Flight tasks in
+ * one parton's subtree, threaded through the same per-render ALS frames the
+ * context map rides (`frame.settle`, `task.settleScope`, the marker's
+ * `_scope`). The patch owns the counting: `createTask` increments `pending`
+ * on the scope AND every ancestor (`parent` chain — a task belongs to all
+ * enclosing partons), each task's terminal transition (completed, errored,
+ * aborted, halted, stream-closed) decrements the same chain, and the scope
+ * whose count crosses zero fires `onSettled` exactly once (`settled` latch).
+ * See `scripts/patch-plugin-rsc-server-context.mjs` and
+ * `docs/notes/task-settle.md`.
+ */
+export interface SettleScope {
+  readonly parent: SettleScope | null
+  pending: number
+  settled: boolean
+  readonly onSettled: (() => void) | null
+}
+
+/** The scope with its framework-side callback list. The patch never touches
+ *  `_cbs`; it only counts and calls `onSettled`. */
+interface InternalSettleScope extends SettleScope {
+  readonly _cbs: Array<() => void>
+}
+
 /** The per-render frame in the parton ALS, as far as server context cares:
- *  `ctx` is the immutable context map this subtree reads. */
+ *  `ctx` is the immutable context map this subtree reads, `settle` the
+ *  nearest enclosing parton's settlement scope. */
 interface RenderFrame {
   ctx?: ReadonlyMap<symbol, unknown> | null
+  settle?: InternalSettleScope | null
 }
 
 const sharedInternals = (
@@ -48,9 +77,14 @@ const sharedInternals = (
  * A server context handle. Created at module scope by `createServerContext`.
  * The value is BOTH the provider component (`<Ctx value={…}>…</Ctx>`) and the
  * handle passed to `getServerContext`.
+ *
+ * `_settle` is framework-internal: a parton hands its own settlement scope to
+ * its `ParentContext` provider so the outlined subtree task (and every task
+ * under it) counts into that parton. User providers never pass it — their
+ * subtrees inherit the ambient scope.
  */
 export interface ServerContext<T> {
-  (props: { value: T; children?: ReactNode }): ReactNode
+  (props: { value: T; children?: ReactNode; _settle?: SettleScope | null }): ReactNode
   readonly _id: symbol
   readonly _default: T
 }
@@ -73,11 +107,24 @@ export function createServerContext<T>(defaultValue: T): ServerContext<T> {
   // and hand it to the patch as a marker wrapping the children. The patch
   // renders `_node` inside `run({ ctx: _ctx })`, so the overlay reaches the
   // descendants on every walk — render AND serialization.
-  const Provider = ({ value, children }: { value: T; children?: ReactNode }): ReactNode => {
+  const Provider = ({
+    value,
+    children,
+    _settle,
+  }: {
+    value: T
+    children?: ReactNode
+    _settle?: SettleScope | null
+  }): ReactNode => {
     const frame = sharedInternals?.__partonStorage?.getStore()
     const next = new Map(frame?.ctx ?? null)
     next.set(id, value)
-    return { $$typeof: PARTON_CTX, _ctx: next, _node: children } as unknown as ReactNode
+    return {
+      $$typeof: PARTON_CTX,
+      _ctx: next,
+      _node: children,
+      _scope: _settle ?? null,
+    } as unknown as ReactNode
   }
   return Object.assign(Provider, { _id: id, _default: defaultValue })
 }
@@ -95,4 +142,64 @@ export function getServerContext<T>(context: ServerContext<T>): T {
   const frame = sharedInternals?.__partonStorage?.getStore()
   const map = frame?.ctx
   return map && map.has(context._id) ? (map.get(context._id) as T) : context._default
+}
+
+// ─── Subtree settlement ────────────────────────────────────────────────
+
+/**
+ * Open a settlement scope for the parton whose render is on the current
+ * frame. Framework-internal: `partial.tsx` calls this once per full parton
+ * render, before invoking `Render`, and hands the returned scope to the
+ * parton's `ParentContext` provider (`_settle`), whose marker seeds it into
+ * the outlined subtree task.
+ *
+ * The scope's `parent` is the frame's inherited scope (the nearest enclosing
+ * parton), so the patch's chain-walk counts each task into every enclosing
+ * parton. The call also stamps the scope onto the CURRENT frame — that is
+ * what `_onPartonSettled` reads, and the render frame's continuations (an
+ * async `Render`'s post-`await` code included) all see it.
+ *
+ * Callback dispatch is microtask-deferred: `onSettled` is invoked
+ * synchronously by the patch at the zero-crossing — inside the Flight
+ * scheduler's stack — so the framework defers each registered callback with
+ * `queueMicrotask` to keep arbitrary consumer code (and its throws) out of
+ * `retryTask` / the abort sweep.
+ */
+export function _openPartonSettleScope(): SettleScope {
+  const frame = sharedInternals?.__partonStorage?.getStore()
+  const cbs: Array<() => void> = []
+  const scope: InternalSettleScope = {
+    parent: frame?.settle ?? null,
+    pending: 0,
+    settled: false,
+    onSettled: () => {
+      for (const cb of cbs) queueMicrotask(cb)
+    },
+    _cbs: cbs,
+  }
+  if (frame) frame.settle = scope
+  return scope
+}
+
+/**
+ * Register a callback that fires once the NEAREST enclosing parton's subtree
+ * has settled — every Flight task in it reached a terminal state (completed,
+ * errored, or aborted), including tasks of nested partons. Call during a
+ * parton's render (the parton's own `Render`, or any plain server component
+ * under it).
+ *
+ * Fires exactly once per scope, on a microtask. Registration after the scope
+ * already settled fires the callback on the next microtask. A parton whose
+ * render never reaches its `ParentContext` marker (it threw before returning,
+ * or was fp-skipped/deferred — no full render) never observes settlement:
+ * the scope counts nothing and the callback is dropped with it.
+ */
+export function _onPartonSettled(cb: () => void): void {
+  const scope = sharedInternals?.__partonStorage?.getStore()?.settle
+  if (!scope)
+    throw new Error(
+      "_onPartonSettled() must be called during a parton's render — no settlement scope on the rendering frame.",
+    )
+  if (scope.settled) queueMicrotask(cb)
+  else scope._cbs.push(cb)
 }
