@@ -33,7 +33,12 @@ import {
 } from "./partial-registry.ts"
 import { computeRouteKey } from "./partial.tsx"
 import { evalDepKeys } from "./server-hooks.ts"
-import { _consumePendingUrlUpdate, getRequest, getScope } from "../runtime/context.ts"
+import {
+  _consumePendingUrlUpdate,
+  _setSettleTrailerSink,
+  getRequest,
+  getScope,
+} from "../runtime/context.ts"
 import { queryMatchingTs } from "../runtime/invalidation-registry.ts"
 import { getSessionFrameUrl } from "../runtime/session.ts"
 import {
@@ -356,6 +361,14 @@ export function wrapSsrStreamWithFpTrailer(
 export function wrapStreamWithFpTrailer(
   stream: ReadableStream<Uint8Array>,
   commit?: () => void,
+  opts?: {
+    /** Emit each parton's warm-fp entry the moment ITS subtree settles
+     *  (default), instead of only at whole-stream flush. Lane renders
+     *  pass `false`: a lane is a single parton, so its flush already
+     *  fires at that parton's completion — and lanes run concurrently,
+     *  which the one-sink-per-request slot doesn't model. */
+    incremental?: boolean
+  },
 ): ReadableStream<Uint8Array> {
   // Capture per-request state at wrap time. The registry ALS is NOT
   // entered yet at this point (`<PartialRoot>` enters it during
@@ -374,12 +387,68 @@ export function wrapStreamWithFpTrailer(
   }
   deferRequestRegistryCommit()
 
+  // Cumulative fp-update map for this response. Every emission — the
+  // settle-time entries and the flush safety net — sends the WHOLE map,
+  // so the last entry on the wire is always complete and consumers keep
+  // last-wins semantics (the splitter's trailer map, `?cached=`
+  // registration) without merge logic.
+  const cumulative: FpUpdatesPayload = {}
+  const incremental = opts?.incremental !== false && request !== null
+
+  /** Fold the current route snapshots into `cumulative` — either the
+   *  subtree under `withinId` (settle-time: that parton + everything
+   *  whose parentPath includes it, all final because settlement is
+   *  subtree-inclusive) or the whole map (flush). Returns true when
+   *  any entry was added or changed. */
+  const foldUpdates = (withinId?: string): boolean => {
+    if (!request) return false
+    const routeKey = computeRouteKey(request.url)
+    const all = _readSnapshotsForRoute(scope, routeKey)
+    if (all.size === 0) return false
+    let snapshots = all
+    if (withinId !== undefined) {
+      snapshots = new Map()
+      for (const [id, snap] of all) {
+        if (id === withinId || snap.parentPath.includes(withinId)) snapshots.set(id, snap)
+      }
+      if (snapshots.size === 0) return false
+    }
+    const updates = computeFpUpdates(snapshots, request)
+    if (!updates) return false
+    let changed = false
+    for (const [id, entry] of Object.entries(updates)) {
+      const prior = cumulative[id]
+      if (prior && prior.to === entry.to && prior.from === entry.from) continue
+      cumulative[id] = entry
+      changed = true
+    }
+    return changed
+  }
+
   return stream.pipeThrough(
     new TransformStream({
+      start(controller) {
+        if (!incremental) return
+        // Settle-time emission: the parton wrapper notifies this sink
+        // when a parton's subtree settles (see partial.tsx); the sink
+        // recomputes that subtree's warm fps against the eagerly-
+        // published registry and, on drift, ships the cumulative map
+        // immediately — a fast parton's fp entry doesn't wait for a
+        // slow sibling's loader. Enqueueing can race the stream's
+        // teardown (a settle microtask after close), so a failed
+        // enqueue is dropped: the flush safety net owned those bytes.
+        _setSettleTrailerSink((partonId) => {
+          if (!foldUpdates(partonId)) return
+          try {
+            emitTrailer(controller, cumulative)
+          } catch {}
+        })
+      },
       transform(chunk, controller) {
         controller.enqueue(chunk)
       },
       async flush(controller) {
+        if (incremental) _setSettleTrailerSink(null)
         await Promise.allSettled(_drainPendingDefers())
         if (commit) commit()
         // Consume any URL push queued by `getServerNavigation().navigate(...)`
@@ -397,13 +466,12 @@ export function wrapStreamWithFpTrailer(
         if (urlUpdate) {
           emitUrlUpdate(controller, urlUpdate)
         }
-        if (!request) return
-        const routeKey = computeRouteKey(request.url)
-        const snapshots = _readSnapshotsForRoute(scope, routeKey)
-        if (snapshots.size === 0) return
-        const updates = computeFpUpdates(snapshots, request)
-        if (!updates) return
-        emitTrailer(controller, updates)
+        // Safety net: anything that never settled (aborted subtrees) or
+        // drifted after its settle emission (an invalidation bump landing
+        // between a parton's settle and stream end). No wire bytes when
+        // the settle-time entries already covered everything.
+        if (!foldUpdates()) return
+        emitTrailer(controller, cumulative)
       },
     }),
   )

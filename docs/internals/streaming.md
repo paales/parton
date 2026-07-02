@@ -274,12 +274,28 @@ Each segment's bytes look like:
 <flight rows for next segment…>
 ```
 
-Order: Flight payload first, then trailer entries, then the `settled`
-milestone, then the optional `next` delimiter. The client's
-`splitSegments` consumes the body bytes until the first `\xFF` (UTF-8
-invalid → never inside Flight payload), reads trailer entries with
-`tryReadMarker`, and either continues to the next segment or
-terminates.
+The tags split into two grammatical roles. **Milestones** (`settled`,
+`next`, `lanes`, `mux`, `muxend`) are phase transitions: they end the
+segment's body block. **Entries** (`fp`, `url`, any future data tag)
+carry data and may appear ANYWHERE — interleaved between Flight rows,
+not just after the body. The server exploits that for settle-time
+trailer emission: every parton's subtree settlement is observable
+(the `SettleScope` refcount in the Flight patch — see
+[server-context.md](./server-context.md)), and
+`wrapStreamWithFpTrailer` registers a per-response sink that emits a
+parton's warm-fp entry the moment ITS subtree settles, so a fast
+parton's `{from,to}` never waits on a slow sibling's loader. Each
+emission carries the CUMULATIVE update map; the whole-stream flush is
+a safety net (aborted subtrees, post-settle invalidation drift) — so
+the last `fp` entry on the wire is always complete and consumers keep
+last-wins semantics. Lane renders skip the sink (`incremental: false`
+— a lane is one parton, its flush already fires at that parton's
+completion).
+
+The client's `splitSegments` consumes body bytes until a `\xFF`
+(UTF-8 invalid → never inside Flight payload), reads the marker with
+`tryReadMarker`, records entry tags into the segment's trailer map and
+keeps the body flowing, and transitions phases on milestone tags.
 
 The `settled` marker is the driver's explicit "this iteration is
 done" signal, written once a segment's render has fully drained (body

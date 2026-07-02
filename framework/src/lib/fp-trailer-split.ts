@@ -45,6 +45,7 @@ import {
 	TAG_LANES_OPEN,
 	TAG_MUX_END,
 	TAG_MUX_FRAME,
+	TAG_NEXT_SEGMENT,
 	TAG_SEGMENT_SETTLED,
 	tryReadMarker,
 } from "./fp-trailer-marker.ts";
@@ -160,6 +161,17 @@ export function splitAtFpTrailer(
 	})();
 	return { mainStream, trailer: trailerPromise };
 }
+
+/** Tags that end a segment's body block (phase transitions). Every
+ *  other tag is a data ENTRY that may interleave with body bytes —
+ *  recorded into the segment's trailer map wherever it appears. */
+const MILESTONE_TAGS = new Set<string>([
+	TAG_SEGMENT_SETTLED,
+	TAG_NEXT_SEGMENT,
+	TAG_LANES_OPEN,
+	TAG_MUX_FRAME,
+	TAG_MUX_END,
+]);
 
 // ─── Internal state machine ─────────────────────────────────────────
 
@@ -519,8 +531,41 @@ class SegmentIterator implements AsyncIterator<Segment> {
 					this.leftover = concat(this.leftover, chunk);
 					continue;
 				}
-				// Confirmed marker. Close body; trailer phase reads from
-				// leftover (which still starts at the `\xFF` prefix).
+				// Confirmed marker. ENTRY tags (fp / url / future data tags)
+				// interleave with body bytes — the server emits a parton's
+				// warm-fp entry the moment its subtree settles, between body
+				// chunks — so they're recorded here and the body continues.
+				// MILESTONE tags (settled / next / lanes / mux) end the body
+				// block; the trailer phase owns those.
+				if (!MILESTONE_TAGS.has(result.tag)) {
+					const totalSize = result.headerSize + result.length;
+					let truncated = false;
+					while (this.leftover.length < totalSize && !this.sourceClosed) {
+						const chunk = await this.readChunk();
+						if (chunk == null) break;
+						this.leftover = concat(this.leftover, chunk);
+					}
+					if (this.leftover.length < totalSize) truncated = true;
+					if (truncated) {
+						// Torn mid-entry: nothing usable. Close out like the
+						// truncated-header case.
+						this.leftover = new Uint8Array(0);
+						seg.closeBody();
+						seg.resolveTrailers();
+						this.exhausted = true;
+						return;
+					}
+					seg.addTrailer(
+						result.tag,
+						result.length > 0
+							? copySlice(this.leftover, result.headerSize, totalSize)
+							: new Uint8Array(0),
+					);
+					this.leftover = copySlice(this.leftover, totalSize, this.leftover.length);
+					continue bodyLoop;
+				}
+				// Milestone: close body; trailer phase reads from leftover
+				// (which still starts at the `\xFF` prefix).
 				seg.closeBody();
 				break bodyLoop;
 			}

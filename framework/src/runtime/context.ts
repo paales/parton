@@ -54,6 +54,14 @@ interface RequestStore {
    *  client's `?streaming=1` URL opt-in — the driver closes after
    *  the first segment. */
   connectionLive?: boolean
+  /** Sink the fp-trailer wrap registers for settle-time trailer
+   *  emission: called with a parton id when that parton's subtree
+   *  settles, so the wrap can emit the id's warm-fp entry mid-stream
+   *  instead of waiting for the whole render. One sink per response
+   *  stream — set by `wrapStreamWithFpTrailer`'s start, cleared at its
+   *  flush. Lane renders never set one (a lane IS a single parton;
+   *  its flush already fires at that parton's completion). */
+  settleTrailerSink?: ((partonId: string) => void) | null
   /** Queued URL push from `getServerNavigation(scope).navigate(...)`.
    *  Consumed (and cleared) at trailer-flush time, emitted as a
    *  `url`-tagged trailer entry so the client can apply it to the
@@ -192,6 +200,18 @@ export async function runWithRequestAsync<T>(
     store.commitRegistry()
   }
   return { result, cookies: store.cookies }
+}
+
+/** Register (or clear) the settle-time trailer sink for the active
+ *  request's response stream. See `RequestStore.settleTrailerSink`. */
+export function _setSettleTrailerSink(sink: ((partonId: string) => void) | null): void {
+  const store = requestContext.getStore()
+  if (store) store.settleTrailerSink = sink
+}
+
+/** The active settle-time trailer sink, if a wrap registered one. */
+export function _getSettleTrailerSink(): ((partonId: string) => void) | null {
+  return requestContext.getStore()?.settleTrailerSink ?? null
 }
 
 export function _setRegistryCommit(commit: () => void): void {
