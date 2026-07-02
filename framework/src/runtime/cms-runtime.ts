@@ -24,6 +24,7 @@ import { matchRoutePattern } from "./context.ts"
 import { getCmsStorage, type LoadedStore } from "./cms-storage.ts"
 import { CMS_DRAFT_COOKIE, EDITOR_COOKIE } from "./cms-constants.ts"
 import { getSpecById } from "../lib/spec-catalog.ts"
+import { _registerDepKind } from "../lib/server-hooks.ts"
 
 export { CMS_DRAFT_COOKIE, EDITOR_COOKIE }
 
@@ -462,6 +463,15 @@ export function cmsFingerprintContribution(id: string, request: Request): string
   if (!node) return `|cms=${id}:miss`
   return `|cms=${id}:${contributionForNode(node, request, new Set([node.id]))}`
 }
+
+// The `cms:<contentKey>` dep kind — how a block's fingerprint tracks
+// its content row. The block wrapper records the key on the live dep
+// set at render; every fold re-reads the CURRENT hash here (committed
+// store + the requester's draft overlay), so a CMS edit moves the fp
+// with no lag and per-author drafts fold per request.
+_registerDepKind("cms", (contentKey, request) =>
+  cmsFingerprintContribution(contentKey, request),
+)
 
 function contributionForNode(node: CmsNode, request: Request, ancestors: Set<string>): string {
   const fields = mergeMatchingConfigs(node.configs, request)

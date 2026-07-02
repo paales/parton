@@ -154,11 +154,19 @@ export function getCurrentParton(): CurrentParton | undefined {
  * and the parton re-renders on the next navigation; it also becomes a
  * selector-refetch target.
  *
- * Effective when called in the schema phase — which runs BEFORE the
- * fingerprint is computed. (A render-body `tag()` lands after the fp;
- * folding those needs a store-and-reread step that is not built yet.)
- * No-op outside a parton body.
+ * Phase decides the ride. In the schema phase (pre-fp) the tag folds
+ * into this render's label set directly — zero lag. In the Render body
+ * (post-fp) it records a `tag:<name>` dependency key on the live dep
+ * set, the same store-and-reread ride `cookie()`/`searchParam()` use:
+ * the NEXT fp re-reads the tag's matching invalidation timestamp, and
+ * the boundary surfaces the name as a refetch label at registration.
+ * That is the natural slot for tags a loader's response yields (e.g.
+ * `tag(`product:${data.id}`)` after a GraphQL await). No-op outside a
+ * parton body.
  */
 export function tag(name: string): void {
-  sharedInternals?.__partonStorage?.getStore()?.parton?.tags.add(name)
+  const parton = getCurrentParton()
+  if (!parton) return
+  if (parton.phase === "schema") parton.tags.add(name)
+  else parton.deps.add(`tag:${name}`)
 }

@@ -25,6 +25,9 @@ import { parseCookies } from "../runtime/context.ts"
 import { getSessionId } from "../runtime/session.ts"
 import { parseSelector, queryMatchingTs } from "../runtime/invalidation-registry.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
+import type { ParseRoute } from "./partial.tsx"
+
+type Prettify<T> = { [K in keyof T]: T[K] } & {}
 
 /**
  * Control signal thrown by `park()`. The parton wrapper catches it
@@ -138,12 +141,21 @@ export function cookie(name: string): string | undefined {
   return parseCookies(cp.request)[name]
 }
 
-/** Read a URL search param and record it as an fp dependency. */
-export function searchParam(name: string): string | null {
+/**
+ * Read a URL search param and record it as an fp dependency. The
+ * two-argument form supplies a default for an ABSENT param, so the
+ * ubiquitous read-with-default is a default, not a null-dance:
+ * `searchParam("q", "")`. A present-but-empty param (`?q=`) still
+ * returns `""` — absence is a value, and the fp folds the two
+ * distinctly either way.
+ */
+export function searchParam(name: string): string | null
+export function searchParam(name: string, fallback: string): string
+export function searchParam(name: string, fallback?: string): string | null {
   const cp = getCurrentParton()
-  if (!cp) return null
+  if (!cp) return fallback ?? null
   cp.deps.add(`search:${name}`)
-  return new URL(cp.request.url).searchParams.get(name)
+  return new URL(cp.request.url).searchParams.get(name) ?? fallback ?? null
 }
 
 /**
@@ -281,14 +293,39 @@ function namedGroups(result: URLPatternResult): Record<string, string> {
  * only the MATCHED PARAMS, not the whole pathname: the spec varies when
  * its captured segment changes, never on every navigation.
  *
- *     const { slug } = match("/p/:slug") ?? {}
+ * A string pattern types its params like the `match` OPTION does
+ * (`ParseRoute`), so inline reads are fully typed:
+ *
+ *     const { slug } = match("/p/:slug") ?? {}   // slug: string
+ *
+ * A `URLPatternInit` pattern (for hash/port/hostname dimensions)
+ * returns an untyped param record.
  */
+export function match<P extends string>(pattern: P): Prettify<ParseRoute<P>> | null
+export function match(pattern: URLPatternInit): Record<string, string> | null
 export function match(pattern: string | URLPatternInit): Record<string, string> | null {
   const cp = getCurrentParton()
   if (!cp) return null
   cp.deps.add(`match:${typeof pattern === "string" ? pattern : JSON.stringify(pattern)}`)
   const result = compilePattern(pattern).exec(cp.request.url)
   return result ? namedGroups(result) : null
+}
+
+/** Evaluators for dep kinds owned by OTHER layers (the CMS layer's
+ *  `cms:<contentKey>` content-hash kind). Registered at module scope by
+ *  the owning layer, so `evalDepKeys` stays import-cycle-free: the
+ *  evaluator must be a pure sync read of (name, request) whose string
+ *  encoding is injective over its observable value space. */
+const depKindEvaluators = new Map<
+  string,
+  (name: string, request: Request) => string | null | undefined
+>()
+
+export function _registerDepKind(
+  kind: string,
+  evaluate: (name: string, request: Request) => string | null | undefined,
+): void {
+  depKindEvaluators.set(kind, evaluate)
 }
 
 /**
@@ -327,6 +364,13 @@ export function evalDepKeys(
       value = result ? JSON.stringify(namedGroups(result)) : "nomatch"
     } else if (kind === "session") {
       value = getSessionId() ?? ""
+    } else if (kind === "tag") {
+      // A render-body `tag()` folds as its matching invalidation
+      // timestamp — same "fold the tag, not the value" rule as cells: a
+      // `refreshSelector(name)` bumps the ts, the fp shifts, the parton
+      // re-renders on the next pass. `name` may carry `?k=v` constraints.
+      const sel = parseSelector(name)
+      value = String(queryMatchingTs([sel.name], sel.constraints))
     } else if (kind === "cell") {
       // An inline cell folds as its invalidation timestamp, not its
       // value: a write fires `reload(cell:<id>?<partition>)`, bumping the
@@ -345,7 +389,10 @@ export function evalDepKeys(
       // first client report each move the fp.
       const v = readVisible(url.searchParams, name)
       value = v === undefined ? "u" : v ? "1" : "0"
-    } else value = undefined
+    } else {
+      const custom = depKindEvaluators.get(kind)
+      value = custom ? custom(name, request) : undefined
+    }
     // Absence is a VALUE: `?search=` (empty string, dialog open) and no
     // `?search` at all (dialog closed) must fold differently — the hooks
     // return `""` vs `null` and Renders branch on it, exactly like a

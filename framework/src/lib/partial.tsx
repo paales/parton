@@ -766,19 +766,25 @@ export function PartialBoundary({
   wakeHints,
   children,
 }: PartialBoundaryProps): ReactNode {
-  // Inline-cell deps are partition-scoped selectors (`cell:<id>?<part>`)
-  // riding in `deps` (they fold into the fp via store-and-reread). Surface
-  // them as refetch labels too — the bare `cell:<id>` name — and fold
-  // their partition into the constraint surface, so a partition-scoped
-  // write (`cell:<id>?sid=`) matches this parton. Schema cells get this in
-  // the schema phase; an inline cell is declared mid-Render, too late for
-  // `expandedLabels`, but its dep is recorded by the time the boundary
-  // registers — so fold it in here.
-  const cellDeps = deps ? [...deps].filter((d) => d.startsWith("cell:")) : []
+  // Two dep kinds double as invalidation selectors and ride in `deps`
+  // (folding into the fp via store-and-reread): inline-cell deps
+  // (`cell:<id>?<part>` — the selector verbatim) and render-body tags
+  // (`tag:<name>` — the selector is the name, prefix stripped). Surface
+  // both as refetch labels and fold their constraints into the
+  // constraint surface, so a partition-scoped write (`cell:<id>?sid=`)
+  // or a constrained tag bump matches this parton. Schema-phase cells
+  // and tags got this in `expandedLabels`; these are declared
+  // mid-Render, too late for that — but recorded by the time the
+  // boundary registers, so fold them in here.
+  const rideDeps = deps
+    ? [...deps].filter((d) => d.startsWith("cell:") || d.startsWith("tag:"))
+    : []
   let labelsWithCells = labels
   let constraintsWithCells = constraintArgs
-  if (cellDeps.length > 0) {
-    const parsed = cellDeps.map(parseInvalidationSelector)
+  if (rideDeps.length > 0) {
+    const parsed = rideDeps.map((d) =>
+      parseInvalidationSelector(d.startsWith("tag:") ? d.slice("tag:".length) : d),
+    )
     labelsWithCells = [...labels, ...parsed.map((p) => p.name)]
     constraintsWithCells = { ...constraintArgs }
     for (const p of parsed) Object.assign(constraintsWithCells, p.constraints)
