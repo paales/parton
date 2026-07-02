@@ -58,7 +58,7 @@ set by `fragmentCell` from its `key` option and runs against the validated
 increments a per-request `{total, deferred}` tally on the context store.
 After the action body runs, `_actionSuppressesCommit()` reads it: true iff
 `total > 0 && total === deferred` — at least one write, all to `deferred`
-cells. The app's RSC entry consults it to emit a **null-root** action
+cells. The framework's RSC handler consults it to emit a **null-root** action
 response (no re-render; the value rides the open heartbeat stream
 instead), and the client skips committing a null root. A mixed batch
 (`total !== deferred`) renders normally. See

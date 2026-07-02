@@ -131,7 +131,8 @@ interface FramesTree {
 
 /**
  * Read the per-frame URL tree from a navigation entry's state.
- * Exported for `entry.browser.tsx`'s traverse listener.
+ * Exported for the browser bootstrap's traverse listener
+ * (`../entry/browser.tsx`).
  */
 export function _readFramesSnapshot(state: unknown): FramesTree {
   if (state == null || typeof state !== "object") return {}
@@ -154,7 +155,7 @@ export function _readFrameNode(state: unknown, path: readonly string[]): FrameNo
 
 /**
  * Flatten the tree into `{dottedPath: url}` pairs — used by browser
- * traverse diffing in `entry.browser.tsx` to detect which frames
+ * traverse diffing in `../entry/browser.tsx` to detect which frames
  * changed between two entries.
  */
 export function _collectFramePaths(
@@ -399,7 +400,7 @@ export function _dispatchFrameRefetch(
   // would keep showing stale nested content.
   //
   // Frame refetches invoked from the urlChanged path in
-  // `entry.browser.tsx` deliberately DO NOT set `partials=` — they
+  // `../entry/browser.tsx` deliberately DO NOT set `partials=` — they
   // want a full render so URL-dependent content (e.g. main listing
   // switching on `?product=`) rerenders while `__frame` still
   // updates the session.

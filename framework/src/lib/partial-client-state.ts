@@ -5,9 +5,9 @@
  * behind accessor functions — one owner module, so the state's
  * lifecycle (what survives which kind of commit, what gets pruned
  * when) is auditable in one place. The state lives outside the React
- * tree so it survives the two-phase void→payload remount in
- * entry.browser.tsx. Without this, each refetch would wipe the cache
- * and force every partial to re-render.
+ * tree so it survives the two-phase void→payload remount in the
+ * browser bootstrap (`../entry/browser.tsx`). Without this, each
+ * refetch would wipe the cache and force every partial to re-render.
  *
  * Consumers:
  *   - `partial-cache.ts` — the tree walks that fill the cache and
@@ -28,7 +28,7 @@ import type { FpUpdatesPayload } from "./fp-trailer-marker.ts";
  * page only. Pruned on every streaming-mode render against the
  * harvested `seen` set, so entries for partials that aren't on the
  * new page are dropped immediately. Survives the two-phase
- * void→payload remount in entry.browser.tsx so cache-mode refetches
+ * void→payload remount in `../entry/browser.tsx` so cache-mode refetches
  * don't wipe everything between commits — but doesn't accumulate
  * across navigations. Steady-state size is bounded by the largest
  * single page the user visits, not by browsing history.

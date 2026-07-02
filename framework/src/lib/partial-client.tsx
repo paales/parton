@@ -136,7 +136,7 @@ export function PartialsClient({
 		[],
 	);
 	// PartialsClient is a `"use client"` component — but client components
-	// STILL execute during SSR's render-to-HTML pass (entry.ssr.tsx ->
+	// STILL execute during SSR's render-to-HTML pass (`../entry/ssr.tsx` ->
 	// renderToReadableStream decodes the Flight tree and runs every
 	// client-component body to produce the HTML). On the server we skip
 	// the cache/template machinery entirely:

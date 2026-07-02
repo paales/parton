@@ -143,11 +143,12 @@ names (`@parton/<pkg>`), never relative paths.
 
 | Path | Role |
 |---|---|
-| `framework/` (`@parton/framework`) | The runtime. `framework/index.ts` is the public barrel. `src/lib/` — partials primitives: `partial.tsx` (`parton` + `block` wrapper pipeline), `match.ts` (the compiled match gate), `cell.ts` (cells + `atomic()`), `frame.tsx`, `remote-frame.tsx`, the client merge layer (`partial-client.tsx` boundary + `PartialsClient`; state `partial-client-state.ts`, tree walks `partial-cache.ts`, template `partial-template.tsx`, refetch `refetch.ts`, frame handles `frame-client.tsx`, hooks `use-navigation.tsx`), `partial-registry.ts` (snapshots + route buckets), `server-hooks.ts` (tracked reads + wake hints), `server-context.ts`, `fp-trailer.ts`, `cache.tsx`, `flight-rewrite.ts` / `flight-graph.ts` / `snapshot-trailer.ts` (wire transforms). `src/runtime/` — RSC plumbing: `context.ts` (request ALS), `cell-actions.ts` (write endpoints), `invalidation-registry.ts`, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`. `src/test/` — in-process Flight harness (`rsc-server.ts`). Module map: [`docs/internals/render-pipeline.md`](./docs/internals/render-pipeline.md). |
+| `framework/` (`@parton/framework`) | The runtime. `framework/index.ts` is the public barrel. `src/lib/` — partials primitives: `partial.tsx` (`parton` + `block` wrapper pipeline), `match.ts` (the compiled match gate), `cell.ts` (cells + `atomic()`), `frame.tsx`, `remote-frame.tsx`, the client merge layer (`partial-client.tsx` boundary + `PartialsClient`; state `partial-client-state.ts`, tree walks `partial-cache.ts`, template `partial-template.tsx`, refetch `refetch.ts`, frame handles `frame-client.tsx`, hooks `use-navigation.tsx`), `partial-registry.ts` (snapshots + route buckets), `server-hooks.ts` (tracked reads + wake hints), `server-context.ts`, `fp-trailer.ts`, `cache.tsx`, `flight-rewrite.ts` / `flight-graph.ts` / `snapshot-trailer.ts` (wire transforms). `src/runtime/` — RSC plumbing: `context.ts` (request ALS), `cell-actions.ts` (write endpoints), `invalidation-registry.ts`, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`. `src/entry/` — the app entry factories (`createRscHandler`, `renderHTML`, `bootBrowser`) that thin app `entry.{rsc,ssr,browser}.tsx` files delegate to. `src/test/` — in-process Flight harness (`rsc-server.ts`). Module map: [`docs/internals/render-pipeline.md`](./docs/internals/render-pipeline.md). |
 | `cms/` (`@parton/cms`) | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/`). Content store as data: `cms/data/content.json` (committed) + `draft.json` (gitignored). Public barrel exports `EditorShell`. |
 | `copies/` (`@parton/copies`) | Vendored shadcn UI primitives (`src/components/ui/`), ai-elements, shared hooks, the `cn` helper. `components.json` lives here — where new shadcn components are added. |
-| `e2e-testing/` (`@parton/e2e-testing`) | Example app (PokeAPI + GraphCommerce Magento backends) + Playwright specs in `e2e/`. `src/entry.{rsc,ssr,browser}.tsx` are the framework entries. `vite.config.ts` owns dev/build. |
+| `e2e-testing/` (`@parton/e2e-testing`) | Example app (PokeAPI + GraphCommerce Magento backends) + Playwright specs in `e2e/`. `src/entry.{rsc,ssr,browser}.tsx` are thin delegations to `@parton/framework/entry/*`. `vite.config.ts` owns dev/build (its `environments.*.build.rollupOptions.input` map is what wires the three entries together). |
 | `e2e-magento/` (`@parton/e2e-magento`) | Companion app on port 5181 hosting remote partons at `/__remote/<id>` for cross-origin `<RemoteFrame>`. Run alongside via `yarn dev:magento`. |
+| `website/` (`@parton/website`) | The parton demo site (port 5183, `yarn dev:website`) — a Factorio-inspired infinite tile world where each 512px chunk is a parton; the framework's story told in-world. |
 
 Load-bearing code: `framework/src/`, `cms/src/`, `copies/src/`,
 `e2e-testing/src/`. Treat the rest as ignorable.
@@ -157,6 +158,7 @@ Load-bearing code: `framework/src/`, `cms/src/`, `copies/src/`,
 ```bash
 yarn dev                # Vite 8.1 (Rolldown) + RSC dev server (e2e-testing, port 5179)
 yarn dev:magento        # Companion e2e-magento showcase (port 5181)
+yarn dev:website        # The parton demo site (port 5183)
 yarn build / build:magento
 yarn typecheck          # tsc --noEmit, every workspace
 yarn test               # typecheck + Vitest node + rsc projects

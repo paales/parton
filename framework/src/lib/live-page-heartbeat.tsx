@@ -13,9 +13,10 @@ interface Props {
 }
 
 /**
- * Opt-in client component that holds a `?live=1` long-poll
- * connection to the current URL open. Mount it once near the app's
- * React root (typically from `entry.browser.tsx`):
+ * Client component that holds a `?live=1` long-poll connection to
+ * the current URL open. Mounted once near the React root by the
+ * framework's browser bootstrap (`../entry/browser.tsx`); an app
+ * assembling its own bootstrap mounts it the same way:
  *
  *   <BrowserRoot />
  *   <LivePageHeartbeat />

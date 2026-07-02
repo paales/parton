@@ -1,14 +1,16 @@
 // Public API surface for @parton/framework.
 //
-// The package contains three layers under src/:
+// The package contains four layers under src/:
 //   - lib/        the partials library (spec constructor, render runtime)
 //   - runtime/    RSC plumbing (request context, errors, CMS runtime, session)
+//   - entry/      the app entry factories (createRscHandler, renderHTML,
+//                 bootBrowser) that thin app entry files delegate to
 //   - test/       in-process Flight test harness (consumed by per-package tests)
 //
 // This barrel re-exports the user-facing surface so server-side consumers can
 // `import { … } from "@parton/framework"`. Deep paths
-// (`@parton/framework/runtime/cms-runtime.ts`) remain available for the
-// RSC adapter entry, which legitimately needs framework internals.
+// (`@parton/framework/entry/rsc.tsx`) remain available for the app's
+// entry files and for `"use client"` modules (see the caveat below).
 //
 // ── Cross-`"use *"` re-export caveat ───────────────────────────────────
 // A `"use client"` file that needs symbols originating in another file
@@ -55,8 +57,8 @@ export {
 // re-exported here. User code reads request state through `vary`'s scope
 // (url / pathname / search / cookies / headers) and writes side-effects
 // through actions; reaching into the request ALS imperatively defeats the
-// dependency declaration vary exists for. The RSC adapter entry
-// (`entry.rsc.tsx`) imports those internals directly via deep paths —
+// dependency declaration vary exists for. The framework's RSC handler
+// (`src/entry/rsc.tsx`) imports those internals via relative paths —
 // that's the only legitimate consumer.
 export {
   setFrameworkControl,
