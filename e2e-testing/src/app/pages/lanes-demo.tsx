@@ -22,7 +22,6 @@ import {
 	parton,
 	time,
 	type RenderArgs,
-	type ResolvedCell,
 } from "@parton/framework";
 import {
 	LaneSlowBumpButton,
@@ -62,9 +61,8 @@ const LaneClock = parton(
 );
 
 const LaneSlowCounter = parton(
-	async function LaneSlowCounterRender({
-		version,
-	}: { version: ResolvedCell<number> } & RenderArgs) {
+	async function LaneSlowCounterRender(_: RenderArgs) {
+		const version = await laneSlowVersion.resolve();
 		const startedAt = Date.now();
 		// Version 0 is the cold page load — render immediately so the
 		// initial segment isn't gated. Every bumped re-render takes the
@@ -93,26 +91,19 @@ const LaneSlowCounter = parton(
 			</div>
 		);
 	},
-	{
-		selector: "lanes-demo-slow",
-		schema: () => ({ version: laneSlowVersion }),
-	},
+	{ selector: "lanes-demo-slow" },
 );
 
-// Its own parton (not part of the page's schema): resolving the cell
+// Its own parton (not folded into the page): resolving the cell
 // stamps the `cell:` label on the resolver, and the bump should make
 // only this small control and the slow counter relevant — never the
 // page wrapper or the clock.
 const LaneSlowControls = parton(
-	function LaneSlowControlsRender({
-		version,
-	}: { version: ResolvedCell<number> } & RenderArgs) {
+	async function LaneSlowControlsRender(_: RenderArgs) {
+		const version = await laneSlowVersion.resolve();
 		return <LaneSlowBumpButton version={version} />;
 	},
-	{
-		selector: "lanes-demo-controls",
-		schema: () => ({ version: laneSlowVersion }),
-	},
+	{ selector: "lanes-demo-controls" },
 );
 
 export const LanesDemoPage = parton(

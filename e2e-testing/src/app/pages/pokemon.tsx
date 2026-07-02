@@ -18,7 +18,6 @@ import {
   type BoundCell,
   type CellValue,
   type PartialCtx,
-  type PartonProps,
 } from "@parton/framework"
 import { Frame } from "@parton/framework/lib/frame.tsx"
 import { Badge } from "@parton/copies/components/ui/badge"
@@ -148,10 +147,10 @@ function makeSearchArea(scope: "page" | "frame") {
   //     (`*-stage-1:<hash>`), so each query is a fresh instance id; the
   //     prior id unmounts and is pruned. (Per-query remount — fine for
   //     ephemeral results.)
-  //   Stage 2 — TRACKED SCHEMA READ + cell. `schema` reads `q` via
-  //     `searchParam()` (a tracked read, folded into the fp) and binds
-  //     the cell in one place. Stable id; `q` moves the fingerprint
-  //     within one identity (fp-cap bounds it).
+  //   Stage 2 — TRACKED BODY READ + cell. The Render body reads `q` via
+  //     `searchParam()` (a tracked read, folded into the fp) and
+  //     resolves the cell in one place. Stable id; `q` moves the
+  //     fingerprint within one identity (fp-cap bounds it).
   //   Stage 3 — MATCH on the query. `match` names `?q=` so each query is
   //     a distinct matchKey of a stable id. `keepalive: false` so a
   //     superseded query's variant is NOT parked (an ephemeral search
@@ -159,8 +158,12 @@ function makeSearchArea(scope: "page" | "frame") {
   //     pruned, keeping matchKeys bounded.
   const offsets = { 1: 0, 2: 6, 3: 12 } as const
   const limits = { 1: 6, 2: 6, 3: 8 } as const
-  const stageCell = (n: 1 | 2 | 3, q: string) =>
-    pokemonSearchCell.with({ pattern: `%${q}%`, offset: offsets[n], limit: limits[n] })
+  const stageArgs = (n: 1 | 2 | 3, q: string) => ({
+    pattern: `%${q}%`,
+    offset: offsets[n],
+    limit: limits[n],
+  })
+  const stageCell = (n: 1 | 2 | 3, q: string) => pokemonSearchCell.with(stageArgs(n, q))
 
   // Stage 1 — call-site props.
   const Stage1 = parton(
@@ -199,18 +202,21 @@ function makeSearchArea(scope: "page" | "frame") {
   )
 
   const Stage2 = parton(
-    async function Stage2Render({
-      results,
-      q,
-    }: PartonProps<{ results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string }>) {
+    async function Stage2Render(_: RenderArgs) {
+      // Tracked read: `q` folds into the fp — and the byte-cache key —
+      // and the cell resolves in the same breath. The frame-scope
+      // placement reads the FRAME's url (tracked hooks see the
+      // frame-resolved request).
+      const q = searchParam("q") ?? ""
       if (!q) return null
+      const results = await pokemonSearchCell.resolve(stageArgs(2, q))
       // Artificial delay — preserves the streaming-UX demo. Real
       // loads run instantly when storage is warm.
       await delay(1000)
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
         <div data-testid="stage-2" data-q={q} data-count={list.length}>
-          <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay (tracked schema read)</h3>
+          <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay (tracked body read)</h3>
           <PokemonCardGrid items={list} compact testId="stage-2-content" />
         </div>
       )
@@ -218,14 +224,6 @@ function makeSearchArea(scope: "page" | "frame") {
     {
       selector: `#${scope}-stage-2`,
       cache: {},
-      // Tracked read in `schema` (pre-fp): `q` folds into the fp — and
-      // the byte-cache key — from render 1, and binds the cell in the
-      // same breath. The frame-scope placement reads the FRAME's url
-      // (tracked hooks see the frame-resolved request, as `vary` did).
-      schema: () => {
-        const q = searchParam("q") ?? ""
-        return { q, results: stageCell(2, q) }
-      },
       fallback: (
         <div data-testid="stage-2-fallback" className="p-2 text-muted-foreground">
           Loading stage 2...
@@ -238,14 +236,16 @@ function makeSearchArea(scope: "page" | "frame") {
   // `?q=` so each query is a distinct matchKey of the stable
   // `*-stage-3` id; `keepalive: false` means a superseded query's
   // variant leaves the tree (not parked) and is pruned, keeping
-  // matchKeys bounded. A tracked `searchParam("q")` in `schema` binds
-  // the cell (the matched param drives identity, the read drives data).
+  // matchKeys bounded. A tracked `searchParam("q")` in the body
+  // resolves the cell (the matched param drives identity, the read
+  // drives data).
   const Stage3 = parton(
-    async function Stage3Render({
-      results,
-      q,
-    }: PartonProps<{ results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string }>) {
+    async function Stage3Render(_: RenderArgs) {
+      // Same tracked-read pattern as Stage 2 — the matched `:query`
+      // drives IDENTITY (matchKey); the tracked read drives DATA.
+      const q = searchParam("q") ?? ""
       if (!q) return null
+      const results = await pokemonSearchCell.resolve(stageArgs(3, q))
       await delay(2000)
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
@@ -266,14 +266,8 @@ function makeSearchArea(scope: "page" | "frame") {
       // captures it; absent `q` → no match → parks out). In a FRAME the
       // query lives on the frame url, which `match` can't see, so the
       // page-search `match` is omitted there and identity falls back to
-      // the stable id (data still flows via the schema read below).
+      // the stable id (data still flows via the body read above).
       ...(scope === "page" ? { match: { search: "*q=:query" } } : {}),
-      // Same tracked-schema pattern as Stage 2 — the matched `:query`
-      // drives IDENTITY (matchKey); the tracked read drives DATA.
-      schema: () => {
-        const q = searchParam("q") ?? ""
-        return { q, results: stageCell(3, q) }
-      },
       fallback: (
         <div data-testid="stage-3-fallback" className="p-2 text-muted-foreground">
           Loading stage 3...
@@ -293,7 +287,7 @@ function makeSearchArea(scope: "page" | "frame") {
     if (search == null) return null
     // Three data-passing methods, one per stage (see definitions above):
     //   Stage 1 — call-site props: pass `results`/`q` here.
-    //   Stage 2 — tracked schema read: self-sources `q`, no query props.
+    //   Stage 2 — tracked body read: self-sources `q`, no query props.
     //   Stage 3 — match: self-sources `q`, no query props.
     return (
       <SearchDialog open>
@@ -319,14 +313,11 @@ export const SearchAreaFrame = makeSearchArea("frame")
 function makeListPagePartial(page: number) {
   return parton(
     function PokemonListPageRender({
-      page,
-      isFirst,
       results,
     }: {
-      page: number
-      isFirst: boolean
       results: ResolvedCell<CellValue<typeof pokemonListCell>>
     } & RenderArgs) {
+      const isFirst = page === 1
       const list = results.value?.pokemon_v2_pokemon ?? []
       return (
         <div>
@@ -349,7 +340,6 @@ function makeListPagePartial(page: number) {
       // Page N exists iff the URL admits it — a miss parks the cached
       // page (back/forward across a load-more boundary restores it).
       match: { searchParams: { pages: (v) => Math.max(1, Number(v) || 1) >= page } },
-      schema: () => ({ page, isFirst: page === 1 }),
     },
   )
 }

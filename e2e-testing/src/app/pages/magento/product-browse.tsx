@@ -13,7 +13,7 @@
  *
  * Two deliberate shapes:
  *  - `total_count` is fetched by the ROUTE (rendered once) and passed down
- *    as a prop — never a child's `schema` cell, which would make the
+ *    as a prop — never a child's own cell, which would make the
  *    framework treat the child as unchanged and stop its reloads.
  *  - the products for a page are a parton keyed by page, rendered only
  *    while that page is visible — so the fetch itself is gated by culling.
@@ -147,9 +147,10 @@ function BrowseList({ totalPages }: { totalPages: number }) {
 }
 
 export const ProductBrowsePage = parton(
-  function ProductBrowseRender({
-    meta,
-  }: { meta: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
+  async function ProductBrowseRender(_: RenderArgs) {
+    // `total_count` is fetched HERE (the route renders once) and passed to
+    // BrowseList as a prop — never a child's cell (see header note).
+    const meta = await magentoProductsCell.resolve({ pageSize: PAGE_SIZE, currentPage: 1 })
     const total = meta.value?.products?.total_count ?? 0
     const totalPages = total > 0 ? Math.ceil(total / PAGE_SIZE) : 1
     return (
@@ -178,10 +179,5 @@ export const ProductBrowsePage = parton(
       </>
     )
   },
-  {
-    match: "/magento/browse",
-    // `total_count` is fetched HERE (the route renders once) and passed to
-    // BrowseList as a prop — never a child's schema (see header note).
-    schema: () => ({ meta: magentoProductsCell.with({ pageSize: PAGE_SIZE, currentPage: 1 }) }),
-  },
+  { match: "/magento/browse" },
 )

@@ -11,18 +11,16 @@
  * [`./cursors-actions.ts`] for the merge.
  */
 
-import { parton, type RenderArgs, type ResolvedCell } from "@parton/framework"
+import { parton, type RenderArgs } from "@parton/framework"
 import { CursorLayer } from "../components/cursor-layer.tsx"
-import { cursorsCell, type CursorMap } from "./cursors-state.ts"
+import { cursorsCell } from "./cursors-state.ts"
 
 const CursorPresence = parton(
-  function CursorPresenceRender({ cursors }: { cursors: ResolvedCell<CursorMap> } & RenderArgs) {
+  async function CursorPresenceRender(_: RenderArgs) {
+    const cursors = await cursorsCell.resolve()
     return <CursorLayer cursors={cursors} />
   },
-  {
-    selector: "cursor-presence",
-    schema: () => ({ cursors: cursorsCell }),
-  },
+  { selector: "cursor-presence" },
 )
 
 export const CursorsPage = parton(

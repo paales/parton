@@ -49,15 +49,17 @@ const Intro = parton(
   },
 )
 
-// `Slow` self-sources `flavor` from the URL via its own `vary`, so a
-// targeted `#slow` refetch (`?partials=slow`) re-derives it against the
-// current request — no parent-passed prop, no refetch-time override.
-// The cache keys on the spec's fingerprint, which folds in `vary`, so
-// each flavor is a distinct cache entry. (Contrast `Intro`, which takes
-// `flavor` as a plain wrapper prop — fine for a child that only ever
-// re-renders with its parent, never on its own refetch.)
+// `Slow` self-sources `flavor` from the URL via a tracked
+// `searchParam` read, so a targeted `#slow` refetch (`?partials=slow`)
+// re-derives it against the current request — no parent-passed prop,
+// no refetch-time override. The cache keys on the spec's fingerprint,
+// which folds in the recorded read, so each flavor is a distinct cache
+// entry. (Contrast `Intro`, which takes `flavor` as a plain wrapper
+// prop — fine for a child that only ever re-renders with its parent,
+// never on its own refetch.)
 const Slow = parton(
-  async function CacheDemoSlowRender({ flavor }: { flavor: string } & RenderArgs) {
+  async function CacheDemoSlowRender(_: RenderArgs) {
+    const flavor = searchParam("flavor") ?? "vanilla"
     const slowRenderCount = bumpSlowRender()
     await delay(500)
     return (
@@ -80,10 +82,6 @@ const Slow = parton(
   {
     selector: "#slow",
     cache: { maxAge: 60 },
-    // Tracked in `schema` (runs before the fp), so `flavor` folds into the
-    // byte-cache key from render 1 — `searchParam` is the inline-tracking
-    // replacement for the old `vary`.
-    schema: () => ({ flavor: searchParam("flavor") ?? "vanilla" }),
     fallback: <div data-testid="slow-fallback">Loading slow…</div>,
   },
 )
@@ -102,7 +100,7 @@ const Clock = parton(
   { selector: "#clock", fallback: <div>Loading clock…</div> },
 )
 
-// Non-addressable (no selector/match/schema) — re-renders inline with
+// Non-addressable (no selector/match) — re-renders inline with
 // its parent, which is enough to show the live render count: a
 // non-addressable spec has no fp on the wire, so nothing ever skips it.
 const Footer = parton(function CacheDemoFooterRender() {
@@ -119,7 +117,8 @@ const Footer = parton(function CacheDemoFooterRender() {
 // ─── Outer wrapper — matches /cache-demo, threads flavor down ─────────
 
 export const CacheDemoPage = parton(
-  function CacheDemoRender({ flavor }: { flavor: string } & RenderArgs) {
+  function CacheDemoRender(_: RenderArgs) {
+    const flavor = searchParam("flavor") ?? "vanilla"
     return (
       <>
         <Intro flavor={flavor} />
@@ -129,8 +128,5 @@ export const CacheDemoPage = parton(
       </>
     )
   },
-  {
-    match: "/cache-demo",
-    schema: () => ({ flavor: searchParam("flavor") ?? "vanilla" }),
-  },
+  { match: "/cache-demo" },
 )

@@ -79,7 +79,8 @@ const MessagePartials = AVAILABLE_FILES.map((fileId) =>
 )
 
 export const ChatListPartial = parton(
-  function ChatListRender({ msgIds }: { msgIds: string[] } & RenderArgs) {
+  function ChatListRender(_: RenderArgs) {
+    const msgIds = parseMsgs(searchParam("msgs"))
     return (
       <div data-testid="chat-list" className="min-h-30 flex-1 overflow-y-auto px-3 py-2">
         {msgIds.length === 0 ? (
@@ -97,20 +98,14 @@ export const ChatListPartial = parton(
       </div>
     )
   },
-  {
-    selector: "#chat-list",
-    schema: () => ({ msgIds: parseMsgs(searchParam("msgs")) }),
-  },
+  { selector: "#chat-list" },
 )
 
 export const ChatOverlayPartial = parton(
-  function ChatOverlayRender({
-    open,
-    nextHref,
-  }: {
-    open: boolean
-    nextHref: string | null
-  } & RenderArgs) {
+  function ChatOverlayRender(_: RenderArgs) {
+    const msgIds = parseMsgs(searchParam("msgs"))
+    const open = searchParam("chat") === "open"
+    const nextHref = computeNextHref(msgIds)
     if (!open) return <ChatOpenPill />
     return (
       <aside
@@ -132,13 +127,7 @@ export const ChatOverlayPartial = parton(
       </aside>
     )
   },
-  {
-    selector: "#chat-overlay",
-    schema: () => {
-      const msgIds = parseMsgs(searchParam("msgs"))
-      return { open: searchParam("chat") === "open", nextHref: computeNextHref(msgIds) }
-    },
-  },
+  { selector: "#chat-overlay" },
 )
 
 export function ChatOverlay() {
