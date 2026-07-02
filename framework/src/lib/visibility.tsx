@@ -30,6 +30,13 @@ import type { VisibleOptions } from "./current-parton.ts"
  *  IntersectionObserver `rootMargin`. */
 const RUNWAY = "600px 0px"
 
+/** Max flipped ids per culling reload. A fast scroll across a large
+ *  cullable field (the website's chunk world) can flip hundreds of
+ *  partons in one coalesced flush; unbatched, the `?partials=` list
+ *  alone would blow the server's request-line limit. Remaining flips
+ *  stay in `changed` and ride the next serialized flush. */
+const FLUSH_BATCH = 48
+
 /** The subset of `FragmentInstance` (React 19.3) this module uses. The
  *  installed react-dom exposes these; `@types/react` may not type a
  *  Fragment `ref` yet, so we shape it locally and cast at the ref site. */
@@ -93,8 +100,9 @@ async function flush(): Promise<void> {
     transition.finished.then(schedule, schedule)
     return
   }
-  const targets = [...changed]
-  changed = new Set()
+  const all = [...changed]
+  const targets = all.slice(0, FLUSH_BATCH)
+  changed = new Set(all.slice(FLUSH_BATCH))
   inFlight = true
   try {
     await _windowNav().reload({

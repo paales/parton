@@ -131,6 +131,22 @@ export const FP_CAP_PER_VARIANT = 4;
  *  never stale) and re-enters the manifest by registering again. */
 export const CACHED_MANIFEST_CAP = 96;
 
+/** Cap on distinct ids retained in the client maps. A long journey
+ *  across a cullable field accumulates entries for every parton ever
+ *  visited; past the cap the OLDEST-registered ids are destroyed
+ *  (cache + fps) — they re-render cold on a return visit. Bounds
+ *  memory the same way the manifest cap bounds the URL. */
+export const CLIENT_POOL_CAP = 512;
+
+function evictOldest(): void {
+	while (_currentPageFingerprints.size > CLIENT_POOL_CAP) {
+		const oldest = _currentPageFingerprints.keys().next().value;
+		if (oldest === undefined) return;
+		_currentPageFingerprints.delete(oldest);
+		_currentPagePartials.delete(oldest);
+	}
+}
+
 export function registerClientPartial(
 	id: string,
 	matchKey: string,
@@ -154,6 +170,7 @@ export function registerClientPartial(
 	}
 	if (set.has(fingerprint)) return;
 	set.add(fingerprint);
+	evictOldest();
 	// Evict the oldest entries (insertion order) once the cap is
 	// reached. Without this, a live partial that re-renders every
 	// segment would inflate `?cached=` unboundedly.
