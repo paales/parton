@@ -40,8 +40,8 @@ export interface SpecCatalogEntry {
   labels: string[]
   /** The component returned by `parton(...)`. */
   Component: FC<SpecComponentProps>
-  /** Compiled URLPattern for the spec's `match` option, if any. */
-  matchPattern?: URLPattern
+  /** Compiled match gate for the spec's `match` option, if any. */
+  match?: import("./match.ts").CompiledMatch
   /** Render-fn display name (for debug). */
   displayName: string
   /** Author-declared via selector / schema / match. Auto-named specs

@@ -154,16 +154,9 @@ export interface RenderArgs {
   children?: ReactNode
 }
 
-/**
- * Pattern accepted by `match`. Either a pathname-only string
- * shorthand, or a full URLPattern init dict for declarative
- * matching across pathname / search / hostname / etc.
- *
- *   match: "/pokemon/:id"
- *   match: { pathname: "/p/:slug", search: "?variant=*" }
- *   match: { pathname: "/api/:v(v[0-9]+)/:resource" }
- */
-export type MatchPattern = string | URLPatternInit
+import { compileMatch, type CompiledMatch, type MatchPattern } from "./match.ts"
+
+export { compileMatch, type CompiledMatch, type MatchInit, type MatchPattern } from "./match.ts"
 
 export type PartialOptions<V> = Pick<
   InternalSpecConfig<V>,
@@ -846,10 +839,10 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
   // for any descendant that records no tracked reads.
   const depsKey = evalDepKeys(snap.deps, request)
   let params: Record<string, string> = {}
-  if (spec.matchPattern) {
-    const result = spec.matchPattern.exec(request.url)
-    if (result === null) return `${descId}:nomatch${invalidationKeyFromSnap(snap)}`
-    params = extractNamedParams(result)
+  if (spec.match) {
+    const verdict = spec.match.evaluate(request)
+    if (!verdict.matched) return `${descId}:nomatch${invalidationKeyFromSnap(snap)}`
+    params = verdict.params
   }
 
   // Match params + bound-cell args form the constraint surface for
@@ -896,77 +889,47 @@ function invalidationKeyFromSnap(snap: PartialSnapshot): string {
 }
 
 /**
- * Every distinct URLPattern any spec was constructed with. Populated
+ * Every distinct match gate any spec was constructed with. Populated
  * as a side effect of `parton(..., { match: ... })` via
- * `registerMatchPattern`. Consumed by `getRegisteredMatchPatterns()`
- * so authors can wire a 404 fallback that fires only when no
- * registered pattern matches the request URL, and by
- * `computeRouteKey` as the matched-set hash input.
+ * `registerMatch`. The URL-pattern halves feed
+ * `getRegisteredMatchPatterns()` (the 404-fallback helper) and
+ * `computeRouteKey` (the matched-set hash input); predicate and
+ * request-record fields gate specs but never split route buckets —
+ * the same rule search patterns already follow.
  */
-const registeredMatchPatterns: URLPattern[] = []
+const registeredMatches: CompiledMatch[] = []
 
-/** Signatures of every registered pattern — the dedup gate for
- *  `registerMatchPattern`. */
-const registeredPatternSignatures = new Set<string>()
+/** Signatures of every registered match — the dedup gate for
+ *  `registerMatch`. */
+const registeredMatchSignatures = new Set<string>()
 
 /**
- * Register a spec's compiled URLPattern, deduplicated by signature.
- * HMR re-executes a spec module and runs the constructor again with
- * the same pattern; appending a duplicate would change the
- * matched-signature list `computeRouteKey` hashes, shifting every
- * affected routeKey across the edit and orphaning the registry's
- * per-routeKey hints.
+ * Register a spec's compiled match, deduplicated by signature. HMR
+ * re-executes a spec module and runs the constructor again with the
+ * same gate; appending a duplicate would change the matched-signature
+ * list `computeRouteKey` hashes, shifting every affected routeKey
+ * across the edit and orphaning the registry's per-routeKey hints.
+ * Predicates sign by source text, so an edited predicate body counts
+ * as a new gate (and correctly shifts route keys).
  */
-function registerMatchPattern(pattern: URLPattern): void {
-  const signature = patternSignature(pattern)
-  if (registeredPatternSignatures.has(signature)) return
-  registeredPatternSignatures.add(signature)
-  registeredMatchPatterns.push(pattern)
-  // Adding a pattern invalidates the routeKey cache — a URL whose
+function registerMatch(compiled: CompiledMatch): void {
+  if (registeredMatchSignatures.has(compiled.signature)) return
+  registeredMatchSignatures.add(compiled.signature)
+  registeredMatches.push(compiled)
+  // Adding a gate invalidates the routeKey cache — a URL whose
   // matched-set previously excluded this pattern may now include it.
   routeKeyCache.clear()
 }
 
-/**
- * Compile a `MatchPattern` into a URLPattern with strict semantics:
- * the string form is the pathname pattern verbatim, no rewriting.
- * `match: "/inspect/*"` matches `/inspect/...` and NOT bare
- * `/inspect`; authors who want both write the URLPattern modifier
- * form `match: "/inspect{/*}?"` (or the URLPatternInit dict). This
- * keeps wildcard semantics aligned with URLPattern itself — there's
- * no implicit "optional trailing slash" magic the author has to know
- * about.
- */
-function compileMatchPattern(pattern: MatchPattern): URLPattern {
-  if (typeof pattern === "string") {
-    return new URLPattern({ pathname: pattern })
-  }
-  return new URLPattern(pattern)
-}
-
-/** Snapshot of every URLPattern currently registered. */
+/** Snapshot of every registered gate's URL-pattern half. Predicate-only
+ *  gates carry no URL structure and are excluded — they can't name a
+ *  page for the 404 fallback nor extract params for actions. */
 export function getRegisteredMatchPatterns(): readonly URLPattern[] {
-  return [...registeredMatchPatterns]
-}
-
-/**
- * Stable signature for a URLPattern — the concatenation of every
- * pattern component. URLPattern doesn't expose a single canonical
- * source string (the constructor accepts both string and dict forms),
- * so we read every component back and join with NUL. Two URLPatterns
- * built from the same input produce byte-identical signatures.
- */
-function patternSignature(pattern: URLPattern): string {
-  return [
-    pattern.protocol,
-    pattern.username,
-    pattern.password,
-    pattern.hostname,
-    pattern.port,
-    pattern.pathname,
-    pattern.search,
-    pattern.hash,
-  ].join("\u0000")
+  const out: URLPattern[] = []
+  for (const m of registeredMatches) {
+    if (m.urlPattern) out.push(m.urlPattern)
+  }
+  return out
 }
 
 /**
@@ -1024,9 +987,9 @@ export function computeRouteKey(url: string): string {
   const cached = routeKeyCache.get(base)
   if (cached !== undefined) return cached
   const matched: string[] = []
-  for (const pattern of registeredMatchPatterns) {
-    if (pattern.exec(base) !== null) {
-      matched.push(patternSignature(pattern))
+  for (const m of registeredMatches) {
+    if (m.urlPattern && m.urlPattern.exec(base) !== null) {
+      matched.push(m.signature)
     }
   }
   let result: string
@@ -1055,8 +1018,8 @@ export function _clearRouteKeyCache(): void {
 /** Test-only: wipe the registered-pattern set (and with it the
  *  routeKey cache). Production never unregisters a pattern. */
 export function _resetMatchPatterns(): void {
-  registeredMatchPatterns.length = 0
-  registeredPatternSignatures.clear()
+  registeredMatches.length = 0
+  registeredMatchSignatures.clear()
   routeKeyCache.clear()
 }
 
@@ -1076,7 +1039,7 @@ interface InternalSpec<V> {
   /** Compiled URLPattern for `options.match`, or `undefined` when
    *  the spec has no match. Compiled once at constructor time so
    *  every render-phase `exec` is cheap. */
-  matchPattern?: URLPattern
+  match?: CompiledMatch
   Render: (props: V & RenderArgs) => ReactNode
   /** True iff the author explicitly declared at least one of
    *  `selector`, `schema`, or `match`. Non-addressable specs (none of
@@ -1103,7 +1066,7 @@ const ROOT_MATCH_KEY = hash(stableStringify({}))
  *    `/pokemon/1` and `/pokemon/2` get distinct keys.
  *  - Spec has no own named params → walk `parent.path` outer-to-inner
  *    (in reverse: nearest first) and find the closest ancestor in the
- *    catalog whose `matchPattern` produces named params on the current
+ *    catalog whose match produces named params on the current
  *    URL. Hash those. Descendants of `/pokemon/:id` (Hero, Stats, …)
  *    share that variant identity even though their own bodies have no
  *    match.
@@ -1117,22 +1080,20 @@ const ROOT_MATCH_KEY = hash(stableStringify({}))
  * matchKey as the originating streaming render.
  */
 export function deriveMatchKey(
-  ownMatchPattern: URLPattern | undefined,
+  ownMatch: CompiledMatch | undefined,
   ownParams: Record<string, string>,
   parentPath: readonly string[],
   url?: string,
 ): string {
-  if (ownMatchPattern && Object.keys(ownParams).length > 0) {
+  if (ownMatch && Object.keys(ownParams).length > 0) {
     return hash(stableStringify(ownParams))
   }
   const requestUrl = url ?? getRequest().url
   for (let i = parentPath.length - 1; i >= 0; i--) {
     const ancestor = getSpecById(parentPath[i])
-    if (!ancestor?.matchPattern) continue
-    const result = ancestor.matchPattern.exec(requestUrl)
-    if (!result) continue
-    const ancestorParams = extractNamedParams(result)
-    if (Object.keys(ancestorParams).length === 0) continue
+    if (!ancestor?.match) continue
+    const ancestorParams = ancestor.match.extractParams(requestUrl)
+    if (ancestorParams === null || Object.keys(ancestorParams).length === 0) continue
     return hash(stableStringify(ancestorParams))
   }
   return ROOT_MATCH_KEY
@@ -1369,10 +1330,10 @@ function createSpecComponent<V>(
     // the frame's URL — so a spec with `match: "/cart/open"` placed in a
     // cart frame routes on the frame.
     let params: Record<string, string> = {}
-    if (spec.matchPattern) {
-      const result = spec.matchPattern.exec(ourRequest.url)
-      if (result === null) return emitParkedKeepalive(id, keepalive, requestState)
-      params = extractNamedParams(result)
+    if (spec.match) {
+      const verdict = spec.match.evaluate(ourRequest)
+      if (!verdict.matched) return emitParkedKeepalive(id, keepalive, requestState)
+      params = verdict.params
     }
     // Stamp the self-context now that the frame-resolved request + match
     // params are known — server-hooks (`cookie()` / `searchParam()` /
@@ -1393,7 +1354,7 @@ function createSpecComponent<V>(
     //   - A spec with its OWN named match params hashes them — so
     //     `/pokemon/1` and `/pokemon/2` get distinct keys.
     //   - A spec WITHOUT named match params walks parent.path to
-    //     find the closest ancestor whose matchPattern has named
+    //     find the closest ancestor whose match has named
     //     params on the current (frame-resolved) URL, and inherits
     //     that hash — so descendants of `/pokemon/:id` (Hero, Stats,
     //     …) share the URL-derived variant identity even though their
@@ -1406,7 +1367,7 @@ function createSpecComponent<V>(
     // `parent.matchKey` through PartialCtx) keeps partial-refetch
     // working: the catalog lookup uses `parent.path` from the
     // reconstructed snapshot, no extra state to thread.
-    const matchKey = deriveMatchKey(spec.matchPattern, params, parent.path, ourRequest.url)
+    const matchKey = deriveMatchKey(spec.match, params, parent.path, ourRequest.url)
 
     // ── Request-derived surface ──
     // Match params are the only pre-declared request dimension — they
@@ -2046,8 +2007,8 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   Render: (props: V & RenderArgs) => ReactNode,
   options: InternalSpecConfig<V>,
 ): SpecComponent<Extra, Prettify<V & RenderArgs>> {
-  const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
-  if (matchPattern) registerMatchPattern(matchPattern)
+  const match = options.match ? compileMatch(options.match) : undefined
+  if (match) registerMatch(match)
 
   // Selector parsing: flat labels, no unique/shared distinction. The
   // spec catalog id (`spec.id`) is the FIRST label. Auto-derives from
@@ -2074,7 +2035,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
     type,
     parsed,
     options,
-    matchPattern,
+    match,
     Render,
     addressable,
   }
@@ -2086,7 +2047,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
     id,
     labels: parsed.labels,
     Component: baseComponent as unknown as FC<SpecComponentProps>,
-    matchPattern,
+    match,
     displayName:
       (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
     addressable,
