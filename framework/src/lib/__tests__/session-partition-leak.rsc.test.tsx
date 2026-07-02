@@ -1,6 +1,6 @@
 /**
  * Session-partition isolation — a PERSISTENT cell partitioned on
- * `vary: ({session}) => ({sid: session.id})` must NOT route distinct
+ * `partition: ({session}) => ({sid: session.id})` must NOT route distinct
  * anonymous (no-cookie) visitors to a single shared partition.
  *
  * `session.id` is the empty string for any request that arrives with no
@@ -53,7 +53,7 @@ describe("persistent cell partitioned on session.id — anonymous isolation", ()
     const notes = localCell({
       id: "test.session.notes",
       shape: "string",
-      vary: ({ session }) => ({ sid: session.id }),
+      partition: ({ session }) => ({ sid: session.id }),
       initial: "",
     })
 
@@ -73,7 +73,7 @@ describe("persistent cell partitioned on session.id — anonymous isolation", ()
     const notes = localCell({
       id: "test.session.same-request",
       shape: "string",
-      vary: ({ session }) => ({ sid: session.id }),
+      partition: ({ session }) => ({ sid: session.id }),
       initial: "",
     })
 
@@ -91,7 +91,7 @@ describe("persistent cell partitioned on session.id — anonymous isolation", ()
     const notes = localCell({
       id: "test.session.resolved",
       shape: "string",
-      vary: ({ session }) => ({ sid: session.id }),
+      partition: ({ session }) => ({ sid: session.id }),
       initial: "",
     })
 
@@ -113,7 +113,7 @@ describe("persistent cell partitioned on session.id — anonymous isolation", ()
     const notes = localCell({
       id: "test.session.per-user",
       shape: "string",
-      vary: ({ session }) => ({ sid: session.id }),
+      partition: ({ session }) => ({ sid: session.id }),
       initial: "",
     })
 
@@ -152,7 +152,7 @@ describe("dev warning — unresolved persistent partition routed to ephemeral", 
     const notes = localCell({
       id: "test.session.warn-once",
       shape: "string",
-      vary: ({ session }) => ({ sid: session.id }),
+      partition: ({ session }) => ({ sid: session.id }),
       initial: "",
     })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
@@ -180,7 +180,7 @@ describe("dev warning — unresolved persistent partition routed to ephemeral", 
     const notes = localCell({
       id: "test.session.warn-resolved",
       shape: "string",
-      vary: ({ session }) => ({ sid: session.id }),
+      partition: ({ session }) => ({ sid: session.id }),
       initial: "",
     })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})

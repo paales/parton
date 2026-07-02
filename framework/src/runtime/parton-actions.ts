@@ -19,7 +19,7 @@
  *   2. Look up the parton's schema callback in the schema registry and
  *      re-run it — tracked hooks read the action's request; every cell
  *      gets its value read from storage at the partition derived from
- *      the cell's vary (scoped cells: matchParams or descriptor.varyFn
+ *      the cell's vary (scoped cells: matchParams or descriptor.partitionFn
  *      output; module cells: their own vary against the action's
  *      request scope).
  *   3. Build the handler scope: match params + resolved schema.
@@ -50,7 +50,7 @@ import {
   isScopedCellDescriptor,
   makeScopedCellFactories,
   type CellInterface,
-  type CellVaryScope,
+  type CellPartitionScope,
   type ResolvedCell,
   type ScopedCellDescriptor,
 } from "../lib/cell.ts"
@@ -74,11 +74,11 @@ function headersToRecord(h: Headers): Record<string, string> {
   return out
 }
 
-/** Build a `CellVaryScope` from the current request context. Used to
+/** Build a `CellPartitionScope` from the current request context. Used to
  *  resolve module-scope cells nested inside a parton's schema (those
  *  partition via their own `vary` against the request scope, same as
  *  outside a schema). */
-function buildCellVaryScope(): CellVaryScope {
+function buildCellPartitionScope(): CellPartitionScope {
   const request = getRequest()
   const url = new URL(request.url)
   return {
@@ -132,8 +132,8 @@ function resolveSchemaForAction(
     if (isScopedCellDescriptor(val)) {
       const descriptor = val as ScopedCellDescriptor<unknown>
       const cell = finalizeScopedCell(descriptor, partonId, key)
-      const partitionVary = descriptor.varyFn
-        ? descriptor.varyFn(matchParams as never)
+      const partitionVary = descriptor.partitionFn
+        ? descriptor.partitionFn(matchParams as never)
         : matchParams
       const partitionKey = computeScopedCellPartitionKey(descriptor, matchParams)
       const stored = cellStorageForArgs(cell, partitionVary).read(getScope(), cell.id, partitionKey)
@@ -143,8 +143,8 @@ function resolveSchemaForAction(
       cellsByKey.set(key, resolvedCell)
     } else if (isModuleCell(val)) {
       const c = val as CellInterface<unknown>
-      const cellScope = buildCellVaryScope()
-      const cellArgs = c.vary(cellScope)
+      const cellScope = buildCellPartitionScope()
+      const cellArgs = c.partition(cellScope)
       const partitionKey = computeCellPartitionKey(c, cellScope)
       const stored = cellStorageForArgs(c, cellArgs).read(getScope(), c.id, partitionKey)
       const value = stored === undefined ? c.defaultValue : stored
@@ -161,14 +161,14 @@ function resolveSchemaForAction(
   // without a render. Schema wins if a key is somehow declared both ways.
   const inlineCells = getInlineCellsForParton(partonId)
   if (inlineCells) {
-    const inlineScope = buildCellVaryScope()
+    const inlineScope = buildCellPartitionScope()
     for (const [key, rec] of inlineCells) {
       if (cellsByKey.has(key)) continue
       const cell = finalizeScopedCell(rec.descriptor, partonId, key)
       // Re-derive a `vary`-partitioned cell against THIS request (the
       // action's session), so a per-session cell resolves at the caller's
       // partition — not the last render's recorded one.
-      const partition = rec.varyFn ? rec.varyFn(inlineScope) : rec.partition
+      const partition = rec.partitionFn ? rec.partitionFn(inlineScope) : rec.partition
       const partitionKey = computePartitionKeyFromArgs(partition)
       const stored = cellStorageForArgs(cell, partition).read(getScope(), cell.id, partitionKey)
       const value = stored === undefined ? cell.defaultValue : stored

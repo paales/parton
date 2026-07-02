@@ -91,7 +91,7 @@ export {
   type CellShape,
   type CellShapeSpec,
   type CellValue,
-  type CellVaryScope,
+  type CellPartitionScope,
   type LocalCellOpts,
   type ResolvedCell,
   type ScopedCellDescriptor,

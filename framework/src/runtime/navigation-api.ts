@@ -213,7 +213,7 @@ export interface FrameworkReloadOptions extends NavigationReloadOptions {
   signal?: AbortSignal
   /** Extra query params appended to the REFETCH url only — never the
    *  page url, never persisted. They reach the re-rendered specs through
-   *  `vary`'s `search`, the same place `?cached=` rides. Use this to send
+   *  tracked `searchParam()` reads, the same place `?cached=` rides. Use this to send
    *  ephemeral per-request view state (a scroll anchor, a visible set)
    *  that should travel with the refetch but not pollute or outlive it.
    *
@@ -221,7 +221,7 @@ export interface FrameworkReloadOptions extends NavigationReloadOptions {
    *  browser entry) must strip these param names, or a refetch carrying
    *  them keys to a different page and its commit is dropped as stale.
    *  They are NOT added to `FRAMEWORK_URL_PARAMS` (that would strip them
-   *  before `vary` ever sees them). */
+   *  before any tracked read ever sees them). */
   params?: Record<string, string>
 }
 

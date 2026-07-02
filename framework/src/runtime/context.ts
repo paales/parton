@@ -4,8 +4,8 @@
  * Minimal ALS surface — just the incoming Request and the outgoing
  * Set-Cookie accumulator. No tracked accessors; no per-Partial
  * manifest, frame-scope, or CMS-scope cells. Specs declare their
- * dependencies via `vary` (see `../lib/partial.tsx`); the request is
- * passed to vary explicitly, so no async-context propagation is needed
+ * dependencies via tracked reads (see `../lib/server-hooks.ts`); the
+ * request rides the parton self-context, so hooks read it directly
  * for dependency tracking.
  */
 
@@ -138,7 +138,7 @@ const _scheduledTaskKeys = new Set<string>()
  * `fn` runs, so the callback can re-schedule itself for a chained
  * timer pattern.
  *
- * Caller must be inside a request context (vary callback, render
+ * Caller must be inside a request context (schema callback, render
  * body, action body). Throws otherwise.
  */
 export function scheduleInScope(
@@ -149,7 +149,7 @@ export function scheduleInScope(
   const captured = requestContext.getStore()
   if (!captured) {
     throw new Error(
-      "scheduleInScope: must be called inside a request context (vary / render / action body)",
+      "scheduleInScope: must be called inside a request context (schema / render / action body)",
     )
   }
   const key = `${captured.scope}:${dedupKey}`
@@ -429,11 +429,11 @@ export function getFrameworkControl(): FrameworkControl | undefined {
  * Read a cookie from the current request, considering any Set-Cookies
  * added during this request's ALS scope.
  *
- * @internal Avoid in spec render / vary callbacks — vary receives a
+ * @internal Avoid in spec schema/render bodies — the `cookie()` hook is
  * pre-parsed `cookies` map in its scope, which is the supported
  * surface. This function stays available for server actions and
  * framework internals (session lookup, CMS runtime) that legitimately
- * read cookies outside the vary scope.
+ * the read surface there; this is for runtime plumbing.
  */
 export function readCookie(name: string): string | undefined {
   const store = getStore()
@@ -450,7 +450,7 @@ export function readCookie(name: string): string | undefined {
  * Parse the request's `Cookie` header into a record, overlaying any
  * `setCookie()` writes made earlier in the active request scope.
  *
- * Vary's `cookies` scope feeds off this. The overlay keeps vary
+ * The `cookie()` hook feeds off this. The overlay keeps reads
  * consistent with `readCookie`: a partial re-rendered immediately
  * after a server action calls `setCookie("cart_id", X) +
  * getServerNavigation().reload({selector: "cart"})` sees the new

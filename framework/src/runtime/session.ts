@@ -236,8 +236,9 @@ export function clearSessionFrame(path: readonly string[]): void {
 }
 
 /**
- * Bare session identity — the only session surface vary and cells
- * see. `vary: ({session}) => ({sid: session.id})` is the canonical
+ * Bare session identity — the only session surface the `session()`
+ * hook and cell partitions see.
+ * `partition: ({session}) => ({sid: session.id})` is the canonical
  * per-user partition pattern on a `localCell`.
  *
  * Empty string when no session cookie yet AND no write has triggered

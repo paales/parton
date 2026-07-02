@@ -205,7 +205,7 @@ export function param(name: string): string | undefined {
  * Read the current session identity and record it as an fp dependency,
  * so the parton re-renders when the session changes. The value is
  * the `__frame_sid`-cookie-backed id, or `""` for an anon request with no
- * session yet. Pair with a cell's `vary: ({session}) => ({sid})` to give
+ * session yet. Pair with a cell's `partition: ({session}) => ({sid})` to give
  * each session its own partition.
  */
 export function session(): { readonly id: string } {

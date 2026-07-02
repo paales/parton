@@ -28,7 +28,6 @@ export type CursorMap = Record<string, Cursor>
 export const cursorsCell = localCell({
   id: "cursors",
   shape: "opaque",
-  vary: () => ({}),
   initial: {} as CursorMap,
   deferred: true,
 })

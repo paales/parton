@@ -44,8 +44,8 @@ Use a cell when:
 - The state isn't shareable (so it doesn't belong in a URL) but is
   authoritative on the server.
 - The state should fan out across all viewers in its partition (a
-  cell with `vary: ({session}) => ({sid: session.id})` reaches every
-  tab the user has open).
+  cell with `partition: ({session}) => ({sid: session.id})` reaches
+  every tab the user has open).
 - Multiple partons need to react to changes (cells auto-stamp
   `cell:<id>` on every reading parton's labels, so a `cell.set`
   refetches matching placements on the next render).
@@ -59,16 +59,20 @@ A cell's storage is keyed by `(id, partitionKey)` where partitionKey
 hashes the cell's **args** for this render. Args come from two
 sources:
 
-- **`vary` callback** on the cell — derives args from the request
-  scope (`session`, `cookies`, `headers`, `params`, etc.). Sync,
-  runs per-render. For request-derived partitioning (palette by
-  session, notes by URL param).
+- **`partition` option** on the cell — a fixed args record, or a
+  sync callback `(scope) => CellArgs` deriving args from the request
+  scope (`session`, `cookies`, `headers`, `params`, etc.). A callback
+  runs at render AND in an action's request — a per-session cell
+  resolves at the caller's partition inside actions too. Omitted →
+  one single slot (`{}`). For request-derived partitioning (palette
+  by session, notes by URL param).
 - **`.with(args)` at the call site** — author binds explicit args
   when placing a cell handle into a parton's schema or as a JSX
   prop. For placement-derived partitioning (cart line by item id).
 
-Both can compose: a cell with `vary` *and* `.with()` ends up with
-merged args. Vary's output forms the base; `.with()` overlays.
+Both can compose: a cell with `partition` *and* `.with()` ends up
+with merged args. The partition's output forms the base; `.with()`
+overlays.
 
 ## Three placement patterns
 
@@ -82,7 +86,7 @@ import { localCell, parton, type RenderArgs, type ResolvedCell } from "@parton/f
 export const palette = localCell({
   id: "palette",
   shape: { enum: ["light", "dark"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "dark",
 })
 
@@ -128,8 +132,8 @@ const ProductPage = parton(
 
 Wire id auto-derives as `<partonId>/<schemaKey>` (e.g.
 `product-page/notes`). Partition is the parton's match params by
-default (here `{ id }`); narrow via `vary: (params) => subset` on
-the descriptor.
+default (here `{ id }`); narrow via `partition: (params) => subset`
+on the descriptor.
 
 ### 3. Placement-bound cell, passed as a JSX prop
 
@@ -180,7 +184,7 @@ refetches. The others stay put.
 const palette = localCell({
   id: "palette",
   shape: { enum: ["light", "dark"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "dark",
 })
 
@@ -188,13 +192,13 @@ const cartItemCell = localCell({
   id: "cart-item",
   shape: "opaque",
   initial: null as CartItem | null,
-  // no `vary` — partition entirely from `.with()` at placement sites
+  // no `partition` — args entirely from `.with()` at placement sites
 })
 
 const cardName = localCell({
   id: "card-name",
   shape: "string",
-  vary: () => ({}),
+  partition: {},   // fixed record — one single slot (same as omitting)
   initial: "",
   // server-side canonicalisation: every write runs through this
   write: (raw) => raw.toUpperCase().replace(/[^A-Z ]/g, "").slice(0, 26),
@@ -208,7 +212,7 @@ const cardName = localCell({
 | `id` | Wire identifier. Required. |
 | `shape` | Runtime shape. `"string"` / `"number"` / `"boolean"` / `"opaque"` / `{enum: [...] as const}`. `"opaque"` accepts any value without validation — author owns the TS type. |
 | `initial` | Default value when storage is empty and no loader is configured. |
-| `vary` | Optional. `(scope) => CellArgs`. Output hashes into the partition key. Omit for a cell whose partition comes entirely from `.with()`. |
+| `partition` | Optional. A fixed `CellArgs` record, or a sync callback `(scope: CellPartitionScope) => CellArgs` for request-derived partitions. Output hashes into the partition key; a callback re-runs in an action's request too, so a per-session cell resolves at the caller's partition there. Omit for one single slot (`{}`) — or for a cell whose args come entirely from `.with()`. |
 | `load` | Optional async `(args) => T`. Runs on cold-start (storage miss) — result is validated, written to storage, then returned. Storage stays the source of truth thereafter. |
 | `write` | Optional `(T) => T`. Server-side canonicalisation. Runs after `validate` and before storage on every write. |
 | `deferred` | Optional `boolean`. When set, a write to this cell makes the action POST return **no re-render** — the new value propagates only over the open streaming connection. See [Deferred (stream-only) writes](#deferred-stream-only-writes). |
@@ -409,7 +413,7 @@ framework-tracked, pass it as its own top-level prop.
 ### Server-side via `cell.peek(args?)`
 
 `peek()` is a sync server-side read of stored state. The partition is
-`args` when given, otherwise derived from the cell's own `vary`
+`args` when given, otherwise derived from the cell's own `partition`
 against the active request. Returns `defaultValue` on miss. Does NOT
 trigger the loader. Useful inside actions.
 
@@ -430,8 +434,8 @@ slot requires naming it: `peek(partitionArgs)`.
 2. **schema phase** — tracked hooks record onto the dep set (they fold
    into THIS render's fp); a `park()` exits to the parked keepalive.
    For each cell entry:
-   - Module cell: run `cell.vary(scope)` → args; resolve via storage (or loader on miss); build `ResolvedCell`.
-   - Scoped descriptor: finalize → run descriptor's `vary` over the parton's match params → args; resolve.
+   - Module cell: run `cell.partition(scope)` → args; resolve via storage (or loader on miss); build `ResolvedCell`.
+   - Scoped descriptor: finalize → run descriptor's `partition` over the parton's match params → args; resolve.
    - Bound cell: use baked args; resolve.
    - Stamp `cell:<id>` onto labels; merge args into constraint surface.
 3. **props phase** — walk top-level JSX props for Cell / BoundCell:
@@ -451,15 +455,15 @@ For module-scope cells where partition is fully derived from request scope:
 import { palette } from "./state.ts"
 
 export async function reset() {
-  await palette.set("dark") // partition from palette.vary(currentRequest)
+  await palette.set("dark") // partition from palette.partition(currentRequest)
 }
 ```
 
-Optional `opts.vary` overrides the cell's own vary for cross-context
-mutations:
+Optional `opts.partition` overrides the cell's own partition for
+cross-context mutations:
 
 ```ts
-await productNotes.set("New notes", { vary: { productId: "abc" } })
+await productNotes.set("New notes", { partition: { productId: "abc" } })
 ```
 
 ### Bound write — `cell.with(args).set(value)`
@@ -489,7 +493,7 @@ loader just returns the aggregate:
 export const cartCell = localCell({
   id: "cart",
   shape: "opaque",
-  vary: ({ cookies }) => ({ cartId: cookies.cart_id }),
+  partition: ({ cookies }) => ({ cartId: cookies.cart_id }),
   initial: null as CartValue | null,
   storage: getEphemeralCellStorage,
   load: async ({ cartId }) => {
@@ -527,7 +531,7 @@ costs a render and a reconcile per keystroke.
 export const cursor = localCell({
   id: "cursor",
   shape: "opaque",
-  vary: () => ({}),                 // global — one shared partition
+  partition: {},                    // global — one shared partition
   initial: { x: 0, y: 0 } as { x: number; y: number },
   deferred: true,
 })
@@ -633,13 +637,13 @@ for the client-side batcher, optimistic value tracking, and the
 
 | What | Pattern |
 |---|---|
-| Featured product banner (admin-set) | `localCell({vary: () => ({}), ...})` |
-| User palette / locale | `localCell({vary: ({session}) => ({sid: session.id}), ...})` |
-| Cart contents (per session) | `localCell({vary: ({cookies}) => ({cartId: cookies.cart_id}), ...})` |
+| Featured product banner (admin-set) | `localCell({partition: {}, ...})` |
+| User palette / locale | `localCell({partition: ({session}) => ({sid: session.id}), ...})` |
+| Cart contents (per session) | `localCell({partition: ({cookies}) => ({cartId: cookies.cart_id}), ...})` |
 | Per cart-line | `cartItemCell.with({uid})` — placement-bound |
 | GraphQL-loaded product | `magentoQuery(\`query Product($sku){...}\`).with({sku})` |
 | Per-line entity, auto-hydrated + value-keyed set | `fragmentCell(LineFragment, {key: d => ({uid: d.uid})})` |
-| Add-to-cart form draft per product | `localCell({vary: ({session, params}) => ({sid, productId}), ...})` |
+| Add-to-cart form draft per product | `localCell({partition: ({session, params}) => ({sid, productId}), ...})` |
 
 What's NOT a cell:
 
@@ -650,9 +654,12 @@ What's NOT a cell:
 ## Composition with existing primitives
 
 - **tracked reads** — unchanged. A parton's request dimensions are
-  its tracked hook reads (fp surface). Cells have their own `vary`
-  callback — a different role: it derives the storage partition key
-  from the request scope, not the parton's fingerprint.
+  its tracked hook reads (fp surface). Cells keep a *declared*
+  `partition` callback — a partition must be re-derivable OUTSIDE a
+  render (action dispatch resolves cells against the caller's
+  request), so it can't be an in-body read. Its role differs too: it
+  derives the storage partition key from the request scope, not the
+  parton's fingerprint.
 - **selector** — cells auto-stamp `cell:<id>` on the parton's
   labels. Partition-scoped writes emit `cell:<id>?<args>`.
 - **invalidation registry** — `cell.set` calls

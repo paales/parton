@@ -1,12 +1,12 @@
 /**
  * Per-author editor preferences, modeled as cells. Each tweak
  * (palette / surface / attachment / device / tree style / left tab)
- * partitions per-session (`vary: ({session}) => ({sid: session.id})`)
+ * partitions per-session (`partition: ({session}) => ({sid: session.id})`)
  * so users carry their own settings across reloads via the session
  * cookie.
  *
  * Replaces the legacy `session.enum("name", values, default)` reads
- * in `shell.tsx`'s vary blocks and the `setSessionValue(name, value)`
+ * in `shell.tsx` and the `setSessionValue(name, value)`
  * action wired through `SessionToggleLink`. With cells:
  *
  *   - The parton's `schema: () => ({palette: editorPalette})` reads
@@ -24,41 +24,41 @@ import { localCell } from "@parton/framework"
 export const editorLeftTab = localCell({
   id: "editor-left-tab",
   shape: { enum: ["layers", "settings"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "layers",
 })
 
 export const editorTreeStyle = localCell({
   id: "editor-tree-style",
   shape: { enum: ["jsx", "plain"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "plain",
 })
 
 export const editorPalette = localCell({
   id: "editor-palette",
   shape: { enum: ["light", "dark"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "light",
 })
 
 export const editorSurface = localCell({
   id: "editor-surface",
   shape: { enum: ["light", "translucent", "solid"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "translucent",
 })
 
 export const editorAttachment = localCell({
   id: "editor-attachment",
   shape: { enum: ["floating", "docked"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "docked",
 })
 
 export const editorDevice = localCell({
   id: "editor-device",
   shape: { enum: ["desktop", "tablet", "mobile"] as const },
-  vary: ({ session }) => ({ sid: session.id }),
+  partition: ({ session }) => ({ sid: session.id }),
   initial: "desktop",
 })

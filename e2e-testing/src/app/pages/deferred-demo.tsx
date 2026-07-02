@@ -24,7 +24,7 @@ import { localCell, parton, type RenderArgs, type ResolvedCell } from "@parton/f
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 import { PingButton } from "../components/deferred-demo-ping.tsx"
 
-// Global, deferred broadcast counter. `vary: () => ({})` → one shared
+// Global, deferred broadcast counter. `partition: () => ({})` → one shared
 // partition across all viewers; `deferred: true` → writes ride the
 // stream, not the POST. Default `localCell` storage is process-global
 // (scope-bucketed, in-memory for test scopes), so a write on one
@@ -32,7 +32,6 @@ import { PingButton } from "../components/deferred-demo-ping.tsx"
 const pings = localCell({
   id: "demo.pings",
   shape: "number",
-  vary: () => ({}),
   initial: 0,
   deferred: true,
 })

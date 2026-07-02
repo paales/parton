@@ -4,7 +4,7 @@
  * value folds into its fingerprint via store-and-reread (the fp is
  * computed before Render, so a render's recorded keys are re-read at the
  * NEXT render). So changing `?q` shifts the tracked spec's fp — exactly
- * as `vary: ({search}) => ({q: search.q})` would — while a control spec
+ * as `partition: ({search}) => ({q: search.q})` would — while a control spec
  * that never tracks `q` is stable across the same change.
  *
  * `cookie()` shares the identical path (a different dep kind, read from
@@ -32,7 +32,7 @@ async function fpAt(url: string, node: React.ReactNode, id: string): Promise<str
 }
 
 // Tracks ?q via the server-hook — the auto-tracked replacement for
-// `vary: ({search}) => ({q: search.q})`.
+// `partition: ({search}) => ({q: search.q})`.
 const Tracked = parton(
   function TrackedRender(_: RenderArgs) {
     const q = searchParam("q")

@@ -149,7 +149,7 @@ describe("inline-cell action enumeration (increment 2)", () => {
         const draft = await localCell("draft", {
           shape: "string",
           initial: "",
-          vary: ({ session }) => ({ sid: session.id }),
+          partition: ({ session }) => ({ sid: session.id }),
         })
         return <span>{draft.value}</span>
       },

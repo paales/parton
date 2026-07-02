@@ -139,7 +139,7 @@ afterEach(() => {
 const counter = localCell({
   id: "parity.counter",
   shape: "number",
-  vary: () => ({}),
+  partition: () => ({}),
   initial: 7,
 })
 

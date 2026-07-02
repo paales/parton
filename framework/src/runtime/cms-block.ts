@@ -34,8 +34,8 @@ import {
 } from "./cms-runtime.ts"
 import { getRequest } from "./context.ts"
 
-/** Scope passed into `schema` callbacks. CMS reads live here; vary
- *  is request-dimensions-only. */
+/** Scope passed into `schema` callbacks. CMS reads live here;
+ *  request dimensions are tracked-hook reads. */
 export interface SchemaScope {
   cms: CmsReadSurface
 }
@@ -47,12 +47,12 @@ export interface SchemaScope {
  *  Omits PartialOptions.schema so block's CMS-shaped schema
  *  (`(scope) => S`) doesn't collide with the parton-level
  *  no-arg schema (`() => Record<string, unknown>`). Block's
- *  schema runs inside the cms-block wrapper's vary; parton-level
+ *  schema runs inside the cms-block wrapper's Render; parton-level
  *  schema would be redundant here. */
 export type BlockOptions<V, S> = Omit<PartialOptions<V>, "schema"> & {
   /** CMS field reads + child slots. Runs at render time with a real
    *  `cms` surface; the result is merged into Render's prop bag
-   *  alongside `vary`'s. The editor's catalog prerender invokes it
+   *  alongside the match params. The editor's catalog prerender invokes it
    *  with a tracking surface to discover content fields + child slot
    *  declarations. */
   schema?: (scope: SchemaScope) => S

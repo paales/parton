@@ -17,7 +17,7 @@
  * TWO POSTs (name + number sync, CVC ~50 ms later). Open the
  * network panel to see the difference.
  *
- * All three use `vary: () => ({})` so the state is global — a
+ * None declares a `partition`, so each is one global slot — a
  * second tab on /streaming-demo broadcasts via its open heartbeat.
  *
  * A per-batch latency simulator is installed via
@@ -26,7 +26,7 @@
  * than typing). Production never installs this.
  *
  * There's no `tick` cell — the live tick demo reads time directly
- * from `vary`'s scope and declares `expiresAt: time.nextSecond` so
+ * from the render clock and declares `expires(time().nextSecond)` so
  * the segment driver wakes on each second boundary. See
  * `streaming-demo.tsx`'s `LiveTick`.
  */
@@ -41,7 +41,6 @@ import {
 export const bumps = localCell({
   id: "demo.bumps",
   shape: "number",
-  vary: () => ({}),
   initial: 0,
 })
 
@@ -52,7 +51,6 @@ export const bumps = localCell({
 export const cardName = localCell({
   id: "demo.card.name",
   shape: "string",
-  vary: () => ({}),
   initial: "",
   write: transformName,
 })
@@ -60,7 +58,6 @@ export const cardName = localCell({
 export const cardNumber = localCell({
   id: "demo.card.number",
   shape: "string",
-  vary: () => ({}),
   initial: "",
   write: (raw) => formatNumberDigits(extractNumberDigits(raw)),
 })
@@ -68,7 +65,6 @@ export const cardNumber = localCell({
 export const cardCvc = localCell({
   id: "demo.card.cvc",
   shape: "string",
-  vary: () => ({}),
   initial: "",
 })
 
@@ -81,7 +77,6 @@ export const cardCvc = localCell({
 export const serverDelay = localCell({
   id: "demo.server-delay",
   shape: "boolean",
-  vary: () => ({}),
   initial: true,
 })
 
@@ -93,7 +88,6 @@ export const serverDelay = localCell({
 export const applyLocalTransform = localCell({
   id: "demo.apply-local-transform",
   shape: "boolean",
-  vary: () => ({}),
   initial: true,
 })
 

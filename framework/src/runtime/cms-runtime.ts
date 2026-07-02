@@ -7,7 +7,7 @@
  * whose match is satisfied by the current request, scores by
  * matched-dimension count, and cascade-merges fields.
  *
- * Read surface for `vary` callbacks:
+ * Sync read surface for block `schema` callbacks:
  *
  *   const cms = createCmsReadSurface(id, request)
  *   cms.text("headline")                       // "Welcome"
@@ -15,8 +15,8 @@
  *   cms.reference("featured", "product")       // string id | null
  *
  * Pure function of `(id, request)`. No ALS, no scope cells, no
- * tracking — the sync surface is what `vary` returns; that result IS
- * the dependency surface.
+ * tracking — the `cms:<contentKey>` dep re-reads the content hash per
+ * fold, so the read IS the dependency surface.
  */
 
 import React, { type ReactNode } from "react"
@@ -597,7 +597,7 @@ function readCookieRaw(request: Request, name: string): string | undefined {
   return match?.[1]
 }
 
-// ─── Sync read surface (passed into vary callbacks) ───────────────────
+// ─── Sync read surface (passed into block schema callbacks) ───────────
 
 const EMPTY_IMAGE = Object.freeze({ src: "", alt: "" })
 

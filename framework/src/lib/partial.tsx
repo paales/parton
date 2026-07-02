@@ -89,7 +89,7 @@ import {
   type BoundCell,
   type CellInterface,
   type CellArgs,
-  type CellVaryScope,
+  type CellPartitionScope,
   type ResolvedCell,
   type ScopedCellDescriptor,
   type ScopedCellFactories,
@@ -195,10 +195,10 @@ interface InternalSpecConfig<V> {
    *    (`cell.string({initial: ""})`) — finalized with wire id
    *    `<partonId>/<schemaKey>` and partitioned by the parton's match
    *    params (or a narrower subset via the descriptor's optional
-   *    `vary` callback).
+   *    `partition` callback).
    *  - a **module-scope cell handle** imported from elsewhere
-   *    (`localCell({id, vary, initial, ...})` at module scope) —
-   *    resolved via its own vary against the request scope.
+   *    (`localCell({id, partition, initial, ...})` at module scope) —
+   *    resolved via its own partition callback against the request scope.
    *  - any other value — passed through to Render's prop bag as-is.
    *
    *  Tracked hooks (`searchParam()`, `cookie()`, …) work here and fold
@@ -1423,13 +1423,13 @@ function createSpecComponent<V>(
     // ── Schema phase ──
     // Resolve declared deps (cell handles + scoped cell descriptors)
     // against the request scope (module cells) or the parton's own
-    // vary output (scoped cells). Each cell becomes a ResolvedCell<T>
+    // match params (scoped cells). Each cell becomes a ResolvedCell<T>
     // for Render's prop bag; the cell's `cell:<id>` label stamps onto
     // this spec so `refreshSelector` — and via it the fp-fold against
     // `queryMatchingTs` — fires when the cell mutates.
     //
     // Scoped cells (declared via the `{cell}` factory inside the
-    // schema callback): partition derived from the parton's vary
+    // schema callback): partition derived from the parton's match-param
     // output (`varyResult`), narrowed by the descriptor's own `vary`
     // if provided. Wire id auto-derives as `<partonId>/<schemaKey>`.
     // The resolved cell's `set` is bound to `__scopedCellWrite` with
@@ -1437,13 +1437,13 @@ function createSpecComponent<V>(
     // partition regardless of URL changes between render and call.
     //
     // Module cells (imported handles): partition derived from the
-    // cell's own `vary` against the request scope, same as before.
+    // cell's own partition callback against the request scope.
     let schemaResult: Record<string, unknown> = {}
     const cellsByKey = new Map<string, ResolvedCell<unknown>>()
     const cellIdByArgKey: Record<string, string> = {}
     const cellLabels: string[] = []
     /** Bound args from any cell resolution (schema OR props). Merged
-     *  with vary into the parton's effective constraint surface for
+     *  with the match params into the parton's effective constraint surface for
      *  invalidation matching — a `cell:<id>?itemId=X` selector only
      *  matches placements whose effective constraints include
      *  `itemId=X`. */
@@ -1452,7 +1452,7 @@ function createSpecComponent<V>(
      *  value. Sorted before hashing. */
     const resolutionParts: string[] = []
     let schemaKeyHash = ""
-    const cellScope: CellVaryScope = {
+    const cellScope: CellPartitionScope = {
       url: ourUrl,
       pathname: ourUrl.pathname,
       search: searchParamsToRecord(ourUrl.searchParams),
@@ -1475,15 +1475,15 @@ function createSpecComponent<V>(
         throw err
       }
       // Scoped-cell partitions derive from the match params (narrowed
-      // by a descriptor's own `vary` callback when declared).
+      // by a descriptor's own `partition` callback when declared).
       const partonVaryForCells = varyResult
       for (const key of Object.keys(raw)) {
         const val = raw[key]
         if (isScopedCellDescriptor(val)) {
           const descriptor = val as ScopedCellDescriptor<unknown>
           const cellHandle = finalizeScopedCell(descriptor, spec.id, key)
-          const partitionVary = descriptor.varyFn
-            ? descriptor.varyFn(partonVaryForCells as never)
+          const partitionVary = descriptor.partitionFn
+            ? descriptor.partitionFn(partonVaryForCells as never)
             : partonVaryForCells
           const partitionKey = computeScopedCellPartitionKey(descriptor, partonVaryForCells)
           const value = await resolveCellValue(cellHandle, partitionVary)
@@ -1512,7 +1512,7 @@ function createSpecComponent<V>(
           resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
         } else if (isModuleCell(val)) {
           const c = val as CellInterface<unknown>
-          const args = c.vary(cellScope)
+          const args = c.partition(cellScope)
           const partitionKey = hash(stableStringify(args))
           const value = await resolveCellValue(c, args)
           const resolved: ResolvedCell<unknown> = buildResolvedCell(c, value)
@@ -1559,7 +1559,7 @@ function createSpecComponent<V>(
         resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
       } else if (isModuleCell(val)) {
         const c = val as CellInterface<unknown>
-        const args = c.vary(cellScope)
+        const args = c.partition(cellScope)
         const partitionKey = hash(stableStringify(args))
         const value = await resolveCellValue(c, args)
         const resolved = buildResolvedCell(c, value)
@@ -1588,7 +1588,7 @@ function createSpecComponent<V>(
 
     // ── Actions phase ──
     // Each declared action becomes a `ResolvedAction` in Render's prop
-    // bag: bound server-action ref with the parton's vary output baked
+    // bag: bound server-action ref with the parton's match params baked
     // (partition bound at resolution time) plus a `writes` map of
     // argKey → cellId for the client's `usePartonAction` to wire
     // optimistic-aware cell updates.
@@ -1633,7 +1633,7 @@ function createSpecComponent<V>(
       Object.keys(extraProps).length > 0 ? `|props=${stableStringify(extraProps)}` : ""
     const varyKey = stableStringify(varyResult)
     // Fold matchKey into the structural fp so content-independent
-    // specs (no own match, no vary — e.g. a layout `<LazySpacer>`)
+    // specs (no own match — e.g. a layout `<LazySpacer>`)
     // still get distinct fps across variants of a match-bearing
     // ancestor. Without this, lazy-spacer at `/pokemon/1` and
     // `/pokemon/2` share an fp, the server fp-skips on the second
@@ -1643,13 +1643,13 @@ function createSpecComponent<V>(
     // collapses the layout instead of substituting in a spacer.
     // Fold in the latest `refreshSelector` ts that matches any of
     // this spec's labels AND whose constraints (if any) are a subset
-    // of vary inputs. Server-side `getServerNavigation().reload({selector})`
+    // of constraint inputs. Server-side `getServerNavigation().reload({selector})`
     // bumps the registry; partials carrying matching labels see their
     // fp shift on the next render, mismatching the client's cached fp,
     // and emit fresh content. No registry entries → 0 → no
     // contribution; same fp as before the registry existed.
     // Constraint surface for selector-constrained invalidation:
-    // merge vary output with bound args from any resolved cells
+    // merge match params with bound args from any resolved cells
     // (schema OR props). `cell:<id>?key=value` selectors match
     // partons whose merged constraints contain the key=value pair —
     // so partition-scoped writes only refetch matching placements.
@@ -1686,7 +1686,7 @@ function createSpecComponent<V>(
     const structuralFp = hash(`${ownStructuralFp}${descendantFold}`)
     const fp = hash(`${ownStructuralFp}${ambientFrameKey}${descendantFold}`)
 
-    // Non-addressable specs (no author-declared selector/vary/match)
+    // Non-addressable specs (no author-declared selector/schema/match)
     // don't ship an fp on the wire — they have no external refetch
     // handle, so the per-spec fp cycle (boundary prop + trailer entry
     // + client-side registration + next-nav `?cached=` triple) is
@@ -1748,7 +1748,7 @@ function createSpecComponent<V>(
     const coldRecordMissing =
       priorSnap == null && committedDepsEvidence(id) !== "depless"
     // TTL gate: a snapshot past its declared freshness boundary
-    // (`expires()` hook or vary's `expiresAt`) must not be served from
+    // (the `expires()` hook) must not be served from
     // the client's cache even when the fp matches — the boundary IS the
     // declaration that identical inputs stop being fresh at that time.
     const snapshotExpiresAt = priorSnap ? effectiveExpiresAt(priorSnap) : undefined
@@ -2123,20 +2123,19 @@ export function _buildPartial<V extends object>(
  * Type inference splits the Render function's props into three:
  *   1. framework-managed (`parent`, `children`) — always injected
  *      by the framework.
- *   2. vary-derived (`V`) — auto-inferred via `InferV<Opts>`. With
- *      `match` set, V defaults to the URL params (`Record<string,
- *      string>`); with `vary` declared, V is its return type.
+ *   2. framework-derived (`V`) — auto-inferred via `InferV<Opts>`:
+ *      match params (`ParseRoute`) + resolved schema + actions.
  *   3. call-site pass-through (`Extra`) — anything left over.
  *      Inferred from `Render`'s prop type minus the previous two.
  *
  * `Extra` is what the JSX call site has to supply (e.g.
- * `<HeroSpec id={pokemonId} />`). When `vary` (or the URL pattern)
- * already covers the entire surface, `Extra` is empty and the call
+ * `<HeroSpec id={pokemonId} />`). When the URL pattern + schema
+ * already cover the entire surface, `Extra` is empty and the call
  * site is just `<HeroSpec />`.
  *
  * The returned spec carries a phantom `.props` type — `typeof
  * Spec.props` resolves to the prop bag the framework supplies to
- * Render (vary-derived + RenderArgs), without re-typing.
+ * Render (framework-derived + RenderArgs), without re-typing.
  */
 export function parton<
   const Opts extends string | PartialOptions<object> = PartialOptions<object>,
@@ -2317,7 +2316,7 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
   if (!Component) return null
   // Replay the call-site props captured during the streaming render
   // (e.g. `<Slow flavor={…}>`). Request-dependent inputs flow through
-  // `vary` / `match` / cells, which re-resolve when this snapshot's
+  // tracked reads / `match` / cells, which re-resolve when this snapshot's
   // spec re-renders here.
   const props = (snap.props ?? {}) as Record<string, unknown>
   // ALWAYS pass the snapshot's id as `__instanceId`. createSpecComponent

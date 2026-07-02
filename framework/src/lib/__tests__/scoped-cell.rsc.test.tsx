@@ -59,7 +59,7 @@ describe("scoped cell — schema-callback factory", () => {
     expect(d.__scopedCellDescriptor).toBe(true)
     expect(d.shape).toEqual({ kind: "string" })
     expect(d.defaultValue).toBe("hello")
-    expect(d.varyFn).toBeUndefined()
+    expect(d.partitionFn).toBeUndefined()
   })
 
   it("finalizes into a CellInterface<T> with compound id `<partonId>/<schemaKey>`", () => {
@@ -139,7 +139,7 @@ describe("scoped cell — schema resolution in a parton", () => {
           sharedNotes: localCell({
             shape: "string",
             initial: "",
-            vary: (pv) => ({ productId: (pv as { id: string }).id }),
+            partition: (pv) => ({ productId: (pv as { id: string }).id }),
           }),
         }),
       },
@@ -161,7 +161,7 @@ describe("scoped cell — schema resolution in a parton", () => {
     const palette = moduleLocalCell({
       id: "test.coexist.palette",
       shape: { enum: ["light", "dark"] as const },
-      vary: () => ({}),
+      partition: () => ({}),
       initial: "light",
     })
 

@@ -43,13 +43,13 @@ against the registry uses `queryMatchingTs(labels, matchParams ∪
 boundArgs)` — a `cell:<id>?uid=X` write only refreshes placements
 whose effective constraints contain `uid=X`. Empty args fall back to
 bare `cell:<id>` (matches every placement of that cell, used for
-cells with no `vary` and no `.with()`).
+cells with no `partition` and no `.with()`).
 
 **Partition derivation in `writeOneCell`.** The args come from, in
-priority order: an explicit `partitionOverride.vary` (the
+priority order: an explicit `partitionOverride.partition` (the
 `.with(args).set` path) → the cell's `keyOf(value)` if present (value-keyed
 fragment cells: the identity lives in the value, so `cell.set(value)`
-needs no restated args) → `cell.vary(scope)` (request-derived). `keyOf` is
+needs no restated args) → `cell.partition(scope)` (request-derived). `keyOf` is
 set by `fragmentCell` from its `key` option and runs against the validated
 + `write`-transformed value.
 
@@ -133,7 +133,7 @@ fp of every parton reading the cell on the next render.
 The cell module handle (the module-singleton thing constructed via
 `localCell(...)`, `gqlCell(...)`, or `fragmentCell(...)`) is
 **distinct** from `ResolvedCell<T>`. The module handle carries
-`vary`, `defaultValue`, `validate`, `write`, `load`, `storage` (a
+`partition`, `defaultValue`, `validate`, `write`, `load`, `storage` (a
 lazy getter, see below), plus `with(args)` returning a
 `BoundCell<T>`. The resolved cell carries `value` (and `set`, the
 bound action ref the module handle also exposes). A `BoundCell<T>`
@@ -210,13 +210,13 @@ On each render the wrapper:
 2. **schema phase** — tracked hooks record onto the parton's dep set
    (folding into THIS render's fp); a `park()` exits to the parked
    keepalive. For each entry in the schema record:
-   - **Module cell**: run `cell.vary(scope)` → args; await
+   - **Module cell**: run `cell.partition(scope)` → args; await
      `resolveCellValue(cell, args)` (storage hit returns sync;
      storage miss + `load` defined runs loader). Build
      `ResolvedCell`. Stamp `cell:<id>` label. Add args to
      `boundArgsMerged`.
    - **Scoped descriptor**: finalize → compute partition from
-     descriptor's `vary` over the parton's match params → resolve.
+     descriptor's `partition` over the parton's match params → resolve.
    - **Bound cell** (a `BoundCell<T>` in the schema record): use
      baked args directly. Same resolution.
 3. **Props phase** — walk top-level JSX props:
@@ -463,7 +463,7 @@ and disappear when the process exits.
 ```json
 {
   "demo.bumps": {
-    "<hash-of-empty-vary>": 5
+    "<hash-of-empty-partition>": 5
   },
   "palette": {
     "<hash-of-{sid:abc123}>": "dark",
@@ -477,8 +477,9 @@ and disappear when the process exits.
 ```
 
 Top-level keys = cell ids. Inner keys =
-`hash(stableStringify(cell.vary(scope)))` — so `vary: () => ({})`
-collapses to one constant partition slot.
+`hash(stableStringify(cell.partition(scope)))` — so an omitted
+`partition` (or a fixed `partition: {}`) collapses to one constant
+partition slot.
 
 ### Debounced flush
 

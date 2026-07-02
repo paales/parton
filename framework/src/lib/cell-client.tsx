@@ -56,7 +56,7 @@ import type { ResolvedAction } from "./parton-actions.ts"
 interface QueuedWrite {
   id: string
   value: unknown
-  partition: { vary?: Record<string, unknown> } | undefined
+  partition: { partition?: Record<string, unknown> } | undefined
   resolve: () => void
   reject: (err: unknown) => void
 }
@@ -141,7 +141,7 @@ function subscribe(cb: () => void): () => void {
 export interface ClientCell<T> {
   readonly value: T
   readonly serverValue: T
-  readonly set: (value: T, opts?: { vary?: Record<string, unknown> }) => Promise<void>
+  readonly set: (value: T, opts?: { partition?: Record<string, unknown> }) => Promise<void>
   readonly input: (opts?: CellInputOpts) => CellInputBindings
   /** Read the current input value via the bound ref. Returns the DOM
    *  `<input>`'s `value` when the bindings are attached, falling back
@@ -218,14 +218,14 @@ export function useCell<T>(cell: ResolvedCell<T>): ClientCell<T> {
   const value = (hasPending ? latestSentByCell.get(id) : cell.value) as T
   const partition = cell.partition
   const set = useCallback(
-    (v: T, opts?: { vary?: Record<string, unknown> }) => {
+    (v: T, opts?: { partition?: Record<string, unknown> }) => {
       // Scoped cells carry their partition on the wire (bound at parton
       // resolution time). Default the batcher's per-entry `partition`
       // field to that partition so writes land on the right slot
       // without the caller having to thread it through. Caller-supplied
-      // `opts.vary` overrides — useful for the rare cross-partition
+      // `opts.partition` overrides — useful for the rare cross-partition
       // write from a controlled input bound to a scoped cell.
-      const effectiveOpts = opts ?? (partition ? { vary: partition } : undefined)
+      const effectiveOpts = opts ?? (partition ? { partition } : undefined)
       return enqueue(id, v, effectiveOpts)
     },
     [id, partition],
@@ -314,7 +314,7 @@ export function useCell<T>(cell: ResolvedCell<T>): ClientCell<T> {
 function enqueue(
   cellId: string,
   value: unknown,
-  opts: { vary?: Record<string, unknown> } | undefined,
+  opts: { partition?: Record<string, unknown> } | undefined,
 ): Promise<void> {
   incrementPending(cellId, value)
   return new Promise<void>((resolve, reject) => {

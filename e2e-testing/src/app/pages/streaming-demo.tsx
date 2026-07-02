@@ -3,12 +3,12 @@
  *
  * Four live demonstrations:
  *
- *  1. `<LiveTick>` — pure time-vary partial. Its `vary` reads
- *     `time` from scope, buckets it by second, and declares
- *     `expiresAt: time.nextSecond`. The framework's `<LivePageHeartbeat>`
+ *  1. `<LiveTick>` — pure time-driven partial. Its body reads the
+ *     render clock, buckets it by second, and declares
+ *     `expires(time().nextSecond)`. The framework's `<LivePageHeartbeat>`
  *     holds a streaming connection open; the segment driver wakes
- *     at each second boundary, vary recomputes, the fp moves, and
- *     a fresh segment ships. No cell, no setInterval, no autostart.
+ *     at each second boundary and ships a fresh lane. No cell, no
+ *     setInterval, no autostart.
  *
  *  2. `<BumpCounter>` — `bumps` cell read via schema. The Bump
  *     button (rendered inside the same parton) calls
@@ -44,7 +44,7 @@ import {
   serverDelay,
 } from "./streaming-demo-state.ts"
 
-// ── Live tick partial — time-vary, no cell ──────────────────────────
+// ── Live tick partial — time-driven, no cell ────────────────────────
 
 const LiveTick = parton(
   function LiveTickRender(_: RenderArgs) {
@@ -135,14 +135,14 @@ export const StreamingDemoPage = parton(
         <Card className="p-5">
           <CardHeader className="px-0">
             <CardTitle className="text-base">
-              1. live tick (time-vary, framework heartbeat)
+              1. live tick (time-driven, framework heartbeat)
             </CardTitle>
           </CardHeader>
           <CardContent className="px-0">
             <p className="mb-2 text-xs text-muted-foreground">
-              <code>vary</code> reads <code>time.nextSecond</code> as its <code>expiresAt</code>.
-              The framework's heartbeat holds the page's RSC connection open; the segment driver
-              wakes at each second boundary and re-renders, shipping the next tick as a new segment.
+              The body declares <code>expires(time().nextSecond)</code>. The framework's
+              heartbeat holds the page's RSC connection open; the segment driver wakes at each
+              second boundary and re-renders, shipping the next tick as a new lane.
             </p>
             <LiveTick />
           </CardContent>
@@ -202,7 +202,7 @@ export const StreamingDemoPage = parton(
               / 100–200 ms / 400–500 ms), gated by the <code>serverDelay</code> cell so the toggle
               broadcasts the choice across tabs. Open in a second tab to watch the authoritative
               panel update from the other tab's typing — every cell is global (
-              <code>vary: () =&gt; ({"{}"})</code>), broadcast rides the open heartbeat stream.
+              <code>partition: () =&gt; ({"{}"})</code>), broadcast rides the open heartbeat stream.
             </p>
             <CardFormPartial />
           </CardContent>
