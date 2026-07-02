@@ -52,6 +52,7 @@ import {
   type ResolvedCell,
   type ScopedCellDescriptor,
 } from "../lib/cell.ts"
+import { _runWithCurrentParton, type CurrentParton } from "../lib/current-parton.ts"
 import { ROOT, type PartialCtx } from "../lib/partial-context.ts"
 import { _isParkSignal } from "../lib/server-hooks.ts"
 import { getRequest, getScope, parseCookies } from "./context.ts"
@@ -252,16 +253,22 @@ function buildHandlerScope(
 
 /**
  * Generic action dispatcher. Bound at parton-resolution time as
- * `__partonAction.bind(null, actionId, partonVary)`; the client's
- * action invocation lands here with `(actionId, partonVary, args)`.
+ * `__partonAction.bind(null, actionId, partonVary, matchParams)`; the
+ * client's action invocation lands here with `(actionId, partonVary,
+ * matchParams, args)`.
  *
- * Module-level callers (`Spec.actions.X(args, {vary?})`) resolve
- * partonVary first via the registry's lookup helper, then call here
- * directly.
+ * The dispatch runs under a stamped `CurrentParton` (see
+ * `_runWithCurrentParton`): id = the bound parton, request = the
+ * action's OWN request, params = the baked match-param record. Tracked
+ * hooks inside the schema callback (or the handler) therefore read the
+ * caller's current cookies/session — strictly more correct than
+ * replaying render-time values. The dep/tag sets it accumulates go
+ * nowhere: an action registers no snapshot.
  */
 export async function __partonAction(
   actionId: string,
   partonVary: Record<string, unknown>,
+  matchParams: Record<string, string>,
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const handler = getActionById(actionId)
@@ -269,8 +276,17 @@ export async function __partonAction(
   const slashIdx = actionId.indexOf("/")
   if (slashIdx < 0) throw new Error(`malformed action id (expected partonId/actionName): "${actionId}"`)
   const partonId = actionId.slice(0, slashIdx)
+  const self: CurrentParton = {
+    id: partonId,
+    tags: new Set(),
+    deps: new Set(),
+    request: getRequest(),
+    params: matchParams ?? {},
+    phase: "schema",
+    wakeHints: {},
+  }
 
-  return await runInvalidationTransaction(async () => {
+  return await _runWithCurrentParton(self, () => runInvalidationTransaction(async () => {
     const { resolved, cellsByKey } = resolveSchemaForAction(partonId, partonVary)
     const pending = new Map<string, PendingWrite>()
     const scope = buildHandlerScope(partonVary, resolved, cellsByKey, args, pending)
@@ -316,5 +332,5 @@ export async function __partonAction(
     }
 
     return handlerResult
-  })
+  }))
 }

@@ -1756,15 +1756,22 @@ function createSpecComponent<V>(
     const actionsResult: Record<string, ResolvedAction<unknown, unknown>> = {}
     if (opts.actions) {
       const partonVaryForActions = (varyResult ?? {}) as Record<string, unknown>
+      // Match params bake separately from the vary output: the action
+      // POST's URL doesn't carry the route, so the dispatcher can't
+      // re-derive WHICH variant's cells to resolve — params are the one
+      // thing that must ride the ref. Everything request-shaped
+      // (cookies, session) the dispatcher reads fresh off the action's
+      // own request via the stamped CurrentParton.
       for (const actionName of Object.keys(opts.actions)) {
         const actionId = `${spec.id}/${actionName}`
         const ref = (
           __partonAction as unknown as (
             actionId: string,
             partonVary: Record<string, unknown>,
+            matchParams: Record<string, string>,
             args: unknown,
           ) => Promise<unknown>
-        ).bind(null, actionId, partonVaryForActions)
+        ).bind(null, actionId, partonVaryForActions, params)
         actionsResult[actionName] = {
           __partonAction: true,
           ref: ref as ResolvedAction<unknown, unknown>["ref"],
