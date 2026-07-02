@@ -249,7 +249,7 @@ function resolveFrameRequest(framePath: readonly string[], baseRequest: Request)
  * must run BEFORE the trailer computation (the recompute reads the
  * committed canonical store), so callers should compose by inlining
  * the commit step into the same flush callback. See
- * `e2e-testing/src/entry.rsc.tsx`.
+ * `../entry/rsc.tsx`.
  *
  * @param stream  The Flight stream from `renderToReadableStream`.
  * @param commit  The registry-commit handle (called inside flush before
@@ -508,8 +508,8 @@ export function emitNextSegmentDelimiter(
 
 /** Emit a `url`-update trailer entry. Body is JSON describing the
  *  URL push (e.g. `{ window?: string, frames?: Record<name, url> }`).
- *  Client-side `entry.browser.tsx` applies the push before committing
- *  the segment's setPayload. */
+ *  The client bootstrap (`../entry/browser.tsx`) applies the push
+ *  before committing the segment's setPayload. */
 export function emitUrlUpdate(
   controller: TransformStreamDefaultController<Uint8Array> | ReadableStreamDefaultController<Uint8Array>,
   update: { window?: string; frames?: Record<string, string>; history?: "push" | "replace" },

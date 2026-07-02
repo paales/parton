@@ -38,7 +38,6 @@
     "babel-plugin-react-compiler": "^1.0.0",
     "gql.tada": "^1.9.2",
     "playwright": "^1.59.1",
-    "rsc-html-stream": "^0.0.7",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.3",
     "vite": "^8.1.0"

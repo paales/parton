@@ -262,7 +262,7 @@ Flight client may throw a stream error (`"Connection closed."`) rather
 than a clean `AbortError` — thrown while rendering the superseded
 payload, so it lands in an error boundary, not a `.catch`. The
 framework's `<NavigationErrorBoundary>` (wrapped around the rendered
-payload root in the host's browser entry, *inside* the component that
+payload root by the browser bootstrap, *inside* the component that
 owns the payload state) recovers from these transient tears in place —
 remounting against the superseding navigation's payload — so a fast
 click-through or back/forward never strands the app on the global

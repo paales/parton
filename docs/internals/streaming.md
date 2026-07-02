@@ -45,8 +45,8 @@ any selector-routing logic that could replace it.
    (time-based) or **resolves a cell** — `cell.resolve()` in its body
    or a cell-bearing prop (write-driven via
    `refreshSelector("cell:<id>")`).
-2. **The app's browser entry mounts `<LivePageHeartbeat />`**
-   near the React root. After hydration it holds a `?live=1`
+2. **The browser bootstrap mounts `<LivePageHeartbeat />`** near
+   the React root (`bootBrowser()` in `framework/src/entry/browser.tsx`). After hydration it holds a `?live=1`
    long-poll open against the current URL (it fires
    `reload({streaming: true, live: true})` — `live` is what holds the
    connection open; `streaming` only sets the client commit mode).
@@ -176,7 +176,8 @@ null root:
    made at least one cell write and **every** write was to a deferred
    cell (a mixed batch is false — the non-deferred cell still needs its
    render). Both live on the request-scoped store in `context.ts`.
-2. **Null-root response.** The app's RSC entry builds the action payload
+2. **Null-root response.** The framework's RSC handler
+   (`createRscHandler` in `framework/src/entry/rsc.tsx`) builds the action payload
    as `root: isAction && actionStatus === undefined && _actionSuppressesCommit() ? null : <Root/>`.
    A suppressed action renders no tree — the POST body is just the
    `returnValue`. Errored actions (`actionStatus` set) always render so
@@ -201,14 +202,15 @@ connections). Default `localCell` storage is process-global; the
 request-scoped `getEphemeralCellStorage` is **not** a valid pairing —
 the write would never reach another connection's render.
 
-## The heartbeat is opt-in
+## The heartbeat rides the browser bootstrap
 
-The framework doesn't auto-inject a heartbeat. Apps that want live
-updates mount `<LivePageHeartbeat />` from their browser entry,
-near the React root:
+`bootBrowser()` (`framework/src/entry/browser.tsx`) mounts
+`<LivePageHeartbeat />` next to the payload root, so every app on the
+standard entry surface holds one streaming connection. An app
+assembling a custom browser bootstrap mounts it itself, near the
+React root:
 
 ```tsx
-// entry.browser.tsx
 import { LivePageHeartbeat } from "@parton/framework/lib/live-page-heartbeat.tsx"
 
 // …alongside <BrowserRoot />

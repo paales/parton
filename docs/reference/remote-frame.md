@@ -163,7 +163,23 @@ export type PaymentCap = {
 }
 ```
 
-Mount the framework's remote handler in your `entry.rsc.tsx`:
+Expose the endpoints via the `remote` config on the app's entry
+handler (`entry.rsc.tsx`):
+
+```tsx
+import { createRscHandler } from "@parton/framework/entry/rsc.tsx"
+
+export default createRscHandler({
+  Root,
+  remote: {
+    name: "magento",
+    typesPath: new URL("./app/remote-types.ts", import.meta.url).pathname,
+  },
+})
+```
+
+An app assembling a custom request handler mounts the underlying
+primitive directly:
 
 ```tsx
 import { createRemoteHandler } from "@parton/framework"

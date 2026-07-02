@@ -2093,7 +2093,6 @@ __metadata:
     playwright: "npm:^1.59.1"
     react: "npm:19.3.0-canary-68631c04-20260626"
     react-dom: "npm:19.3.0-canary-68631c04-20260626"
-    rsc-html-stream: "npm:^0.0.7"
     shadcn: "npm:^4.4.0"
     streamdown: "npm:^2.5.0"
     tailwindcss: "npm:^4.2.4"
@@ -2116,6 +2115,7 @@ __metadata:
     playwright: "npm:^1.59.1"
     react: "npm:19.3.0-canary-68631c04-20260626"
     react-dom: "npm:19.3.0-canary-68631c04-20260626"
+    rsc-html-stream: "npm:^0.0.7"
     vite: "npm:^8.1.0"
     vitest: "npm:^3.1.4"
   bin:

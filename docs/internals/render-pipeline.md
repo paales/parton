@@ -215,7 +215,7 @@ Client merge layer:
 | `frame-client.tsx` | The frames tree on the nav entry (read/write + the write serialiser), `FrameNameProvider`, frame refetch dispatch, and the window/frame imperative handle builders. |
 | `use-navigation.tsx` | The `useNavigation()` hook layer (`[fire, progress]` tuples, `@self` resolution, preload), `useActivate`, `useScrollRestore`, `PageUrlContext`, `PartialIdContext`. |
 | `cell-client.tsx` | `useCell` + the client-side write batcher (see [`cell-internals.md`](./cell-internals.md)). |
-| `live-page-heartbeat.tsx` | The opt-in `?live=1` long-poll + the `data-parton-live` marker (see [`streaming.md`](./streaming.md)). |
+| `live-page-heartbeat.tsx` | The `?live=1` long-poll (mounted by `bootBrowser`) + the `data-parton-live` marker (see [`streaming.md`](./streaming.md)). |
 | `visibility.tsx` / `page-interactive.ts` | The viewport observer for `visible()`-cullable partons (`?visible=` reporting); the `data-parton-interactive` root marker. |
 
 `framework/src/runtime/` holds the request plumbing: `context.ts`
@@ -231,6 +231,20 @@ session store), `cell-actions.ts` / `cell-storage.ts` /
 (client nav + error recovery), `capability.ts` /
 `remote-endpoints.tsx` (host→remote scoping), and the
 `cms-*.ts` CMS layer.
+
+`framework/src/entry/` is the app entry surface — the three factories
+an app's thin `src/entry.{rsc,ssr,browser}.tsx` files delegate to:
+`rsc.tsx` (`createRscHandler({Root, notFound?, fetch?, remote?,
+clearCaches?})` — remote-endpoint dispatch, the DEV-only
+`/__test/clear-caches` endpoint, action decode inside an invalidation
+transaction, the segment driver + fp-trailer wiring, and the SSR
+handoff via `import.meta.viteRsc.loadModule("ssr", "index")`, which
+the plugin resolves from the APP's vite config, so the framework
+never imports app code), `ssr.tsx` (`renderHTML` — Flight→HTML with
+the inline FLIGHT_DATA injection), and `browser.tsx` (`bootBrowser()`
+— hydration, the Navigation API intercept, the segmented refetch /
+preload transports, the server-action callback, and
+`<LivePageHeartbeat />`).
 
 ### Bounding the client cache (and the pending-lazy guard)
 

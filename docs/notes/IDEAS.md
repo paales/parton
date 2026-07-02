@@ -48,7 +48,7 @@ Open questions:
 
 ### Cross-tab sync via BroadcastChannel
 
-When tab A runs a server action that invalidates `["cart"]`, tab B is stale — unless it holds a `?live=1` heartbeat connection, in which case the process-global invalidation registry wakes its segment stream and pushes the update. But the heartbeat is opt-in and costs one long-poll connection per tab. A BroadcastChannel propagating invalidation signals across same-origin tabs would make multi-tab behaviour correct by default without every tab holding a stream open (one tab holds the connection, the others hear the bump and refetch).
+When tab A runs a server action that invalidates `["cart"]`, tab B is stale — unless it holds a `?live=1` heartbeat connection, in which case the process-global invalidation registry wakes its segment stream and pushes the update. But the heartbeat costs one long-poll connection per tab. A BroadcastChannel propagating invalidation signals across same-origin tabs would make multi-tab behaviour correct by default without every tab holding a stream open (one tab holds the connection, the others hear the bump and refetch).
 
 ### Persist optimistic unsaved cell values
 
