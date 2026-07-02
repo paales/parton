@@ -314,9 +314,3 @@ When a non-trivial task reaches a clean end state AND `yarn test` +
 
 The two test tiers + the docs surface are load-bearing — a fix without
 the corresponding doc/test update is incomplete work.
-
-## Agent skills
-
-- **Issue tracker**: GitHub Issues at `partonjs/parton` (`gh` CLI). See `docs/reference/agents/issue-tracker.md`.
-- **Triage labels**: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/reference/agents/triage-labels.md`.
-- **Domain docs**: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/reference/agents/domain.md`.

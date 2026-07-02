@@ -1,5 +1,10 @@
 # 0001 — Partial / Block / Frame split
 
+> Superseded 2026-07-02 by `docs/reference/partial.md` + `docs/reference/block.md`
+> + `docs/reference/frames-navigation.md`. The three-constructor split this ADR
+> decided still stands; the option lists recorded here predate the removal of
+> `vary` (the read is the dependency) and of `schema`/`actions` on partons.
+
 Date: 2026-05-11
 Status: Shipped 2026-05-11 (commit `8b7f579`)
 

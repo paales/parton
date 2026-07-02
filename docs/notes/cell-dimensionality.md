@@ -7,7 +7,7 @@
 ## Premise
 
 A cell today stores **one value per partition**, where the
-partition key is `hash(stableStringify(cell.vary(scope)))`. The
+partition key is `hash(stableStringify(cell.partition(scope)))`. The
 storage layer is exact-match: read with partition K, return the
 stored value at K, else the cell's `default`. No fallback chain
 between partitions.
@@ -124,7 +124,7 @@ const translation = localCell({
   id: "translation",
   shape: "string",
   initial: "",
-  vary: ({ cookies: { locale } }) => ({ locale }),
+  partition: ({ cookies: { locale } }) => ({ locale }),
   fallback: {
     // For the `locale` key: walk en-US → en → default.
     locale: (value) => {
@@ -142,7 +142,7 @@ const cmsField = localCell({
   id: "cms-field",
   shape: "string",
   initial: "",
-  vary: ({ cookies: { __editor } }) => ({
+  partition: ({ cookies: { __editor } }) => ({
     stage: __editor ? "draft" : "published",
   }),
   fallback: {
@@ -158,7 +158,7 @@ const versioned = localCell({
   id: "versioned",
   shape: "string",
   initial: "",
-  vary: ({ search }) => ({ at: search.at ?? "latest" }),
+  partition: ({ search }) => ({ at: search.at ?? "latest" }),
   fallback: {
     at: "latest",  // any `at=X` not found falls back to `at=latest`
   },

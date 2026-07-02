@@ -20,6 +20,7 @@ For that, start at [`../reference/intro.md`](../reference/intro.md).
 | `NAVIGATE_UNIFIED.md` | [`reference/frames-navigation.md`](../reference/frames-navigation.md) |
 | `FRAMES.md` | [`reference/frames-navigation.md`](../reference/frames-navigation.md) |
 | `DEFER_ACTIVATORS.md` | [`reference/partial.md`](../reference/partial.md) § defer |
+| [`adr-0001-partial-block-frame-split.md`](./adr-0001-partial-block-frame-split.md) | ADR: the partial/block/frame three-constructor split (shipped 2026-05-11). Decision stands; option lists predate vary/schema/actions removal. |
 | `AUTO_TRACKED_CACHE_KEYS.md` | [`reference/cache.md`](../reference/cache.md) + [`internals/cache-internals.md`](../internals/cache-internals.md) |
 | `AUTO_TRACKED_VARY.md` | [`reference/cache.md`](../reference/cache.md) + [`internals/cache-internals.md`](../internals/cache-internals.md) |
 | `CACHE_SCOPING.md` | [`reference/cache.md`](../reference/cache.md) |
