@@ -22,7 +22,10 @@ import {
 	type RenderArgs,
 	type ResolvedCell,
 } from "@parton/framework";
-import { LaneSlowBumpButton } from "../components/lanes-demo-button.tsx";
+import {
+	LaneSlowBumpButton,
+	SlowCommitBeacon,
+} from "../components/lanes-demo-button.tsx";
 
 // Deferred: the bump's POST returns no re-render — the new value
 // reaches the page over the live connection's lane, which is the
@@ -69,15 +72,23 @@ const LaneSlowCounter = parton(
 		if (version.value > 0) {
 			await new Promise((resolve) => setTimeout(resolve, SLOW_RENDER_MS));
 		}
+		const finishedAt = Date.now();
+		// Visible render window in the same unit the clock displays, so a
+		// human can check the clock ticked THROUGH the slow render.
+		const renderWindow =
+			version.value > 0
+				? ` — rendered during server seconds ${Math.floor(startedAt / 1000)} → ${Math.floor(finishedAt / 1000)}`
+				: " (initial render — instant)";
 		return (
 			<div
 				className="font-mono text-sm"
 				data-testid="lanes-demo-slow"
 				data-slow-version={version.value}
 				data-slow-started={startedAt}
-				data-slow-finished={Date.now()}
+				data-slow-finished={finishedAt}
 			>
-				{`slow counter v${version.value}`}
+				{`slow counter v${version.value}${renderWindow}`}
+				<SlowCommitBeacon version={version.value} />
 			</div>
 		);
 	},
@@ -112,6 +123,9 @@ export const LanesDemoPage = parton(
 					The clock ticks every second over its own lane. Bumping the slow
 					counter opens a ~2.5s lane — and the clock keeps ticking through it,
 					because lanes interleave instead of gating on the slowest render.
+					After it lands, the counter reports the server-second window it
+					rendered through: the clock will have displayed those very seconds
+					while the render was still in flight.
 				</p>
 				<LaneClock />
 				<LaneSlowCounter />
