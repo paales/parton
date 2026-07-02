@@ -100,9 +100,16 @@ async function flush(): Promise<void> {
     transition.finished.then(schedule, schedule)
     return
   }
+  // Viewport first: flips the user can SEE (currently in view — their
+  // content needs to paint) outrank flips for partons already scrolled
+  // past (their cull-to-shell can wait). A continuous scroll otherwise
+  // buries the live viewport at the tail of a FIFO of stale cull-outs
+  // and the visible world stops filling until the queue drains.
   const all = [...changed]
-  const targets = all.slice(0, FLUSH_BATCH)
-  changed = new Set(all.slice(FLUSH_BATCH))
+  const inViewFlips = all.filter((id) => inView.has(id))
+  const outFlips = all.filter((id) => !inView.has(id))
+  const targets = [...inViewFlips, ...outFlips].slice(0, FLUSH_BATCH)
+  changed = new Set([...inViewFlips, ...outFlips].slice(FLUSH_BATCH))
   inFlight = true
   try {
     await _windowNav().reload({
