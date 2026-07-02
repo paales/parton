@@ -26,17 +26,18 @@ import {
 } from "../../remote/magento"
 
 /** Wrapper parton — reads `?step=` from the frame URL and threads it
- *  into MagentoCheckoutStep's searchParams. The remote spec's `vary`
- *  reads the same param, so when the frame URL changes the binding
+ *  into MagentoCheckoutStep's searchParams. The remote spec's tracked
+ *  read sees the same param, so when the frame URL changes the binding
  *  re-fetches with the new step.
  *
  *  Demonstrates: navigating within a `<Frame>` to a different variant
  *  of the SAME bound remote, without reloading the host or affecting
  *  other frames. The frame URL is the navigation axis; the parton's
- *  vary is the bridge.
+ *  tracked `searchParam` read is the bridge.
  */
 const RemoteCheckoutFrame = parton(
-  function RemoteCheckoutFrameRender({ step }: { step: string } & RenderArgs) {
+  function RemoteCheckoutFrameRender(_: RenderArgs) {
+    const step = searchParam("step", "shipping")
     return (
       <Suspense
         fallback={
@@ -51,10 +52,7 @@ const RemoteCheckoutFrame = parton(
       </Suspense>
     )
   },
-  {
-    selector: "remote-checkout-frame",
-    schema: () => ({ step: searchParam("step", "shipping") }),
-  },
+  { selector: "remote-checkout-frame" },
 )
 
 export const RemoteFrameCrossOriginDemoPage = parton(

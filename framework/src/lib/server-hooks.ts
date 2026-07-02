@@ -30,66 +30,6 @@ import type { ParseRoute } from "./partial.tsx"
 type Prettify<T> = { [K in keyof T]: T[K] } & {}
 
 /**
- * Control signal thrown by `park()`. The parton wrapper catches it
- * around the schema callback and returns the parked keepalive emission
- * instead of a boundary — the thrown form is what lets a park decision
- * live inside helper functions and exit the schema unconditionally.
- * Deliberately NOT `__framework`-branded: it must never bubble past the
- * wrapper (a stray one becomes the parton's error card, not a page
- * crash).
- */
-class ParkSignal extends Error {
-  readonly __parkSignal = true
-  constructor(id: string) {
-    super(
-      `park() escaped the schema phase of "${id}" — the parton wrapper should have caught this`,
-    )
-  }
-}
-
-/** Wrapper-internal: is this thrown value a `park()` signal? */
-export function _isParkSignal(err: unknown): boolean {
-  return (
-    err instanceof Error && (err as { __parkSignal?: boolean }).__parkSignal === true
-  )
-}
-
-/**
- * Park this parton for the current request: stop the schema phase and
- * emit the parked keepalive (hidden `<Activity>` per cached variant, no
- * snapshot registration, no fingerprint) instead of rendering. The
- * value-conditional gate `match` can't express:
- *
- *     schema: () => {
- *       const pages = Math.max(1, Number(searchParam("pages")) || 1)
- *       if (page > pages) park()
- *       return { page }
- *     }
- *
- * Schema-phase only — parking must happen BEFORE the fingerprint is
- * computed (the parked path replaces the boundary emission entirely).
- * Prefer `return null` from Render for "render nothing" WITHOUT park
- * semantics: that registers the spec (deps recorded, fp emitted) and
- * replaces the client's cached variant with an empty body; `park()`
- * preserves the parked client state. The decision re-evaluates on every
- * parent render pass from live reads, so no dep record is needed for
- * un-parking. Throws; never returns.
- */
-export function park(): never {
-  const cp = getCurrentParton()
-  if (!cp) {
-    throw new Error("park() called outside a parton — it is a schema-phase hook")
-  }
-  if (cp.phase !== "schema") {
-    throw new Error(
-      `park() called in the render body of "${cp.id}" — parking must happen before ` +
-        `the fingerprint is computed, so call it from the schema callback`,
-    )
-  }
-  throw new ParkSignal(cp.id)
-}
-
-/**
  * Declare a freshness boundary for this render: after `at`
  * (epoch ms), this parton's output is no longer fresh. Two consumers:
  * the live segment driver arms its expiry timer on the earliest

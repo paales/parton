@@ -16,7 +16,7 @@
  * that id taking the place of the spec's catalog id (slot wiring sets
  * it to the slot entry's id).
  *
- * See `notes/partial-define-step-api.md`.
+ * See `docs/reference/partial.md`.
  */
 
 import React, {
@@ -78,13 +78,11 @@ import {
 import {
   buildResolvedCell,
   computeCellPartitionKey,
-  computeScopedCellPartitionKey,
   finalizeScopedCell,
   getCellById,
   isBoundCell,
   isModuleCell,
   isScopedCellDescriptor,
-  makeScopedCellFactories,
   resolveCellValue,
   type BoundCell,
   type CellInterface,
@@ -92,21 +90,13 @@ import {
   type CellPartitionScope,
   type ResolvedCell,
   type ScopedCellDescriptor,
-  type ScopedCellFactories,
 } from "./cell.ts"
-import {
-  registerAction,
-  registerSchema,
-  type ActionHandler,
-  type ResolvedAction,
-} from "./parton-actions.ts"
-import { __partonAction } from "../runtime/parton-actions.ts"
 import { getCellStorage } from "../runtime/cell-storage.ts"
 import { _getSettleTrailerSink, getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
 import { _onPartonSettled, _openPartonSettleScope, getServerContext } from "./server-context.ts"
 import { _setCurrentParton, type CurrentParton, type WakeHints } from "./current-parton.ts"
-import { evalDepKeys, _isParkSignal } from "./server-hooks.ts"
+import { evalDepKeys } from "./server-hooks.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -154,26 +144,18 @@ export interface RenderArgs {
   children?: ReactNode
 }
 
-/**
- * Pattern accepted by `match`. Either a pathname-only string
- * shorthand, or a full URLPattern init dict for declarative
- * matching across pathname / search / hostname / etc.
- *
- *   match: "/pokemon/:id"
- *   match: { pathname: "/p/:slug", search: "?variant=*" }
- *   match: { pathname: "/api/:v(v[0-9]+)/:resource" }
- */
-export type MatchPattern = string | URLPatternInit
+import { compileMatch, type CompiledMatch, type MatchPattern } from "./match.ts"
+
+export { compileMatch, type CompiledMatch, type MatchInit, type MatchPattern } from "./match.ts"
 
 export type PartialOptions<V> = Pick<
   InternalSpecConfig<V>,
   | "match"
-  | "schema"
-  | "actions"
   | "cache"
   | "defer"
   | "fallback"
   | "keepalive"
+  | "fpSkip"
   | "selector"
   | "capabilityType"
 >
@@ -187,47 +169,6 @@ export type PartialOptions<V> = Pick<
 interface InternalSpecConfig<V> {
   /** URLPattern gate. Spec emits nothing on miss. */
   match?: MatchPattern
-  /** Declared deps that need framework-mediated resolution — cells
-   *  in particular. Sync callback receiving `{cell}` (a parton-scoped
-   *  factory) and returning a record. Each entry's value can be:
-   *
-   *  - a **scoped cell descriptor** from the injected `cell` factory
-   *    (`cell.string({initial: ""})`) — finalized with wire id
-   *    `<partonId>/<schemaKey>` and partitioned by the parton's match
-   *    params (or a narrower subset via the descriptor's optional
-   *    `partition` callback).
-   *  - a **module-scope cell handle** imported from elsewhere
-   *    (`localCell({id, partition, initial, ...})` at module scope) —
-   *    resolved via its own partition callback against the request scope.
-   *  - any other value — passed through to Render's prop bag as-is.
-   *
-   *  Tracked hooks (`searchParam()`, `cookie()`, …) work here and fold
-   *  into the CURRENT fingerprint with no cold lag — schema runs
-   *  before the fp. Request-derived cell bindings read hooks directly:
-   *  `schema: () => ({ cart: cartCell.with({ cartId: cookie("cart_id") }) })`.
-   *
-   *  Resolved cells get `cell:<id>` selector labels auto-stamped on
-   *  the parton so `refreshSelector` fires on `cell.set`. */
-  schema?: (scope: ScopedCellFactories<V>) => Record<string, unknown>
-  /** Server-side handlers declared on the parton. Each handler runs
-   *  inside `runInvalidationTransaction` and receives `(scope, args)`:
-   *  scope is the parton's match params + resolved schema (same prop
-   *  bag Render gets minus children); args is caller-
-   *  supplied. After the handler returns, the framework auto-writes
-   *  any `args[K]` whose key matches a schema cell — atomic with the
-   *  handler's own writes. A throw aborts the transaction.
-   *
-   *  Each action is exposed as a `ResolvedAction` in Render's prop
-   *  bag with partition pre-bound (Flight-portable, callable from
-   *  client `onClick` via `usePartonAction(prop)`). */
-  actions?: Record<
-    string,
-    // `any` (not `unknown`): TS can't propagate the literal's schema return
-    // into action-handler scope contravariantly; `any` lets the author
-    // destructure freely. Render's prop bag (typed via InferV) is the source
-    // of truth for cell types.
-    (scope: any, args: any) => Promise<unknown>
-  >
   /** Refetch labels (whitespace string or array). First label is the
    *  spec catalog id; additional labels are extra fan-out targets.
    *  Auto-derives from `Render.name` when omitted. */
@@ -237,8 +178,8 @@ interface InternalSpecConfig<V> {
   fallback?: ReactNode
   /** When `true` (default), wraps the spec's rendered body in
    *  `<Activity mode="visible">` while active and emits
-   *  `<Activity mode="hidden">` with a placeholder when `match` (or a
-   *  schema `park()`) says the spec shouldn't render on this route — provided
+   *  `<Activity mode="hidden">` with a placeholder when `match` says
+   *  the spec shouldn't render on this request — provided
    *  the client has previously cached this id (signalled via
    *  `?cached=id:fp`). The spec component fiber lives at its natural
    *  JSX position (e.g. a root.tsx sibling), so Activity mode flips
@@ -250,6 +191,11 @@ interface InternalSpecConfig<V> {
    *  on cross-route nav (heavy video / iframe DOM, partials whose
    *  state is meaningful only while visible, debug-only specs). */
   keepalive?: boolean
+  /** When `false`, this spec is never served from the client's cache
+   *  on a fingerprint match — every request renders it fresh. For
+   *  always-authoritative surfaces (the CMS editor chrome) whose
+   *  output must track the request exactly. Default `true`. */
+  fpSkip?: boolean
   /** Capability schema name for this spec — referenced by the
    *  `/__remote/manifest.json` endpoint so the `parton add` CLI can
    *  generate typed bindings (`remote<TypeName>({…})`). The string
@@ -379,54 +325,7 @@ type InferMatch<Opts> = Opts extends string
         : object
     : object
 
-/**
- * Map cell handles + scoped descriptors in a schema record to their
- * `ResolvedCell<T>` counterparts — what Render actually receives after
- * framework resolution. Both `CellInterface<T>` (module-scope) and
- * `ScopedCellDescriptor<T>` (declared via the `{cell}` factory inside
- * the schema callback) become `ResolvedCell<T>`.
- */
-type ResolveSchemaProps<S> = {
-  [K in keyof S]: S[K] extends CellInterface<infer T, any>
-    ? ResolvedCell<T>
-    : S[K] extends BoundCell<infer T>
-      ? ResolvedCell<T>
-      : S[K] extends ScopedCellDescriptor<infer T>
-        ? ResolvedCell<T>
-        : S[K]
-}
-
-// One pattern covers 0- and 1-arg schema callbacks: a callback taking
-// fewer params is assignable to the 1-param shape, so `(scope) => S`
-// matches `() => S` too.
-type InferSchema<Opts> = Opts extends {
-  schema: (scope: ScopedCellFactories<infer _V>) => infer S
-}
-  ? S extends Record<string, unknown>
-    ? ResolveSchemaProps<S>
-    : object
-  : object
-
-/**
- * Map an action handler to the Render-prop view of it: caller-args
- * signature only (scope is framework-supplied at resolution time).
- *
- * `Args` is inferred from the handler's second parameter; `R` from its
- * return type. The Render prop is `(args: Args) => Promise<Awaited<R>>`.
- */
-type ResolveActions<A> = {
-  [K in keyof A]: A[K] extends (scope: infer _S, args: infer Args) => infer R
-    ? ResolvedAction<Args, Awaited<R>>
-    : never
-}
-
-type InferActions<Opts> = Opts extends { actions: infer A }
-  ? A extends Record<string, unknown>
-    ? ResolveActions<A>
-    : object
-  : object
-
-export type InferV<Opts> = Prettify<InferMatch<Opts> & InferSchema<Opts> & InferActions<Opts>>
+export type InferV<Opts> = Prettify<InferMatch<Opts>>
 
 /** Flatten a `T1 & T2 & …` intersection into a single object literal
  *  shape so editor hovers display the merged keys, not a chain. */
@@ -846,10 +745,10 @@ function descendantContribution(descId: string, snap: PartialSnapshot): string {
   // for any descendant that records no tracked reads.
   const depsKey = evalDepKeys(snap.deps, request)
   let params: Record<string, string> = {}
-  if (spec.matchPattern) {
-    const result = spec.matchPattern.exec(request.url)
-    if (result === null) return `${descId}:nomatch${invalidationKeyFromSnap(snap)}`
-    params = extractNamedParams(result)
+  if (spec.match) {
+    const verdict = spec.match.evaluate(request)
+    if (!verdict.matched) return `${descId}:nomatch${invalidationKeyFromSnap(snap)}`
+    params = verdict.params
   }
 
   // Match params + bound-cell args form the constraint surface for
@@ -896,77 +795,47 @@ function invalidationKeyFromSnap(snap: PartialSnapshot): string {
 }
 
 /**
- * Every distinct URLPattern any spec was constructed with. Populated
+ * Every distinct match gate any spec was constructed with. Populated
  * as a side effect of `parton(..., { match: ... })` via
- * `registerMatchPattern`. Consumed by `getRegisteredMatchPatterns()`
- * so authors can wire a 404 fallback that fires only when no
- * registered pattern matches the request URL, and by
- * `computeRouteKey` as the matched-set hash input.
+ * `registerMatch`. The URL-pattern halves feed
+ * `getRegisteredMatchPatterns()` (the 404-fallback helper) and
+ * `computeRouteKey` (the matched-set hash input); predicate and
+ * request-record fields gate specs but never split route buckets —
+ * the same rule search patterns already follow.
  */
-const registeredMatchPatterns: URLPattern[] = []
+const registeredMatches: CompiledMatch[] = []
 
-/** Signatures of every registered pattern — the dedup gate for
- *  `registerMatchPattern`. */
-const registeredPatternSignatures = new Set<string>()
+/** Signatures of every registered match — the dedup gate for
+ *  `registerMatch`. */
+const registeredMatchSignatures = new Set<string>()
 
 /**
- * Register a spec's compiled URLPattern, deduplicated by signature.
- * HMR re-executes a spec module and runs the constructor again with
- * the same pattern; appending a duplicate would change the
- * matched-signature list `computeRouteKey` hashes, shifting every
- * affected routeKey across the edit and orphaning the registry's
- * per-routeKey hints.
+ * Register a spec's compiled match, deduplicated by signature. HMR
+ * re-executes a spec module and runs the constructor again with the
+ * same gate; appending a duplicate would change the matched-signature
+ * list `computeRouteKey` hashes, shifting every affected routeKey
+ * across the edit and orphaning the registry's per-routeKey hints.
+ * Predicates sign by source text, so an edited predicate body counts
+ * as a new gate (and correctly shifts route keys).
  */
-function registerMatchPattern(pattern: URLPattern): void {
-  const signature = patternSignature(pattern)
-  if (registeredPatternSignatures.has(signature)) return
-  registeredPatternSignatures.add(signature)
-  registeredMatchPatterns.push(pattern)
-  // Adding a pattern invalidates the routeKey cache — a URL whose
+function registerMatch(compiled: CompiledMatch): void {
+  if (registeredMatchSignatures.has(compiled.signature)) return
+  registeredMatchSignatures.add(compiled.signature)
+  registeredMatches.push(compiled)
+  // Adding a gate invalidates the routeKey cache — a URL whose
   // matched-set previously excluded this pattern may now include it.
   routeKeyCache.clear()
 }
 
-/**
- * Compile a `MatchPattern` into a URLPattern with strict semantics:
- * the string form is the pathname pattern verbatim, no rewriting.
- * `match: "/inspect/*"` matches `/inspect/...` and NOT bare
- * `/inspect`; authors who want both write the URLPattern modifier
- * form `match: "/inspect{/*}?"` (or the URLPatternInit dict). This
- * keeps wildcard semantics aligned with URLPattern itself — there's
- * no implicit "optional trailing slash" magic the author has to know
- * about.
- */
-function compileMatchPattern(pattern: MatchPattern): URLPattern {
-  if (typeof pattern === "string") {
-    return new URLPattern({ pathname: pattern })
-  }
-  return new URLPattern(pattern)
-}
-
-/** Snapshot of every URLPattern currently registered. */
+/** Snapshot of every registered gate's URL-pattern half. Predicate-only
+ *  gates carry no URL structure and are excluded — they can't name a
+ *  page for the 404 fallback nor extract params for actions. */
 export function getRegisteredMatchPatterns(): readonly URLPattern[] {
-  return [...registeredMatchPatterns]
-}
-
-/**
- * Stable signature for a URLPattern — the concatenation of every
- * pattern component. URLPattern doesn't expose a single canonical
- * source string (the constructor accepts both string and dict forms),
- * so we read every component back and join with NUL. Two URLPatterns
- * built from the same input produce byte-identical signatures.
- */
-function patternSignature(pattern: URLPattern): string {
-  return [
-    pattern.protocol,
-    pattern.username,
-    pattern.password,
-    pattern.hostname,
-    pattern.port,
-    pattern.pathname,
-    pattern.search,
-    pattern.hash,
-  ].join("\u0000")
+  const out: URLPattern[] = []
+  for (const m of registeredMatches) {
+    if (m.urlPattern) out.push(m.urlPattern)
+  }
+  return out
 }
 
 /**
@@ -1024,9 +893,9 @@ export function computeRouteKey(url: string): string {
   const cached = routeKeyCache.get(base)
   if (cached !== undefined) return cached
   const matched: string[] = []
-  for (const pattern of registeredMatchPatterns) {
-    if (pattern.exec(base) !== null) {
-      matched.push(patternSignature(pattern))
+  for (const m of registeredMatches) {
+    if (m.urlPattern && m.urlPattern.exec(base) !== null) {
+      matched.push(m.signature)
     }
   }
   let result: string
@@ -1055,8 +924,8 @@ export function _clearRouteKeyCache(): void {
 /** Test-only: wipe the registered-pattern set (and with it the
  *  routeKey cache). Production never unregisters a pattern. */
 export function _resetMatchPatterns(): void {
-  registeredMatchPatterns.length = 0
-  registeredPatternSignatures.clear()
+  registeredMatches.length = 0
+  registeredMatchSignatures.clear()
   routeKeyCache.clear()
 }
 
@@ -1076,7 +945,7 @@ interface InternalSpec<V> {
   /** Compiled URLPattern for `options.match`, or `undefined` when
    *  the spec has no match. Compiled once at constructor time so
    *  every render-phase `exec` is cheap. */
-  matchPattern?: URLPattern
+  match?: CompiledMatch
   Render: (props: V & RenderArgs) => ReactNode
   /** True iff the author explicitly declared at least one of
    *  `selector`, `schema`, or `match`. Non-addressable specs (none of
@@ -1103,7 +972,7 @@ const ROOT_MATCH_KEY = hash(stableStringify({}))
  *    `/pokemon/1` and `/pokemon/2` get distinct keys.
  *  - Spec has no own named params → walk `parent.path` outer-to-inner
  *    (in reverse: nearest first) and find the closest ancestor in the
- *    catalog whose `matchPattern` produces named params on the current
+ *    catalog whose match produces named params on the current
  *    URL. Hash those. Descendants of `/pokemon/:id` (Hero, Stats, …)
  *    share that variant identity even though their own bodies have no
  *    match.
@@ -1117,22 +986,20 @@ const ROOT_MATCH_KEY = hash(stableStringify({}))
  * matchKey as the originating streaming render.
  */
 export function deriveMatchKey(
-  ownMatchPattern: URLPattern | undefined,
+  ownMatch: CompiledMatch | undefined,
   ownParams: Record<string, string>,
   parentPath: readonly string[],
   url?: string,
 ): string {
-  if (ownMatchPattern && Object.keys(ownParams).length > 0) {
+  if (ownMatch && Object.keys(ownParams).length > 0) {
     return hash(stableStringify(ownParams))
   }
   const requestUrl = url ?? getRequest().url
   for (let i = parentPath.length - 1; i >= 0; i--) {
     const ancestor = getSpecById(parentPath[i])
-    if (!ancestor?.matchPattern) continue
-    const result = ancestor.matchPattern.exec(requestUrl)
-    if (!result) continue
-    const ancestorParams = extractNamedParams(result)
-    if (Object.keys(ancestorParams).length === 0) continue
+    if (!ancestor?.match) continue
+    const ancestorParams = ancestor.match.extractParams(requestUrl)
+    if (ancestorParams === null || Object.keys(ancestorParams).length === 0) continue
     return hash(stableStringify(ancestorParams))
   }
   return ROOT_MATCH_KEY
@@ -1162,8 +1029,7 @@ function placeholderFor(id: string, matchKey: string): ReactElement {
 }
 
 /**
- * Parked emission for a keepalive spec whose `match` (or a schema
- * `park()`) says it
+ * Parked emission for a keepalive spec whose `match` says it
  * shouldn't render on this request, but the client has it cached
  * (declared via `?cached=id:matchKey:fp`). Returns one
  * `<Activity mode="hidden" key={matchKey}>` per cached matchKey,
@@ -1347,7 +1213,7 @@ function createSpecComponent<V>(
     const selfDeps = new Set<string>()
     // Keepalive defaults to true. The flag governs both the active
     // emission (wrap body in `<Activity mode="visible">`) and the
-    // parked emission on match-miss / park() (emit
+    // parked emission on match-miss (emit
     // `<Activity mode="hidden">` + placeholder when the client has
     // this id cached). The shared Activity wrapper is what lets React
     // preserve the inner Suspense subtree's fiber identity across
@@ -1369,10 +1235,10 @@ function createSpecComponent<V>(
     // the frame's URL — so a spec with `match: "/cart/open"` placed in a
     // cart frame routes on the frame.
     let params: Record<string, string> = {}
-    if (spec.matchPattern) {
-      const result = spec.matchPattern.exec(ourRequest.url)
-      if (result === null) return emitParkedKeepalive(id, keepalive, requestState)
-      params = extractNamedParams(result)
+    if (spec.match) {
+      const verdict = spec.match.evaluate(ourRequest)
+      if (!verdict.matched) return emitParkedKeepalive(id, keepalive, requestState)
+      params = verdict.params
     }
     // Stamp the self-context now that the frame-resolved request + match
     // params are known — server-hooks (`cookie()` / `searchParam()` /
@@ -1393,7 +1259,7 @@ function createSpecComponent<V>(
     //   - A spec with its OWN named match params hashes them — so
     //     `/pokemon/1` and `/pokemon/2` get distinct keys.
     //   - A spec WITHOUT named match params walks parent.path to
-    //     find the closest ancestor whose matchPattern has named
+    //     find the closest ancestor whose match has named
     //     params on the current (frame-resolved) URL, and inherits
     //     that hash — so descendants of `/pokemon/:id` (Hero, Stats,
     //     …) share the URL-derived variant identity even though their
@@ -1406,7 +1272,7 @@ function createSpecComponent<V>(
     // `parent.matchKey` through PartialCtx) keeps partial-refetch
     // working: the catalog lookup uses `parent.path` from the
     // reconstructed snapshot, no extra state to thread.
-    const matchKey = deriveMatchKey(spec.matchPattern, params, parent.path, ourRequest.url)
+    const matchKey = deriveMatchKey(spec.match, params, parent.path, ourRequest.url)
 
     // ── Request-derived surface ──
     // Match params are the only pre-declared request dimension — they
@@ -1438,9 +1304,6 @@ function createSpecComponent<V>(
     //
     // Module cells (imported handles): partition derived from the
     // cell's own partition callback against the request scope.
-    let schemaResult: Record<string, unknown> = {}
-    const cellsByKey = new Map<string, ResolvedCell<unknown>>()
-    const cellIdByArgKey: Record<string, string> = {}
     const cellLabels: string[] = []
     /** Bound args from any cell resolution (schema OR props). Merged
      *  with the match params into the parton's effective constraint surface for
@@ -1462,72 +1325,6 @@ function createSpecComponent<V>(
       session,
       time,
     }
-    if (opts.schema) {
-      const factories = makeScopedCellFactories<unknown>()
-      // A `park()` inside the callback throws the branded ParkSignal:
-      // this request renders the parked keepalive instead of a boundary
-      // — no snapshot, no fp, cached client variants preserved.
-      let raw: Record<string, unknown>
-      try {
-        raw = opts.schema(factories)
-      } catch (err) {
-        if (_isParkSignal(err)) return emitParkedKeepalive(id, keepalive, requestState)
-        throw err
-      }
-      // Scoped-cell partitions derive from the match params (narrowed
-      // by a descriptor's own `partition` callback when declared).
-      const partonVaryForCells = varyResult
-      for (const key of Object.keys(raw)) {
-        const val = raw[key]
-        if (isScopedCellDescriptor(val)) {
-          const descriptor = val as ScopedCellDescriptor<unknown>
-          const cellHandle = finalizeScopedCell(descriptor, spec.id, key)
-          const partitionVary = descriptor.partitionFn
-            ? descriptor.partitionFn(partonVaryForCells as never)
-            : partonVaryForCells
-          const partitionKey = computeScopedCellPartitionKey(descriptor, partonVaryForCells)
-          const value = await resolveCellValue(cellHandle, partitionVary)
-          const resolved = buildResolvedCell(cellHandle, value, partitionVary)
-          schemaResult[key] = resolved
-          cellsByKey.set(key, resolved)
-          cellIdByArgKey[key] = cellHandle.id
-          cellLabels.push(`cell:${cellHandle.id}`)
-          Object.assign(boundArgsMerged, partitionVary)
-          resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
-        } else if (isBoundCell(val)) {
-          const bound = val as BoundCell<unknown>
-          const cellHandle = getCellById(bound.cellId)
-          if (!cellHandle) {
-            throw new Error(`schema: bound cell "${bound.cellId}" not in registry`)
-          }
-          const args = bound.args
-          const partitionKey = hash(stableStringify(args))
-          const value = await resolveCellValue(cellHandle, args)
-          const resolved = buildResolvedCell(cellHandle, value, args)
-          schemaResult[key] = resolved
-          cellsByKey.set(key, resolved)
-          cellIdByArgKey[key] = cellHandle.id
-          cellLabels.push(`cell:${cellHandle.id}`)
-          Object.assign(boundArgsMerged, args)
-          resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
-        } else if (isModuleCell(val)) {
-          const c = val as CellInterface<unknown>
-          const args = c.partition(cellScope)
-          const partitionKey = hash(stableStringify(args))
-          const value = await resolveCellValue(c, args)
-          const resolved: ResolvedCell<unknown> = buildResolvedCell(c, value)
-          schemaResult[key] = resolved
-          cellsByKey.set(key, resolved)
-          cellIdByArgKey[key] = c.id
-          cellLabels.push(`cell:${c.id}`)
-          Object.assign(boundArgsMerged, args)
-          resolutionParts.push(`${c.id}:${partitionKey}:${stableStringify(value)}`)
-        } else {
-          schemaResult[key] = val
-        }
-      }
-    }
-
     // ── Props cell-resolution phase ──
     // Walk top-level extraProps for Cell handles or BoundCell
     // descriptors. Resolve each one in place: storage read (running
@@ -1585,37 +1382,6 @@ function createSpecComponent<V>(
       cellLabels.length > 0 || tagLabels.length > 0
         ? [...parsed.labels, ...cellLabels, ...tagLabels]
         : parsed.labels
-
-    // ── Actions phase ──
-    // Each declared action becomes a `ResolvedAction` in Render's prop
-    // bag: bound server-action ref with the parton's match params baked
-    // (partition bound at resolution time) plus a `writes` map of
-    // argKey → cellId for the client's `usePartonAction` to wire
-    // optimistic-aware cell updates.
-    const actionsResult: Record<string, ResolvedAction<unknown, unknown>> = {}
-    if (opts.actions) {
-      // Match params bake into the ref: the action POST's URL doesn't
-      // carry the route, so the dispatcher can't re-derive WHICH
-      // variant's cells to resolve — params are the one thing that
-      // must ride. Everything request-shaped (cookies, session) the
-      // dispatcher reads fresh off the action's own request via the
-      // stamped CurrentParton.
-      for (const actionName of Object.keys(opts.actions)) {
-        const actionId = `${spec.id}/${actionName}`
-        const ref = (
-          __partonAction as unknown as (
-            actionId: string,
-            matchParams: Record<string, string>,
-            args: unknown,
-          ) => Promise<unknown>
-        ).bind(null, actionId, params)
-        actionsResult[actionName] = {
-          __partonAction: true,
-          ref: ref as ResolvedAction<unknown, unknown>["ref"],
-          writes: { ...cellIdByArgKey },
-        }
-      }
-    }
 
     // ── Fingerprint ──
     // The spec's "own" fp captures only what THIS spec depends on:
@@ -1754,6 +1520,7 @@ function createSpecComponent<V>(
     const snapshotExpiresAt = priorSnap ? effectiveExpiresAt(priorSnap) : undefined
     const snapshotExpired = snapshotExpiresAt !== undefined && snapshotExpiresAt <= Date.now()
     const shouldSkip =
+      opts.fpSkip !== false &&
       state != null &&
       !isExplicit &&
       fingerprintMatches &&
@@ -1785,8 +1552,6 @@ function createSpecComponent<V>(
     const renderProps = {
       ...resolvedExtraProps,
       ...(varyResult as object),
-      ...schemaResult,
-      ...actionsResult,
       children: outerChildren,
       ...(effectiveInstanceId !== undefined ? { __instanceId: effectiveInstanceId } : {}),
     } as V & RenderArgs
@@ -2046,8 +1811,8 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   Render: (props: V & RenderArgs) => ReactNode,
   options: InternalSpecConfig<V>,
 ): SpecComponent<Extra, Prettify<V & RenderArgs>> {
-  const matchPattern = options.match ? compileMatchPattern(options.match) : undefined
-  if (matchPattern) registerMatchPattern(matchPattern)
+  const match = options.match ? compileMatch(options.match) : undefined
+  if (match) registerMatch(match)
 
   // Selector parsing: flat labels, no unique/shared distinction. The
   // spec catalog id (`spec.id`) is the FIRST label. Auto-derives from
@@ -2064,17 +1829,14 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   // a unique id. A spec with none of the three is a structural child
   // of its parent and cannot be the target of selective refetch,
   // session/tag invalidation, or URL-driven variant carve-out.
-  const addressable =
-    options.selector !== undefined ||
-    options.schema !== undefined ||
-    options.match !== undefined
+  const addressable = options.selector !== undefined || options.match !== undefined
 
   const spec: InternalSpec<V> = {
     id,
     type,
     parsed,
     options,
-    matchPattern,
+    match,
     Render,
     addressable,
   }
@@ -2086,27 +1848,12 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
     id,
     labels: parsed.labels,
     Component: baseComponent as unknown as FC<SpecComponentProps>,
-    matchPattern,
+    match,
     displayName:
       (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
     addressable,
     capabilityType: options.capabilityType,
   })
-
-  // Register the schema callback (for the action dispatcher to re-run
-  // server-side at dispatch time). Idempotent overwrite on HMR — same
-  // semantics as the cell registry.
-  if (options.schema) {
-    registerSchema(id, options.schema as unknown as Parameters<typeof registerSchema>[1])
-  }
-
-  // Register each declared action handler under `<partonId>/<actionName>`.
-  if (options.actions) {
-    for (const actionName of Object.keys(options.actions)) {
-      const handler = options.actions[actionName]
-      registerAction(`${id}/${actionName}`, handler as ActionHandler)
-    }
-  }
 
   // Attach `.props` as a phantom field. The runtime value is
   // `undefined`; the type declares it as `V & RenderArgs` so

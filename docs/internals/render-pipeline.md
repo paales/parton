@@ -36,8 +36,8 @@ ids the route's hint table knows about.
    hint, find the spec component (`getSpecComponentById(id)` or
    via spec catalog by `snap.type` for slot blocks), invoke it as
    a flat sibling.
-3. The spec's body re-runs (match, schema, fingerprint, skip /
-   render). No ancestor execution.
+3. The spec's body re-runs (match, props cell resolution,
+   fingerprint, skip / render). No ancestor execution.
 4. On commit, the routeKey's hint is patched (not replaced) — ids
    that didn't refetch keep their existing variant pointers.
 
@@ -223,11 +223,12 @@ Wire params:
 | `cached` | `id:matchKey:fp,…` — fingerprints the client has |
 | `__frame=...&__frameUrl=...` | session-write a frame URL before render |
 
-After a server action commits, refetch routing is driven entirely by
-the invalidation registry — actions call `getServerNavigation().reload({selector})`
-in-body (queued inside the action's `runInvalidationTransaction`),
-and the response render computes fresh fps for any partial whose
-selector matches. Cold clients (no `?cached=`) receive the full root
+After a server function commits, refetch routing is driven entirely by
+the invalidation registry — cell writes fire their `cell:` selectors
+(batched inside `atomic()`), and a function can call
+`getServerNavigation().reload({selector})` in-body (queued inside the
+invalidation transaction); the response render computes fresh fps for
+any partial whose selector matches. Cold clients (no `?cached=`) receive the full root
 tree; warm clients get fp-skip placeholders for everything unchanged.
 No URL-rewrite step in between.
 
@@ -312,7 +313,7 @@ The fp folds in:
   pathname / `match()` reads, session, visibility, tags, and custom
   dep kinds (the CMS layer's `cms:<contentKey>` content hash, which
   is how a block's resolved fields move its fp)
-- resolved schema cells (`schemaKey`: cell-id × partition × value)
+- prop-resolved cells (`schemaKey`: cell-id × partition × value)
 - call-site JSX props (`extraProps`)
 - frame URL (own and ambient)
 - every previously-registered descendant spec's contribution — its
@@ -332,13 +333,12 @@ parent renders directly, so there's nothing for fp-skip to gate.
 ## Addressable gate
 
 A spec is *externally addressable* iff the author explicitly
-declared at least one of `selector`, `schema`, or `match`. Specs
-declaring none of the three are non-addressable: they have no
-external refetch handle (`reload({selector})` requires a declared
-selector, cell/session invalidation binds through `schema`,
-URL-driven variant carve-out requires `match`). Auto-derived
-selectors from `Render.name` don't count — they only exist to
-give the spec catalog a unique id.
+declared `selector` or `match`. Specs declaring neither are
+non-addressable: they have no external refetch handle
+(`reload({selector})` requires a declared selector, URL-driven
+variant carve-out requires `match`). Auto-derived selectors from
+`Render.name` don't count — they only exist to give the spec
+catalog a unique id.
 
 Non-addressable specs **don't emit a `partialFingerprint` on the
 wire**. The four-step fp cycle is collapsed for them:
@@ -368,8 +368,8 @@ only collapses the *wire identity*, never the structural one.
 
 The gate is computed once at spec construction time
 (`addressable = options.selector !== undefined ||
-options.schema !== undefined || options.match !== undefined`) and
-read in the render path as `spec.addressable`.
+options.match !== undefined`) and read in the render path as
+`spec.addressable`.
 
 ## Cold → warm fp drift and the trailer
 
@@ -514,7 +514,7 @@ every spec has registered.
 ## Error containment
 
 The per-partial `<PartialErrorBoundary>` wraps the *resolved body*
-only. Schema/props cell resolution (`await resolveCellValue`) and the
+only. Props cell resolution (`await resolveCellValue`) and the
 synchronous `Render` call both run earlier in the spec component —
 above where that boundary sits in the returned tree. A React error
 boundary catches throws from its descendants, so it cannot catch a

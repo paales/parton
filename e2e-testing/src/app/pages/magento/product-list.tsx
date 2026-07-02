@@ -68,9 +68,11 @@ const MagentoHeader = parton(
 
 const MagentoProducts = parton(
   function MagentoProductsRender({
-    q,
     products,
-  }: { q: string; products: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
+  }: { products: ResolvedCell<CellValue<typeof magentoProductsCell>> } & RenderArgs) {
+    // Tracked read: `q` records on this parton and folds into the fp —
+    // and with it the byte-cache key — so each query is its own entry.
+    const q = searchParam("q") ?? ""
     const items = (products.value?.products?.items ?? []).filter(
       (item): item is ProductItem => item != null,
     )
@@ -101,10 +103,6 @@ const MagentoProducts = parton(
     // cache hit and streamed in over their 1s load. Exercises the
     // row-level cache splice end-to-end (cache-dynamic-partial-holes spec).
     cache: { maxAge: 60 },
-    // Tracked in `schema` (runs before the fp), so `q` folds into the
-    // byte-cache key from render 1 — a render-BODY read would lag one
-    // render and mis-key the cache on a cold process.
-    schema: () => ({ q: searchParam("q") ?? "" }),
   },
 )
 

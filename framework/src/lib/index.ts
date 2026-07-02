@@ -42,7 +42,7 @@ export {
 
 // Server-hooks — free functions a parton's schema/Render calls to read
 // a request dimension AND record it as an fp dependency: `cookie()`,
-// `searchParam()`, `param()`, the wake hooks, `park()`. Plus `tag()`
+// `searchParam()`, `param()`, the wake hooks. Plus `tag()`
 // (a render-time invalidation label) and `getCurrentParton()` (the
 // parton's own identity). See current-parton.ts / server-hooks.ts.
 export {
@@ -54,7 +54,6 @@ export {
   visible,
   header,
   pathname,
-  park,
   expires,
   staleUntil,
   time,
@@ -72,17 +71,16 @@ export {
 } from "./partial-client.tsx"
 
 export {
+  atomic,
   localCell,
   buildResolvedCell,
   computeCellPartitionKey,
-  computeScopedCellPartitionKey,
   finalizeScopedCell,
   getCellById,
   isBoundCell,
   isCellHandle,
   isModuleCell,
   isScopedCellDescriptor,
-  makeScopedCellFactories,
   resolveCellValue,
   type BoundCell,
   type CellInterface,
@@ -95,8 +93,6 @@ export {
   type LocalCellOpts,
   type ResolvedCell,
   type ScopedCellDescriptor,
-  type ScopedCellFactories,
-  type ScopedLocalCellOpts,
   type ValueOfShape,
 } from "./cell.ts"
 
@@ -119,22 +115,11 @@ export {
 
 export {
   useCell,
-  usePartonAction,
   type CellInputBindings,
   type CellInputOpts,
   type ClientCell,
 } from "./cell-client.tsx"
 
-export {
-  getActionById,
-  getSchemaForParton,
-  isResolvedAction,
-  registerAction,
-  registerSchema,
-  type ActionHandler,
-  type ResolvedAction,
-  type SchemaCallback,
-} from "./parton-actions.ts"
 
 export { type TimeScope } from "./time.ts"
 

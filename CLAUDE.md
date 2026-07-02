@@ -148,36 +148,53 @@ baseline); CPU profiles (`--prof`) and scratch logs stay local
 ## Spec authoring rules
 
 - Three constructors, one engine. Pick by role:
-  - `parton(Render, '/path')` / `parton(Render, {match, schema, …})` — addressable subtree, request-dimensions only. The everything-else case.
-  - `block(Render, {selector, schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is where CMS reads live.
+  - `parton(Render, '/path')` / `parton(Render, {match, selector, cache, defer, fallback, keepalive, fpSkip})` — addressable subtree, request-dimensions only. The everything-else case. Addressability = `selector || match`.
+  - `block(Render, {selector, schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is the CMS resolution surface — the one declared schema in the framework.
   - `<Frame name initialUrl>{…}</Frame>` — plain component, opens a per-name URL scope for descendants (which inherit the frame chain via server context).
 - **The read IS the dependency.** A spec's request surface is what
-  its schema/body actually reads via tracked hooks — `cookie()`,
+  its Render body actually reads via tracked hooks — `cookie()`,
   `searchParam()`, `header()`, `pathname()`, `match()`, `session()`,
   `visible()`, `tag()` — recorded per render and folded into the
-  fingerprint by store-and-reread. Schema-phase reads fold with no
-  cold lag (schema runs pre-fp); render-body reads lag one render,
-  healed in-response by the fp-trailer. The tracking invariant: a
-  body's read set must be a function of tracked inputs, props, and
-  invalidation-covered data (cells/tags) — never of untracked
-  nondeterminism (no `Date.now()` branching into a `cookie()` read).
-  CMS reads (`cms.text(...)`, `cms.blocks(...)`, …) live inside a
-  block's `schema` callback. Async loaders run in `render`.
-- **Wake hints are hooks, park is a hook.** `expires(at)` /
-  `staleUntil(at)` declare freshness boundaries (live-driver wakes +
-  the fp-skip TTL gate); `time()` is the render clock
-  (`expires(time().nextSecond)`). `park()` (schema-phase) is the
-  value-conditional gate `match` can't express — parked keepalive,
-  cached client variants preserved; `return null` from Render renders
-  an empty body instead. Wrappers need NO declaration for their
-  descendants' sake: same-bucket changes ride the descendant fold,
-  new-bucket first visits ride the cold-record gate (over-fetch,
-  never stale).
-- **`match` is strict URLPattern** — no auto-suffixing. `match:
-  "/inspect/*"` means `/inspect/<rest>` and does NOT match bare
-  `/inspect`. To match both, use `match: "/inspect{/*}?"`.
+  fingerprint by store-and-reread (one-render lag, healed in-response
+  by the fp-trailer). Cells resolve in the body too: `await
+  handle.resolve(args?)` for module cells, inline `localCell(key,
+  opts)` for parton-scoped ones, `.with(args)` for JSX prop binding —
+  each records its partition-scoped `cell:` dep. Writes are plain
+  `"use server"` functions that import cells and call `.set`, wrapped
+  in `atomic(fn)` (one commit, one wake; a throw rolls back). The
+  tracking invariant: a body's read set must be a function of tracked
+  inputs, props, and invalidation-covered data (cells/tags) — never
+  of untracked nondeterminism (no `Date.now()` branching into a
+  `cookie()` read). CMS reads (`cms.text(...)`, `cms.blocks(...)`, …)
+  live inside a block's `schema` callback. Async loaders run in
+  `render`.
+- **Wake hints are hooks, existence is the match gate.**
+  `expires(at)` / `staleUntil(at)` declare freshness boundaries
+  (live-driver wakes + the fp-skip TTL gate); `time()` is the render
+  clock (`expires(time().nextSecond)`). Value-conditional existence
+  is a `match` gate (`searchParams: {pages: (v) => Number(v) >=
+  page}`) — a miss parks: keepalive emission, cached client variants
+  preserved. `return null` from Render is the other semantic: render
+  an empty body, replacing the cached content. Wrappers need NO
+  declaration for their descendants' sake: same-bucket changes ride
+  the descendant fold, new-bucket first visits ride the cold-record
+  gate (over-fetch, never stale).
+- **`match` gates the whole request.** String form is strict
+  URLPattern — no auto-suffixing: `match: "/inspect/*"` means
+  `/inspect/<rest>` and does NOT match bare `/inspect`; use
+  `"/inspect{/*}?"` for both. The object form (`MatchInit`) gates any
+  request dimension: URL components take URLPattern strings or
+  per-value predicates `(value: string) => boolean`;
+  `searchParams` / `cookies` / `headers` are per-value records
+  (`string | (value: string | null) => boolean`, absence is `null`,
+  order-independent). Predicates must be pure + sync (re-run outside
+  renders; signed by source text for HMR dedup); named params come
+  only from string components; `cookies` gates read the raw `Cookie`
+  header (not the same-request `setCookie` overlay). Transport params
+  (`TRANSPORT_PARAMS`: partials, cached, live, streaming, __frame,
+  __frameUrl) are stripped before evaluation — match never sees them.
 - **Slot blocks** are constructed via `block`; they self-register in the type catalog under their auto-derived `type` (`HeroRender` → `"hero"`). `selector` is a flat list of refetch labels (`"page-block"` or `["page-block", "composed-hero"]`); leading `#`/`.` is cosmetic and stripped. The first label is the spec's catalog id — and for singleton blocks, also the CMS storage key. Slots are composed from inside a host's `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)` — author code never threads `host` / per-instance content keys; the framework wires it internally.
-- **No `parent` prop.** A parton reads its `parent` (id path + frame chain) from server context — the ambient parton, threaded through a per-component ALS frame (see [`docs/internals/server-context.md`](./docs/internals/server-context.md), backed by a `@vitejs/plugin-rsc` patch in `.yarn/patches/`). Place specs as `<Spec />`, never `<Spec parent={…} />`. `Render` receives `{...matchParams, ...schema, ...actions, children}` — no `parent`, no `id`. CMS content flows via `schema` reads bound by the framework.
+- **No `parent` prop.** A parton reads its `parent` (id path + frame chain) from server context — the ambient parton, threaded through a per-component ALS frame (see [`docs/internals/server-context.md`](./docs/internals/server-context.md), backed by a `@vitejs/plugin-rsc` patch in `.yarn/patches/`). Place specs as `<Spec />`, never `<Spec parent={…} />`. `Render` receives `{...resolvedProps, ...matchParams, children}` — call-site props (cell-bearing ones resolved), then match params; no `parent`, no `id`. CMS content flows via a block's `schema` reads bound by the framework.
 
 ## Comments
 

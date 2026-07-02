@@ -45,11 +45,10 @@ export interface SchemaScope {
  *  partial; same fingerprint / cache / refetch path.
  *
  *  Omits PartialOptions.schema so block's CMS-shaped schema
- *  (`(scope) => S`) doesn't collide with the parton-level
- *  no-arg schema (`() => Record<string, unknown>`). Block's
- *  schema runs inside the cms-block wrapper's Render; parton-level
- *  schema would be redundant here. */
-export type BlockOptions<V, S> = Omit<PartialOptions<V>, "schema"> & {
+ *  (`(scope) => S`) is the block's own surface — the one declared
+ *  schema in the framework; it runs inside the cms-block wrapper's
+ *  Render. */
+export type BlockOptions<V, S> = PartialOptions<V> & {
   /** CMS field reads + child slots. Runs at render time with a real
    *  `cms` surface; the result is merged into Render's prop bag
    *  alongside the match params. The editor's catalog prerender invokes it

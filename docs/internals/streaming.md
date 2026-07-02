@@ -38,7 +38,8 @@ any selector-routing logic that could replace it.
 ## How a live update lands
 
 1. **A parton declares a freshness boundary via `expires()`**
-   (time-based) or **reads a cell via `schema`** (write-driven via
+   (time-based) or **resolves a cell** — `cell.resolve()` in its body
+   or a cell-bearing prop (write-driven via
    `refreshSelector("cell:<id>")`).
 2. **The app's browser entry mounts `<LivePageHeartbeat />`**
    near the React root. After hydration it holds a `?live=1`
@@ -98,14 +99,14 @@ keepalive cycle: the connection closes after ~20s idle, the
 heartbeat reopens it, and a reopened connection's first segment is
 always whole-tree — a periodic full reconciliation.
 
-## Actions stay non-streaming
+## Writes stay non-streaming
 
-Server actions complete with a one-shot response (no `?live=1` on
-their URL). Their bodies call `refreshSelector` / `cell.set` /
-`getServerNavigation().reload({selector})`, which bumps the
-**already-open** heartbeat stream. The segment driver wakes, the
-next segment renders, the changed partial's fp moves, the bytes
-ship. The heartbeat is the one connection actions ever need.
+Server functions complete with a one-shot response (no `?live=1` on
+their URL). Their bodies call `cell.set` (batched in `atomic()`) /
+`refreshSelector` / `getServerNavigation().reload({selector})`, which
+bumps the **already-open** heartbeat stream. The segment driver
+wakes, the next segment renders, the changed partial's fp moves, the
+bytes ship. The heartbeat is the one connection a write ever needs.
 
 A frame refetch, though, CAN open a second connection: the chat
 overlay's frame nav renders a `markConnectionLive` sentinel, so that

@@ -11,10 +11,10 @@ frame gates on the frame, exactly like a `pathname()` read tracking
 the frame's URL.
 
 ```tsx
-const CartContent = parton(CartContentRender, {
-  selector: "#cart",
-  schema: () => ({ state: parseCartState(pathname()) }),
-})
+const CartContent = parton(function CartContentRender(_: RenderArgs) {
+  const state = parseCartState(pathname())   // tracked read of the FRAME url
+  return <CartPanel state={state} />
+}, { selector: "#cart" })
 
 <Frame name="cart" initialUrl="/cart/closed">
   <CartContent />

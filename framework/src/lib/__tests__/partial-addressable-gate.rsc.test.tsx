@@ -1,16 +1,17 @@
 /**
  * Addressable gate — non-addressable specs (no author-declared
- * selector/vary/match) don't emit a `partialFingerprint` on the
- * wire. The per-spec fp cycle (boundary prop → client registration
- * → next-nav `?cached=` triple → fp-trailer update) is redundant
+ * selector/match) don't emit a `partialFingerprint` on the wire.
+ * The per-spec fp cycle (boundary prop → client registration →
+ * next-nav `?cached=` triple → fp-trailer update) is redundant
  * for them: they have no external refetch handle, so they only
  * ever render as part of their parent's render. The parent's
  * descendant fold still folds their varyKey/contentKey
  * contributions in, so fp-skip safety is preserved at the parent.
  *
- * Auto-derived selectors (from `Render.name`) DON'T count as
- * author-declared addressability — they only exist to give the
- * spec catalog a unique id.
+ * Tracked body reads don't count either — the read IS a dependency,
+ * not an address. Auto-derived selectors (from `Render.name`) DON'T
+ * count as author-declared addressability — they only exist to give
+ * the spec catalog a unique id.
  */
 
 import { describe, expect, it } from "vitest"
@@ -48,13 +49,22 @@ async function flightAt(url: string, node: React.ReactNode): Promise<string> {
 }
 
 describe("addressable gate — wire fp emission", () => {
-  it("a spec with no author-declared selector/vary/match emits no partialFingerprint on the wire", async () => {
+  it("a spec with no author-declared selector/match emits no partialFingerprint on the wire", async () => {
     clearRegistry("all")
 
-    // Non-addressable child: no `selector`, no `vary`, no `match`.
-    // Catalog id auto-derives to "gate-child" from Render.name.
+    // Non-addressable child: no `selector`, no `match`. Catalog id
+    // auto-derives to "gate-child" from Render.name.
     const Child = parton(function GateChildRender(_: RenderArgs) {
       return <span data-testid="gate-child-body">child</span>
+    })
+
+    // A tracked body read does NOT flip the gate — the read folds
+    // into the fingerprint machinery (and the parent's descendant
+    // fold), but addressability is an author opt-in via
+    // selector/match. Catalog id auto-derives to "read-only-child".
+    const ReadingChild = parton(function ReadOnlyChildRender(_: RenderArgs) {
+      const v = searchParam("v", "x")
+      return <span data-testid="read-only-body">{`child-${v}`}</span>
     })
 
     // Addressable parent: explicit `selector` AND `match`. The
@@ -64,6 +74,7 @@ describe("addressable gate — wire fp emission", () => {
         return (
           <div data-testid="gate-parent-body">
             <Child />
+            <ReadingChild />
           </div>
         )
       },
@@ -79,9 +90,10 @@ describe("addressable gate — wire fp emission", () => {
     const out = await flightAt("http://t/gate", tree)
     const fps = fingerprintsByPartialId(out)
 
-    // Sanity: both partials rendered.
+    // Sanity: all three partials rendered.
     expect(out).toContain("gate-parent-body")
     expect(out).toContain("gate-child-body")
+    expect(out).toContain("read-only-body")
 
     // Parent is addressable — fp present.
     expect(fps.has("gate-parent")).toBe(true)
@@ -92,6 +104,11 @@ describe("addressable gate — wire fp emission", () => {
     // omitted, so Flight doesn't serialize it.
     expect(fps.has("gate-child")).toBe(true)
     expect(fps.get("gate-child")).toBeUndefined()
+
+    // The reading child is non-addressable too — its tracked read is
+    // a dependency, not an address.
+    expect(fps.has("read-only-child")).toBe(true)
+    expect(fps.get("read-only-child")).toBeUndefined()
   })
 
   it("an explicit selector flips the gate on — the spec emits a fingerprint", async () => {
@@ -127,15 +144,18 @@ describe("addressable gate — wire fp emission", () => {
     expect(fps.get("opt-in-child")).toMatch(/^[0-9a-f]{16}$/)
   })
 
-  it("an explicit schema flips the gate on — the spec emits a fingerprint", async () => {
+  it("a spec with a tracked body read opts in via selector — the spec emits a fingerprint", async () => {
     clearRegistry("all")
 
-    // No selector, no match, but `schema` is declared. Author opted in.
+    // The tracked read alone leaves the gate off (see above); an
+    // explicit `selector` is the opt-in that puts the read-bearing
+    // spec's fp on the wire.
     const VaryChild = parton(
-      function VaryOptInChildRender({ v }: { v: string } & RenderArgs) {
+      function VaryOptInChildRender(_: RenderArgs) {
+        const v = searchParam("v", "x")
         return <span data-testid="vary-opt-in-body">{`child-${v}`}</span>
       },
-      { schema: () => ({ v: searchParam("v", "x") }) },
+      { selector: ".vary-opt-in-child" },
     )
 
     const Parent = parton(
@@ -162,18 +182,16 @@ describe("addressable gate — wire fp emission", () => {
   it("the parent's fingerprint moves when a non-addressable child's tracked read would move (fold safety)", async () => {
     clearRegistry("all")
 
-    // Child reads a cookie via its schema. Child is still addressable
-    // here (schema alone trips the gate), but the important assertion
-    // is that the PARENT's fp picks up the child's dep contribution
+    // Child reads a cookie in its body — no selector, no match, so
+    // the child stays non-addressable. The important assertion is
+    // that the PARENT's fp picks up the child's dep contribution
     // through the descendant fold. Without the fold, fp-skipping the
     // parent would serve a stale child body when only the cookie
     // changed.
-    const FoldChild = parton(
-      function FoldChildRender({ flag }: { flag: string } & RenderArgs) {
-        return <span data-testid="fold-body">flag={flag}</span>
-      },
-      { schema: () => ({ flag: cookie("flag") ?? "off" }) },
-    )
+    const FoldChild = parton(function FoldChildRender(_: RenderArgs) {
+      const flag = cookie("flag") ?? "off"
+      return <span data-testid="fold-body">flag={flag}</span>
+    })
 
     const Parent = parton(
       function FoldParentRender() {

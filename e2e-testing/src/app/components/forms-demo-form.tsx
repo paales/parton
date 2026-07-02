@@ -13,20 +13,13 @@
  *     state via `defaultValue`-style semantics; the hook tracks user
  *     edits without writing to the cell. Used here for the cardName /
  *     cardCvc fields — the input owns the draft locally; submit
- *     calls `save({cardName: nameInput.value, cardCvc: cvcInput.value})`
- *     and the framework auto-writes both into the matching cells
- *     atomically inside the action's transaction.
- *
- * `usePartonAction(save)` wraps the action ref and pushes args into
- * the optimistic-value map at fire time. While the action is in
- * flight, `useCell(cardName).value` surfaces the optimistic value;
- * on success the server refetch carries the committed value; on
- * failure the optimistic clears and the UI rewinds to prior server
- * value.
+ *     passes the drafts to `save(...)`, a plain server function that
+ *     writes both cells inside `atomic()` — one wake, and a throw
+ *     rolls the batch back.
  */
 
-import { useCell, usePartonAction } from "@parton/framework/lib/cell-client.tsx"
-import type { ResolvedAction, ResolvedCell } from "@parton/framework"
+import { useCell } from "@parton/framework/lib/cell-client.tsx"
+import type { ResolvedCell } from "@parton/framework"
 import { useEffect, useState } from "react"
 
 interface SaveArgs {
@@ -40,7 +33,7 @@ export interface FormsDemoFormProps {
   notes: ResolvedCell<string>
   saves: ResolvedCell<string>
   failChance: ResolvedCell<number>
-  save: ResolvedAction<SaveArgs, void>
+  save: (args: SaveArgs) => Promise<void>
 }
 
 export function FormsDemoForm({
@@ -49,14 +42,13 @@ export function FormsDemoForm({
   notes,
   saves,
   failChance,
-  save: rawSave,
+  save,
 }: FormsDemoFormProps) {
   const name = useCell(cardName)
   const cvc = useCell(cardCvc)
   const notesCell = useCell(notes)
   const savesView = useCell(saves)
   const failChanceView = useCell(failChance)
-  const save = usePartonAction(rawSave)
 
   // onSubmit-mode bindings: uncontrolled `<input>`. defaultValue from
   // cell.value, no per-keystroke state, no hook re-renders. Harvest at

@@ -18,7 +18,7 @@ The public surface is five things:
 
 | | What it is | When you reach for it |
 |---|---|---|
-| `parton(R, opts)` | Addressable render unit. Optionally URL-gated via `match`. | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all. |
+| `parton(R, opts)` | Addressable render unit. Optionally request-gated via `match`. | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all. |
 | `block(R, opts)` | Slot-placeable partial with a `schema` for CMS content. | Content blocks the CMS can place into slots or render directly as a singleton (storage row matches spec id). |
 | `cell` / `localCell` / `gqlCell` | Typed, identity-keyed slot of server-authoritative state; crosses Flight as `ResolvedCell<T>`. | Server-owned state a parton reads and clients mutate — cart, prefs, form drafts, GraphQL-loaded entities. |
 | `<Frame name initialUrl>` | Scope opener — extends the ambient frame chain so descendants see the frame-resolved request. | Any region whose URL is independent of the window URL. |
@@ -26,8 +26,9 @@ The public surface is five things:
 
 A spec is constructed once at module scope; every dependency it has on
 the request is a tracked read — `searchParam()`, `cookie()`,
-`header()`, … — recorded wherever the spec's `schema` or `Render`
-actually reads it (CMS reads live on blocks' `schema`).
+`header()`, … — recorded where the spec's `Render` actually reads it
+(CMS reads live on a block's `schema({cms})` callback — the one
+declared resolution surface in the framework).
 
 ```tsx
 const PokemonPage = parton(PokemonRender, "/pokemon/:id")
@@ -51,7 +52,7 @@ A spec is:
 - **Independently re-renderable** — a targeted refetch re-runs only
   the requested spec's body without re-executing any ancestor.
 - **Fingerprinted** — every render computes a hash from the spec
-  id, its match params, its resolved schema, and its recorded
+  id, its match params, its resolved cells, and its recorded
   tracked reads re-evaluated at the current request. The
   client sends the fingerprints it has on every refetch; the server
   emits a 3-byte placeholder for any spec whose fingerprint is
@@ -69,10 +70,9 @@ A spec is:
 > asked for, the client merges them into a persisted template.
 
 Every render decision lives inside the spec component the
-constructor returns: pattern match, schema resolution, fingerprint,
-skip, fall through. Specs placed inside opaque server components or
-`.map()` loops register themselves the same way as top-level
-placements.
+constructor returns: match gate, fingerprint, skip, fall through.
+Specs placed inside opaque server components or `.map()` loops
+register themselves the same way as top-level placements.
 
 ## What lives where
 

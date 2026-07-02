@@ -1,10 +1,12 @@
 # CMS
 
 CMS-driven content lives on [`block`](./block.md) specs via
-a `schema` callback. The callback receives a sync `cms` read surface
-bound to the block's effective CMS content row (the storage key of
-the rendered instance); its return is merged into the Render
-function's prop bag.
+a `schema` callback — the CMS resolution surface, and the one
+declared schema in the framework. The callback receives a sync `cms`
+read surface bound to the block's effective CMS content row (the
+storage key of the rendered instance); its return is merged into the
+Render function's prop bag. Request dimensions never appear here —
+they're tracked-hook reads in the Render body, same as on any parton.
 
 ```tsx
 const PromoBlock = block(

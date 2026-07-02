@@ -324,8 +324,8 @@ function fingerprintsByPartialId(flight: string): Map<string, string | undefined
 }
 
 describe("merged cart granularity — parent re-renders, only the touched line follows", () => {
-  // Models the flattened MagentoCartPage: ONE parton reads the cart
-  // cell in its `schema` AND hosts a per-line placement bound to a
+  // Models the flattened MagentoCartPage: ONE parton takes the cart
+  // cell as a bound JSX prop AND hosts a per-line placement bound to a
   // line cell at `{ uid }`. A qty update writes the touched line's
   // partition + the cart cell (totals). The parent re-renders (its
   // cart-cell value folds into its fp) and the touched line re-renders
@@ -374,24 +374,27 @@ describe("merged cart granularity — parent re-renders, only the touched line f
       {
         selector: "gran-cart",
         match: "/gc",
-        schema: () => ({ cart: cart.with({ cartId: "c1" }) }),
       },
     )
 
     const tree = (
       <PartialRoot>
-        <Cart />
+        <Cart cart={cart.with({ cartId: "c1" })} />
       </PartialRoot>
     )
 
     const before = await flightAt("http://t/gc", tree)
     const fpsBefore = fingerprintsByPartialId(before)
     const lineKeys = [...fpsBefore.keys()].filter((k) => k.startsWith("gran-line"))
+    // The bound-cell JSX prop gives the cart placement a per-instance
+    // id (`gran-cart:<propsHash>`).
+    const cartKey = [...fpsBefore.keys()].find((k) => k.startsWith("gran-cart"))!
 
     // Sanity: parent + exactly two distinct line placements rendered.
     expect(before).toContain("qty 1")
     expect(before).toContain("qty 9")
-    expect(fpsBefore.get("gran-cart")).toMatch(/^[0-9a-f]{16}$/)
+    expect(cartKey).toBeDefined()
+    expect(fpsBefore.get(cartKey)).toMatch(/^[0-9a-f]{16}$/)
     expect(lineKeys).toHaveLength(2)
 
     // The mutation: bump line A's qty (1 → 2) and the cart total.
@@ -406,7 +409,7 @@ describe("merged cart granularity — parent re-renders, only the touched line f
     expect(after).toContain("qty 9")
 
     // Parent fp shifted (its cart-cell value folded into the fp).
-    expect(fpsAfter.get("gran-cart")).not.toEqual(fpsBefore.get("gran-cart"))
+    expect(fpsAfter.get(cartKey)).not.toEqual(fpsBefore.get(cartKey))
 
     // Of the two sibling lines, EXACTLY one fp moved (the touched one);
     // the other is byte-identical and would fp-skip on the wire.

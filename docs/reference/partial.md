@@ -2,12 +2,15 @@
 
 The framework's base addressable-render-unit constructor. A spec is
 constructed once at module scope from a `Render` function and an
-options object; the call returns a placeable React component. Every
-request dependency the spec has — search params, cookies, headers,
-session — is whatever its `schema` and `Render` actually read through
-the tracked server-hooks (`searchParam()`, `cookie()`, …): the read
-IS the dependency, recorded per render and folded into the
-fingerprint.
+options object; the call returns a placeable React component. The
+constructor declares placement and replay — which instance exists
+(`match`), how it's addressed (`selector`), how it's served (`cache`,
+`defer`, `fallback`, `keepalive`, `fpSkip`). Everything else happens
+in the body: every request dependency the spec has — search params,
+cookies, headers, session — is whatever its `Render` actually reads
+through the tracked server-hooks (`searchParam()`, `cookie()`, …),
+and its data is whatever cells it resolves there: the read IS the
+dependency, recorded per render and folded into the fingerprint.
 
 > **Three constructors, one engine.** `partial` is the base case.
 > Slot-placeable CMS-driven units use [`block`](./block.md);
@@ -32,8 +35,8 @@ function PokemonRender({ id }: { id: string } & RenderArgs) {
 ## Tier 1 — pattern-match shorthand
 
 When a string is passed as the second argument, it's treated as the
-`match` pattern. On miss, the spec doesn't render. Pattern params
-flow into `Render`'s props directly.
+`match` pattern (a pathname gate). On miss, the spec doesn't render.
+Pattern params flow into `Render`'s props directly.
 
 ```tsx
 const HomePage = parton(Home, "/")
@@ -55,13 +58,10 @@ the type level. URLPattern syntax handled:
 | `/{group}?` | bracket-stripped; named params inside parse normally |
 
 URLPattern is the source of truth for what actually matches at runtime;
-unparseable corners fall through and the prop is just absent. Coerce
-inside `schema` (or `Render`) when you need a non-string shape —
-`param()` is a pure read of an already-folded match param:
-
-```tsx
-schema: () => ({ id: Number(param("id")) })
-```
+unparseable corners fall through and the prop is just absent. Params
+are always strings — coerce inside `Render` where you use them
+(`Number(id)`); `param()` is a pure read of an already-folded match
+param when a nested component needs one without threading props.
 
 ## Tier 2 — options object
 
@@ -69,62 +69,152 @@ schema: () => ({ id: Number(param("id")) })
 const ProductHero = parton(ProductHeroRender, {
   match: "/p/:slug",
   cache: { maxAge: 60 },
-  schema: () => ({ variant: searchParam("variant", "default") }),
 })
 
 async function ProductHeroRender({
-  slug, variant,
-}: { slug: string; variant: string } & RenderArgs) {
+  slug,
+}: { slug: string } & RenderArgs) {
+  const variant = searchParam("variant", "default")   // tracked read
   const product = await getProduct(slug)
   return <Hero product={product} variant={variant} />
 }
 ```
 
 For CMS-driven content (text, images, references), use
-[`block`](./block.md) with a `schema` callback.
-
-`match` runs first; on miss, `schema` doesn't run. On match, the
-pattern's named params flow straight into Render's props, and
-`schema`'s result merges alongside. A schema-phase
-[`park()`](#park--the-value-conditional-gate) is the
-value-conditional "don't render" gate.
+[`block`](./block.md) — its `schema({cms})` callback is the CMS
+resolution surface.
 
 ## Options
 
 ```ts
 interface PartialOptions {
-  match?: MatchPattern                             // URLPattern gate
-  schema?: (scope: ScopedCellFactories) => Record<string, unknown>
-  actions?: Record<string, (scope, args) => Promise<unknown>>
+  match?: MatchPattern                             // request gate (string or MatchInit)
   selector?: SelectorTokens                        // auto-derived from Render.name
   cache?: CacheOptions
   defer?: true | ReactElement<ActivatorProps>
   fallback?: ReactNode
   keepalive?: boolean                              // default true
+  fpSkip?: boolean                                 // default true
   capabilityType?: string                          // remote-manifest typing
 }
 ```
 
 | Option | Notes |
 |---|---|
-| `match` | URLPattern pathname (or full `URLPatternInit`). `/p/:slug`, `/p/:slug/reviews/:page`, `/inspect/*` (descendants only), `/inspect{/*}?` (bare + descendants). Pattern miss → spec emits nothing. Anonymous `*` captures don't fold into the fingerprint — only named groups (`:foo`) do; a spec that genuinely depends on the wildcard tail reads `pathname()` explicitly. |
-| `schema` | Sync callback, runs before the fingerprint. Returns the record merged into Render's prop bag: scoped cell descriptors (via the injected `{ localCell }` factory), module cell handles / `.with()` bindings (resolved into `ResolvedCell<T>`s), or plain values. Tracked hooks work here and fold into the CURRENT fingerprint with no cold lag — the natural home for request-derived reads (`schema: () => ({ q: searchParam("q", "") })`) and request-derived cell bindings (`cart: cartCell.with({ cartId: cookie("cart_id") })`). **No `cms` here** — CMS reads live on `block`'s `schema` callback. |
-| `actions` | Server-side handlers exposed as `ResolvedAction`s in Render's prop bag. See [Actions](#actions). |
+| `match` | The request gate. A URLPattern pathname string (`/p/:slug`, `/inspect/*` — descendants only, `/inspect{/*}?` — bare + descendants), or a `MatchInit` object gating any request dimension — URL components, search params, cookies, headers — with per-value predicates. Gate miss → the spec parks (or emits nothing when the client has no cached variant). See [The match gate](#the-match-gate--gating-the-request). Anonymous `*` captures don't fold into the fingerprint — only named groups (`:foo`) do; a spec that genuinely depends on the wildcard tail reads `pathname()` explicitly. |
 | `selector` | One or more refetch labels. Plain strings; leading `#` / `.` are cosmetic and stripped on parse (`"#hero"` and `"hero"` are equivalent). Defaults to `<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. The first label is the spec's catalog id; additional labels are extra fan-out targets. Multiple placements of the same spec share their labels; `nav.reload({selector: "label"})` hits every carrier. |
 | `cache` | See [`cache.md`](./cache.md). |
 | `defer` | `true` for app-driven, an activator element to wire automatically. |
 | `fallback` | React node rendered while the partial's body is suspended. |
-| `keepalive` | When `true` (default), the rendered body is wrapped in a `<Activity mode="visible" key={matchKey}>` while active and the spec emits `<Activity mode="hidden">` + placeholder for each cached variant on cross-route nav (instead of returning nothing on a `match` miss or a schema `park()`). The client substitutes its cached subtree at each placeholder, so the React fiber tree stays shape-stable across active ↔ parked transitions — `useState`, `useRef`, and DOM state survive a navigate-away-and-back round-trip. Multiple variants of the same spec (e.g. `/pokemon/1` ↔ `/pokemon/2`) coexist as hidden Activity siblings keyed by `matchKey` so each variant's fiber stays alive across cross-variant navigation. Set to `false` for partials whose state should reset on cross-route nav (heavy video/iframe DOM, debug-only specs, anything where stale state is worse than re-mount cost). |
+| `keepalive` | When `true` (default), the rendered body is wrapped in a `<Activity mode="visible" key={matchKey}>` while active and the spec emits `<Activity mode="hidden">` + placeholder for each cached variant on a `match` miss (instead of returning nothing). The client substitutes its cached subtree at each placeholder, so the React fiber tree stays shape-stable across active ↔ parked transitions — `useState`, `useRef`, and DOM state survive a navigate-away-and-back round-trip. Multiple variants of the same spec (e.g. `/pokemon/1` ↔ `/pokemon/2`) coexist as hidden Activity siblings keyed by `matchKey` so each variant's fiber stays alive across cross-variant navigation. Set to `false` for partials whose state should reset on cross-route nav (heavy video/iframe DOM, debug-only specs, anything where stale state is worse than re-mount cost). |
+| `fpSkip` | When `false`, this spec is never served from the client's fingerprint cache — every request renders it fresh. The spec still fingerprints normally (folds, trailer, addressability all unchanged); only the serve-from-cache decision is disabled. For always-authoritative surfaces whose output must track the request exactly: the CMS editor chrome opts out because its links embed the full request URL, which no individually-tracked dimension covers. Default `true`. |
 | `capabilityType` | Capability schema name referenced by the `/__remote/manifest.json` endpoint so `parton add` can generate typed bindings. Omit if the spec doesn't read capability values. See [`remote-frame.md`](./remote-frame.md). |
+
+## The match gate — gating the request
+
+`match` decides **which instance exists**: variant identity (named
+params → `matchKey`), route buckets (the URL-pattern half feeds route
+keying), and existence (a miss parks the client's cached variants).
+The gate surface is the whole request, not just the URL:
+
+```ts
+type FieldTest = string | ((value: string) => boolean)
+type ValueTest = string | ((value: string | null) => boolean)
+
+interface MatchInit {
+  protocol?, hostname?, port?, pathname?, hash?: FieldTest
+  username?, password?, baseURL?: string
+  search?: string                            // raw URLPattern search string
+  searchParams?: Record<string, ValueTest>   // per-param gates
+  cookies?: Record<string, ValueTest>        // per-cookie gates
+  headers?: Record<string, ValueTest>        // per-header gates
+}
+```
+
+- **URL components** (`pathname`, `hostname`, …) take URLPattern
+  strings or per-value predicates `(value: string) => boolean`. String
+  semantics are strict URLPattern — no auto-suffixing: `match:
+  "/inspect/*"` matches `/inspect/…` and NOT bare `/inspect`; write
+  `"/inspect{/*}?"` for both.
+- **`searchParams` / `cookies` / `headers`** gate on individual
+  values, order-independent (unlike a raw URLPattern `search` string).
+  A string value tests equality; a predicate receives the value or
+  `null` when absent — absence is a value (`?q=` is `""`, no `?q` at
+  all is `null`).
+- **`search`** stays as the raw, order-sensitive URLPattern
+  search-string pattern — it exists for full-string patterns with
+  capture groups (`"*q=:query"`) where the named capture matters;
+  prefer `searchParams` for gating individual params.
+
+Rules that make the gate sound:
+
+- **Predicates are the gate itself — pure and sync.** The framework
+  re-runs them outside any render (the descendant fold, route keying,
+  cache-mode refetch reconstruction). Each predicate sees one value; a
+  gate that needs two request dimensions is two fields (fields AND
+  together). Gates sign by their source text, so HMR dedups an
+  unchanged gate and an edited predicate body correctly counts as a
+  new one.
+- **Gates read the request as sent.** The `cookies` fields parse the
+  raw `Cookie` header, deliberately bypassing the same-request
+  `setCookie` overlay that body reads (`cookie()`) see. A gate verdict
+  is therefore a pure function of the incoming request — every
+  re-evaluation during the request's lifetime agrees by construction.
+  A mid-request cookie write re-gates on the NEXT request, while the
+  body's reads see it immediately: the gate is who you were when you
+  asked; the content is who you are now.
+- **Header names are lowercased** per HTTP semantics;
+  framework-internal `x-parton-*` headers are invisible (they test as
+  `null`).
+- **Named params come only from URLPattern string components.** A
+  predicate can gate but not name (there's no capture group to
+  extract), so `ParseRoute` typing and matchKey identity flow from the
+  string half untouched. Predicates and the `searchParams` / `cookies`
+  / `headers` records gate specs but never split route buckets —
+  route keys come from the URL-pattern half alone.
+- **Transport params are invisible.** The framework mints search
+  params for its own transport — refetch targeting (`partials`), the
+  client cache manifest (`cached`), live holds (`live`), commit mode
+  (`streaming`), frame routing (`__frame`, `__frameUrl`) — so the SAME
+  page arrives with and without them (SSR, targeted refetch, live
+  heartbeat). Match evaluation and param extraction strip them first;
+  a wildcard search capture like `"*q=:query"` never swallows them
+  into the named param, so transport noise can't split variant
+  identity. The list is exported as `TRANSPORT_PARAMS` — the single
+  source of truth for code that needs to strip them too (the CMS
+  editor's href builder does).
+
+### Match miss = park
+
+A gate miss doesn't just skip rendering — when the client has one or
+more variants of the spec cached (and `keepalive` is on), the spec
+emits a hidden-`<Activity>` placeholder per cached variant, so the
+client's fibers and state stay alive, parked. Parking is automatic;
+the gate IS the park trigger. Because the gate covers values, not
+just URL shape, value-conditional existence is a match gate too:
+
+```tsx
+// Page N of a load-more list exists iff the URL admits it — a miss
+// parks the cached page (back/forward across a load-more boundary
+// restores it).
+match: { searchParams: { pages: (v) => Math.max(1, Number(v) || 1) >= page } }
+```
+
+Contrast `return null` from Render: that's render-emptiness — the
+spec registers (deps recorded, fp emitted) and REPLACES the client's
+cached variant with an empty body. A gate miss preserves the parked
+client state. Two distinct semantics: "this instance doesn't exist
+here" is a gate; "this instance exists and is empty" is a body
+decision.
 
 ## Tracked reads — the server hooks
 
 Free functions imported from the framework, callable anywhere inside
-a parton's `schema` or `Render` body. Each returns the request value
-AND records a dependency key on the parton's live dep set, so the
-read folds into the fingerprint — a changed cookie / search param /
-header moves the fp and the parton re-renders on the next
-navigation. The read IS the dependency, exactly like a cell.
+a parton's `Render` body. Each returns the request value AND records
+a dependency key on the parton's live dep set, so the read folds into
+the fingerprint — a changed cookie / search param / header moves the
+fp and the parton re-renders on the next navigation. The read IS the
+dependency, exactly like a cell.
 
 | Hook | Reads | Records |
 |---|---|---|
@@ -136,32 +226,34 @@ navigation. The read IS the dependency, exactly like a cell.
 | `param(name)` | A resolved match param (`/pokemon/:id` → `param("id")`). Pure read, records NOTHING — match params already fold into the fp via `matchKey`. | — |
 | `session()` | `{ id }` — the session identity; `""` for an anon request with no session yet. | `session:` |
 | `visible(options?)` | The parton's viewport visibility (tri-state; `undefined` pre-measurement). Calling it makes the parton cullable — entering/leaving the viewport moves its fp. | `visible:<id>` |
-| `tag(name)` | Registers an invalidation tag computed per render (`` tag(`product:${id}`) ``), so a matching `refreshSelector(name)` shifts the fp and the name becomes a refetch target. Schema-phase: folds into this render's label set directly — zero lag. Render-body: records a `tag:<name>` dep riding store-and-reread (the natural slot for tags a loader's response yields). | `tag:<name>` |
+| `tag(name)` | Registers an invalidation tag computed per render (`` tag(`product:${id}`) ``), so a matching `refreshSelector(name)` shifts the fp and the name becomes a refetch target. Records a `tag:<name>` dep riding store-and-reread — the natural slot for tags a loader's response yields. | `tag:<name>` |
 
 All hooks read from the parton's frame-resolved request, so a framed
 spec tracks its frame's URL and cookies. Outside a parton body
 they're no-ops returning the empty value.
 
 `cookie()` overlays any in-request `setCookie()` writes on top of the
-request header — so a partial re-rendered immediately after an action
-calls `setCookie("cart_id", X) + getServerNavigation().reload({
+request header — so a partial re-rendered immediately after a server
+function calls `setCookie("cart_id", X) + getServerNavigation().reload({
 selector: "cart" })` reads the new value (consistent with
 `readCookie`). `Max-Age=0` follows browser deletion semantics and
 removes the cookie from the overlay; a non-zero `Max-Age` with an
-empty value reads as the empty string.
+empty value reads as the empty string. (Match `cookies` gates
+deliberately bypass this overlay — see
+[The match gate](#the-match-gate--gating-the-request).)
 
 ### Timing — store-and-reread
 
-Where the read runs decides its fingerprint lag:
+Body reads are recorded during the render, but the fp was computed
+before the body ran — so the fold uses the PRIOR render's recorded
+keys, re-read at the current request (store-and-reread). The first
+render of a variant folds nothing and emits a cold fp; the fp-trailer
+ships the cold→warm drift in the same response, so the very next
+navigation is fp-accurate.
 
-- **Schema-phase reads** fold into the CURRENT fingerprint with no
-  cold lag — `schema` runs before the fp is computed.
-- **Render-body reads** are recorded during the render, but the fp
-  was computed before the body ran — so the fold uses the PRIOR
-  render's recorded keys, re-read at the current request
-  (store-and-reread). The first render of a variant folds nothing and
-  emits a cold fp; the fp-trailer ships the cold→warm drift in the
-  same response, so the very next navigation is fp-accurate.
+Declared `match` gates have no such lag: they're request-reproducible
+(pure functions of the request, re-runnable outside any render), so
+they gate and key correctly from render 1 with nothing to record.
 
 ### Cold-record gate
 
@@ -202,33 +294,64 @@ The CMS layer registers its `cms:<contentKey>` content-hash kind this
 way — a block's fingerprint tracks its content row through the same
 channel as every other dependency.
 
-## `park()` — the value-conditional gate
+## Cells — resolved in the body
 
-`match` gates on URL shape; `park()` gates on values. A schema-phase
-hook that throws a branded signal; the wrapper catches it before the
-fingerprint is computed and emits the parked keepalive (hidden
-`<Activity>` per cached client variant — no snapshot registration, no
-fp) instead of rendering:
+A parton's data comes from [cells](./cells.md), resolved where it's
+used:
 
 ```tsx
-schema: () => {
-  const page = Number(param("page") ?? "1")
-  const pages = Math.max(1, Number(searchParam("pages")) || 1)
-  if (page > pages) park()
-  return { page }
-},
+const FormsDemoPage = parton(
+  async function FormsDemoRender(_: RenderArgs) {
+    const notes = await notesCell.resolve()          // module cell
+    const draft = await localCell("draft", {          // parton-scoped cell
+      shape: "string", initial: "",
+    })
+    return <Editor notes={notes} draft={draft} />
+  },
+  { match: "/forms-demo" },
+)
 ```
 
-Schema-phase only — a `park()` in the Render body throws (parking
-must happen before the fp exists). The decision re-evaluates from
-live reads on every parent render pass, so no dep record is needed
-for un-parking.
+`await handle.resolve(args?)` reads the value (running the loader on
+a storage miss), records the partition-scoped `cell:` dependency on
+the rendering parton — a write re-renders it, and the label rides for
+selector refetch — and returns a Flight-portable `ResolvedCell<T>`.
+The inline `localCell("key", {…})` form declares a cell owned by the
+calling parton (wire id `<partonId>/<key>`). Cells can also be bound
+at a JSX call site (`<CartLine item={cartItemCell.with({uid})} />`) —
+the framework resolves cell-bearing props before Render runs. Full
+surface in [`cells.md`](./cells.md).
 
-Contrast `return null` from Render: that registers the spec (deps
-recorded, fp emitted) and replaces the client's cached variant with
-an empty body. `park()` preserves the parked client state — exactly
-the cross-route keepalive emission. During action dispatch a `park()`
-converts to a dispatch error — a parked parton cannot handle actions.
+## Writes — plain server functions + `atomic()`
+
+There is no action option on the constructor. Writes are plain
+`"use server"` functions that import cells and call `.set`, wrapped
+in `atomic(fn)` — the transactional boundary: every write inside `fn`
+commits together (one invalidation fan-out, one live-driver wake),
+reads inside the transaction see the buffered writes, and a throw
+discards them all. Client-side optimism is cell-level via `useCell`.
+
+```ts
+// forms-demo-actions.ts
+"use server"
+import { atomic } from "@parton/framework"
+import { cardName, cardCvc, saves } from "./forms-demo-state.ts"
+
+export async function saveCard(args: { cardName?: string; cardCvc?: string }) {
+  await atomic(async () => {
+    if (args.cardName !== undefined) await cardName.set(args.cardName)
+    if (args.cardCvc !== undefined) await cardCvc.set(args.cardCvc)
+    await saves.set(JSON.stringify({ ...args, at: Date.now() }))
+  })
+}
+```
+
+The Render passes the function to a client component like any bound
+server reference; the client calls it directly. The canonical worked
+example is the forms demo
+(`e2e-testing/src/app/pages/forms-demo{-state.ts,-actions.ts,.tsx}`).
+See [`cells.md`](./cells.md#mutation-patterns) for the full write
+surface.
 
 ## Wake hints — `expires()` / `staleUntil()` / `time()`
 
@@ -244,10 +367,10 @@ converts to a dispatch error — a parked parton cannot handle actions.
 
 `staleUntil(at)` declares the stale-while-revalidate window beyond
 `expires()`. Multiple calls keep the EARLIEST boundary. Both are
-callable anywhere in schema or Render — they write a live box on the
-snapshot, so post-await calls still land before the driver consults
-it, and a skip/defer pass threads the prior snapshot's box through so
-a wake schedule survives a skip.
+callable anywhere in Render — they write a live box on the snapshot,
+so post-await calls still land before the driver consults it, and a
+skip/defer pass threads the prior snapshot's box through so a wake
+schedule survives a skip.
 
 Wake hints never enter the fingerprint — folding a wall-clock
 timestamp would shift the fp every millisecond.
@@ -264,33 +387,34 @@ time().never                 // +Infinity — sentinel for "no expiry"
 
 ## `Render` props
 
-`Render` receives, in order: any extra props passed at the JSX call
-site, the named match params, the resolved `schema` result, the
-resolved actions, and the framework-injected `children`. Later rows
-win on collision.
+`Render` receives the call-site JSX props (with cell-bearing props
+resolved to `ResolvedCell<T>`s), the named match params, and the
+framework-injected `children`. Later rows win on collision.
 
 | Key | Source |
 |---|---|
-| `<JSX call-site props>` | placing spec, e.g. `<Hero pokemonId={id} />` |
-| `<named match params>` | the `match` pattern — `/pokemon/:id` → `{ id }` |
-| `<every key from schema's return>` | author — cell descriptors/handles resolve to `ResolvedCell<T>`, plain values pass through |
-| `<every key from actions>` | author — each handler becomes a `ResolvedAction` |
+| `<JSX call-site props>` | placing spec, e.g. `<Hero pokemonId={id} />` — `CellInterface` / `BoundCell` props arrive resolved |
+| `<named match params>` | the `match` pattern's string half — `/pokemon/:id` → `{ id }` |
 | `children` | framework — passes outer JSX children through |
+
+Everything else the body reads itself: tracked hooks for request
+dimensions, `cell.resolve()` / inline `localCell` for data.
 
 A parton neither receives nor threads a `parent` — nested specs and
 slot hosts read their parent (id path + frame chain) from server
 context (the ambient parton; see
 [`server-context.md`](../internals/server-context.md)). There is no
 `id` prop on the Render surface either — CMS-bound blocks
-([`block.md`](./block.md)) get their content via `schema` reads, and
-the framework binds the read surface to the right row internally.
+([`block.md`](./block.md)) get their content via their `schema`
+reads, and the framework binds the read surface to the right row
+internally.
 
 ### `typeof Spec.props` — derive the prop bag from the spec
 
 The returned spec carries a phantom `.props` type that resolves to the
-prop bag the framework supplies to `Render` (match params + schema
-result + actions + `RenderArgs`). Use it to skip retyping the same
-shape across sibling factories or hooks:
+prop bag the framework supplies to `Render` (match params +
+`RenderArgs`). Use it to skip retyping the same shape across sibling
+factories or hooks:
 
 ```tsx
 const Hero = parton(HeroRender, { match: "/pokemon/:id" })
@@ -327,22 +451,19 @@ it just orders the type plumbing differently to dodge the cycle.
 
 `parton(Render, …)` feels like `React.memo(Render)`: the
 returned component's prop signature is Render's prop signature minus
-the keys the framework already provides (match params, schema keys,
-actions) minus the framework-injected keys. TypeScript subtracts
-both, so the call site is exactly the props you still have to supply.
+the keys the framework already provides (match params) minus the
+framework-injected keys. TypeScript subtracts both, so the call site
+is exactly the props you still have to supply.
 
 ```tsx
-// schema fills `pokemonId` → call site takes nothing
-const Hero = parton(HeroRender, {
-  match: "/pokemon/:id",
-  schema: () => ({ pokemonId: Number(param("id")) }),
-})
-function HeroRender({ pokemonId }: { pokemonId: number } & RenderArgs) { … }
+// match fills `id` → call site takes nothing
+const Hero = parton(HeroRender, { match: "/pokemon/:id" })
+function HeroRender({ id }: { id: string } & RenderArgs) { … }
 <Hero />
 ```
 
 ```tsx
-// no match, no schema → `pokemonId` is required at the call site
+// no match → `pokemonId` is required at the call site
 const Hero = parton(function HeroRender({
   pokemonId,
 }: { pokemonId: number } & RenderArgs) { … })
@@ -379,10 +500,9 @@ const Hero = parton(async function HeroRender({
 
 `{ match: "/pokemon/:id" }` alone is enough — `ParseRoute<P>` extracts
 `:id` from the pattern at the type level and auto-flows it as a typed
-`{ id: string }` into Render. Add a `schema` only when you need to
-reshape the params (coercion, defaults, derived values). Call-site
-props are part of the cache fingerprint automatically — two parents
-passing different `id` values produce different cache entries.
+`{ id: string }` into Render. Call-site props are part of the cache
+fingerprint automatically — two parents passing different `id` values
+produce different cache entries.
 
 The framework captures the call-site props in the spec's snapshot
 so a partial-refetch (cache-mode `?partials=…`) can re-invoke the
@@ -394,14 +514,14 @@ so refetches carry the props they were originally rendered with.
 
 ## Slots
 
-Slot composition is a block-spec concern. A parton's `schema` has no
-`cms` surface and can't read CMS slot entries — if you need a unit
-that hosts CMS-managed children, use [`block`](./block.md)
-and declare the slot via `cms.blocks(slot, selector?)` /
-`cms.block(slot, selector?)` inside `schema`. A partial that happens
-to render a singleton block can still place it directly via JSX
-(`<SomeBlock />`); the block's CMS row falls out of
-its spec id (the first selector label, or `Render.name`-derived).
+Slot composition is a block-spec concern. A parton has no `cms`
+surface and can't read CMS slot entries — if you need a unit that
+hosts CMS-managed children, use [`block`](./block.md) and declare the
+slot via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)`
+inside its `schema`. A partial that happens to render a singleton
+block can still place it directly via JSX (`<SomeBlock />`); the
+block's CMS row falls out of its spec id (the first selector label,
+or `Render.name`-derived).
 
 ## Selector grammar
 
@@ -438,11 +558,11 @@ through a CMS slot.
 
 A spec emits in one of four shapes, in priority order:
 
-1. **`match` miss or schema `park()`, no cached entry on the
-   client.** Spec emits nothing — the JSX position is empty.
-2. **`match` miss or schema `park()`, AND the client has one
-   or more variants cached (declared via `?cached=id:matchKey:fp`),
-   AND `keepalive` is on (default).** Spec emits one
+1. **`match` miss, no cached entry on the client.** Spec emits
+   nothing — the JSX position is empty.
+2. **`match` miss, AND the client has one or more variants cached
+   (declared via `?cached=id:matchKey:fp`), AND `keepalive` is on
+   (default).** Spec emits one
    `<Activity mode="hidden" key={matchKey}>{placeholder}</Activity>`
    per cached variant. The client substitutes each placeholder with
    its cached subtree, so every cached variant stays parked under
@@ -455,9 +575,10 @@ A spec emits in one of four shapes, in priority order:
    plus a hidden Activity sibling for each other cached matchKey.
    Client substitutes from cache — same bytes as last render, no
    body re-execution. (The fp-skip is also gated by the
-   [cold-record gate](#cold-record-gate) and the
-   [wake-hint TTL](#wake-hints--expires--staleuntil--time) — a cold
-   dep record or an expired snapshot declines the skip and renders.)
+   [cold-record gate](#cold-record-gate), the
+   [wake-hint TTL](#wake-hints--expires--staleuntil--time), and the
+   spec's [`fpSkip`](#options) option — a cold dep record, an expired
+   snapshot, or `fpSkip: false` declines the skip and renders.)
 4. **`match` succeeded, fingerprint differs (fresh render).** Spec
    executes its `Render`, wraps the result in
    `<Activity mode="visible" key={matchKey}>
@@ -525,7 +646,7 @@ JSX parent renders directly.
 
 ## Error containment
 
-A parton resolves its `schema` / props cells and runs its `Render`
+A parton resolves its cell-bearing props and runs its `Render`
 *above* the per-partial `PartialErrorBoundary` (which wraps only the
 already-resolved body). So a throw during resolution — a cell loader
 that rejects, a failed GraphQL read — or a synchronous throw in
@@ -577,18 +698,20 @@ specs don't need their own `match` — the wrapper already filtered.
 
 ### 404 fallback
 
-`getRegisteredMatchPatterns()` returns every `match` pattern any
-spec was constructed with. A `NotFoundFallback` spec checks the URL
-against that set; if no pattern matches, it calls `notFound()`,
-which `Root` catches and turns into HTTP 404 + `<NotFoundPage>`.
+`getRegisteredMatchPatterns()` returns the URL-pattern half of every
+`match` gate any spec was constructed with (predicate-only gates
+carry no URL structure and are excluded). A `NotFoundFallback` spec
+checks the URL against that set; if no pattern matches, it calls
+`notFound()`, which `Root` catches and turns into HTTP 404 +
+`<NotFoundPage>`.
 
 ```tsx
 import { parton, getRegisteredMatchPatterns, getCurrentParton, notFound } from "@parton/framework"
 
 export const NotFoundFallback = parton(function NotFoundFallbackRender() {
-  // Non-addressable gate: it declares no selector/schema/match, so it
-  // never fp-skips — the check re-evaluates on every render pass, no
-  // dep to record.
+  // Non-addressable gate: it declares no selector/match, so it never
+  // fp-skips — the check re-evaluates on every render pass, no dep
+  // to record.
   const url = getCurrentParton()?.request.url
   if (url) {
     for (const pattern of getRegisteredMatchPatterns()) {
@@ -605,105 +728,6 @@ export const NotFoundFallback = parton(function NotFoundFallbackRender() {
 
 The set is populated as a side-effect of every `parton(…,
 { match: … })` call; no explicit registration needed.
-
-## Actions
-
-Server-side handlers declared on a parton. Each action becomes a
-`ResolvedAction` in Render's prop bag — a Flight-portable server
-reference paired with a `writes` map for client-side optimistic
-tracking.
-
-```tsx
-const CheckoutForm = parton(
-  function Render({ cardName, cardCvc, saves, save }) {
-    return <CheckoutClient cardName={cardName} cardCvc={cardCvc} saves={saves} onSave={save} />
-  },
-  {
-    match: "/checkout",
-    schema: ({ localCell }) => ({
-      cardName: localCell({ shape: "string", initial: "" }),
-      cardCvc:  localCell({ shape: "string", initial: "" }),
-      saves:    localCell({ shape: "number", initial: 0 }),
-    }),
-    actions: {
-      // Handler receives `(scope, args)` — scope is the same prop bag
-      // Render gets (match params + resolved schema); args is
-      // caller-supplied.
-      save: async ({ saves }, args: { cardName?: string; cardCvc?: string }) => {
-        await saves.set(saves.value + 1)
-        // No need to write cardName/cardCvc — args matching schema
-        // cell keys auto-write at commit time.
-      },
-    },
-  },
-)
-```
-
-### Auto-write semantic
-
-When the action commits successfully, the framework iterates `args`.
-For each key matching a schema cell, the framework writes `args[K]`
-to that cell — same name = same cell, no drift. Keys that don't
-match a cell are passed to the handler as opaque data.
-
-The handler's `scope` view is overlay-aware: `scope.cardName.value`
-reflects `args.cardName` if provided, otherwise the stored value.
-Subsequent `cell.set(v)` calls inside the handler further overlay the
-view — `set` then `value` reads back the new value.
-
-### Transactional commit / rollback
-
-The whole action body — auto-writes AND handler-explicit `cell.set`
-calls — is staged in a pending-writes map. The framework commits the
-map to storage AFTER the handler returns successfully. A throw
-discards the pending map; no storage write lands, no `cell:<id>`
-selector fires.
-
-Client-side, `usePartonAction` tracks the args in the optimistic-
-value map; on settle (success or failure), it clears the optimistic
-view. Success → server refetch carries the new value (committed)
-through Render's prop bag. Failure → server unchanged, the cell view
-falls back to the prior server value → optimistic UI rewinds.
-
-```tsx
-"use client"
-import { useCell, usePartonAction } from "@parton/framework/lib/cell-client.tsx"
-
-function CheckoutClient({ cardName, cardCvc, saves, onSave }) {
-  const save = usePartonAction(onSave)
-  const name = useCell(cardName)
-  const [draftName, setDraftName] = useState(name.serverValue)
-
-  return (
-    <form action={() => save({ cardName: draftName })}>
-      <input value={draftName} onChange={(e) => setDraftName(e.target.value)} />
-      <div>optimistic: {name.value}</div>
-      <div>server: {name.serverValue}</div>
-      <div>saves: {useCell(saves).value}</div>
-      <button>Save</button>
-    </form>
-  )
-}
-```
-
-### Action handler scope
-
-| Key | Source |
-|---|---|
-| `<named match params>` | baked into the action ref at render time |
-| `<every key from schema's return>` | re-resolved at dispatch: scoped descriptors → `ResolvedCell`; module cells → `ResolvedCell`; plain values pass through |
-| `args` | second parameter, caller-supplied |
-
-An action ref bakes `(actionId, matchParams)` when it crosses Flight;
-dispatch runs under a stamped current-parton identity (the parton's
-id, the action's OWN request, the baked params), so tracked hooks
-inside the schema callback or the handler read the caller's *current*
-cookies and session — not a replay of render-time values.
-
-Cells in the handler scope have deferred-write `set`: the call
-pushes into the pending map instead of hitting storage directly.
-This is what makes the body transactional — the framework can
-discard the map on throw without partial commits leaking through.
 
 ## Sharp edges
 

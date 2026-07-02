@@ -11,7 +11,6 @@ an explicit opt-in.
 const ProductHero = parton(ProductHeroRender, {
   match: "/p/:slug",
   cache: { maxAge: 60, staleWhileRevalidate: 30 },
-  schema: () => ({ variant: searchParam("variant", "default") }),
 })
 ```
 
@@ -88,9 +87,9 @@ lookup = `${spec.id}:${structuralFingerprint}:${hash([matchParams])}`
 ```
 
 `structuralFingerprint` folds the spec's prior dep record (re-read at
-the current request), schema reads, call-site props, invalidation
-bumps, and the descendant fold — so it moves whenever any of those
-change (including an inner partial added or removed). The trailing
+the current request), prop-resolved cells, call-site props,
+invalidation bumps, and the descendant fold — so it moves whenever
+any of those change (including an inner partial added or removed). The trailing
 match-params hash is a stable, legible axis on top of that.
 
 The WRITE key is computed after the render, folding the LIVE tracked-

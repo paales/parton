@@ -30,6 +30,10 @@
 export * from "./src/lib/index.ts"
 
 // ── Framework runtime — control + errors ────────────────────────────────
+// ── Match gate ──────────────────────────────────────────────────────────
+export { TRANSPORT_PARAMS } from "./src/lib/match.ts"
+export type { MatchInit, MatchPattern, FieldTest, ValueTest } from "./src/lib/match.ts"
+
 export {
   NotFoundError,
   RedirectError,

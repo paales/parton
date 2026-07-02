@@ -7,7 +7,7 @@
  * once per id.
  */
 
-import { park, parton, searchParam, type PartialCtx, type RenderArgs } from "@parton/framework"
+import { parton, searchParam, type PartialCtx, type RenderArgs } from "@parton/framework"
 import { Frame } from "@parton/framework/lib/frame.tsx"
 import { ChatMessage } from "./piece.tsx"
 import {
@@ -71,17 +71,16 @@ const MessagePartials = AVAILABLE_FILES.map((fileId) =>
     },
     {
       selector: `#chat-msg-${fileId}`,
-      schema: () => {
-        const msgs = parseMsgs(searchParam("msgs"))
-        if (!msgs.includes(fileId)) park()
-        return {}
-      },
+      // The message exists iff its id is in the `?msgs=` list — a miss
+      // parks the streamed DOM so back/forward restores it instantly.
+      match: { searchParams: { msgs: (v) => parseMsgs(v).includes(fileId) } },
     },
   ),
 )
 
 export const ChatListPartial = parton(
-  function ChatListRender({ msgIds }: { msgIds: string[] } & RenderArgs) {
+  function ChatListRender(_: RenderArgs) {
+    const msgIds = parseMsgs(searchParam("msgs"))
     return (
       <div data-testid="chat-list" className="min-h-30 flex-1 overflow-y-auto px-3 py-2">
         {msgIds.length === 0 ? (
@@ -99,20 +98,14 @@ export const ChatListPartial = parton(
       </div>
     )
   },
-  {
-    selector: "#chat-list",
-    schema: () => ({ msgIds: parseMsgs(searchParam("msgs")) }),
-  },
+  { selector: "#chat-list" },
 )
 
 export const ChatOverlayPartial = parton(
-  function ChatOverlayRender({
-    open,
-    nextHref,
-  }: {
-    open: boolean
-    nextHref: string | null
-  } & RenderArgs) {
+  function ChatOverlayRender(_: RenderArgs) {
+    const msgIds = parseMsgs(searchParam("msgs"))
+    const open = searchParam("chat") === "open"
+    const nextHref = computeNextHref(msgIds)
     if (!open) return <ChatOpenPill />
     return (
       <aside
@@ -134,13 +127,7 @@ export const ChatOverlayPartial = parton(
       </aside>
     )
   },
-  {
-    selector: "#chat-overlay",
-    schema: () => {
-      const msgIds = parseMsgs(searchParam("msgs"))
-      return { open: searchParam("chat") === "open", nextHref: computeNextHref(msgIds) }
-    },
-  },
+  { selector: "#chat-overlay" },
 )
 
 export function ChatOverlay() {

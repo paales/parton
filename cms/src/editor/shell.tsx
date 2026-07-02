@@ -9,14 +9,15 @@
  *   │   tree …       │   │  ╳selection chrome  │   │ Properties│
  *   └────────────────┘   └─────────────────────┘   └───────────┘
  *
- * Tweaks (palette / surface / attachment / device) live in URL
- * params and a sticky cookie. Tree and field panels are still
- * partials with the `#cms-edit-tree` and `#cms-edit-fields`
+ * Tweaks (palette / surface / attachment / device) live in
+ * session-partitioned cells (see `./state.ts`). Tree and field panels
+ * are partials with the `#cms-edit-tree` and `#cms-edit-fields`
  * selectors — selector-targeted refetch on a tree click only re-runs
  * those two, never the preview.
  */
 
 import {
+  TRANSPORT_PARAMS,
   EDITOR_COOKIE,
   parton,
   cookie,
@@ -38,7 +39,6 @@ import {
   type ContentFieldKind,
   type MatchClause,
   type RenderArgs,
-  type ResolvedCell,
 } from "@parton/framework"
 import {
   editorAttachment,
@@ -78,30 +78,22 @@ const saveCmsFields = _saveCmsFields
 
 // URL-bound editor params (shareable / browser-history). Tweaks
 // (palette / surface / attachment / device / tree style / left tab)
-// are session-backed via the `session.*` vary surface — see the
-// session.enum reads in each vary block below. Editor on/off lives
+// are session-partitioned cells — see `./state.ts`. Editor on/off lives
 // in the `__editor` cookie (the sole source of truth); entry/exit
 // flows through `nav.navigate(url, {cookies: {[EDITOR_COOKIE]: …}})`.
 // `editor` stays in `EDITOR_RESERVED_PARAMS` only so stray legacy
 // bookmarks get stripped from internal hrefs — the param itself has
 // no effect.
 const EDITOR_RESERVED_PARAMS = ["editor", "select", "config", "tabs"] as const
-const FRAMEWORK_INTERNAL_PARAMS = [
-  "partials",
-  "cached",
-  "__frame",
-  "__frameUrl",
-  "streaming",
-] as const
+
 
 type Palette = "light" | "dark"
-type Surface = "light" | "translucent" | "solid"
 type Attachment = "floating" | "docked"
 type Device = "desktop" | "tablet" | "mobile"
 
 function stripEditorAndInternalParams(url: URL): void {
   for (const p of EDITOR_RESERVED_PARAMS) url.searchParams.delete(p)
-  for (const p of FRAMEWORK_INTERNAL_PARAMS) url.searchParams.delete(p)
+  for (const p of TRANSPORT_PARAMS) url.searchParams.delete(p)
 }
 
 function derivePreviewUrl(currentUrl: URL): string {
@@ -157,7 +149,7 @@ function cmsEditHref(currentUrl: URL, opts: HrefOpts): string {
   }
 
   url.searchParams.delete("editor")
-  for (const p of FRAMEWORK_INTERNAL_PARAMS) url.searchParams.delete(p)
+  for (const p of TRANSPORT_PARAMS) url.searchParams.delete(p)
   return url.pathname + url.search
 }
 
@@ -205,17 +197,17 @@ function readMultiTabs(currentUrl: URL): string[] {
 // ─── Tree pane ─────────────────────────────────────────────────────────
 
 export const EditorTreePartial = parton(
-  async function EditorTreeRender({
-    selected,
-    treeStyle: treeStyleCell,
-    currentUrl: currentUrlRaw,
-  }: {
-    selected: string | null
-    treeStyle: ResolvedCell<"jsx" | "plain">
-    currentUrl: string
-  } & RenderArgs) {
-    const treeStyle = treeStyleCell.value
-    const currentUrl = new URL(currentUrlRaw)
+  async function EditorTreeRender(_: RenderArgs) {
+    // Tracked reads: selection + page identity, plus the URL
+    // dimensions the row hrefs embed (`config`/`tabs` ride through
+    // `cmsEditHref`). The full URL is a derived output for
+    // link-building; every nav-relevant dimension of it is recorded.
+    const selected = searchParam("select")
+    searchParam("config")
+    searchParam("tabs")
+    pathname()
+    const currentUrl = new URL(getCurrentParton()?.request.url ?? "")
+    const treeStyle = (await editorTreeStyle.resolve()).value
     const catalog = await getCatalogManifest()
     const rootIds = renderedCmsIdsForPreviewedPage()
     const entries = listAllCmsNodes(rootIds)
@@ -455,27 +447,17 @@ export const EditorTreePartial = parton(
       </div>
     )
   },
-  {
-    selector: "#cms-edit-tree",
-    schema: () => {
-      // Tracked reads: selection + page identity. The full URL is a
-      // derived output for link-building; its nav-relevant dimensions
-      // are the recorded pathname/select reads.
-      const selected = searchParam("select")
-      pathname()
-      return {
-        treeStyle: editorTreeStyle,
-        selected,
-        currentUrl: getCurrentParton()?.request.url ?? "",
-      }
-    },
-  },
+  { selector: "#cms-edit-tree",
+    // Editor chrome is always authoritative — never served from the
+    // client's fp cache (its links embed the full URL).
+    fpSkip: false },
 )
 
 // ─── Settings pane (left panel — Settings tab) ─────────────────────────
 
 export const EditorSettingsPartial = parton(
-  function EditorSettingsRender({ pathname }: { pathname: string } & RenderArgs) {
+  function EditorSettingsRender(_: RenderArgs) {
+    const path = pathname()
     return (
       <div className="cms-panel-body">
         <div className="cms-section-head" style={{ marginTop: 6 }}>
@@ -491,7 +473,7 @@ export const EditorSettingsPartial = parton(
             className="cms-wf-field"
             style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}
           >
-            {pathname}
+            {path}
           </span>
         </div>
         <div className="cms-row">
@@ -512,25 +494,23 @@ export const EditorSettingsPartial = parton(
       </div>
     )
   },
-  {
-    selector: "#cms-edit-settings",
-    schema: () => ({ pathname: pathname() }),
-  },
+  { selector: "#cms-edit-settings" },
 )
 
 // ─── Field panel ───────────────────────────────────────────────────────
 
 export const EditorFieldPanelPartial = parton(
-  async function EditorFieldPanelRender({
-    selected,
-    effectiveIndex: vEffectiveIndex,
-    currentUrl: currentUrlRaw,
-  }: {
-    selected: string | null
-    effectiveIndex: number
-    currentUrl: string
-  } & RenderArgs) {
-    const currentUrl = new URL(currentUrlRaw)
+  async function EditorFieldPanelRender(_: RenderArgs) {
+    // Tracked reads: selection, requested config tab, open tabs (the
+    // panel hrefs embed them), page identity — plus the selected
+    // node's content row (`cms:` dep), which is what moves
+    // `effectiveIndex` when configs are edited.
+    const selected = searchParam("select")
+    const config = searchParam("config")
+    searchParam("tabs")
+    pathname()
+    const cp = getCurrentParton()
+    const currentUrl = new URL(cp?.request.url ?? "http://localhost/")
     if (!selected) {
       return (
         <div className="cms-panel-body">
@@ -549,17 +529,21 @@ export const EditorFieldPanelPartial = parton(
         </div>
       )
     }
+    cp?.deps.add(`cms:${selected}`)
     const node = lookupDraftNode(selected)
+    const configs = node?.configs ?? []
+    const requested = config != null ? Number(config) : null
+    const effectiveIndex =
+      configs.length > 0
+        ? pickEffectiveConfig(
+            configs,
+            requested,
+            buildPreviewRequest(currentUrl, cp?.request.headers ?? new Headers()),
+          )
+        : -1
     const catalog = await getCatalogManifest()
     const manifest = node?.type ? catalog[node.type] : undefined
     const hasDraft = listAllCmsNodes().some((e) => e.id === selected && e.hasDraft)
-    const configs = node?.configs ?? []
-    const effectiveIndex =
-      vEffectiveIndex >= 0 && vEffectiveIndex < configs.length
-        ? vEffectiveIndex
-        : configs.length > 0
-          ? 0
-          : -1
     const currentConfig = effectiveIndex >= 0 ? configs[effectiveIndex] : null
     const fieldMap = buildFieldMap(currentConfig, manifest)
 
@@ -651,35 +635,10 @@ export const EditorFieldPanelPartial = parton(
       </div>
     )
   },
-  {
-    selector: "#cms-edit-fields",
-    schema: () => {
-      // Tracked reads: selection, requested config tab, page identity —
-      // plus the selected node's content row (`cms:` dep), which is what
-      // moves `effectiveIndex` when configs are edited.
-      const select = searchParam("select")
-      const config = searchParam("config")
-      pathname()
-      const cp = getCurrentParton()
-      const url = new URL(cp?.request.url ?? "http://localhost/")
-      const requested = config != null ? Number(config) : null
-      let effectiveIndex = -1
-      if (select && !parseSlotEntryId(select)) {
-        cp?.deps.add(`cms:${select}`)
-        const node = lookupDraftNode(select)
-        const configs = node?.configs ?? []
-        if (configs.length > 0) {
-          const previewReq = buildPreviewRequest(url, cp?.request.headers ?? new Headers())
-          effectiveIndex = pickEffectiveConfig(configs, requested, previewReq)
-        }
-      }
-      return {
-        selected: select,
-        effectiveIndex,
-        currentUrl: url.toString(),
-      }
-    },
-  },
+  { selector: "#cms-edit-fields",
+    // Editor chrome is always authoritative — never served from the
+    // client's fp cache (its links embed the full URL).
+    fpSkip: false },
 )
 
 // ─── Helpers ───────────────────────────────────────────────────────────
@@ -1178,42 +1137,53 @@ function CanvasChrome({
 // ─── Editor shell ──────────────────────────────────────────────────────
 
 export const EditorShell = parton(
-  function EditorShellRender({
-    editor,
-    leftTab: leftTabCell,
-    treeStyle: treeStyleCell,
-    selected,
-    palette: paletteCell,
-    surface: surfaceCell,
-    attachment: attachmentCell,
-    device: deviceCell,
-    currentUrl: currentUrlRaw,
-    previewUrl,
-    isPreviewFrameRefetch,
-  }: {
-    editor: boolean
-    leftTab: ResolvedCell<"layers" | "settings">
-    treeStyle: ResolvedCell<"jsx" | "plain">
-    selected: string | null
-    palette: ResolvedCell<Palette>
-    surface: ResolvedCell<Surface>
-    attachment: ResolvedCell<Attachment>
-    device: ResolvedCell<Device>
-    currentUrl: string
-    previewUrl: string
-    isPreviewFrameRefetch: boolean
-  } & RenderArgs) {
+  async function EditorShellRender(_: RenderArgs) {
+    // Cookie is the sole source of truth for editor on/off.
+    // Entry/exit (deep-links, click triggers, tests) all flow through
+    // `nav.navigate(url, {cookies: {[EDITOR_COOKIE]: "1" | ""}})` —
+    // there's no URL-param sync side-effect. Tests set the cookie
+    // directly via `context.addCookies` before navigating.
+    const editor = cookie(EDITOR_COOKIE) === "1"
+    // Editor off — every non-authoring visit, the common case: read
+    // NOTHING beyond the cookie, so the fp folds only that one read
+    // and stays constant across navigation. After the first
+    // (null-body) render the shell fp-skips to a bare placeholder
+    // instead of re-emitting its error-boundary on every nav.
+    // Parking is wrong here — keepalive would leave the prior chrome
+    // hidden in the DOM, so the close button couldn't clear it. The
+    // page renders on its own; this partial is a sibling overlay
+    // placed at body level.
+    if (!editor) return null
+
+    // Editor on: selection, config tab, open tabs, frame refetch flag,
+    // and page identity are the tracked nav axes — every URL dimension
+    // the chrome consumes (hrefs via `cmsEditHref`, the right panel's
+    // tab list, the preview frame url) is recorded; the full URL is a
+    // derived output for chrome links.
+    const selected = searchParam("select")
+    searchParam("config")
+    searchParam("tabs")
+    searchParam("__frame")
+    pathname()
+    const currentUrl = new URL(getCurrentParton()?.request.url ?? "http://localhost/")
+    const isPreviewFrameRefetch = currentUrl.searchParams.getAll("__frame").includes("preview")
+    const previewUrl = derivePreviewUrl(currentUrl)
+    const [leftTabCell, treeStyleCell, paletteCell, surfaceCell, attachmentCell, deviceCell] =
+      await Promise.all([
+        editorLeftTab.resolve(),
+        editorTreeStyle.resolve(),
+        editorPalette.resolve(),
+        editorSurface.resolve(),
+        editorAttachment.resolve(),
+        editorDevice.resolve(),
+      ])
     const leftTab = leftTabCell.value
     const treeStyle = treeStyleCell.value
     const palette = paletteCell.value
     const surface = surfaceCell.value
     const attachment = attachmentCell.value
     const device = deviceCell.value
-    // Editor off — the partial emits nothing. The page renders on its
-    // own; this partial is a sibling overlay placed at body level.
-    if (!editor) return null
 
-    const currentUrl = new URL(currentUrlRaw)
     if (!isPreviewFrameRefetch) setSessionFrameUrl(["preview"], previewUrl)
 
     const selectedNode: CmsNode | null = selected ? lookupDraftNode(selected) : null
@@ -1332,49 +1302,11 @@ export const EditorShell = parton(
     )
   },
   {
-    schema: () => {
-      // Cookie is the sole source of truth for editor on/off.
-      // Entry/exit (deep-links, click triggers, tests) all flow through
-      // `nav.navigate(url, {cookies: {[EDITOR_COOKIE]: "1" | ""}})` —
-      // there's no URL-param sync side-effect. Tests set the cookie
-      // directly via `context.addCookies` before navigating.
-      const editor = cookie(EDITOR_COOKIE) === "1"
-      // Editor off — every non-authoring visit, the common case: read
-      // NOTHING beyond the cookie, so the fp folds only that one read
-      // and stays constant across navigation. After the first
-      // (null-body) render the shell fp-skips to a bare placeholder
-      // instead of re-emitting its error-boundary on every nav.
-      // Parking is wrong here — keepalive would leave the prior chrome
-      // hidden in the DOM, so the close button couldn't clear it.
-      let selected: string | null = null
-      let currentUrl = ""
-      let previewUrl = ""
-      let isPreviewFrameRefetch = false
-      if (editor) {
-        // Editor on: selection + page identity are the tracked nav
-        // axes; the full URL is a derived output for chrome links.
-        selected = searchParam("select")
-        searchParam("__frame")
-        pathname()
-        const url = new URL(getCurrentParton()?.request.url ?? "http://localhost/")
-        isPreviewFrameRefetch = url.searchParams.getAll("__frame").includes("preview")
-        currentUrl = url.toString()
-        previewUrl = derivePreviewUrl(url)
-      }
-      return {
-        editor,
-        selected,
-        currentUrl,
-        previewUrl,
-        isPreviewFrameRefetch,
-        leftTab: editorLeftTab,
-        treeStyle: editorTreeStyle,
-        palette: editorPalette,
-        surface: editorSurface,
-        attachment: editorAttachment,
-        device: editorDevice,
-      }
-    },
+    // Explicit selector keeps the spec addressable (fp on the wire).
+    selector: "#editor-shell",
+    // Editor chrome is always authoritative — never served from the
+    // client's fp cache (its links embed the full URL).
+    fpSkip: false,
   },
 )
 

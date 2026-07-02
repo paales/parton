@@ -116,9 +116,10 @@ lookup = `${spec.id}:${structuralFp}:${hash(stableStringify([matchParams]))}`
 ```
 
 `structuralFp` is the spec's fingerprint folded with its descendant
-fold, so it already moves when a tracked read's value, schema, props,
-an invalidation bump, or any descendant's deps change — including a
-descendant added or removed (via the fold). The trailing match-params
+fold, so it already moves when a tracked read's value, a
+prop-resolved cell, props, an invalidation bump, or any descendant's
+deps change — including a descendant added or removed (via the
+fold). The trailing match-params
 hash is a stable, legible axis on top of that.
 
 The lookup fp folds the PRIOR render's dep record (store-and-reread);

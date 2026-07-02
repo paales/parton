@@ -20,7 +20,7 @@
  * while `sent:` keeps climbing — proof the value never rode the POST.
  */
 
-import { localCell, parton, type RenderArgs, type ResolvedCell } from "@parton/framework"
+import { localCell, parton, type RenderArgs } from "@parton/framework"
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 import { PingButton } from "../components/deferred-demo-ping.tsx"
 
@@ -29,7 +29,7 @@ import { PingButton } from "../components/deferred-demo-ping.tsx"
 // stream, not the POST. Default `localCell` storage is process-global
 // (scope-bucketed, in-memory for test scopes), so a write on one
 // connection is visible to every other connection's heartbeat render.
-const pings = localCell({
+const pingsCell = localCell({
   id: "demo.pings",
   shape: "number",
   initial: 0,
@@ -37,7 +37,8 @@ const pings = localCell({
 })
 
 const DeferredBroadcast = parton(
-  function DeferredBroadcastRender({ pings }: { pings: ResolvedCell<number> } & RenderArgs) {
+  async function DeferredBroadcastRender(_: RenderArgs) {
+    const pings = await pingsCell.resolve()
     return (
       <div className="flex flex-col gap-3">
         <div className="font-mono text-sm" data-testid="deferred-pings">
@@ -47,10 +48,7 @@ const DeferredBroadcast = parton(
       </div>
     )
   },
-  {
-    selector: "deferred-broadcast",
-    schema: () => ({ pings }),
-  },
+  { selector: "deferred-broadcast" },
 )
 
 export const DeferredDemoPage = parton(

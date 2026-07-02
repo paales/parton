@@ -3,8 +3,8 @@
  *
  * Demonstrates the bound-cell + partition-scoped invalidation model:
  *
- *   - MagentoCartPage derives `cartId` from the cookie (`vary`), binds +
- *     reads `cartCell.with({ cartId })` in its own `schema`, and renders
+ *   - MagentoCartPage derives `cartId` from the cookie (a tracked read),
+ *     resolves `cartCell` at that partition in its Render, and renders
  *     the lines + totals. One parton — no binder/reader split. Its cart
  *     value is the query result with the `...CartLine` spread rewritten
  *     to per-line BoundCells, so `cart.value.cart.items` is an array of
@@ -23,6 +23,7 @@ import {
   cookie,
   type CellValue,
   type PartonProps,
+  type RenderArgs,
   type ResolvedCell,
 } from "@parton/framework"
 import { Card } from "@parton/copies/components/ui/card"
@@ -80,15 +81,17 @@ const CartLine = parton(
   // label (stamped by the prop binding), not a selector reload.
 )
 
-// One parton: derives cartId from the cookie (`vary`), binds + reads the
-// cart cell at that partition (`schema`), and renders the lines + totals.
+// One parton: derives cartId from the cookie (a tracked read), resolves
+// the cart cell at that partition, and renders the lines + totals.
 // No binder/reader split — the cart cell's `cell:magento.cart` label is
 // stamped here, so it refetches in place; the per-line BoundCells carry
 // their own `cell:magento.cart-item?uid` labels for line-level granularity.
 export const MagentoCartPage = parton(
-  function MagentoCartRender({
-    cart,
-  }: PartonProps<{ cart: ResolvedCell<CellValue<typeof cartCell>> }>) {
+  async function MagentoCartRender(_: RenderArgs) {
+    // cart_id cookie → the cart cell's partition. The read records the
+    // cookie dep so the fp folds it.
+    const cartId = cookie("cart_id") ?? ""
+    const cart = await cartCell.resolve({ cartId })
     const c = cart.value?.cart
     // `items` are per-line BoundCells (the query result→cells rewrite) —
     // forward each straight to <CartLine>, no manual `.with({uid})`.
@@ -128,13 +131,5 @@ export const MagentoCartPage = parton(
       </main>
     )
   },
-  {
-    match: "/magento/cart",
-    // cart_id cookie → the cart cell's partition. Read inline in schema
-    // (records the cookie dep so the fp folds it) and bind the cart cell.
-    schema: () => {
-      const cartId = cookie("cart_id") ?? ""
-      return { cart: cartCell.with({ cartId }) }
-    },
-  },
+  { match: "/magento/cart" },
 )

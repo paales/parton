@@ -52,9 +52,8 @@ export const MagentoGreeting = parton(
  *  RemoteFrame re-fetches with new content — all without
  *  reloading the host page or affecting other frames. */
 export const MagentoCheckoutStep = parton(
-  async function MagentoCheckoutStepRender(
-    { step }: { step: string } & RenderArgs,
-  ) {
+  async function MagentoCheckoutStepRender(_: RenderArgs) {
+    const step = searchParam("step", "shipping")
     await delay(150)
     const steps = ["shipping", "payment", "review"] as const
     const currentIdx = steps.findIndex((s) => s === step)
@@ -86,10 +85,7 @@ export const MagentoCheckoutStep = parton(
       </div>
     )
   },
-  {
-    selector: "magento-checkout-step",
-    schema: () => ({ step: searchParam("step", "shipping") }),
-  },
+  { selector: "magento-checkout-step" },
 )
 
 /** A capability-aware parton — reads host-declared values via

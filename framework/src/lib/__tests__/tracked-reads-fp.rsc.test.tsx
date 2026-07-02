@@ -156,12 +156,14 @@ describe("descendant fold: tracked reads bubble into an ancestor's fp", () => {
 
 // ── match(): folds only the captured params, not the whole pathname ──
 const MatchProbe = parton(
-  function MatchProbeRender({ m }: { m: Record<string, string> | null } & RenderArgs) {
+  function MatchProbeRender(_: RenderArgs) {
+    // No `match` OPTION → renders at any URL; the `match()` HOOK reads
+    // the pattern in the body (recorded on the dep set, folded by
+    // store-and-reread on the next render).
+    const m = match("/p/:slug")
     return <span data-testid="match-probe">{m?.slug ?? "—"}</span>
   },
-  // No `match` OPTION → renders at any URL; the `match()` HOOK reads the
-  // pattern inline in schema (folds into the current fp).
-  { selector: "#match-probe", schema: () => ({ m: match("/p/:slug") }) },
+  { selector: "#match-probe" },
 )
 
 describe("match(): varies on the captured param, not on every URL", () => {
@@ -173,6 +175,8 @@ describe("match(): varies on the captured param, not on every URL", () => {
         <MatchProbe />
       </PartialRoot>
     )
+    // Cold render records the match dep; warm renders fold it.
+    await fpAt("http://t/p/a", tree, "match-probe")
     const fpA = await fpAt("http://t/p/a", tree, "match-probe")
     const fpB = await fpAt("http://t/p/b", tree, "match-probe")
     expect(fpA).toBeDefined()
@@ -185,6 +189,7 @@ describe("match(): varies on the captured param, not on every URL", () => {
         <MatchProbe />
       </PartialRoot>
     )
+    await fpAt("http://t/p/a?q=1", tree, "match-probe") // cold — records the dep
     const fp1 = await fpAt("http://t/p/a?q=1", tree, "match-probe")
     const fp2 = await fpAt("http://t/p/a?q=2", tree, "match-probe")
     expect(fp1).toBeDefined()

@@ -51,7 +51,6 @@
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, type ChangeEvent } from "react"
 import { __cellWriteBatch } from "../runtime/cell-actions.ts"
 import type { ResolvedCell } from "./cell.ts"
-import type { ResolvedAction } from "./parton-actions.ts"
 
 interface QueuedWrite {
   id: string
@@ -325,57 +324,6 @@ function enqueue(
   })
 }
 
-/**
- * `usePartonAction` — wraps a Render-prop `ResolvedAction` into a
- * callable that adds optimistic-aware cell tracking around the action's
- * invocation.
- *
- * The semantic: when `save({cardName: "Foo"})` fires,
- *
- *   1. For each arg key present in the action's `writes` map, push the
- *      arg value into `latestSentByCell` and bump pending. The cells'
- *      `useCell(cell).value` immediately surfaces the optimistic value
- *      to any subscriber (controlled input, "server says" display, etc.).
- *   2. Fire the bound server-action ref `prop.ref(args)`.
- *   3. On settle (success or failure): decrement pending, clearing the
- *      optimistic value when the count drops to zero. The cell's
- *      `useCell.value` falls back to its `serverValue` — which is the
- *      committed new value on success (the action's transaction landed,
- *      the server refetch carried the new value through Render's prop
- *      bag), or the prior server value on failure (transaction rolled
- *      back, no server-side change).
- *
- * Net behavior: optimistic-then-commit-or-rewind via the same
- * `latestSentByCell` infrastructure `useCell` already uses. No
- * duplicate state, no separate optimistic store.
- */
-export function usePartonAction<Args, R>(
-  action: ResolvedAction<Args, R>,
-): (args: Args) => Promise<R> {
-  return useCallback(
-    async (args: Args): Promise<R> => {
-      const writes = action.writes
-      const bumped: string[] = []
-      if (args && typeof args === "object") {
-        const argsObj = args as Record<string, unknown>
-        for (const argKey of Object.keys(argsObj)) {
-          const cellId = writes[argKey]
-          if (!cellId) continue
-          const value = argsObj[argKey]
-          if (value === undefined) continue
-          incrementPending(cellId, value)
-          bumped.push(cellId)
-        }
-      }
-      try {
-        return await action.ref(args)
-      } finally {
-        for (const cellId of bumped) decrementPending(cellId)
-      }
-    },
-    [action],
-  )
-}
 
 /**
  * Drain the queue one batch at a time, serially. While a batch is

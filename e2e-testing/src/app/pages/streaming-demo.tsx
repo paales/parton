@@ -10,8 +10,8 @@
  *     at each second boundary and ships a fresh lane. No cell, no
  *     setInterval, no autostart.
  *
- *  2. `<BumpCounter>` — `bumps` cell read via schema. The Bump
- *     button (rendered inside the same parton) calls
+ *  2. `<BumpCounter>` — `bumps` cell resolved in the Render body. The
+ *     Bump button (rendered inside the same parton) calls
  *     `bumps.set(bumps.value + 1)` via the cell's Flight-serialized
  *     server-action ref. The action's response refetches
  *     `cell:demo.bumps`, which the cell layer auto-stamps onto this
@@ -22,7 +22,7 @@
  *     trailer; unrelated to cells.
  *
  *  4. `<CardFormPartial>` — controlled-form demo. Three cells
- *     (name / number / cvc) read via schema, bound to a client
+ *     (name / number / cvc) resolved in the Render body, bound to a client
  *     `<CardForm>` whose single-inflight + replace-coalesce
  *     discipline guarantees in-order writes despite random
  *     per-action server delay (0–1500 ms). All three cells are
@@ -31,17 +31,17 @@
  *     per keystroke and one segment ships with all updates.
  */
 
-import { expires, parton, time, type RenderArgs, type ResolvedCell } from "@parton/framework"
+import { expires, parton, time, type RenderArgs } from "@parton/framework"
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 import { BumpButton, PushUrlButton } from "../components/streaming-demo-buttons.tsx"
 import { CardForm } from "../components/streaming-demo-card-form.tsx"
 import {
-  applyLocalTransform,
-  bumps,
-  cardCvc,
-  cardName,
-  cardNumber,
-  serverDelay,
+  applyLocalTransform as applyLocalTransformCell,
+  bumps as bumpsCell,
+  cardCvc as cardCvcCell,
+  cardName as cardNameCell,
+  cardNumber as cardNumberCell,
+  serverDelay as serverDelayCell,
 } from "./streaming-demo-state.ts"
 
 // ── Live tick partial — time-driven, no cell ────────────────────────
@@ -65,7 +65,8 @@ const LiveTick = parton(
 // ── Bump counter + button — cell-backed, button inline ──────────────
 
 const BumpCounter = parton(
-  function BumpCounterRender({ bumps }: { bumps: ResolvedCell<number> } & RenderArgs) {
+  async function BumpCounterRender(_: RenderArgs) {
+    const bumps = await bumpsCell.resolve()
     return (
       <div className="flex flex-col gap-3">
         <div className="font-mono text-sm" data-testid="streaming-demo-bumps">
@@ -75,28 +76,20 @@ const BumpCounter = parton(
       </div>
     )
   },
-  {
-    selector: "bump-counter",
-    schema: () => ({ bumps }),
-  },
+  { selector: "bump-counter" },
 )
 
 // ── Card form — three cells, atomic batch, single-inflight client ───
 
 const CardFormPartial = parton(
-  function CardFormPartialRender({
-    cardName,
-    cardNumber,
-    cardCvc,
-    serverDelay,
-    applyLocalTransform,
-  }: {
-    cardName: ResolvedCell<string>
-    cardNumber: ResolvedCell<string>
-    cardCvc: ResolvedCell<string>
-    serverDelay: ResolvedCell<boolean>
-    applyLocalTransform: ResolvedCell<boolean>
-  } & RenderArgs) {
+  async function CardFormPartialRender(_: RenderArgs) {
+    const [cardName, cardNumber, cardCvc, serverDelay, applyLocalTransform] = await Promise.all([
+      cardNameCell.resolve(),
+      cardNumberCell.resolve(),
+      cardCvcCell.resolve(),
+      serverDelayCell.resolve(),
+      applyLocalTransformCell.resolve(),
+    ])
     return (
       <CardForm
         cardName={cardName}
@@ -107,16 +100,7 @@ const CardFormPartial = parton(
       />
     )
   },
-  {
-    selector: "card-form",
-    schema: () => ({
-      cardName,
-      cardNumber,
-      cardCvc,
-      serverDelay,
-      applyLocalTransform,
-    }),
-  },
+  { selector: "card-form" },
 )
 
 // ── Page ──────────────────────────────────────────────────────────────

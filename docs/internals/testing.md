@@ -134,8 +134,8 @@ import { parton } from "../partial.tsx"
 import { searchParam } from "../server-hooks.ts"
 
 const TestPartial = parton(
-  ({ value }) => <span>{value}</span>,
-  { selector: "#test", schema: () => ({ value: searchParam("v", "") }) }
+  () => <span>{searchParam("v", "")}</span>,
+  { selector: "#test" }
 )
 
 const { rendered } = await renderRsc(<TestPartial />, { url: "/?v=hello" })

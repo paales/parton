@@ -2,9 +2,9 @@
 
 Implementation details behind the [cell primitive](../reference/cells.md):
 the write pipeline, the client-side batcher, the optimistic-value
-plumbing inside `useCell`, the storage backends, and the
-nested-transaction batching that lets app-level multi-cell writes
-ship as one segment.
+plumbing inside `useCell`, the storage backends, and the `atomic()`
+transaction overlay that lets app-level multi-cell writes commit
+together and ship as one segment.
 
 ## Write pipeline
 
@@ -165,10 +165,11 @@ late resolution doesn't matter) AND lets ephemeral cells resolve
 fresh per request.
 
 Every read/write site (`resolveCellValue`, `BoundCell.set/clear/
-invalidate/hydrate`, `__cellWrite`'s `writeOneCell`, the schema-
+invalidate/hydrate`, `__cellWrite`'s `writeOneCell`, the props-
 resolution path in `partial.tsx`) routes through `cellStorageForArgs`
-to fetch the current storage. Same code path for both tiers; the only
-difference is which adapter it returns.
+to fetch the current storage — which also applies the active
+`atomic()` overlay via `_txView`. Same code path for both tiers; the
+only difference is which adapter it returns.
 
 Outside-request fallback: `getEphemeralCellStorage` returns a fresh
 `MemoryCellStorage` if no request is active (bootstrap, isolated
@@ -206,24 +207,17 @@ app policy, not framework default.
 `createSpecComponent` builds an async React component for every spec.
 On each render the wrapper:
 
-1. **match phase** — URLPattern gate. Mismatch → parked keepalive.
-2. **schema phase** — tracked hooks record onto the parton's dep set
-   (folding into THIS render's fp); a `park()` exits to the parked
-   keepalive. For each entry in the schema record:
-   - **Module cell**: run `cell.partition(scope)` → args; await
-     `resolveCellValue(cell, args)` (storage hit returns sync;
-     storage miss + `load` defined runs loader). Build
-     `ResolvedCell`. Stamp `cell:<id>` label. Add args to
-     `boundArgsMerged`.
-   - **Scoped descriptor**: finalize → compute partition from
-     descriptor's `partition` over the parton's match params → resolve.
-   - **Bound cell** (a `BoundCell<T>` in the schema record): use
-     baked args directly. Same resolution.
-3. **Props phase** — walk top-level JSX props:
+1. **match phase** — the compiled gate (`compileMatch` in
+   `lib/match.ts`) evaluates the frame-resolved request. Mismatch →
+   parked keepalive.
+2. **Props phase** — walk top-level JSX props:
    - For each prop whose value is a `Cell<T>` or `BoundCell<T>`,
-     resolve as above, replace the prop with `ResolvedCell<T>`,
-     stamp label, add args.
-4. **Constraint surface** — `effectiveConstraints = matchParams ∪
+     await `resolveCellValue(cell, args)` (storage hit returns sync;
+     storage miss + `load` defined runs loader), replace the prop
+     with `ResolvedCell<T>`, stamp the `cell:<id>` label, add args to
+     `boundArgsMerged`, and fold `cellId × partitionKey × value` into
+     the `schema=` fp term.
+3. **Constraint surface** — `effectiveConstraints = matchParams ∪
    boundArgsMerged`. Passed to `queryMatchingTs(labels, surface)` →
    `inv` fold. Matching is type-aware: non-string partition values
    (number, boolean, null) match type-exactly, so `{uid:123}` and
@@ -231,12 +225,26 @@ On each render the wrapper:
    (`hash(stableStringify(args))`). Bare string tokens still match
    loosely, so a hand-authored `cart_id=1234` matches a string
    constraint value `"1234"`.
-5. **fp** = `id|matchKey|schema=<cellHashes>|props|inv|deps` —
+4. **fp** = `id|matchKey|schema=<cellHashes>|props|inv|deps` —
    `deps` re-reads the prior render's recorded dep keys at the
    current request (store-and-reread).
-6. **Render** with the assembled prop bag (match params, resolved
-   cells, schema-resolved entries); render-body tracked reads record
-   for the NEXT fp.
+5. **Render** with the assembled prop bag (match params, resolved
+   props). In-body resolutions and tracked reads record onto the
+   live dep set for the NEXT fp.
+
+**In-body resolution dep stamping.** `handle.resolve(args?)` (and the
+inline `localCell(key, opts)` form, which builds its handle via
+`finalizeScopedCell` and registers it in the cell registry so the
+client write action finds it) resolves the value through the same
+`resolveCellValue`, then stamps the partition-scoped selector —
+`buildCellSelector(id, partition)`, the exact string a write fires —
+onto `getCurrentParton().deps`. The boundary registers the live dep
+set on the snapshot; `evalDepKeys`'s `cell:` branch re-reads the
+selector's invalidation timestamp on every fold (store-and-reread),
+and `PartialBoundary` surfaces the bare `cell:` name as a refetch
+label with its constraints merged into the constraint surface. So a
+write re-renders the reading parton and selector refetch finds it —
+same wire ids, partitions, and labels as the prop-resolution path.
 
 The wrapper is `async`. Cold-load paths await; hot paths (storage
 warm) settle in a microtask — sync-equivalent in practice.
@@ -394,18 +402,38 @@ The `input(opts)` callback returns `{value, onChange, ref}`. Its
 in `pendingCaret`, fires `set(transformed.value)`, then calls
 `opts.onCommit?(transformed.value)` for cross-cell triggers.
 
-## Nested-transaction batching
+## `atomic()` — the transaction overlay
 
-`runInvalidationTransaction` is **nestable** — when an enclosing tx
-is already active, the inner call is a pass-through. App-level
-multi-cell writes use this to batch correctly:
+`atomic(fn)` (in `lib/cell.ts`) is the public transactional write
+boundary for plain server functions. Two layers compose:
+
+1. **The storage overlay.** `atomic` opens an ALS-scoped write buffer
+   (`cellTxStorage`). While active, `_txView` wraps every storage
+   adapter the cell paths fetch (`cellStorageForArgs`, `peek`): writes
+   land in the buffer instead of real storage, and reads check the
+   buffer first — so `peek` / `resolve` / `update` inside the
+   transaction see the overlaid values. On success the buffered
+   writes flush to their real adapters BEFORE the invalidation
+   fan-out commits, so the wake's re-render reads committed values. A
+   throw discards the buffer — no storage write lands.
+
+2. **The invalidation transaction.** `atomic` runs `fn` inside
+   `runInvalidationTransaction`, which is **nestable** — each
+   `cell.set` internally wraps in its own transaction, and with an
+   enclosing tx active those inner wrappers are pass-throughs. All
+   the `refreshSelector("cell:...")` bumps flush at the outer commit:
+   the segment driver wakes once, one segment ships carrying every
+   affected cell. A throw discards the pending bumps together with
+   the storage buffer — observers can't see a partial commit, and the
+   client's optimistic overlay rewinds when the rejected `set`
+   promises settle.
 
 ```ts
 "use server"
-import { runInvalidationTransaction } from "@parton/framework"
+import { atomic } from "@parton/framework"
 
 export async function commitCardForm({ name, number }) {
-  await runInvalidationTransaction(async () => {
+  await atomic(async () => {
     await cardName.set(name)
     await cardNumber.set(number)
     await cardCvc.set(computeCvc(name, number))
@@ -413,18 +441,15 @@ export async function commitCardForm({ name, number }) {
 }
 ```
 
-Each `cell.set` internally wraps in its own
-`runInvalidationTransaction`; with nesting, those inner wrappers
-join the outer tx. All three `refreshSelector("cell:...")` bumps
-flush at the outer commit — the segment driver wakes once, one
-segment ships carrying every affected cell. Without nesting each
-`cell.set` would commit at its own boundary and the three writes
-would arrive as three separate segments — visually out-of-step on
-watching tabs.
+Without the boundary each `cell.set` commits at its own boundary and
+the three writes arrive as three separate segments — visually
+out-of-step on watching tabs. `atomic` inside an active transaction
+joins it (pass-through into the enclosing tx), so composed write
+helpers batch into one commit.
 
-The client-side batcher's `__cellWriteBatch` action body does the
-same thing implicitly: every entry in the batch participates in
-one outer `runInvalidationTransaction`.
+The client-side batcher's `__cellWriteBatch` action body batches the
+same way: every entry in the batch participates in one outer
+`runInvalidationTransaction`.
 
 ## Storage
 
@@ -440,9 +465,9 @@ export interface CellStorage {
 }
 ```
 
-Reads are **sync** — `parton.schema` resolution happens
-synchronously inside the render path. Writes are sync at the API
-boundary; durability is a property of the adapter (in-memory
+Reads are **sync** — a warm cell resolution inside the render path
+never awaits storage (only a cold loader does). Writes are sync at
+the API boundary; durability is a property of the adapter (in-memory
 adapters are instant; `JsonFileCellStorage` debounces to disk).
 
 ### Scope bucketing
@@ -553,9 +578,9 @@ for cells whose modules haven't loaded yet on the current process.
 ## Related
 
 - [`../reference/cells.md`](../reference/cells.md) — user-facing
-  surface (construction, options, schema reads, `useCell`,
+  surface (construction, options, `resolve()`, `atomic()`, `useCell`,
   controlled-input discipline, examples).
 - [`./render-pipeline.md`](./render-pipeline.md) — how fp folds
-  in schema-resolved cell labels.
+  in cell labels and the resolved-cell `schema=` term.
 - [`./testing.md`](./testing.md) — `x-test-scope` header and
   per-worker storage isolation.
