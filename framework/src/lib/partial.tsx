@@ -106,7 +106,7 @@ import { getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
 import { getServerContext } from "./server-context.ts"
 import { _setCurrentParton, type CurrentParton } from "./current-parton.ts"
-import { evalDepKeys } from "./server-hooks.ts"
+import { evalDepKeys, _isParkSignal } from "./server-hooks.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -1503,7 +1503,14 @@ function createSpecComponent<V>(
     // params are known — server-hooks (`cookie()` / `searchParam()` /
     // `param()`, `tag()`, inline `localCell`) read them off it. See
     // current-parton.ts.
-    const self: CurrentParton = { id, tags: selfTags, deps: selfDeps, request: ourRequest, params }
+    const self: CurrentParton = {
+      id,
+      tags: selfTags,
+      deps: selfDeps,
+      request: ourRequest,
+      params,
+      phase: "schema",
+    }
     _setCurrentParton(self)
     // matchKey identifies the rendered variant for client-side
     // Activity keying AND nested-substitution lookups. The rule is:
@@ -1611,7 +1618,16 @@ function createSpecComponent<V>(
       const factories = makeScopedCellFactories<unknown>()
       // 2nd arg: the parton's vary output, so a parton can bind its own
       // cells (`cartCell.with({ cartId })`) from request-derived params.
-      const raw = opts.schema(factories, (varyResult ?? {}) as V)
+      // A `park()` inside the callback throws the branded ParkSignal:
+      // this request renders the parked keepalive instead of a boundary
+      // — no snapshot, no fp, cached client variants preserved.
+      let raw: Record<string, unknown>
+      try {
+        raw = opts.schema(factories, (varyResult ?? {}) as V)
+      } catch (err) {
+        if (_isParkSignal(err)) return emitParkedKeepalive(id, keepalive, requestState)
+        throw err
+      }
       const partonVaryForCells = (varyResult ?? {}) as Record<string, unknown>
       for (const key of Object.keys(raw)) {
         const val = raw[key]
@@ -2002,6 +2018,7 @@ function createSpecComponent<V>(
       )
     }
 
+    self.phase = "render"
     let body: ReactNode = spec.Render(renderProps)
     // Cullable if the render read `visible()` — the client observes its
     // viewport intersection and self-refetches it on enter/leave. The

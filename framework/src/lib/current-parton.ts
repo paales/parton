@@ -82,6 +82,11 @@ export interface CurrentParton {
    *  — the hook writes it; the wrapper reads it back to build the cullable
    *  boundary's observer config. */
   visibleOptions?: VisibleOptions
+  /** Which wrapper phase is executing. `"schema"` spans match → vary →
+   *  schema → fingerprint — everything BEFORE the fp is computed, where
+   *  `park()` is legal; `"render"` is the Render body. The wrapper flips
+   *  it just before invoking Render. Mutable; the wrapper owns it. */
+  phase: "schema" | "render"
 }
 
 /**
