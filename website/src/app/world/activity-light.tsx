@@ -10,7 +10,7 @@
  * green (occasional) → blue (busy) → white (hot).
  */
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const WINDOW_MS = 10_000
 const history = new Map<string, number[]>()
@@ -26,10 +26,18 @@ function recordArrival(ck: string): number {
 
 export function ActivityLight({ ck, stamp }: { ck: string; stamp?: unknown }) {
   const [pulse, setPulse] = useState<{ tone: string; seq: number }>({ tone: "idle", seq: 0 })
+  const mounted = useRef(false)
   // A lane commit reconciles this element in place (identity-stable by
-  // design), so arrival is "the stamp changed", not "the component
-  // mounted". The seq keys the flash span so the animation restarts.
+  // design), so a value arrival is "the stamp changed" on a LIVE
+  // instance — frequency-colored. A MOUNT flashes RED: it means this
+  // subtree was freshly committed (expected on scroll-in loads,
+  // suspicious anywhere else), so remounts are visible at a glance.
   useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true
+      setPulse((p) => ({ tone: "red", seq: p.seq + 1 }))
+      return
+    }
     const n = recordArrival(ck)
     setPulse((p) => ({ tone: n >= 5 ? "white" : n >= 2 ? "blue" : "green", seq: p.seq + 1 }))
   }, [ck, stamp])

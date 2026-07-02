@@ -123,8 +123,13 @@ body {
 
 .chunk__light--green,
 .chunk__light--blue,
-.chunk__light--white {
+.chunk__light--white,
+.chunk__light--red {
   animation: light-flash 0.9s ease-out 1 both;
+}
+
+.chunk__light--red {
+  color: #ff5f56;
 }
 
 .chunk__light--green {
