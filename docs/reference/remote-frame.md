@@ -229,17 +229,15 @@ import { MagentoCheckoutStep } from "@/remote/magento"
 </Frame>
 
 const RemoteCheckoutFrame = parton(
-  function Render({ step }) {
+  function Render(_: RenderArgs) {
+    const step = searchParam("step", "shipping")   // tracked read, frame URL
     return (
       <Suspense fallback={…}>
         <MagentoCheckoutStep searchParams={{ step }} />
       </Suspense>
     )
   },
-  {
-    selector: "remote-checkout-frame",
-    schema: () => ({ step: searchParam("step", "shipping") }),
-  },
+  { selector: "remote-checkout-frame" },
 )
 ```
 
@@ -247,7 +245,7 @@ How it composes:
 
 1. `<Frame>` opens a per-name URL scope (session-backed; survives
    reloads; per-tab shared).
-2. The wrapper parton's `schema` reads `?step=` from the frame URL —
+2. The wrapper parton's body reads `?step=` from the frame URL —
    `searchParam()` is a tracked read against the frame-resolved
    request.
 3. The parton threads `step` into the binding's `searchParams`.

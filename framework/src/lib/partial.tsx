@@ -16,7 +16,7 @@
  * that id taking the place of the spec's catalog id (slot wiring sets
  * it to the slot entry's id).
  *
- * See `notes/partial-define-step-api.md`.
+ * See `docs/reference/partial.md`.
  */
 
 import React, {

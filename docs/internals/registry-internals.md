@@ -131,10 +131,29 @@ cache it once per pass instead of rebuilding per parton. See the
 
 `commitRequestRegistry` runs on stream flush and atomically applies
 the pending sets to the canonical store. Snapshots merge into
-`partials[id][variantKey]` unconditionally — same structural
-placement → same variant key → idempotent. The hint table is also
-MERGED: `pendingHints` overlays the existing hint for the route,
-with `ctx.invalidations` removing specific ids.
+`partials[id][variantKey]` — same structural placement → same
+variant key → idempotent, subject to the freshness guard below. The
+hint table is also MERGED: `pendingHints` overlays the existing hint
+for the route, with `ctx.invalidations` removing specific ids.
+
+### Registration-sequence freshness guard
+
+Every snapshot is stamped with a process-wide monotonic registration
+sequence (`_seq`) by `registerPartial`, and every canonical variant
+write — the eager publish inside `registerPartial`, the no-context
+direct write (HMR / prerender), and the commit-time merge — keeps the
+newest registration: a stored snapshot with a higher `_seq` than the
+incoming one wins (`isStale`).
+
+The guard exists because commit time is decoupled from registration
+time. A long-lived connection's registry context commits when the
+connection **closes** — after any number of interleaved targeted
+refetches have committed fresher records for the same variants. An
+unguarded overwrite would let that late commit clobber the fresher
+snapshot — losing, e.g., dep keys the newer render recorded, which
+then breaks fp-skip against the trailer's healed fps. Ordering by
+registration sequence (not commit order) keeps the canonical record
+at the newest render regardless of which connection flushes last.
 
 Wholesale-replace (overwriting the hint with `pendingHints`) looks
 appealing for the streaming-mode case — pendingHints is an

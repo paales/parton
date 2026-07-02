@@ -2,7 +2,12 @@
 
 Slot-placeable, type-catalog-registered partial. A block is what slots
 look up by `type` to render their entries; its `schema` callback
-declares both CMS content reads and child slot composition.
+declares both CMS content reads and child slot composition. `schema`
+is the CMS resolution surface — the one declared schema in the
+framework, and it exists because the editor needs a declarative
+manifest of a block's content fields (the catalog prerender invokes
+it with a tracking surface). Everything request-shaped stays in the
+Render body, exactly as on `parton`.
 
 ```tsx
 const HeroBlock = block(
@@ -67,7 +72,7 @@ interface BlockOptions<S> {
 | Option | Notes |
 |---|---|
 | `selector` | One or more refetch labels. The first label is the spec's catalog id (also the CMS storage row for singletons). Slot-allow filters and `nav.reload({selector: "…"})` match any label. Cosmetic `#`/`.` prefixes are stripped. |
-| `schema` | Sync. Returns content reads (`cms.text(...)`, `cms.enum(...)`) and child slot compositions (`cms.blocks(...)`, `cms.block(...)`). Both flow into Render as props. Request-dimension deps come from the tracked server-hooks (`searchParam()`, `cookie()`, …), same as on `parton` — rare on blocks, whose content side lives on the `cms` surface. |
+| `schema` | Sync. Receives `{ cms }` — the CMS read surface, nothing else. Returns content reads (`cms.text(...)`, `cms.enum(...)`) and child slot compositions (`cms.blocks(...)`, `cms.block(...)`); both flow into Render as props. Request-dimension deps come from the tracked server-hooks (`searchParam()`, `cookie()`, …) read in the Render body, same as on `parton` — rare on blocks, whose content side lives on the `cms` surface. |
 | `cache`, `defer`, `fallback` | Same as `parton`. |
 
 ## `cms` surface on schema

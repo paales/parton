@@ -20,8 +20,10 @@
  * cold-start (storage miss) and populates the slot. Mutations write
  * storage explicitly and fire partition-scoped invalidation. No TTL.
  *
- * Reading: a parton declares cells via `schema` or by accepting them
- * as JSX props (auto-resolved by the framework before Render).
+ * Reading: a Render body resolves cells where it uses them —
+ * `await handle.resolve(args?)` for module cells, the inline
+ * `localCell(key, opts)` form for parton-scoped ones — or accepts
+ * them as JSX props (auto-resolved by the framework before Render).
  *
  * Writing: `cell.with(args).set(value)` writes storage at the bound
  * partition AND fires `refreshSelector("cell:<id>?<args>")` so only
@@ -950,23 +952,6 @@ export interface ScopedCellDescriptor<T> {
   readonly validate: (value: unknown) => T
 }
 
-/**
- * What an inline `localCell("key", …)` records on its parton's snapshot
- * so an `actions` handler can resolve the cell WITHOUT a render
- * (increment 2). The descriptor is the rebuild input
- * (`finalizeScopedCell(descriptor, partonId, key)`); the partition is the
- * slot the render resolved against. Read by `resolveSchemaForAction`.
- */
-export interface InlineCellRecord {
-  readonly partition: CellArgs
-  readonly descriptor: ScopedCellDescriptor<unknown>
-  /** Request-derived partition callback, re-run in the action's request
-   *  so a per-session cell resolves at the caller's partition there. When
-   *  present, the action re-derives the partition rather than using the
-   *  recorded `partition` value. */
-  readonly partitionFn?: (scope: CellPartitionScope) => CellArgs
-}
-
 export function isScopedCellDescriptor(
   value: unknown,
 ): value is ScopedCellDescriptor<unknown> {
@@ -988,9 +973,9 @@ export function finalizeScopedCell<T>(
   // tied to parton state like form drafts that authors want to keep
   // across renders. Override via a future `storage` option on the
   // descriptor if needed.
-  // The handle's own `partition` is constant — a scoped cell's partition
-  // comes from the OWNING PARTON's match params at schema-resolution
-  // time (see partial.tsx's schema phase), not from request scope.
+  // The handle's own `partition` is constant — an inline cell's
+  // partition is fixed at declaration (the descriptor's `partition`
+  // record/callback, default `{}`), not derived from request scope.
   // `peek` follows the same rule: no-arg reads the `{}` partition;
   // callers that need a parton-partitioned slot pass its args
   // (`peek(partitionArgs)`). See `CellInterface.peek`.
