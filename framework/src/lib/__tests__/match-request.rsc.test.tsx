@@ -18,6 +18,7 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest"
+import { compileMatch } from "../match.ts"
 import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
@@ -209,5 +210,29 @@ describe("match over the request", () => {
       tree,
     )
     expect(reopened).not.toContain("page-three-body") // fp still matches → skip
+  })
+})
+
+describe("transport params are invisible to match", () => {
+  it("a wildcard search capture is identical with and without transport params", () => {
+    const m = compileMatch({ search: "*q=:query" })
+    const plain = m.evaluate(new Request("http://t/pokemon/1?search=url&q=a"))
+    const heartbeat = m.evaluate(
+      new Request(
+        "http://t/pokemon/1?search=url&q=a&streaming=1&live=1&cached=page-stage-3:x:y&partials=z&__frame=preview",
+      ),
+    )
+    expect(plain.matched).toBe(true)
+    expect(plain.params).toEqual({ query: "a" })
+    // The heartbeat/refetch shape of the SAME page must produce the
+    // SAME variant identity — otherwise a live render mints a phantom
+    // variant that supersedes (and hides) the real one on the client.
+    expect(heartbeat.params).toEqual(plain.params)
+    expect(m.extractParams("http://t/pokemon/1?q=a&live=1&cached=zzz")).toEqual({ query: "a" })
+  })
+
+  it("searchParams gates see the app URL, not transport params", () => {
+    const m = compileMatch({ searchParams: { live: (v: string | null) => v === null } })
+    expect(m.evaluate(new Request("http://t/x?live=1")).matched).toBe(true)
   })
 })

@@ -17,6 +17,7 @@
  */
 
 import {
+  TRANSPORT_PARAMS,
   EDITOR_COOKIE,
   parton,
   cookie,
@@ -84,14 +85,7 @@ const saveCmsFields = _saveCmsFields
 // bookmarks get stripped from internal hrefs — the param itself has
 // no effect.
 const EDITOR_RESERVED_PARAMS = ["editor", "select", "config", "tabs"] as const
-const FRAMEWORK_INTERNAL_PARAMS = [
-  "partials",
-  "cached",
-  "__frame",
-  "__frameUrl",
-  "streaming",
-  "live",
-] as const
+
 
 type Palette = "light" | "dark"
 type Attachment = "floating" | "docked"
@@ -99,7 +93,7 @@ type Device = "desktop" | "tablet" | "mobile"
 
 function stripEditorAndInternalParams(url: URL): void {
   for (const p of EDITOR_RESERVED_PARAMS) url.searchParams.delete(p)
-  for (const p of FRAMEWORK_INTERNAL_PARAMS) url.searchParams.delete(p)
+  for (const p of TRANSPORT_PARAMS) url.searchParams.delete(p)
 }
 
 function derivePreviewUrl(currentUrl: URL): string {
@@ -155,7 +149,7 @@ function cmsEditHref(currentUrl: URL, opts: HrefOpts): string {
   }
 
   url.searchParams.delete("editor")
-  for (const p of FRAMEWORK_INTERNAL_PARAMS) url.searchParams.delete(p)
+  for (const p of TRANSPORT_PARAMS) url.searchParams.delete(p)
   return url.pathname + url.search
 }
 
