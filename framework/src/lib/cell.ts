@@ -36,7 +36,6 @@ import {
 } from "../runtime/cell-actions.ts"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { getCurrentParton } from "./current-parton.ts"
-import { registerInlineCell } from "./parton-actions.ts"
 import { buildCellSelector, runInvalidationTransaction } from "../runtime/invalidation-registry.ts"
 import {
   getCellStorage,
@@ -828,15 +827,6 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
   // string the write fires — so a partitioned write's bump is matched
   // (queryMatchingTs needs the constraints, not just the name).
   cp.deps.add(buildCellSelector(id, partition))
-  // Record the cell in the module-global inline-cell registry so an
-  // `actions` handler resolves it by key without a render (increment 2).
-  // The per-request snapshot store isn't visible in the action's separate
-  // request, so this mirrors the module-global schema registry.
-  registerInlineCell(cp.id, key, {
-    partition,
-    descriptor: descriptor as ScopedCellDescriptor<unknown>,
-    partitionFn: typeof opts.partition === "function" ? opts.partition : undefined,
-  })
   return buildResolvedCell(handle, value, partition)
 }
 
@@ -987,47 +977,6 @@ export function isScopedCellDescriptor(
   )
 }
 
-/** Options for `schema({localCell}) => ({ x: localCell({...}) })`. */
-export interface ScopedLocalCellOpts<S extends CellShapeSpec, PV, T = ValueOfShape<S>> {
-  shape: S
-  initial: T
-  /** Narrow the partition from the parton's match params — one slot per
-   *  named dimension instead of one per full params record. */
-  partition?: (partonParams: PV) => CellArgs
-  write?: (value: T) => T
-  load?: (args: CellArgs) => Promise<T>
-}
-
-export interface ScopedCellFactories<PV> {
-  localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
-    opts: ScopedLocalCellOpts<S, PV, T>,
-  ): ScopedCellDescriptor<T>
-}
-
-export function makeScopedCellFactories<PV>(): ScopedCellFactories<PV> {
-  return {
-    localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
-      opts: ScopedLocalCellOpts<S, PV, T>,
-    ): ScopedCellDescriptor<T> {
-      const shape = shapeFromSpec(opts.shape)
-      return {
-        __scopedCellDescriptor: true,
-        shape,
-        defaultValue: opts.initial,
-        partitionFn: opts.partition as ((pv: never) => CellArgs) | undefined,
-        write: opts.write,
-        load: opts.load,
-        validate: makeValidator<T>("scoped-cell", shape),
-      }
-    },
-  }
-}
-
-/**
- * Finalize a scoped descriptor into a `CellInterface<T>` handle keyed by
- * compound id `<partonId>/<schemaKey>`. Registered into the cell
- * registry so `__cellWrite` / `__cellWriteBatch` can look it up by id.
- */
 export function finalizeScopedCell<T>(
   descriptor: ScopedCellDescriptor<T>,
   partonId: string,

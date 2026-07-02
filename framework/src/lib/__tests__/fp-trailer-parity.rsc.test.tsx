@@ -25,7 +25,7 @@ import { wrapStreamWithFpTrailer } from "../fp-trailer.ts"
 import { splitAtFpTrailer } from "../fp-trailer-split.ts"
 import { runWithRequestAsync, _captureCommitHandle } from "../../runtime/context.ts"
 import { renderServerToFlight } from "../../test/rsc-server.ts"
-import { localCell, type ResolvedCell } from "../cell.ts"
+import { localCell } from "../cell.ts"
 import {
   MemoryCellStorage,
   setCellStorage,
@@ -129,11 +129,12 @@ afterEach(() => {
   _clearInvalidationRegistry()
 })
 
-// ─── Axis: a leaf spec resolving a cell in `schema` ─────────────────
+// ─── Axis: a leaf spec resolving a cell in its body ─────────────────
 //
-// `schema` cell resolution folds a `|schema=<hash>` term into the LIVE
-// own-structural fp (partial.tsx). The trailer's recompute must fold
-// the identical term, or the warm fp it ships omits `|schema=` and can
+// An in-body `cell.resolve()` records a partition-scoped `cell:` dep
+// DURING Render (after the live fp is computed), so it folds by
+// store-and-reread. The trailer's recompute must fold the identical
+// dep re-read, or the warm fp it ships omits the cell term and can
 // never match the live warm fp.
 
 const counter = localCell({
@@ -144,17 +145,18 @@ const counter = localCell({
 })
 
 const CellLeaf = parton(
-  function CellLeafRender({ counter }: { counter: ResolvedCell<number> } & RenderArgs) {
-    return <span data-testid="cell-leaf">{counter.value}</span>
+  async function CellLeafRender(_: RenderArgs) {
+    const c = await counter.resolve()
+    return <span data-testid="cell-leaf">{c.value}</span>
   },
-  { selector: "#cell-leaf", schema: () => ({ counter }) },
+  { selector: "#cell-leaf" },
 )
 
 // A wrapper over the cell leaf. The wrapper's fp drifts cold→warm (its
 // descendant fold is empty on the cold visit, populated on warm) so its
-// trailer entry FIRES — and the leaf below it carries a non-empty
-// `|schema=` term. Exercises `recomputeFpWithFold` with a live fold AND
-// a schema-bearing descendant in the same route.
+// trailer entry FIRES — and the leaf below it carries a cell dep.
+// Exercises `recomputeFpWithFold` with a live fold AND a cell-resolving
+// descendant in the same route.
 const CellWrapper = parton(
   function CellWrapperRender(_: RenderArgs) {
     return (
@@ -166,7 +168,7 @@ const CellWrapper = parton(
   { selector: "#cell-wrapper" },
 )
 
-describe("parity — schema-resolved cell", () => {
+describe("parity — body-resolved cell", () => {
   it("a cell-resolving leaf's trailer fp matches the live warm fp", async () => {
     const tree = (
       <PartialRoot>
@@ -183,7 +185,7 @@ describe("parity — schema-resolved cell", () => {
       </PartialRoot>
     )
     // The wrapper's trailer entry fires (descendant-fold drift); the
-    // leaf carries a schema term. Both must round-trip.
+    // leaf carries a cell dep. Both must round-trip.
     await assertParity("http://t/cw", tree, "cell-wrapper")
     await assertParity("http://t/cw", tree, "cell-leaf")
   })
@@ -234,10 +236,11 @@ describe("parity — tracked search dep", () => {
 // ─── Axis: tracked match() hook dep ─────────────────────────────────
 
 const MatchHook = parton(
-  function MatchHookRender({ m }: { m: Record<string, string> | null } & RenderArgs) {
+  function MatchHookRender(_: RenderArgs) {
+    const m = match("/p/:slug")
     return <span data-testid="match-hook">{m?.slug ?? "—"}</span>
   },
-  { selector: "#match-hook", schema: () => ({ m: match("/p/:slug") }) },
+  { selector: "#match-hook" },
 )
 
 describe("parity — tracked match() hook", () => {

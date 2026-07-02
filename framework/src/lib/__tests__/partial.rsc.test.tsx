@@ -115,15 +115,10 @@ describe("parton — tracked reads + render", () => {
     expect(out).toContain("hello-world")
   })
 
-  it("merges match params + schema-read fields", async () => {
+  it("merges match params + tracked body reads", async () => {
     const Page = parton(
-      function MergedRender({
-        slug,
-        page,
-      }: {
-        slug: string
-        page: number
-      } & RenderArgs) {
+      function MergedRender({ slug }: { slug: string } & RenderArgs) {
+        const page = Number(searchParam("page", "1"))
         return (
           <span data-testid="merged">
             {slug}/{page}
@@ -133,7 +128,6 @@ describe("parton — tracked reads + render", () => {
       {
         match: "/p/:slug",
         selector: "#merged-spec",
-        schema: () => ({ page: Number(searchParam("page", "1")) }),
       },
     )
     const out = await flightAt("http://t/p/x?page=3", <Page />)
@@ -192,15 +186,14 @@ describe("parton — children passthrough", () => {
 })
 
 describe("parton — call-site prop pass-through", () => {
-  it("forwards JSX call-site props to Render alongside schema reads", async () => {
+  it("forwards JSX call-site props to Render alongside tracked body reads", async () => {
     const Inner = parton(
       function PassthroughInnerRender({
         pokemonId,
-        flavor,
       }: {
         pokemonId: number
-        flavor: string
       } & RenderArgs) {
+        const flavor = searchParam("flavor", "vanilla")
         return (
           <span data-testid="passthrough-out">
             {pokemonId}/{flavor}
@@ -209,12 +202,11 @@ describe("parton — call-site prop pass-through", () => {
       },
       {
         selector: "#passthrough-inner",
-        schema: () => ({ flavor: searchParam("flavor", "vanilla") }),
       },
     )
     // Outer wrapper: parses :id from URL, passes pokemonId as a JSX
-    // prop to Inner. Inner gets `flavor` from its own schema read and
-    // `pokemonId` from the call-site prop.
+    // prop to Inner. Inner gets `flavor` from its own tracked body
+    // read and `pokemonId` from the call-site prop.
     const Outer = parton(
       function PassthroughOuterRender({ id }: { id: string } & RenderArgs) {
         return <Inner pokemonId={Number(id)} />
@@ -264,16 +256,16 @@ describe("parton — two-step builder", () => {
     expect(out).toContain("hello")
   })
 
-  it("builder threads schema reads through the same way single-step does", async () => {
+  it("builder threads tracked body reads through the same way single-step does", async () => {
     const Builder = parton({
       match: "/builder/:slug",
       selector: "#two-step-vary",
-      schema: () => ({ variant: searchParam("variant", "default") }),
     })
     function BuilderVaryRender(p: typeof Builder.props) {
+      const variant = searchParam("variant", "default")
       return (
         <span data-testid="two-step-vary-out">
-          {p.slug}:{p.variant}
+          {p.slug}:{variant}
         </span>
       )
     }

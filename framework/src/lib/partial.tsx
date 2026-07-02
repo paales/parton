@@ -78,13 +78,11 @@ import {
 import {
   buildResolvedCell,
   computeCellPartitionKey,
-  computeScopedCellPartitionKey,
   finalizeScopedCell,
   getCellById,
   isBoundCell,
   isModuleCell,
   isScopedCellDescriptor,
-  makeScopedCellFactories,
   resolveCellValue,
   type BoundCell,
   type CellInterface,
@@ -92,15 +90,7 @@ import {
   type CellPartitionScope,
   type ResolvedCell,
   type ScopedCellDescriptor,
-  type ScopedCellFactories,
 } from "./cell.ts"
-import {
-  registerAction,
-  registerSchema,
-  type ActionHandler,
-  type ResolvedAction,
-} from "./parton-actions.ts"
-import { __partonAction } from "../runtime/parton-actions.ts"
 import { getCellStorage } from "../runtime/cell-storage.ts"
 import { _getSettleTrailerSink, getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
@@ -161,8 +151,6 @@ export { compileMatch, type CompiledMatch, type MatchInit, type MatchPattern } f
 export type PartialOptions<V> = Pick<
   InternalSpecConfig<V>,
   | "match"
-  | "schema"
-  | "actions"
   | "cache"
   | "defer"
   | "fallback"
@@ -180,47 +168,6 @@ export type PartialOptions<V> = Pick<
 interface InternalSpecConfig<V> {
   /** URLPattern gate. Spec emits nothing on miss. */
   match?: MatchPattern
-  /** Declared deps that need framework-mediated resolution — cells
-   *  in particular. Sync callback receiving `{cell}` (a parton-scoped
-   *  factory) and returning a record. Each entry's value can be:
-   *
-   *  - a **scoped cell descriptor** from the injected `cell` factory
-   *    (`cell.string({initial: ""})`) — finalized with wire id
-   *    `<partonId>/<schemaKey>` and partitioned by the parton's match
-   *    params (or a narrower subset via the descriptor's optional
-   *    `partition` callback).
-   *  - a **module-scope cell handle** imported from elsewhere
-   *    (`localCell({id, partition, initial, ...})` at module scope) —
-   *    resolved via its own partition callback against the request scope.
-   *  - any other value — passed through to Render's prop bag as-is.
-   *
-   *  Tracked hooks (`searchParam()`, `cookie()`, …) work here and fold
-   *  into the CURRENT fingerprint with no cold lag — schema runs
-   *  before the fp. Request-derived cell bindings read hooks directly:
-   *  `schema: () => ({ cart: cartCell.with({ cartId: cookie("cart_id") }) })`.
-   *
-   *  Resolved cells get `cell:<id>` selector labels auto-stamped on
-   *  the parton so `refreshSelector` fires on `cell.set`. */
-  schema?: (scope: ScopedCellFactories<V>) => Record<string, unknown>
-  /** Server-side handlers declared on the parton. Each handler runs
-   *  inside `runInvalidationTransaction` and receives `(scope, args)`:
-   *  scope is the parton's match params + resolved schema (same prop
-   *  bag Render gets minus children); args is caller-
-   *  supplied. After the handler returns, the framework auto-writes
-   *  any `args[K]` whose key matches a schema cell — atomic with the
-   *  handler's own writes. A throw aborts the transaction.
-   *
-   *  Each action is exposed as a `ResolvedAction` in Render's prop
-   *  bag with partition pre-bound (Flight-portable, callable from
-   *  client `onClick` via `usePartonAction(prop)`). */
-  actions?: Record<
-    string,
-    // `any` (not `unknown`): TS can't propagate the literal's schema return
-    // into action-handler scope contravariantly; `any` lets the author
-    // destructure freely. Render's prop bag (typed via InferV) is the source
-    // of truth for cell types.
-    (scope: any, args: any) => Promise<unknown>
-  >
   /** Refetch labels (whitespace string or array). First label is the
    *  spec catalog id; additional labels are extra fan-out targets.
    *  Auto-derives from `Render.name` when omitted. */
@@ -372,54 +319,7 @@ type InferMatch<Opts> = Opts extends string
         : object
     : object
 
-/**
- * Map cell handles + scoped descriptors in a schema record to their
- * `ResolvedCell<T>` counterparts — what Render actually receives after
- * framework resolution. Both `CellInterface<T>` (module-scope) and
- * `ScopedCellDescriptor<T>` (declared via the `{cell}` factory inside
- * the schema callback) become `ResolvedCell<T>`.
- */
-type ResolveSchemaProps<S> = {
-  [K in keyof S]: S[K] extends CellInterface<infer T, any>
-    ? ResolvedCell<T>
-    : S[K] extends BoundCell<infer T>
-      ? ResolvedCell<T>
-      : S[K] extends ScopedCellDescriptor<infer T>
-        ? ResolvedCell<T>
-        : S[K]
-}
-
-// One pattern covers 0- and 1-arg schema callbacks: a callback taking
-// fewer params is assignable to the 1-param shape, so `(scope) => S`
-// matches `() => S` too.
-type InferSchema<Opts> = Opts extends {
-  schema: (scope: ScopedCellFactories<infer _V>) => infer S
-}
-  ? S extends Record<string, unknown>
-    ? ResolveSchemaProps<S>
-    : object
-  : object
-
-/**
- * Map an action handler to the Render-prop view of it: caller-args
- * signature only (scope is framework-supplied at resolution time).
- *
- * `Args` is inferred from the handler's second parameter; `R` from its
- * return type. The Render prop is `(args: Args) => Promise<Awaited<R>>`.
- */
-type ResolveActions<A> = {
-  [K in keyof A]: A[K] extends (scope: infer _S, args: infer Args) => infer R
-    ? ResolvedAction<Args, Awaited<R>>
-    : never
-}
-
-type InferActions<Opts> = Opts extends { actions: infer A }
-  ? A extends Record<string, unknown>
-    ? ResolveActions<A>
-    : object
-  : object
-
-export type InferV<Opts> = Prettify<InferMatch<Opts> & InferSchema<Opts> & InferActions<Opts>>
+export type InferV<Opts> = Prettify<InferMatch<Opts>>
 
 /** Flatten a `T1 & T2 & …` intersection into a single object literal
  *  shape so editor hovers display the merged keys, not a chain. */
@@ -1398,9 +1298,6 @@ function createSpecComponent<V>(
     //
     // Module cells (imported handles): partition derived from the
     // cell's own partition callback against the request scope.
-    let schemaResult: Record<string, unknown> = {}
-    const cellsByKey = new Map<string, ResolvedCell<unknown>>()
-    const cellIdByArgKey: Record<string, string> = {}
     const cellLabels: string[] = []
     /** Bound args from any cell resolution (schema OR props). Merged
      *  with the match params into the parton's effective constraint surface for
@@ -1422,63 +1319,6 @@ function createSpecComponent<V>(
       session,
       time,
     }
-    if (opts.schema) {
-      const factories = makeScopedCellFactories<unknown>()
-      const raw = opts.schema(factories)
-      // Scoped-cell partitions derive from the match params (narrowed
-      // by a descriptor's own `partition` callback when declared).
-      const partonVaryForCells = varyResult
-      for (const key of Object.keys(raw)) {
-        const val = raw[key]
-        if (isScopedCellDescriptor(val)) {
-          const descriptor = val as ScopedCellDescriptor<unknown>
-          const cellHandle = finalizeScopedCell(descriptor, spec.id, key)
-          const partitionVary = descriptor.partitionFn
-            ? descriptor.partitionFn(partonVaryForCells as never)
-            : partonVaryForCells
-          const partitionKey = computeScopedCellPartitionKey(descriptor, partonVaryForCells)
-          const value = await resolveCellValue(cellHandle, partitionVary)
-          const resolved = buildResolvedCell(cellHandle, value, partitionVary)
-          schemaResult[key] = resolved
-          cellsByKey.set(key, resolved)
-          cellIdByArgKey[key] = cellHandle.id
-          cellLabels.push(`cell:${cellHandle.id}`)
-          Object.assign(boundArgsMerged, partitionVary)
-          resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
-        } else if (isBoundCell(val)) {
-          const bound = val as BoundCell<unknown>
-          const cellHandle = getCellById(bound.cellId)
-          if (!cellHandle) {
-            throw new Error(`schema: bound cell "${bound.cellId}" not in registry`)
-          }
-          const args = bound.args
-          const partitionKey = hash(stableStringify(args))
-          const value = await resolveCellValue(cellHandle, args)
-          const resolved = buildResolvedCell(cellHandle, value, args)
-          schemaResult[key] = resolved
-          cellsByKey.set(key, resolved)
-          cellIdByArgKey[key] = cellHandle.id
-          cellLabels.push(`cell:${cellHandle.id}`)
-          Object.assign(boundArgsMerged, args)
-          resolutionParts.push(`${cellHandle.id}:${partitionKey}:${stableStringify(value)}`)
-        } else if (isModuleCell(val)) {
-          const c = val as CellInterface<unknown>
-          const args = c.partition(cellScope)
-          const partitionKey = hash(stableStringify(args))
-          const value = await resolveCellValue(c, args)
-          const resolved: ResolvedCell<unknown> = buildResolvedCell(c, value)
-          schemaResult[key] = resolved
-          cellsByKey.set(key, resolved)
-          cellIdByArgKey[key] = c.id
-          cellLabels.push(`cell:${c.id}`)
-          Object.assign(boundArgsMerged, args)
-          resolutionParts.push(`${c.id}:${partitionKey}:${stableStringify(value)}`)
-        } else {
-          schemaResult[key] = val
-        }
-      }
-    }
-
     // ── Props cell-resolution phase ──
     // Walk top-level extraProps for Cell handles or BoundCell
     // descriptors. Resolve each one in place: storage read (running
@@ -1536,37 +1376,6 @@ function createSpecComponent<V>(
       cellLabels.length > 0 || tagLabels.length > 0
         ? [...parsed.labels, ...cellLabels, ...tagLabels]
         : parsed.labels
-
-    // ── Actions phase ──
-    // Each declared action becomes a `ResolvedAction` in Render's prop
-    // bag: bound server-action ref with the parton's match params baked
-    // (partition bound at resolution time) plus a `writes` map of
-    // argKey → cellId for the client's `usePartonAction` to wire
-    // optimistic-aware cell updates.
-    const actionsResult: Record<string, ResolvedAction<unknown, unknown>> = {}
-    if (opts.actions) {
-      // Match params bake into the ref: the action POST's URL doesn't
-      // carry the route, so the dispatcher can't re-derive WHICH
-      // variant's cells to resolve — params are the one thing that
-      // must ride. Everything request-shaped (cookies, session) the
-      // dispatcher reads fresh off the action's own request via the
-      // stamped CurrentParton.
-      for (const actionName of Object.keys(opts.actions)) {
-        const actionId = `${spec.id}/${actionName}`
-        const ref = (
-          __partonAction as unknown as (
-            actionId: string,
-            matchParams: Record<string, string>,
-            args: unknown,
-          ) => Promise<unknown>
-        ).bind(null, actionId, params)
-        actionsResult[actionName] = {
-          __partonAction: true,
-          ref: ref as ResolvedAction<unknown, unknown>["ref"],
-          writes: { ...cellIdByArgKey },
-        }
-      }
-    }
 
     // ── Fingerprint ──
     // The spec's "own" fp captures only what THIS spec depends on:
@@ -1736,8 +1545,6 @@ function createSpecComponent<V>(
     const renderProps = {
       ...resolvedExtraProps,
       ...(varyResult as object),
-      ...schemaResult,
-      ...actionsResult,
       children: outerChildren,
       ...(effectiveInstanceId !== undefined ? { __instanceId: effectiveInstanceId } : {}),
     } as V & RenderArgs
@@ -2015,10 +1822,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   // a unique id. A spec with none of the three is a structural child
   // of its parent and cannot be the target of selective refetch,
   // session/tag invalidation, or URL-driven variant carve-out.
-  const addressable =
-    options.selector !== undefined ||
-    options.schema !== undefined ||
-    options.match !== undefined
+  const addressable = options.selector !== undefined || options.match !== undefined
 
   const spec: InternalSpec<V> = {
     id,
@@ -2043,21 +1847,6 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
     addressable,
     capabilityType: options.capabilityType,
   })
-
-  // Register the schema callback (for the action dispatcher to re-run
-  // server-side at dispatch time). Idempotent overwrite on HMR — same
-  // semantics as the cell registry.
-  if (options.schema) {
-    registerSchema(id, options.schema as unknown as Parameters<typeof registerSchema>[1])
-  }
-
-  // Register each declared action handler under `<partonId>/<actionName>`.
-  if (options.actions) {
-    for (const actionName of Object.keys(options.actions)) {
-      const handler = options.actions[actionName]
-      registerAction(`${id}/${actionName}`, handler as ActionHandler)
-    }
-  }
 
   // Attach `.props` as a phantom field. The runtime value is
   // `undefined`; the type declares it as `V & RenderArgs` so

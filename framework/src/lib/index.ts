@@ -75,14 +75,12 @@ export {
   localCell,
   buildResolvedCell,
   computeCellPartitionKey,
-  computeScopedCellPartitionKey,
   finalizeScopedCell,
   getCellById,
   isBoundCell,
   isCellHandle,
   isModuleCell,
   isScopedCellDescriptor,
-  makeScopedCellFactories,
   resolveCellValue,
   type BoundCell,
   type CellInterface,
@@ -95,8 +93,6 @@ export {
   type LocalCellOpts,
   type ResolvedCell,
   type ScopedCellDescriptor,
-  type ScopedCellFactories,
-  type ScopedLocalCellOpts,
   type ValueOfShape,
 } from "./cell.ts"
 
@@ -119,22 +115,11 @@ export {
 
 export {
   useCell,
-  usePartonAction,
   type CellInputBindings,
   type CellInputOpts,
   type ClientCell,
 } from "./cell-client.tsx"
 
-export {
-  getActionById,
-  getSchemaForParton,
-  isResolvedAction,
-  registerAction,
-  registerSchema,
-  type ActionHandler,
-  type ResolvedAction,
-  type SchemaCallback,
-} from "./parton-actions.ts"
 
 export { type TimeScope } from "./time.ts"
 

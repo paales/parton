@@ -1,14 +1,10 @@
 /**
- * Cells — schema resolution + storage + invalidation.
+ * Cells — in-body resolution + storage + invalidation.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import {
-  parton,
-  ROOT,
-  type RenderArgs,
-} from "../partial.tsx"
-import { localCell, type ResolvedCell } from "../cell.ts"
+import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
+import { localCell } from "../cell.ts"
 import { hash } from "../hash.ts"
 import { stableStringify } from "../stable-stringify.ts"
 import {
@@ -49,8 +45,8 @@ afterEach(() => {
   _clearInvalidationRegistry()
 })
 
-describe("cell — schema resolution", () => {
-  it("threads a resolved cell into render props with the default value on miss", async () => {
+describe("cell — in-body resolution", () => {
+  it("resolves the default value on a storage miss", async () => {
     const flag = localCell({
       id: "test.flag",
       shape: "boolean",
@@ -58,12 +54,11 @@ describe("cell — schema resolution", () => {
       initial: false,
     })
     const Page = parton(
-      function FlagPageRender({
-        flag,
-      }: { flag: ResolvedCell<boolean> } & RenderArgs) {
-        return <span data-testid="flag">value={String(flag.value)}</span>
+      async function FlagPageRender(_: RenderArgs) {
+        const f = await flag.resolve()
+        return <span data-testid="flag">value={String(f.value)}</span>
       },
-      { match: "/flag", schema: () => ({ flag }) },
+      { match: "/flag" },
     )
     const out = await flightAt("http://t/flag", <Page />)
     // Flight serializes JSX children as an array `["value=", "false"]`.
@@ -80,19 +75,18 @@ describe("cell — schema resolution", () => {
     seedCell(palette.id, {}, "dark")
 
     const Page = parton(
-      function PaletteRender({
-        palette,
-      }: { palette: ResolvedCell<"light" | "dark"> } & RenderArgs) {
-        return <span data-testid="palette">{palette.value}</span>
+      async function PaletteRender(_: RenderArgs) {
+        const p = await palette.resolve()
+        return <span data-testid="palette">{p.value}</span>
       },
-      { match: "/palette", schema: () => ({ palette }) },
+      { match: "/palette" },
     )
     const out = await flightAt("http://t/palette", <Page />)
     // Single text child serializes as `"children":"dark"` in Flight.
     expect(out).toContain('"children":"dark"')
   })
 
-  it("stamps the cell selector label onto the partial", async () => {
+  it("a selector refresh on the cell label shifts the parton's fp", async () => {
     const counter = localCell({
       id: "test.counter",
       shape: "number",
@@ -100,46 +94,52 @@ describe("cell — schema resolution", () => {
       initial: 0,
     })
     const Page = parton(
-      function CounterRender({
-        counter,
-      }: { counter: ResolvedCell<number> } & RenderArgs) {
-        return <span data-testid="counter">{counter.value}</span>
+      async function CounterRender(_: RenderArgs) {
+        const c = await counter.resolve()
+        return <span data-testid="counter">{c.value}</span>
       },
-      { match: "/counter", selector: "counter-spec", schema: () => ({ counter }) },
+      { match: "/counter", selector: "counter-spec" },
     )
 
-    // Render once — fp baked in.
-    const first = await flightAt("http://t/counter", <Page />)
+    // In-body reads land on the dep record DURING Render — after the
+    // fp is computed — so warm up once (inside a PartialRoot, which
+    // commits the snapshot the fold re-reads), then capture the
+    // settled fp.
+    const tree = (
+      <PartialRoot>
+        <Page />
+      </PartialRoot>
+    )
+    await flightAt("http://t/counter", tree)
+    const first = await flightAt("http://t/counter", tree)
     const fpMatch = first.match(/partialFingerprint":"([0-9a-f]+)/)
     expect(fpMatch).not.toBeNull()
     const initialFp = fpMatch![1]
 
-    // Refresh by the cell's auto-stamped label — fp must shift even
+    // Refresh by the cell's recorded label — fp must shift even
     // though the cell value is still 0 (the invalidation timestamp
     // contributes via `queryMatchingTs`).
     refreshSelector("cell:test.counter")
-    const second = await flightAt("http://t/counter", <Page />)
+    const second = await flightAt("http://t/counter", tree)
     const secondFp = second.match(/partialFingerprint":"([0-9a-f]+)/)![1]
     expect(secondFp).not.toEqual(initialFp)
   })
 
-  it("partitions storage by the cell's vary output", async () => {
+  it("partitions storage by explicit resolve args", async () => {
     const notes = localCell({
       id: "test.notes",
       shape: "string",
-      partition: ({ params }) => ({ productId: params.id ?? "" }),
       initial: "",
     })
     seedCell(notes.id, { productId: "42" }, "notes for 42")
     seedCell(notes.id, { productId: "99" }, "notes for 99")
 
     const Page = parton(
-      function NotesRender({
-        notes,
-      }: { notes: ResolvedCell<string> } & RenderArgs) {
-        return <span data-testid="notes">{notes.value}</span>
+      async function NotesRender({ id }: { id: string } & RenderArgs) {
+        const n = await notes.resolve({ productId: id })
+        return <span data-testid="notes">{n.value}</span>
       },
-      { match: "/product/:id", schema: () => ({ notes }) },
+      { match: "/product/:id" },
     )
     const at42 = await flightAt("http://t/product/42", <Page />)
     expect(at42).toContain('"children":"notes for 42"')
@@ -175,19 +175,17 @@ describe("cell — fp transitive on partition change", () => {
     const notes = localCell({
       id: "test.notes-fp",
       shape: "string",
-      partition: ({ params }) => ({ productId: params.id ?? "" }),
       initial: "default",
     })
     seedCell(notes.id, { productId: "A" }, "A-notes")
     seedCell(notes.id, { productId: "B" }, "B-notes")
 
     const Page = parton(
-      function NotesFpRender({
-        notes,
-      }: { notes: ResolvedCell<string> } & RenderArgs) {
-        return <span data-testid="notes-fp">{notes.value}</span>
+      async function NotesFpRender({ id }: { id: string } & RenderArgs) {
+        const n = await notes.resolve({ productId: id })
+        return <span data-testid="notes-fp">{n.value}</span>
       },
-      { match: "/p/:id", schema: () => ({ notes }) },
+      { match: "/p/:id" },
     )
     const a = await flightAt("http://t/p/A", <Page />)
     const b = await flightAt("http://t/p/B", <Page />)

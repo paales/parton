@@ -116,4 +116,54 @@ describe("atomic() — one commit, one fan-out", () => {
       expect(flavor.peek()).toBe("cherry")
     })
   })
+
+  it("commits and rolls back at the caller's session partition", async () => {
+    // Per-session cells: the partition callback re-derives from the
+    // WRITING request's scope, so an atomic multi-cell commit lands on
+    // the caller's own slots — and a rollback discards exactly those.
+    const name = localCell({
+      id: "resolve-tx-name",
+      shape: "string",
+      initial: "",
+      partition: ({ session }) => ({ sid: session.id }),
+    })
+    const saves = localCell({
+      id: "resolve-tx-saves",
+      shape: "number",
+      initial: 0,
+      partition: ({ session }) => ({ sid: session.id }),
+    })
+
+    await runWithRequestAsync(
+      new Request("http://t/x", { headers: { cookie: "__frame_sid=alice" } }),
+      async () => {
+        await atomic(async () => {
+          await name.set("Alice")
+          await saves.set(1)
+        })
+        expect(name.peek()).toBe("Alice")
+        expect(saves.peek()).toBe(1)
+
+        await expect(
+          atomic(async () => {
+            await name.set("should-not-stick")
+            await saves.set(100)
+            throw new Error("nope")
+          }),
+        ).rejects.toThrow("nope")
+        // Rollback discarded both writes; the committed values stand.
+        expect(name.peek()).toBe("Alice")
+        expect(saves.peek()).toBe(1)
+      },
+    )
+
+    // Bob's partition is untouched by Alice's transaction.
+    await runWithRequestAsync(
+      new Request("http://t/x", { headers: { cookie: "__frame_sid=bob" } }),
+      async () => {
+        expect(name.peek()).toBe("")
+        expect(saves.peek()).toBe(0)
+      },
+    )
+  })
 })

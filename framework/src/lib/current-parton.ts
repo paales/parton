@@ -21,7 +21,6 @@
  * non-parton server component nested in the body reads `undefined`.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks"
 import React from "react"
 
 /** The per-render frame, as far as this module cares: just the slot for the
@@ -112,32 +111,14 @@ export function _setCurrentParton(parton: CurrentParton): void {
   if (frame) frame.parton = parton
 }
 
-/** Identity store for non-render execution — action dispatch. Renders
- *  stamp identity on the per-component frame (which isolates sibling
- *  renders); an action is one logical task with no siblings, so a plain
- *  ALS run scopes it. `getCurrentParton` prefers the frame — during a
- *  render the dispatch store is never populated. */
-const dispatchStorage = new AsyncLocalStorage<CurrentParton>()
-
-/**
- * Run `fn` with `parton` as the current parton — the action
- * dispatcher's stamp, so tracked hooks inside a schema callback (or an
- * action handler) read the ACTION's request: the caller's current
- * cookies/session, not a replay of render-time values.
- */
-export function _runWithCurrentParton<T>(parton: CurrentParton, fn: () => T): T {
-  return dispatchStorage.run(parton, fn)
-}
-
 /**
  * Read the rendering parton's own identity, or `undefined` when there is
  * no enclosing parton body (outside a render, or inside a non-parton
  * server component nested in the body). Valid anywhere in the body —
- * before or after awaits. During action dispatch, the dispatcher's
- * synthetic stamp (see `_runWithCurrentParton`).
+ * before or after awaits.
  */
 export function getCurrentParton(): CurrentParton | undefined {
-  return sharedInternals?.__partonStorage?.getStore()?.parton ?? dispatchStorage.getStore()
+  return sharedInternals?.__partonStorage?.getStore()?.parton
 }
 
 /**
