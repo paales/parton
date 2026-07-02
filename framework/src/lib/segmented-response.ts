@@ -282,7 +282,13 @@ async function driveLaneStream(
 				const snap = lookupPartial(id);
 				if (!snap) break;
 				const flight = renderToReadableStream(partialFromSnapshot(id, snap));
-				const wrapped = wrapStreamWithFpTrailer(flight, _captureCommitHandle());
+				// A lane is a single parton's render — its flush already fires at
+				// that parton's completion, and lanes run concurrently (the
+				// one-sink-per-request settle slot doesn't model that), so
+				// settle-time emission is off here.
+				const wrapped = wrapStreamWithFpTrailer(flight, _captureCommitHandle(), {
+					incremental: false,
+				});
 				const reader = wrapped.getReader();
 				try {
 					while (true) {

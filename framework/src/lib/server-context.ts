@@ -55,6 +55,7 @@ export interface SettleScope {
  *  `_cbs`; it only counts and calls `onSettled`. */
 interface InternalSettleScope extends SettleScope {
   readonly _cbs: Array<() => void>
+  readonly toJSON: () => null
 }
 
 /** The per-render frame in the parton ALS, as far as server context cares:
@@ -176,6 +177,12 @@ export function _openPartonSettleScope(): SettleScope {
       for (const cb of cbs) queueMicrotask(cb)
     },
     _cbs: cbs,
+    // The scope rides the provider's `_settle` prop, and dev-build
+    // Flight captures raw element props into debug-info rows — where a
+    // function-bearing object serializes as an `$E` row that a
+    // server-side decode (the byte cache's replay) cannot resolve.
+    // The scope is render-machinery, not data: its wire form is null.
+    toJSON: () => null,
   }
   if (frame) frame.settle = scope
   return scope

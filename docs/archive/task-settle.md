@@ -1,3 +1,8 @@
+> Superseded 2026-07-02 by [docs/internals/server-context.md](../internals/server-context.md)
+> (the settle-scope mechanism) and [docs/internals/streaming.md](../internals/streaming.md)
+> (settle-time trailer emission, the shipped consumer). Kept for the
+> Flight task-lifecycle citations.
+
 # Per-parton subtree settlement — the task-done moment in Flight
 
 **The research question:** is there a moment in React's Flight server where

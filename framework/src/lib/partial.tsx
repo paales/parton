@@ -102,9 +102,9 @@ import {
 } from "./parton-actions.ts"
 import { __partonAction } from "../runtime/parton-actions.ts"
 import { getCellStorage } from "../runtime/cell-storage.ts"
-import { getScope } from "../runtime/context.ts"
+import { _getSettleTrailerSink, getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
-import { _openPartonSettleScope, getServerContext } from "./server-context.ts"
+import { _onPartonSettled, _openPartonSettleScope, getServerContext } from "./server-context.ts"
 import { _setCurrentParton, type CurrentParton, type WakeHints } from "./current-parton.ts"
 import { evalDepKeys, _isParkSignal } from "./server-hooks.ts"
 
@@ -1770,7 +1770,7 @@ function createSpecComponent<V>(
     }
 
     // Scope this parton's descendants: the returned body is wrapped in
-    // `<ParentContext value={childCtx}>` (below), so child partons inherit
+    // `<ParentContext>` (below), so child partons inherit
     // `childCtx` as their ambient parent.
     const childCtx = _childContext(parent, id)
     // Render receives: extra JSX-prop pass-through, match params,
@@ -1884,6 +1884,17 @@ function createSpecComponent<V>(
     // outlined subtree task; the Flight patch refcounts every task under it
     // and fires the scope's callbacks when the subtree fully settles.
     const settleScope = _openPartonSettleScope()
+    // Settle-time trailer emission: when a response stream registered a
+    // sink (wrapStreamWithFpTrailer's incremental mode), notify it the
+    // moment this parton's subtree settles — its own snapshot and every
+    // descendant's are final then, so its warm fp can ship mid-stream
+    // instead of waiting for slower siblings. The registration attaches
+    // to the scope just opened (the wrapper's frame now holds it); the
+    // sink is read at fire time from the request context, so renders
+    // whose response has no sink (lanes, SSR) no-op.
+    if (_getSettleTrailerSink()) {
+      _onPartonSettled(() => _getSettleTrailerSink()?.(id))
+    }
     let body: ReactNode = spec.Render(renderProps)
     // Cullable if the render read `visible()` — the client observes its
     // viewport intersection and self-refetches it on enter/leave. The
