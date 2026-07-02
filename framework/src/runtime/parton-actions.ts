@@ -56,7 +56,6 @@ import {
 } from "../lib/cell.ts"
 import { _runWithCurrentParton, type CurrentParton } from "../lib/current-parton.ts"
 import { ROOT, type PartialCtx } from "../lib/partial-context.ts"
-import { _isParkSignal } from "../lib/server-hooks.ts"
 import { getRequest, getScope, parseCookies } from "./context.ts"
 import { runInvalidationTransaction } from "./invalidation-registry.ts"
 import { createSessionReadSurface } from "./session.ts"
@@ -111,22 +110,7 @@ function resolveSchemaForAction(
   const resolved: Record<string, unknown> = {}
   const cellsByKey = new Map<string, ResolvedCell<unknown>>()
   const schemaCb = getSchemaForParton(partonId)
-  // A `park()` here means the schema's gate condition holds at dispatch
-  // time. Parking is a render-emission concept — an action has no
-  // boundary to replace — so surface it as a dispatch error: the client
-  // shouldn't be able to invoke actions on a parton it can't see.
-  let raw: Record<string, unknown>
-  try {
-    raw = schemaCb ? schemaCb(makeScopedCellFactories<unknown>()) : {}
-  } catch (err) {
-    if (_isParkSignal(err)) {
-      throw new Error(
-        `action dispatch for "${partonId}": its schema parked for this request — ` +
-          `a parked parton cannot handle actions`,
-      )
-    }
-    throw err
-  }
+  const raw = schemaCb ? schemaCb(makeScopedCellFactories<unknown>()) : {}
   for (const key of Object.keys(raw)) {
     const val = raw[key]
     if (isScopedCellDescriptor(val)) {

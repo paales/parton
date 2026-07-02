@@ -106,7 +106,7 @@ import { _getSettleTrailerSink, getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
 import { _onPartonSettled, _openPartonSettleScope, getServerContext } from "./server-context.ts"
 import { _setCurrentParton, type CurrentParton, type WakeHints } from "./current-parton.ts"
-import { evalDepKeys, _isParkSignal } from "./server-hooks.ts"
+import { evalDepKeys } from "./server-hooks.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -230,8 +230,8 @@ interface InternalSpecConfig<V> {
   fallback?: ReactNode
   /** When `true` (default), wraps the spec's rendered body in
    *  `<Activity mode="visible">` while active and emits
-   *  `<Activity mode="hidden">` with a placeholder when `match` (or a
-   *  schema `park()`) says the spec shouldn't render on this route — provided
+   *  `<Activity mode="hidden">` with a placeholder when `match` says
+   *  the spec shouldn't render on this request — provided
    *  the client has previously cached this id (signalled via
    *  `?cached=id:fp`). The spec component fiber lives at its natural
    *  JSX position (e.g. a root.tsx sibling), so Activity mode flips
@@ -1123,8 +1123,7 @@ function placeholderFor(id: string, matchKey: string): ReactElement {
 }
 
 /**
- * Parked emission for a keepalive spec whose `match` (or a schema
- * `park()`) says it
+ * Parked emission for a keepalive spec whose `match` says it
  * shouldn't render on this request, but the client has it cached
  * (declared via `?cached=id:matchKey:fp`). Returns one
  * `<Activity mode="hidden" key={matchKey}>` per cached matchKey,
@@ -1308,7 +1307,7 @@ function createSpecComponent<V>(
     const selfDeps = new Set<string>()
     // Keepalive defaults to true. The flag governs both the active
     // emission (wrap body in `<Activity mode="visible">`) and the
-    // parked emission on match-miss / park() (emit
+    // parked emission on match-miss (emit
     // `<Activity mode="hidden">` + placeholder when the client has
     // this id cached). The shared Activity wrapper is what lets React
     // preserve the inner Suspense subtree's fiber identity across
@@ -1425,16 +1424,7 @@ function createSpecComponent<V>(
     }
     if (opts.schema) {
       const factories = makeScopedCellFactories<unknown>()
-      // A `park()` inside the callback throws the branded ParkSignal:
-      // this request renders the parked keepalive instead of a boundary
-      // — no snapshot, no fp, cached client variants preserved.
-      let raw: Record<string, unknown>
-      try {
-        raw = opts.schema(factories)
-      } catch (err) {
-        if (_isParkSignal(err)) return emitParkedKeepalive(id, keepalive, requestState)
-        throw err
-      }
+      const raw = opts.schema(factories)
       // Scoped-cell partitions derive from the match params (narrowed
       // by a descriptor's own `partition` callback when declared).
       const partonVaryForCells = varyResult

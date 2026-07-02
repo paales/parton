@@ -12,7 +12,6 @@
 
 import {
   parton,
-  park,
   searchParam,
   type RenderArgs,
   type ResolvedCell,
@@ -347,11 +346,10 @@ function makeListPagePartial(page: number) {
     },
     {
       selector: `#page-${page}` as const,
-      schema: () => {
-        const pages = Math.max(1, Number(searchParam("pages")) || 1)
-        if (page > pages) park()
-        return { page, isFirst: page === 1 }
-      },
+      // Page N exists iff the URL admits it — a miss parks the cached
+      // page (back/forward across a load-more boundary restores it).
+      match: { searchParams: { pages: (v) => Math.max(1, Number(v) || 1) >= page } },
+      schema: () => ({ page, isFirst: page === 1 }),
     },
   )
 }

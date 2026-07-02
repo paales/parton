@@ -42,7 +42,7 @@ export {
 
 // Server-hooks — free functions a parton's schema/Render calls to read
 // a request dimension AND record it as an fp dependency: `cookie()`,
-// `searchParam()`, `param()`, the wake hooks, `park()`. Plus `tag()`
+// `searchParam()`, `param()`, the wake hooks. Plus `tag()`
 // (a render-time invalidation label) and `getCurrentParton()` (the
 // parton's own identity). See current-parton.ts / server-hooks.ts.
 export {
@@ -54,7 +54,6 @@ export {
   visible,
   header,
   pathname,
-  park,
   expires,
   staleUntil,
   time,

@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest"
 import { parton, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
-import { cookie, park, pathname, searchParam } from "../server-hooks.ts"
+import { cookie, pathname, searchParam } from "../server-hooks.ts"
 import { Frame } from "../frame.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { setCookie } from "../../runtime/context.ts"
@@ -44,18 +44,14 @@ describe("parton — match + skip", () => {
     expect(out).not.toContain("should-not-appear")
   })
 
-  it("emits nothing when the schema parks", async () => {
+  it("emits nothing when a match predicate misses", async () => {
     const Page = parton(
       function ParkedTargetRender({}: RenderArgs) {
         return <span data-testid="parked-target">x</span>
       },
       {
-        match: "/x",
+        match: { pathname: "/x", searchParams: { on: "1" } },
         selector: "#parked-spec",
-        schema: () => {
-          if (searchParam("on") !== "1") park()
-          return {}
-        },
       },
     )
     const off = await flightAt("http://t/x", <Page />)

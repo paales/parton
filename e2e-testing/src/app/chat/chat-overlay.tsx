@@ -7,7 +7,7 @@
  * once per id.
  */
 
-import { park, parton, searchParam, type PartialCtx, type RenderArgs } from "@parton/framework"
+import { parton, searchParam, type PartialCtx, type RenderArgs } from "@parton/framework"
 import { Frame } from "@parton/framework/lib/frame.tsx"
 import { ChatMessage } from "./piece.tsx"
 import {
@@ -71,11 +71,9 @@ const MessagePartials = AVAILABLE_FILES.map((fileId) =>
     },
     {
       selector: `#chat-msg-${fileId}`,
-      schema: () => {
-        const msgs = parseMsgs(searchParam("msgs"))
-        if (!msgs.includes(fileId)) park()
-        return {}
-      },
+      // The message exists iff its id is in the `?msgs=` list — a miss
+      // parks the streamed DOM so back/forward restores it instantly.
+      match: { searchParams: { msgs: (v) => parseMsgs(v).includes(fileId) } },
     },
   ),
 )

@@ -6,9 +6,7 @@
  *   - tracked hooks inside a schema callback read the CALLER's current
  *     cookies/session at dispatch time, not a replay of render-time
  *     values;
- *   - `param()` resolves the variant identity the ref baked;
- *   - a schema that `park()`s at dispatch time is a dispatch error
- *     (a parked parton has no boundary and isn't action-reachable).
+ *   - `param()` resolves the variant identity the ref baked.
  */
 
 import { describe, expect, it, beforeEach } from "vitest"
@@ -17,7 +15,7 @@ import { __partonAction } from "../../runtime/parton-actions.ts"
 import { runWithRequestAsync } from "../../runtime/context.ts"
 import { _clearInvalidationRegistry } from "../../runtime/invalidation-registry.ts"
 import { clearRegistry } from "../partial-registry.ts"
-import { cookie, park, param } from "../server-hooks.ts"
+import { cookie, param } from "../server-hooks.ts"
 
 // Schema reads the request via tracked hooks; the handler echoes what
 // the schema resolved, so the assertion sees exactly what dispatch-time
@@ -31,22 +29,6 @@ const _EchoSpec = parton(
     schema: () => ({ who: cookie("who") ?? "anon", pid: param("id") ?? "" }),
     actions: {
       echo: async (scope: { who?: string; pid?: string }) => `${scope.who}:${scope.pid}`,
-    },
-  },
-)
-
-const _ParkedSpec = parton(
-  function ParkedRender(_: RenderArgs) {
-    return <span>parked</span>
-  },
-  {
-    selector: "#stamp-parked",
-    schema: () => {
-      if (cookie("open") !== "1") park()
-      return {}
-    },
-    actions: {
-      save: async () => "saved",
     },
   },
 )
@@ -77,17 +59,4 @@ describe("action dispatch — stamped CurrentParton", () => {
     expect(await dispatch("bob")).toBe("bob:")
   })
 
-  it("a schema that parks at dispatch time rejects the action", async () => {
-    await expect(
-      runWithRequestAsync(new Request("http://t/__action"), async () =>
-        __partonAction("stamp-parked/save", {}, {}),
-      ),
-    ).rejects.toThrow(/parked parton cannot handle actions/)
-    // Same action with the gate open dispatches fine.
-    const { result } = await runWithRequestAsync(
-      new Request("http://t/__action", { headers: { cookie: "open=1" } }),
-      async () => await __partonAction("stamp-parked/save", {}, {}),
-    )
-    expect(result).toBe("saved")
-  })
 })

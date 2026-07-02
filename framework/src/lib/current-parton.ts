@@ -90,9 +90,9 @@ export interface CurrentParton {
    *  boundary's observer config. */
   visibleOptions?: VisibleOptions
   /** Which wrapper phase is executing. `"schema"` spans match →
-   *  schema → fingerprint — everything BEFORE the fp is computed, where
-   *  `park()` is legal; `"render"` is the Render body. The wrapper flips
-   *  it just before invoking Render. Mutable; the wrapper owns it. */
+   *  schema → fingerprint — everything BEFORE the fp is computed;
+   *  `"render"` is the Render body. The wrapper flips it just before
+   *  invoking Render. Mutable; the wrapper owns it. */
   phase: "schema" | "render"
   /** Wake-hint box written by `expires()` / `staleUntil()` during this
    *  render. The wrapper passes the same object to the boundary, which
