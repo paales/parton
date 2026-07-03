@@ -49,7 +49,11 @@
 import React, { useEffect, useRef } from "react"
 import { registerCullObserver, reportCullState } from "./cull-park.ts"
 import type { VisibleOptions } from "./current-parton.ts"
-import { _getLiveConnectionId, _setLiveConnectionId } from "./partial-client-state.ts"
+import {
+	_getLiveConnectionId,
+	_setLiveConnectionId,
+	cachedTokensFor,
+} from "./partial-client-state.ts"
 import { enqueueRefetch } from "./refetch.ts"
 import { VISIBILITY_ENDPOINT, type VisibilityReport } from "./visibility-protocol.ts"
 
@@ -256,6 +260,9 @@ async function postVisibilityReport(
 		seq: ++reportSeq,
 		changed: changedIds,
 		visible: [...inView],
+		// The client's actual holdings for the flipped ids — what the
+		// server may confirm with a placeholder instead of re-rendering.
+		cached: cachedTokensFor(changedIds),
 	}
 	try {
 		const res = await fetch(VISIBILITY_ENDPOINT, {

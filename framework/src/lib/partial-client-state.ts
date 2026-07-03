@@ -345,6 +345,25 @@ export function getCachedPartialIds(): string[] {
 }
 
 /**
+ * The client's current cached tokens (`id:matchKey:fp`) for a specific
+ * id set — the visibility report's holdings declaration (see
+ * `visibility-protocol.ts`): a culling flip tells the server exactly
+ * what it holds for the flipped partons, so the lane's fp-skip verdict
+ * can't confirm content the client already dropped.
+ */
+export function cachedTokensFor(ids: readonly string[]): string[] {
+	const out: string[] = [];
+	for (const id of ids) {
+		const byMatchKey = _currentPageFingerprints.get(id);
+		if (!byMatchKey) continue;
+		for (const [matchKey, fps] of byMatchKey) {
+			for (const fp of fps) out.push(`${id}:${matchKey}:${fp}`);
+		}
+	}
+	return out;
+}
+
+/**
  * Prune both client maps down to the given live `(id, matchKey)` set.
  * Anything in the maps but not in `live` was superseded — a
  * churned-away instance id, an evicted variant, a partial from a

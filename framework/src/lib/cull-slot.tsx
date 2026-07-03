@@ -61,6 +61,8 @@ interface CullSlotProps {
 	children?: ReactNode
 }
 
+const noopSubscribe = () => () => {}
+
 export function CullSlot({ id, matchKey, slot, culled, children }: CullSlotProps): ReactNode {
 	// Subscribe to reported-visibility flips + generation bumps for this
 	// id. The snapshot string is per-id, so unrelated flips don't
@@ -70,21 +72,48 @@ export function CullSlot({ id, matchKey, slot, culled, children }: CullSlotProps
 		() => cullStateSnapshot(id),
 		() => "u|0",
 	)
+	// Hydration gate for the cache-availability adjustments below. The
+	// HYDRATION render must reproduce the SSR modes exactly — the walk
+	// may not have cached a still-streaming slot yet, and adjusting an
+	// Activity's mode against the server-rendered state mid-hydration
+	// crashes React's hydration pass. useSyncExternalStore returns the
+	// server snapshot during hydration and re-renders with the client
+	// one right after mount, which is exactly the boundary needed.
+	const hydrated = React.useSyncExternalStore(
+		noopSubscribe,
+		() => true,
+		() => false,
+	)
 	const isServer = typeof document === "undefined"
 	const reported = isServer ? undefined : reportedVisibility(id)
 	const out = reported === undefined ? culled : !reported
 
+	// One slot must ALWAYS be showing something real: the pair hosts the
+	// parton's space reservation AND its viewport observer (a hidden
+	// Activity unmounts effects), so a state whose cache entry hasn't
+	// arrived yet keeps the OTHER slot visible until it does. Both
+	// availability checks read the live cache — every commit that stores
+	// a slot re-renders the pair, so they re-run exactly when they can
+	// change. On the server (and during hydration) the emission itself
+	// is the availability of the state it carries.
+	const cache = hydrated ? getCurrentPagePartials() : null
+	const hasContent = cache != null && cacheLookup(cache, id, matchKey) != null
+	const hasSkeleton = cache != null && cacheLookup(cache, id, culledKey(matchKey)) != null
+
 	if (slot === "skeleton") {
-		return <Activity mode={out ? "visible" : "hidden"}>{children}</Activity>
+		// Visible while culled, and ALSO while in view with no content to
+		// show yet (the flip's bytes still in flight — without this the
+		// pair renders nothing at all: no reservation, no observer, and a
+		// parton nothing observes can never report itself again).
+		const show = hydrated ? out || !hasContent : out
+		return <Activity mode={show ? "visible" : "hidden"}>{children}</Activity>
 	}
 
 	// Content slot. Hide only when a skeleton exists to hold the space —
-	// checked against the live cache (a commit that stores the skeleton
-	// re-renders this slot, so the check re-runs).
-	const hasSkeleton =
-		!isServer && cacheLookup(getCurrentPagePartials(), id, culledKey(matchKey)) != null
-	const hidden = out && (isServer || hasSkeleton)
-	const generation = isServer ? 0 : contentGeneration(id)
+	// the first-ever cull-out has no skeleton bytes yet, and hiding the
+	// content with nothing behind it would collapse the layout.
+	const hidden = out && (!hydrated || hasSkeleton)
+	const generation = hydrated ? contentGeneration(id) : 0
 	return (
 		<Activity key={generation} mode={hidden ? "hidden" : "visible"}>
 			{children}

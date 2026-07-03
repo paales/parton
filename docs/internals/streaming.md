@@ -234,37 +234,52 @@ The pieces:
 - **The report POST** (`lib/visibility-protocol.ts`,
   `POST /__parton/visible`, handled by `createRscHandler` before app
   routing). The client's visibility controller sends flips as a
-  fire-and-forget JSON report `{connection, seq, changed, visible}`;
-  the server applies it to the session and answers `204` with no
-  body — the flipped partons' bytes come down the live stream as
-  lane segments, never on this response. `seq` is a client-monotonic
-  counter: the session applies `visible` only from reports newer
-  than the last applied (two in-flight POSTs can't commit an older
-  set over a newer one) while `changed` ids merge regardless — a
-  superseded report's flips still get their lane render, which reads
-  the current set either way. `404` means "no such connection" — the
-  explicit signal for the controller to clear its published id and
-  deliver that batch (and everything until the heartbeat
-  re-establishes) via the render-reload fallback.
+  fire-and-forget JSON report `{connection, seq, changed, visible,
+  cached}`; the server applies it to the session and answers `204`
+  with no body — the flipped partons' bytes come down the live
+  stream as lane segments, never on this response. `seq` is a
+  client-monotonic counter: the session applies `visible` only from
+  reports newer than the last applied (two in-flight POSTs can't
+  commit an older set over a newer one) while `changed` ids merge
+  regardless — a superseded report's flips still get their lane
+  render, which reads the current set either way. `cached` carries
+  the client's CURRENT `id:matchKey:fp` tokens for the changed ids —
+  its actual holdings at flip time, which the driver swaps into the
+  connection's cached override before each direct flip's lane
+  renders. `404` means "no such connection" — the explicit signal
+  for the controller to clear its published id and deliver that
+  batch (and everything until the heartbeat re-establishes) via the
+  render-reload fallback.
 - **The visibility wake.** The lane driver races the session's flip
   promise alongside the bump/expiry/keepalive arms. On a flip wake
-  it drains the session's pending ids, drops each id's promoted fps
-  from the cached override (a visibility fp CYCLES between the same
-  two values — in ↔ out — so a stale override entry would fp-skip a
-  re-entry to a placeholder while the client's cache slot holds the
-  other state's body; a flip is an explicit target, like
-  `?partials=`, and must re-render), and starts a lane per id
-  through the same `partialFromSnapshot` path bump lanes use. Lanes
-  start in report order — the controller sends in-view flips before
-  cull-outs, so the visible world's renders lead. A flip whose id
-  has NO route snapshot yet (the report raced the render that first
-  materializes its parton — a chunk reported in-view while its
-  container's flip-in lane is still streaming) is DEFERRED, never
-  dropped: the client reports each flip exactly once, so a drop
-  would leave the parton stale until the next whole-tree
-  reconciliation. Deferred ids re-resolve on every subsequent wake
-  (the materializing lane's drain is itself a wake) and never arm
-  one, so an id that never materializes can't busy-loop the driver.
+  it drains the session's pending ids and starts a lane per id
+  through the same `partialFromSnapshot` path bump lanes use. Lane
+  renders carry a request state backed by the connection's cached
+  override, so a flip may FP-SKIP: the culled state is its own cache
+  variant (`~cull` — see
+  [render-pipeline.md](./render-pipeline.md#cull-to-park)), so each
+  state's fps only ever match that state's own body, and a skip is
+  the zero-byte confirmation that the client's parked copy for the
+  state being entered is current. The verdict is computed against
+  the client's ACTUAL holdings — a direct flip's report `cached`
+  tokens replace the override's entries for the id first (the
+  additive override alone drifts from the client: prunes, evictions,
+  slot overwrites — and confirming a phantom copy would blank the
+  parton); a deferred flip keeps the override as promoted, since the
+  materializing render's just-promoted fps are exactly what the
+  client's slot received. Per-lane fp-trailers also fold their warm
+  fps back into the override (`onUpdates`), so drifted ancestors of
+  live descendants stay skippable. Lanes start in report order — the
+  controller sends in-view flips before cull-outs, so the visible
+  world's renders lead. A flip whose id has NO route snapshot yet
+  (the report raced the render that first materializes its parton —
+  a chunk reported in-view while its container's flip-in lane is
+  still streaming) is DEFERRED, never dropped: the client reports
+  each flip exactly once, so a drop would leave the parton stale
+  until the next whole-tree reconciliation. Deferred ids re-resolve
+  on every subsequent wake (the materializing lane's drain is itself
+  a wake) and never arm one, so an id that never materializes can't
+  busy-loop the driver.
 - **The read stays request-reproducible.** `visible()` and the fp
   fold's store-and-reread both resolve through one function
   (`readVisible` in `server-hooks.ts`): the connection session's set

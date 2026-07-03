@@ -54,6 +54,7 @@ import { renderToReadableStream } from "./flight-runtime.ts";
 import { wrapStreamWithFpTrailer } from "./fp-trailer.ts";
 import {
 	buildMarker,
+	type FpUpdatesPayload,
 	TAG_LANES_OPEN,
 	TAG_NEXT_SEGMENT,
 	TAG_SEGMENT_SETTLED,
@@ -66,7 +67,7 @@ import {
 	enterRequestRegistry,
 	lookupPartial,
 } from "./partial-registry.ts";
-import type { PartialRequestState } from "./partial-request-state.ts";
+import { enterPartialState, type PartialRequestState } from "./partial-request-state.ts";
 import { muxEndFrame, muxFrame } from "./parton-mux.ts";
 import {
 	_routeHasMatchingBump,
@@ -343,6 +344,30 @@ async function driveLaneStream(
 	};
 
 	const pumpLane = async (id: string, runtime: LaneRuntime): Promise<void> => {
+		// Lane renders bypass PartialRoot, so the request-state ALS the
+		// spec wrapper's skip path consults never flows here on its own.
+		// Enter a lane-scoped state backed by the connection's cached
+		// override MAPS (live references — promotes and trailer heals
+		// between renders are visible to every subsequent pass), so a
+		// lane render can fp-skip like any other: an unchanged parton
+		// answers with its placeholder (for a culling flip, the
+		// confirmation that restores the parked copy with zero bytes)
+		// instead of re-shipping identical bytes. No override (the
+		// connection never carried `?cached=`) → no state → every lane
+		// renders fresh, exactly as a cold client would be served.
+		const laneOverride = _getCachedOverride();
+		if (laneOverride) {
+			enterPartialState({
+				requestedIds: null,
+				isPartialRefetch: true,
+				populateCache: false,
+				cachedFingerprints: laneOverride.fingerprints,
+				cachedMatchKeys: laneOverride.matchKeys,
+				explicitIds: new Set(),
+				cullFlip: false,
+				seenIds: new Set(),
+			});
+		}
 		try {
 			while (!closed) {
 				runtime.dirty = false;
@@ -358,6 +383,17 @@ async function driveLaneStream(
 					_captureCommitHandle(),
 					{
 						incremental: false,
+						// Fold this lane's warm fps into the connection's cached
+						// override alongside the client-bound trailer, so the
+						// server-side skip check tracks the same cold→warm drift
+						// the client heals. Without it, a drifted parton (any
+						// ancestor of live descendants — a cullable chunk over a
+						// ticking pulse) can never fp-skip on this connection:
+						// its promoted emitted fp stays one drift behind the
+						// next candidate, and every culling flip re-ships bytes
+						// that the client's lane-updated parked copy already
+						// shows.
+						onUpdates: promoteFpUpdatesToCachedOverride,
 					},
 				);
 				const reader = wrapped.getReader();
@@ -433,23 +469,35 @@ async function driveLaneStream(
 		// Resolve flips — the wake's fresh ids after any deferred ones (a
 		// deferred flip has waited at least one wake already; reports are
 		// ordered viewport-first, and this keeps that order within each
-		// group). Flips keep their promoted fps and the lane render may
-		// fp-skip: the culled state is its own cache variant
-		// (`~cull` — see render-pipeline.md §Cull-to-park), so each
-		// state's fps only ever match that state's own body — a skip is
-		// the zero-byte confirmation that the client's parked copy for
-		// the state being entered is current, and a moved fp re-renders
-		// the body as usual.
+		// group). A flip's lane may fp-skip: the culled state is its own
+		// cache variant (`~cull` — see render-pipeline.md §Cull-to-park),
+		// so each state's fps only ever match that state's own body — a
+		// skip is the zero-byte confirmation that the client's parked
+		// copy for the state being entered is current, and a moved fp
+		// re-renders the body as usual. The verdict must be against the
+		// client's ACTUAL holdings, so a DIRECT flip swaps its report's
+		// cached tokens into the override first (the additive override
+		// alone drifts from the client — prunes, evictions, slot
+		// overwrites — and confirming a phantom copy blanks the parton).
+		// A DEFERRED flip keeps the override as-is: its tokens are stale
+		// by lane time, while the materializing render's just-promoted
+		// fps are exactly what the client's slot received.
 		const directFlips =
 			wake === "visibility" && session !== null
 				? takeConnectionFlips(session)
 				: [];
+		const override = _getCachedOverride();
 		for (const id of [...deferredFlips, ...directFlips]) {
+			const reported = session?.reportedCached.get(id);
+			session?.reportedCached.delete(id);
 			if (!snapshots.has(id)) {
 				deferredFlips.add(id);
 				continue;
 			}
 			deferredFlips.delete(id);
+			if (reported !== undefined && override) {
+				applyReportedCached(id, reported, override);
+			}
 			if (!touched.includes(id)) touched.push(id);
 		}
 		if (wake === "bump") {
@@ -670,6 +718,58 @@ function isLiveSubscription(): boolean {
  * profile (~7% total + URL parse cost). The carrier collapses it to
  * one map mutation per snapshot.
  */
+/** Replace the override's entries for `id` with the client's reported
+ *  holdings — `id:matchKey:fp` tokens, parsed right-to-left like
+ *  `parseCachedTokens` (ids may contain colons; matchKeys never do). */
+function applyReportedCached(
+	id: string,
+	tokens: readonly string[],
+	override: { fingerprints: Map<string, Set<string>>; matchKeys: Map<string, Set<string>> },
+): void {
+	const fps = new Set<string>();
+	const mks = new Set<string>();
+	for (const token of tokens) {
+		const fpIdx = token.lastIndexOf(":");
+		if (fpIdx <= 0) continue;
+		const fp = token.slice(fpIdx + 1);
+		const rest = token.slice(0, fpIdx);
+		const mkIdx = rest.lastIndexOf(":");
+		if (mkIdx <= 0) continue;
+		fps.add(fp);
+		mks.add(rest.slice(mkIdx + 1));
+	}
+	override.fingerprints.set(id, fps);
+	override.matchKeys.set(id, mks);
+}
+
+/** Fold a trailer's `{from, to}` warm-fp entries into the live
+ *  connection's cached override — the server-side mirror of the
+ *  client's `_applyFpUpdates`. The override's fp sets are per id;
+ *  additions are safe (a candidate fp is computed fresh each render,
+ *  so matching any accumulated fp means the fold values genuinely
+ *  coincide) and bounded per set below. */
+function promoteFpUpdatesToCachedOverride(updates: FpUpdatesPayload): void {
+	const override = _getCachedOverride();
+	if (!override) return;
+	for (const [id, entry] of Object.entries(updates)) {
+		let fpSet = override.fingerprints.get(id);
+		if (!fpSet) {
+			fpSet = new Set();
+			override.fingerprints.set(id, fpSet);
+		}
+		fpSet.add(entry.to);
+		// Same shape as the client's FP_CAP_PER_VARIANT: a live parton
+		// drifting every lane would grow the set unboundedly over a
+		// long-held connection. Oldest-first eviction keeps the newest
+		// few — enough for the next render's skip check.
+		while (fpSet.size > 8) {
+			const oldest = fpSet.values().next().value;
+			if (oldest === undefined) break;
+			fpSet.delete(oldest);
+		}
+	}
+}
+
 export function promoteSnapshotsToCachedOverride(): void {
 	let request: Request;
 	let scope: string;
