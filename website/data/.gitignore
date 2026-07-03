@@ -1,2 +1,4 @@
 cells.json
 draft.json
+# Atomic-write leftovers from the cell storage (write-to-tmp + rename).
+cells.json.tmp-*
