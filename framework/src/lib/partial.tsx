@@ -96,7 +96,9 @@ import { _getSettleTrailerSink, getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
 import { _onPartonSettled, _openPartonSettleScope, getServerContext } from "./server-context.ts"
 import { _setCurrentParton, type CurrentParton, type WakeHints } from "./current-parton.ts"
-import { evalDepKeys } from "./server-hooks.ts"
+import { baseKey, culledKey, isCulledKey } from "./cull-key.ts"
+import { CullSlot } from "./cull-slot.tsx"
+import { evalDepKeys, readVisible } from "./server-hooks.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -545,6 +547,10 @@ interface PartialBoundaryProps {
    *  thread the prior snapshot's box through so a hook-declared wake
    *  survives. */
   wakeHints?: WakeHints
+  /** This registration is the parton's CULLED render — it lands in the
+   *  `~cull` registry variant beside the in-view one, so each state
+   *  keeps its own dep record. See `PartialSnapshot.culled`. */
+  culled?: boolean
   children: ReactNode
 }
 
@@ -565,6 +571,7 @@ export function PartialBoundary({
   schemaKey,
   emittedFp,
   wakeHints,
+  culled,
   children,
 }: PartialBoundaryProps): ReactNode {
   // Two dep kinds double as invalidation selectors and ride in `deps`
@@ -607,6 +614,7 @@ export function PartialBoundary({
     schemaKey,
     emittedFp,
     wakeHints,
+    culled,
   })
   return children
 }
@@ -1016,7 +1024,29 @@ function hasVisibleDep(deps: ReadonlySet<string> | undefined): boolean {
   return false
 }
 
-function placeholderFor(id: string, matchKey: string): ReactElement {
+/**
+ * The `<i data-partial>` marker the client's merge layer resolves
+ * against its cache. Two kinds share the shape:
+ *
+ *   - a HOLE (`confirm` absent) — a position the client MAY fill from
+ *     cache: parked-keepalive variants, a cull pair's off slot, and
+ *     ordinary fp-skips (heartbeat segments, navigations);
+ *   - a CULLING CONFIRMATION (`confirm: true`) — the fp-skip verdict
+ *     for an explicit `?__cullFlip=1` target: the server computed the
+ *     fingerprint of the state the flip is entering and it matched
+ *     the client's advertisement, so the parked copy is provably
+ *     current for THAT state.
+ *
+ * The distinction rides the wire as `data-partial-confirm` because
+ * one consumer needs it exactly: the cull-park drop-on-drift decision
+ * (`contentSlotConfirmed` in the commit walk). A restored parked
+ * fiber is confirmed by its flip's placeholder — race-free, in the
+ * same commit pipeline that would otherwise deliver the replacing
+ * bytes. Ordinary fp-skips must NOT carry it: a heartbeat segment's
+ * skip is a verdict on the heartbeat's own request (no `?visible=` —
+ * the pre-measurement state), not on the state a parked fiber holds.
+ */
+function placeholderFor(id: string, matchKey: string, confirm?: boolean): ReactElement {
   return (
     <i
       key={`${id}|${matchKey}`}
@@ -1024,8 +1054,67 @@ function placeholderFor(id: string, matchKey: string): ReactElement {
       data-partial
       data-partial-id={id}
       data-partial-match={matchKey}
+      data-partial-confirm={confirm || undefined}
     />
   )
+}
+
+/**
+ * The two-slot pair a cullable keepalive parton renders as — one
+ * `<CullSlot>` per state, ALWAYS both present (see `cull-slot.tsx`):
+ * the content slot backs the in-view body (client cache variant
+ * `base`), the skeleton slot the culled body (variant
+ * `culledKey(base)`). The pair's shape is identical across every
+ * emission (fresh, fp-skip, match-miss park), so a culling flip is an
+ * Activity MODE change inside a stable structure — the off state's
+ * subtree parks instead of unmounting.
+ *
+ * `activeBody` is this render's emitted body (the keyed PEB wrapper,
+ * or the fp-skip placeholder), routed into the slot `culled` names;
+ * `null` for a parked variant, where both slots are cache-backed. The
+ * off slot ALWAYS emits its placeholder — even when the client has
+ * nothing cached under that variant yet. The pair mounts inside the
+ * page's persisted template (or an ancestor's cached wrapper), and a
+ * later flip's bytes can only reach the mounted tree through a
+ * placeholder hole: an empty off slot would have nowhere to
+ * substitute the state's first render when it arrives. An unbacked
+ * placeholder renders to nothing.
+ */
+function cullPairSlots(
+  id: string,
+  base: string,
+  activeBody: ReactNode | null,
+  culled: boolean,
+): ReactNode {
+  const cullMk = culledKey(base)
+  const contentChild =
+    activeBody != null && !culled ? activeBody : placeholderFor(id, base)
+  const skeletonChild =
+    activeBody != null && culled ? activeBody : placeholderFor(id, cullMk)
+  return (
+    <>
+      <CullSlot key="c" id={id} matchKey={base} slot="content" culled={culled}>
+        {contentChild}
+      </CullSlot>
+      <CullSlot key="s" id={id} matchKey={base} slot="skeleton" culled={culled}>
+        {skeletonChild}
+      </CullSlot>
+    </>
+  )
+}
+
+/** Distinct BASE matchKeys in a cached-variant set — a cull-pair
+ *  parton's `~cull` twins collapse onto their base. */
+function cachedBases(matchKeys: ReadonlySet<string>): string[] {
+  const bases: string[] = []
+  const seen = new Set<string>()
+  for (const mk of matchKeys) {
+    const b = baseKey(mk)
+    if (seen.has(b)) continue
+    seen.add(b)
+    bases.push(b)
+  }
+  return bases
 }
 
 /**
@@ -1036,6 +1125,12 @@ function placeholderFor(id: string, matchKey: string): ReactElement {
  * each wrapping a placeholder the client's cache merge resolves to
  * the cached subtree for that variant. Mode flips, fiber persists,
  * state survives.
+ *
+ * Cull-pair partons (a cullable spec — prior dep record has a
+ * `visible:` read — or a cached `~cull` twin) park PAIR-shaped: the
+ * same two-slot structure the active emission uses, both slots
+ * placeholders under the outer hidden Activity, so a route-away and
+ * back reconciles onto the same fibers.
  *
  * Returns `null` when keepalive is opted out or when the client has
  * no cached variants for this id — falls back to the classic
@@ -1049,18 +1144,22 @@ function emitParkedKeepalive(
   if (!keepalive) return null
   const matchKeys = state?.cachedMatchKeys.get(id)
   if (!matchKeys || matchKeys.size === 0) return null
+  const paired =
+    hasVisibleDep(lookupPartial(id)?.deps) || [...matchKeys].some(isCulledKey)
+  const parkedBody = (mk: string): ReactNode =>
+    paired ? cullPairSlots(id, mk, null, false) : placeholderFor(id, mk)
+  const bases = paired ? cachedBases(matchKeys) : [...matchKeys]
   // Single cached variant — emit one Activity without a key so React
   // reconciles by position across active ↔ parked transitions. Same
   // shape as `emitWithVariantSiblings`'s single-variant branch.
-  if (matchKeys.size === 1) {
-    const [mk] = matchKeys
-    return <Activity mode="hidden">{placeholderFor(id, mk)}</Activity>
+  if (bases.length === 1) {
+    return <Activity mode="hidden">{parkedBody(bases[0])}</Activity>
   }
   return (
     <>
-      {[...matchKeys].map((mk) => (
+      {bases.map((mk) => (
         <Activity key={mk} mode="hidden">
-          {placeholderFor(id, mk)}
+          {parkedBody(mk)}
         </Activity>
       ))}
     </>
@@ -1075,6 +1174,12 @@ function emitParkedKeepalive(
  * stable matchKey-keyed Activity reconciles cleanly across renders
  * (same variant → same key → same fiber → state preserved).
  *
+ * `cull` marks a cull-pair parton: the body (and every hidden
+ * sibling) is wrapped in the two-slot pair (`cullPairSlots`), with
+ * `cull.culled` routing this render's body into the content or
+ * skeleton slot. Activity keys stay BASE matchKeys — the `~cull`
+ * twin never surfaces at the variant level.
+ *
  * When `state` is null (e.g. test fixtures without PartialRoot) or
  * the client has no other cached matchKeys, returns a single
  * `<Activity mode="visible">` with no hidden siblings — identical
@@ -1085,11 +1190,13 @@ function emitWithVariantSiblings(
   matchKey: string,
   visibleBody: ReactNode,
   state: PartialRequestState | null | undefined,
+  cull?: { culled: boolean },
 ): ReactNode {
   const cached = state?.cachedMatchKeys.get(id)
+  const body = cull ? cullPairSlots(id, matchKey, visibleBody, cull.culled) : visibleBody
   const others: string[] = []
   if (cached) {
-    for (const mk of cached) {
+    for (const mk of cull ? cachedBases(cached) : cached) {
       if (mk !== matchKey) others.push(mk)
     }
   }
@@ -1099,17 +1206,17 @@ function emitWithVariantSiblings(
   // (when a hidden sibling appears) and remount the body, resetting
   // local state.
   if (others.length === 0) {
-    return <Activity mode="visible">{visibleBody}</Activity>
+    return <Activity mode="visible">{body}</Activity>
   }
   // Multi-variant: keys required for sibling reconciliation.
   return (
     <>
       <Activity key={matchKey} mode="visible">
-        {visibleBody}
+        {body}
       </Activity>
       {others.map((mk) => (
         <Activity key={mk} mode="hidden">
-          {placeholderFor(id, mk)}
+          {cull ? cullPairSlots(id, mk, null, false) : placeholderFor(id, mk)}
         </Activity>
       ))}
     </>
@@ -1425,6 +1532,21 @@ function createSpecComponent<V>(
         : { ...varyResult, ...boundArgsMerged }
     const invalidationTs = queryMatchingTs(expandedLabels, effectiveConstraints)
     const invalidationKey = invalidationTs > 0 ? `|inv=${invalidationTs}` : ""
+    // ── Culled state (cull-to-park) ──
+    // A cullable keepalive parton's culled render is a VARIANT of its
+    // in-view one (see cull-key.ts): distinct wire matchKey, distinct
+    // client cache slot, distinct per-state snapshot — so the two
+    // states park side by side on the client and each state's dep
+    // record folds its own fingerprint. Cullability comes from the
+    // prior dep record (the body's branches share the `visible()`
+    // read — the read IS what makes the spec cullable), off whichever
+    // state's snapshot the route hint holds. Wrappers (outerChildren)
+    // never split: their output is their children.
+    const hasOuterChildren = outerChildren != null && outerChildren !== false
+    const visibleValue = readVisible(ourUrl.searchParams, id)
+    const cullCapable =
+      keepalive && !hasOuterChildren && hasVisibleDep(lookupPartial(id)?.deps)
+    const culled = cullCapable && visibleValue === false
     // Store-and-reread for tracked reads: `cookie()` / `searchParam()`
     // record their keys DURING Render, after this fp is computed — so
     // fold the PRIOR render's recorded keys, re-read against the current
@@ -1432,8 +1554,10 @@ function createSpecComponent<V>(
     // never calls a tracked hook has no prior deps and folds nothing
     // (byte-identical). First render of a variant: no prior snapshot →
     // cold (no fp-skip relies on it), and the keys it records make every
-    // subsequent render fp-accurate.
-    const priorSnap = lookupPartial(id)
+    // subsequent render fp-accurate. Cull-pair specs fold the record of
+    // the STATE this render is entering, so the fp lines up with the
+    // client's advertised same-state fingerprint.
+    const priorSnap = lookupPartial(id, cullCapable ? culled : undefined)
     // Fold this render's dep keys, re-read at the current request. Tracked
     // reads done in the SCHEMA phase are already in `selfDeps` (schema runs
     // before this fp) → they fold into the CURRENT fp with no cold-lag,
@@ -1497,7 +1621,6 @@ function createSpecComponent<V>(
     const isExplicit = state?.explicitIds.has(id) ?? false
     const cachedFps = state?.cachedFingerprints.get(id)
     const fingerprintMatches = cachedFps != null && cachedFps.has(fp)
-    const hasOuterChildren = outerChildren != null && outerChildren !== false
     // Cold-record gate: a spec's tracked reads only reach the fp via
     // the snapshot's dep record (store-and-reread). With no prior
     // snapshot for this route's variant, the fp above folded NO deps —
@@ -1519,10 +1642,16 @@ function createSpecComponent<V>(
     // declaration that identical inputs stop being fresh at that time.
     const snapshotExpiresAt = priorSnap ? effectiveExpiresAt(priorSnap) : undefined
     const snapshotExpired = snapshotExpiresAt !== undefined && snapshotExpiresAt <= Date.now()
+    // An explicit `?partials=` target must re-render — EXCEPT on a
+    // culling flip (`?__cullFlip=1`, minted only by the visibility
+    // controller): its targets are revalidations, and an fp match
+    // means the client's parked same-state copy is current — the
+    // placeholder below is the restore-with-zero-bytes confirmation.
+    const explicitForces = isExplicit && !(state?.cullFlip ?? false)
     const shouldSkip =
       opts.fpSkip !== false &&
       state != null &&
-      !isExplicit &&
+      !explicitForces &&
       fingerprintMatches &&
       !hasOuterChildren &&
       !coldRecordMissing &&
@@ -1569,9 +1698,18 @@ function createSpecComponent<V>(
       // siblings for each other matchKey the client has cached for
       // this id, so navigating between variants of the same spec
       // parks the prior variant rather than dropping its fiber.
-      const placeholder = placeholderFor(id, matchKey)
+      //
+      // Cull-pair specs skip with the placeholder in the slot of the
+      // state the fp confirmed (the fp can only match same-state — the
+      // `visible:` dep folds a distinct token per state), keeping the
+      // pair's shape identical to the fresh emission.
+      const placeholder = placeholderFor(
+        id,
+        culled ? culledKey(matchKey) : matchKey,
+        isExplicit && (state?.cullFlip ?? false),
+      )
       const skipBody: ReactNode = keepalive
-        ? emitWithVariantSiblings(id, matchKey, placeholder, state)
+        ? emitWithVariantSiblings(id, matchKey, placeholder, state, cullCapable ? { culled } : undefined)
         : placeholder
       return (
         <PartialBoundary
@@ -1591,6 +1729,7 @@ function createSpecComponent<V>(
           schemaKey={schemaKeyHash || undefined}
           emittedFp={snapshotFp}
           wakeHints={priorSnap?.wakeHints}
+          culled={culled || undefined}
         >
           {skipBody}
         </PartialBoundary>
@@ -1610,13 +1749,20 @@ function createSpecComponent<V>(
           key={id}
           partialId={id}
           {...fpProp}
-          partialMatchKey={matchKey}
+          partialMatchKey={culled ? culledKey(matchKey) : matchKey}
           cullable={hasVisibleDep(priorSnap?.deps) ? {} : undefined}
         >
           {dormant}
         </PartialErrorBoundary>
       )
-      if (keepalive) deferBody = emitWithVariantSiblings(id, matchKey, deferBody, state)
+      if (keepalive)
+        deferBody = emitWithVariantSiblings(
+          id,
+          matchKey,
+          deferBody,
+          state,
+          cullCapable ? { culled } : undefined,
+        )
       return (
         <PartialBoundary
           id={id}
@@ -1635,6 +1781,7 @@ function createSpecComponent<V>(
           schemaKey={schemaKeyHash || undefined}
           emittedFp={snapshotFp}
           wakeHints={priorSnap?.wakeHints}
+          culled={culled || undefined}
         >
           {deferBody}
         </PartialBoundary>
@@ -1666,6 +1813,15 @@ function createSpecComponent<V>(
     // boundary prop carries the parton's observer options (or `{}`), so its
     // presence is the cullable flag and its value is the runway config.
     const cullable = hasVisibleDep(selfDeps) ? (self.visibleOptions ?? {}) : undefined
+    // Pair emission can additionally learn cullability from THIS render's
+    // sync-prefix reads (`selfDeps`) — so the very first render of a
+    // cullable spec already carries the two-slot structure, and the first
+    // client measurement's refetch reconciles into it instead of
+    // reshaping the tree (which would remount the fresh body). The wire
+    // matchKey routes this body into the slot of the state it rendered.
+    const cullPair = cullCapable || (keepalive && !hasOuterChildren && cullable !== undefined)
+    const culledEmit = cullPair && visibleValue === false
+    const wireMatchKey = culledEmit ? culledKey(matchKey) : matchKey
 
     if (opts.cache !== undefined) {
       // Store-time key: recompute the structural fp with the LIVE
@@ -1700,7 +1856,7 @@ function createSpecComponent<V>(
             <PartialErrorBoundary
               partialId={id}
               {...fpProp}
-              partialMatchKey={matchKey}
+              partialMatchKey={wireMatchKey}
               cullable={cullable}
             >
               {fallback}
@@ -1710,7 +1866,7 @@ function createSpecComponent<V>(
           <PartialErrorBoundary
             partialId={id}
             {...fpProp}
-            partialMatchKey={matchKey}
+            partialMatchKey={wireMatchKey}
             cullable={cullable}
           >
             {body}
@@ -1726,7 +1882,7 @@ function createSpecComponent<V>(
           key={id}
           partialId={id}
           {...fpProp}
-          partialMatchKey={matchKey}
+          partialMatchKey={wireMatchKey}
           cullable={cullable}
         >
           {body}
@@ -1743,7 +1899,14 @@ function createSpecComponent<V>(
     // hidden Activity siblings for each other matchKey the client has
     // cached, so cross-variant navigation parks the prior variant
     // rather than dropping its fiber.
-    if (keepalive) body = emitWithVariantSiblings(id, matchKey, body, state)
+    if (keepalive)
+      body = emitWithVariantSiblings(
+        id,
+        matchKey,
+        body,
+        state,
+        cullPair ? { culled: culledEmit } : undefined,
+      )
 
     return (
       <ParentContext value={childCtx} _settle={settleScope}>
@@ -1764,6 +1927,7 @@ function createSpecComponent<V>(
           schemaKey={schemaKeyHash || undefined}
           emittedFp={snapshotFp}
           wakeHints={self.wakeHints}
+          culled={culledEmit || undefined}
         >
           {body}
         </PartialBoundary>
@@ -2171,6 +2335,7 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     cachedFingerprints: cachedFps,
     cachedMatchKeys: cachedMks,
     explicitIds,
+    cullFlip: requestUrl.searchParams.get("__cullFlip") === "1",
     seenIds: new Set(),
   }
 

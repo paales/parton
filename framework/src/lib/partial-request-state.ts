@@ -33,8 +33,15 @@ export interface PartialRequestState {
    *  unmounting it. matchKey is `stableStringify(matchParams)`, stable
    *  across vary refreshes of the same route. */
   cachedMatchKeys: Map<string, Set<string>>
-  /** Effective ids explicitly targeted this request (resolved from `?partials=`). Never skipped. */
+  /** Effective ids explicitly targeted this request (resolved from `?partials=`). Never skipped —
+   *  except on a culling flip (see `cullFlip`). */
   explicitIds: Set<string>
+  /** `?__cullFlip=1` — this refetch is a culling flip fired by the
+   *  client's visibility controller. Its explicit targets are
+   *  REVALIDATIONS, not forces: an fp match may skip them, emitting the
+   *  placeholder that confirms the client's parked copy (restore with
+   *  zero bytes). Only the visibility controller mints the param. */
+  cullFlip: boolean
   /** Effective ids seen this request — debug-only record of what
    *  rendered. Multiple placements of the same keyless spec are
    *  allowed; this set is a `Set` but the values aren't unique. */

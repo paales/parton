@@ -19,6 +19,7 @@
  */
 
 import type { ReactNode } from "react";
+import { isCulledKey } from "./cull-key.ts";
 import type { FpUpdatesPayload } from "./fp-trailer-marker.ts";
 
 // ─── Partial cache + fingerprints ─────────────────────────────────
@@ -133,10 +134,36 @@ export const CACHED_MANIFEST_CAP = 96;
 
 /** Cap on distinct ids retained in the client maps. A long journey
  *  across a cullable field accumulates entries for every parton ever
- *  visited; past the cap the OLDEST-registered ids are destroyed
+ *  visited; past the cap the LEAST-RECENTLY-SIGHTED ids are destroyed
  *  (cache + fps) — they re-render cold on a return visit. Bounds
- *  memory the same way the manifest cap bounds the URL. */
-export const CLIENT_POOL_CAP = 512;
+ *  memory the same way the manifest cap bounds the URL.
+ *
+ *  Must sit comfortably ABOVE the largest live working set (every id
+ *  a single page's commits mention — rendered, fp-skipped, or parked;
+ *  the website's chunk world crosses 700 on a journey): a FIFO whose
+ *  capacity is under the working set thrashes and evicts entries the
+ *  current page still substitutes from — starting with the page shell
+ *  itself, whose eviction blanks the page. Entries are small (a
+ *  cached element graph + fp strings); the HEAVY budget — parked
+ *  subtree DOM and fibers — is `CULL_PARK_CAP` in `cull-park.ts`. */
+export const CLIENT_POOL_CAP = 4096;
+
+/**
+ * Listener for ids leaving the client maps entirely — fired by
+ * `pruneToLive` and the pool-cap eviction. This is THE page-membership
+ * signal: an id is on the page for exactly as long as some commit
+ * still references it (rendered, fp-skipped, or parked); when the
+ * maps drop it, dependent client state must go too. The cull-park
+ * module registers here to tear down its per-id state — observer
+ * lifecycles can't stand in for this signal, because an Activity flip
+ * can unmount one slot's observer in a different pass than it mounts
+ * the other's.
+ */
+let _onIdPruned: ((id: string) => void) | null = null;
+
+export function _setIdPrunedListener(fn: (id: string) => void): void {
+	_onIdPruned = fn;
+}
 
 function evictOldest(): void {
 	while (_currentPageFingerprints.size > CLIENT_POOL_CAP) {
@@ -144,7 +171,26 @@ function evictOldest(): void {
 		if (oldest === undefined) return;
 		_currentPageFingerprints.delete(oldest);
 		_currentPagePartials.delete(oldest);
+		_onIdPruned?.(oldest);
 	}
+}
+
+/**
+ * Refresh an id's recency in the fingerprint map without changing its
+ * entries. The payload walk calls this for every wrapper and
+ * placeholder it sights, so map order means "recency of appearing in
+ * a commit" — the server still emits the id — rather than "recency of
+ * a fresh registration". Structural ancestors (a page shell that
+ * fp-skips forever, appearing only as placeholders) stay at the tail;
+ * the `CLIENT_POOL_CAP` FIFO then ages out exactly the ids commits
+ * stopped mentioning — content parked deep inside another id's cached
+ * subtree. No-op for unknown ids.
+ */
+export function touchClientPartial(id: string): void {
+	const inner = _currentPageFingerprints.get(id);
+	if (!inner) return;
+	_currentPageFingerprints.delete(id);
+	_currentPageFingerprints.set(id, inner);
 }
 
 export function registerClientPartial(
@@ -216,6 +262,24 @@ export function _applyFpUpdates(updates: FpUpdatesPayload): void {
 }
 
 /**
+ * Ids whose manifest tokens are advertised FIRST, ahead of the
+ * newest-registration walk — the cull-park module registers its
+ * parked-by-culling LRU here (see `cull-park.ts`). A parked id's
+ * client state survives only as long as the server can CONFIRM its
+ * fingerprints; on a busy live page the manifest's recency window
+ * churns with every lane registration, and without priority a parked
+ * subtree silently loses its `?cached=` slots — its next cull-in then
+ * re-renders and drops the parked copy. Bounded by the parked pool's
+ * own cap, so the priority block can never starve the recency walk
+ * entirely.
+ */
+let _manifestPriorityIds: (() => readonly string[]) | null = null;
+
+export function _setManifestPriorityIds(fn: () => readonly string[]): void {
+	_manifestPriorityIds = fn;
+}
+
+/**
  * Module-level accessor for cached partial tokens.
  * Returns "id:matchKey:fingerprint" triples so the server can:
  *   - decide fp-skip per (id, fingerprint), unchanged from before;
@@ -235,18 +299,33 @@ export function _applyFpUpdates(updates: FpUpdatesPayload): void {
  */
 export function getCachedPartialIds(): string[] {
 	const out: string[] = [];
-	// Insertion order tracks registration recency (re-registration
-	// re-inserts) — walk newest-first and stop at the manifest cap.
-	const ids = [...(_currentPageFingerprints.keys())].reverse();
-	outer: for (const id of ids) {
+	const emitted = new Set<string>();
+	const emitId = (id: string): boolean => {
 		const byMatchKey = _currentPageFingerprints.get(id);
-		if (!byMatchKey) continue;
+		if (!byMatchKey) return true;
 		for (const [matchKey, fps] of byMatchKey) {
 			for (const fp of fps) {
 				out.push(`${id}:${matchKey}:${fp}`);
-				if (out.length >= CACHED_MANIFEST_CAP) break outer;
+				if (out.length >= CACHED_MANIFEST_CAP) return false;
 			}
 		}
+		return true;
+	};
+	// Priority block first: parked-by-culling ids (see
+	// `_setManifestPriorityIds`) must keep advertising their variants
+	// or their parked state is unrestorable.
+	for (const id of _manifestPriorityIds?.() ?? []) {
+		if (emitted.has(id)) continue;
+		emitted.add(id);
+		if (!emitId(id)) return out;
+	}
+	// Insertion order tracks registration recency (re-registration
+	// re-inserts) — walk newest-first and stop at the manifest cap.
+	const ids = [...(_currentPageFingerprints.keys())].reverse();
+	for (const id of ids) {
+		if (emitted.has(id)) continue;
+		emitted.add(id);
+		if (!emitId(id)) return out;
 	}
 	return out;
 }
@@ -262,6 +341,10 @@ export function getCachedPartialIds(): string[] {
  * anywhere drops.
  */
 export function pruneToLive(live: Map<string, Set<string>>): void {
+	const before = new Set<string>([
+		..._currentPagePartials.keys(),
+		..._currentPageFingerprints.keys(),
+	]);
 	for (const map of [_currentPagePartials, _currentPageFingerprints]) {
 		for (const [id, byMatchKey] of map) {
 			const liveMks = live.get(id);
@@ -274,6 +357,35 @@ export function pruneToLive(live: Map<string, Set<string>>): void {
 			}
 			if (byMatchKey.size === 0) map.delete(id);
 		}
+	}
+	// Page-membership teardown: an id that left BOTH maps is off the
+	// page — no commit references it rendered, skipped, or parked.
+	if (_onIdPruned) {
+		for (const id of before) {
+			if (!_currentPageFingerprints.has(id) && !_currentPagePartials.has(id)) {
+				_onIdPruned(id);
+			}
+		}
+	}
+}
+
+/**
+ * Destroy a parton's parked CONTENT — the cull-park LRU's eviction
+ * (see `cull-park.ts`). Deletes the id's base-variant cache slots and
+ * advertised fingerprints; the culled-variant (`~cull`) skeleton
+ * entries stay, so the visible skeleton keeps holding its space. The
+ * mounted parked fiber unmounts on the next commit's template render
+ * (its placeholder no longer resolves), and with no advertised fp the
+ * next cull-in renders cold — the pre-parking behavior.
+ */
+export function evictCulledContent(id: string): void {
+	for (const map of [_currentPagePartials, _currentPageFingerprints]) {
+		const byMatchKey = map.get(id);
+		if (!byMatchKey) continue;
+		for (const mk of [...byMatchKey.keys()]) {
+			if (!isCulledKey(mk)) byMatchKey.delete(mk);
+		}
+		if (byMatchKey.size === 0) map.delete(id);
 	}
 }
 

@@ -191,9 +191,10 @@ export function visible(options?: VisibleOptions): boolean | undefined {
 
 /** Resolve a parton's visibility from a request's `?visible=<id>,…` set:
  *  absent param → `undefined` (cold / pre-measurement), present →
- *  membership. Shared by the `visible()` hook and `evalDepKeys`'
- *  store-and-reread so the live read and the fp fold can't drift. */
-function readVisible(search: URLSearchParams, id: string): boolean | undefined {
+ *  membership. Shared by the `visible()` hook, `evalDepKeys`'
+ *  store-and-reread, AND the spec wrapper's culled-state derivation
+ *  (partial.tsx) so no consumer of the visibility signal can drift. */
+export function readVisible(search: URLSearchParams, id: string): boolean | undefined {
   const raw = search.get("visible")
   if (raw === null) return undefined
   return raw.split(",").includes(id)

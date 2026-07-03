@@ -1,11 +1,26 @@
 # View culling — read-tracked, per-parton
 
-**Status:** working, at `/magento/browse`
-(`e2e-testing/src/app/pages/magento/product-browse.tsx`, framework in
-`framework/src/lib/visibility.tsx` + `server-hooks.ts` `visible()`, specs in
-`e2e/product-browse-culling.spec.ts` + `__tests__/visible-fp.rsc.test.tsx`).
-This note is the design and the framework-level findings — the substrate for
-a future framework `<Scroller>`.
+**Status:** shipped, including cull-to-park. Live at `/magento/browse`
+(`e2e-testing/src/app/pages/magento/product-browse.tsx`) and the
+website's chunk world (`website/src/app/world/`); framework in
+`framework/src/lib/visibility.tsx` + `server-hooks.ts` `visible()` +
+the cull-park layer (`cull-key.ts`, `cull-park.ts`, `cull-slot.tsx`);
+specs in `e2e/product-browse-culling.spec.ts`,
+`__tests__/visible-fp.rsc.test.tsx`, `__tests__/cull-park.rsc.test.tsx`,
+`__tests__/cull-park.test.ts`. The shipped contract lives in
+[`docs/reference/partial.md`](../reference/partial.md#view-culling--visible)
+(behavior) and
+[`docs/internals/render-pipeline.md`](../internals/render-pipeline.md#cull-to-park)
+(mechanics) — those supersede this note for how culling works today.
+This note remains the design rationale and framework-level findings —
+the substrate for a future framework `<Scroller>`.
+
+Cull-to-park closed the note's original gap: a culling flip no longer
+replaces the mounted content (which destroyed client state and made
+re-entry a cold remount). The culled state is a parked VARIANT — a
+stable two-slot Activity pair whose modes flip with the viewport
+report, revalidated by the flip's `?__cullFlip=1` reload under fp-skip
+semantics, budgeted by an LRU of the 64 most-recently-culled subtrees.
 
 This is the shipped form of what [`IDEAS.md`](./IDEAS.md) filed as
 "Activate ⇄ deactivate symmetry" (now collapsed there to a pointer here),

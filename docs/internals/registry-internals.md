@@ -52,10 +52,11 @@ Two layers:
 
 ```ts
 function variantKeyOf(snap: PartialSnapshot): string {
-  return hash(stableStringify([
+  const base = hash(stableStringify([
     snap.parentPath,
     snap.parentFrameChain,
   ]))
+  return snap.culled ? culledKey(base) : base
 }
 ```
 
@@ -76,6 +77,7 @@ distinguish two registrations of the same id:
 |---|---|
 | `parentPath` | Same id mounted under different ancestors (e.g. `Header` under `PageRoot` vs under `EditorShell`) |
 | `parentFrameChain` | Same id rendered inside vs outside a frame |
+| `culled` | A cullable spec's culled (skeleton) render vs its in-view one — the `~cull` suffix (`lib/cull-key.ts`). Per-state snapshots keep each state's dep record intact, so a culling flip's fingerprint folds the record of the state it is ENTERING (`lookupPartial(id, culled)`), not whichever state rendered last. See [render-pipeline.md](./render-pipeline.md#cull-to-park). |
 
 Per-instance content divergence (slot blocks bound to different CMS
 rows, partials called with different JSX props) folds into the

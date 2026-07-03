@@ -88,13 +88,14 @@ export interface CompiledMatch {
 
 /** Search params the framework mints for transport — refetch targeting
  *  (`partials`), the client cache manifest (`cached`), live holds
- *  (`live`), commit mode (`streaming`), and frame routing (`__frame`,
- *  `__frameUrl`). Match never sees them: the SAME page arrives with and
- *  without them (SSR vs targeted refetch vs live heartbeat), and a
- *  wildcard search capture (`"*q=:query"`) would otherwise swallow them
- *  into the named param — splitting variant identity by transport
- *  noise, so a heartbeat render mints a phantom variant that supersedes
- *  (and hides) the real one on the client. */
+ *  (`live`), commit mode (`streaming`), frame routing (`__frame`,
+ *  `__frameUrl`), and the culling-flip stamp (`__cullFlip`). Match
+ *  never sees them: the SAME page arrives with and without them (SSR
+ *  vs targeted refetch vs live heartbeat), and a wildcard search
+ *  capture (`"*q=:query"`) would otherwise swallow them into the
+ *  named param — splitting variant identity by transport noise, so a
+ *  heartbeat render mints a phantom variant that supersedes (and
+ *  hides) the real one on the client. */
 export const TRANSPORT_PARAMS = [
   "partials",
   "cached",
@@ -102,6 +103,7 @@ export const TRANSPORT_PARAMS = [
   "streaming",
   "__frame",
   "__frameUrl",
+  "__cullFlip",
 ] as const
 
 /** The request URL as the app sees it — transport params stripped. */
