@@ -57,6 +57,7 @@ import {
 	templateRouteKey,
 } from "./partial-client-state.ts";
 import { deriveTemplate, renderTemplate } from "./partial-template.tsx";
+import { _sweepEmptyVisibilityObservers } from "./visibility.tsx";
 
 export {
 	_collectFramePaths,
@@ -167,6 +168,13 @@ export function PartialsClient({
 			}),
 		[],
 	);
+	// Post-commit sweep: any commit of the merge layer may have
+	// materialized content under a cullable boundary whose observer was
+	// attached while its fragment was still empty — re-attach those so
+	// they can measure (see `_sweepEmptyVisibilityObservers`).
+	React.useEffect(() => {
+		_sweepEmptyVisibilityObservers();
+	});
 	// PartialsClient is a `"use client"` component — but client components
 	// STILL execute during SSR's render-to-HTML pass (`../entry/ssr.tsx` ->
 	// renderToReadableStream decodes the Flight tree and runs every

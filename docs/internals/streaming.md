@@ -349,6 +349,30 @@ connection's lifecycle:
   seed and its id publication ride the reload fallback; when the id
   publishes, the controller pushes one full-set report
   (`changed: []`) so the session catches up.
+- **Only measured nodes testify.** Two rules keep the observer's
+  evidence honest across content transitions
+  (`VisibilityObserver` in `lib/visibility.tsx`):
+  - An IO callback whose pruned node set is EMPTY reports nothing —
+    zero connected nodes means the parton is mid-swap (a flip lane's
+    commit disconnects the old body before the new one reports), not
+    "out". Reporting "out" on no evidence starts a flip loop: out →
+    cull lane → placeholder commits → intersects → "in" → content
+    lane → swap → transient empty → "out" → … at rAF rate,
+    remounting the subtree and re-shipping its body every cycle.
+  - An observer attached while its fragment had NO host children
+    (dehydrated nested boundaries on a fast prod hydration,
+    unresolved Flight lazies) re-attaches when content arrives —
+    `_sweepEmptyVisibilityObservers()`, run on the framework's
+    content-arrival signals: a cullable boundary's observer mounting
+    and every `PartialsClient` commit. React's `FragmentInstance`
+    attaches observers to later PLACEMENTS on its own, but not to
+    hydration ADOPTIONS — without the sweep, such a parton never
+    reports, the session's set never contains it, and everything the
+    server parks behind it stays parked (the world's
+    frozen-after-refresh bug: the seed bigChunks hydrate exactly
+    like this). Covered by
+    `visibility-late-content.browser.test.tsx` (real Chromium,
+    red without the sweep).
 
 When no live connection is open (heartbeat disabled, or between
 keepalive close and the next fire), the reload fallback is the whole

@@ -280,6 +280,40 @@ async function postVisibilityReport(
 
 // ─── Boundary observer ────────────────────────────────────────────────
 
+/** Re-attach handles for every mounted boundary observer, keyed by
+ *  parton id. Each handle re-attaches ITS observer to the fragment's
+ *  current host children — but only when the observer tracks nothing
+ *  (see `_sweepEmptyVisibilityObservers`). */
+const reattachHandles = new Map<string, Set<() => void>>()
+
+/**
+ * Re-attach every observer that currently tracks ZERO connected nodes
+ * to its fragment's current host children.
+ *
+ * Why this exists: `FragmentInstance.observeUsing` attaches the
+ * observer to the host children React knows about AT THAT MOMENT. A
+ * cullable boundary whose content is still materializing when its
+ * effect runs — dehydrated nested boundaries on a fast prod
+ * hydration, unresolved Flight lazies — has NO host children yet, and
+ * children that materialize later are not attached retroactively. An
+ * observer over an empty fragment never fires: the parton never
+ * reports, the connection's visible set never learns it exists, and
+ * everything the server parks behind it stays parked.
+ *
+ * The sweep runs on the framework's own content-arrival signals — a
+ * cullable boundary's observer mounting (nested partons hydrating or
+ * materializing) and every `PartialsClient` commit (lane commits,
+ * payload swaps, substitutions) — never on a timer. Observers that
+ * track at least one connected node are left alone, so a sweep is
+ * O(observers) map walks and re-fires IntersectionObserver callbacks
+ * only for boundaries that were unmeasurable before it.
+ */
+export function _sweepEmptyVisibilityObservers(): void {
+	for (const handles of reattachHandles.values()) {
+		for (const handle of handles) handle()
+	}
+}
+
 /**
  * Wraps a cullable parton's children in a `<Fragment ref>` and observes
  * their viewport intersection, reporting to the controller under the
@@ -321,12 +355,53 @@ export function VisibilityObserver({
 				for (const el of [...nodeState.keys()]) {
 					if (!el.isConnected) nodeState.delete(el)
 				}
+				// Zero connected nodes is UNMEASURABLE, not "out" — the parton
+				// is mid-swap (a flip lane replacing its body disconnects the
+				// old nodes before the new ones report). Reporting "out" here
+				// starts a flip loop: out → cull lane → placeholder commits →
+				// intersects → "in" → content lane → swap → transient empty →
+				// "out" → … at rAF rate, remounting the subtree every cycle.
+				// Stay silent; the new nodes' initial callback (placement
+				// attach or the empty-observer sweep) carries real evidence.
+				if (nodeState.size === 0) return
 				reportVisible(id, [...nodeState.values()].some(Boolean))
 			},
 			{ rootMargin },
 		)
 		inst.observeUsing(io)
+		// Late-materializing content: if the fragment had no host children
+		// when `observeUsing` ran (dehydrated nested boundaries, unresolved
+		// lazies), this observer watches nothing and can never report. The
+		// handle re-attaches to the CURRENT host children; the sweep calls
+		// it only while the observer tracks zero connected nodes.
+		const reattachIfEmpty = (): void => {
+			for (const el of [...nodeState.keys()]) {
+				if (!el.isConnected) nodeState.delete(el)
+			}
+			if (nodeState.size > 0) return
+			try {
+				inst.unobserveUsing(io)
+			} catch {
+				// nothing was attached
+			}
+			inst.observeUsing(io)
+		}
+		let handles = reattachHandles.get(id)
+		if (!handles) {
+			handles = new Set()
+			reattachHandles.set(id, handles)
+		}
+		handles.add(reattachIfEmpty)
+		// This mount IS a content-arrival signal for ancestors: a nested
+		// cullable materializing means an enclosing boundary's fragment may
+		// have just gained its first host children.
+		_sweepEmptyVisibilityObservers()
 		return () => {
+			const set = reattachHandles.get(id)
+			if (set) {
+				set.delete(reattachIfEmpty)
+				if (set.size === 0) reattachHandles.delete(id)
+			}
 			try {
 				inst.unobserveUsing(io)
 			} catch {
