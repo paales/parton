@@ -26,12 +26,22 @@
  *      explicit fall-back-to-reload signal), and the endpoint handler
  *      maps apply/refuse/malformed to 204/404/400;
  *   6. report ordering — a stale report (older seq) can't regress the
- *      set, but its flips still merge.
+ *      set, but its flips still merge;
+ *   7. PARKED partons don't lane — a bump or `expiresAt` deadline
+ *      touching a parton outside the session's measured visible set
+ *      renders nothing (its client copy is a hidden Activity slot);
+ *      the flip-in revalidation re-renders the returning state fresh,
+ *      folding everything that landed while parked. Without the skip,
+ *      a held connection lane-renders every parton the client ever
+ *      scrolled past, at full invalidation rate, forever.
  */
 
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { _clearInvalidationRegistry } from "../../runtime/invalidation-registry.ts";
+import {
+	_clearInvalidationRegistry,
+	refreshSelector,
+} from "../../runtime/invalidation-registry.ts";
 import {
 	decodeLane,
 	drainPayloadSegment,
@@ -48,7 +58,7 @@ import {
 import type { DemuxedLane } from "../fp-trailer-split.ts";
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx";
 import { clearRegistry } from "../partial-registry.ts";
-import { visible } from "../server-hooks.ts";
+import { expires, time, visible } from "../server-hooks.ts";
 import { VISIBILITY_ENDPOINT } from "../visibility-protocol.ts";
 
 // Module-scope render counters — bumped every time a Render body runs,
@@ -85,6 +95,23 @@ function Page(): ReactNode {
 		</PartialRoot>
 	);
 }
+
+// Live-data cullable for the parked-skip probe: an unconditional
+// `expires()` boundary (the culled snapshot carries a due deadline too,
+// the hot-spin shape) over a body whose state string exposes which
+// visibility state each render saw.
+const renders3 = { pulse: 0 };
+const CullPulse = parton(
+	function CullPulseRender(_: RenderArgs) {
+		renders3.pulse++;
+		const v = visible();
+		expires(time().in(120));
+		return (
+			<div data-pulse>{`pulse:${v ? "full" : "skeleton"}:${renders3.pulse}`}</div>
+		);
+	},
+	{ selector: "cull-pulse" },
+);
 
 // Parent/child pair for the deferral probe: the child only exists in
 // the tree while the parent is in view, so its FIRST snapshot is
@@ -124,6 +151,7 @@ beforeEach(() => {
 	_clearInvalidationRegistry();
 	renders.a = 0;
 	renders.b = 0;
+	renders3.pulse = 0;
 });
 
 afterEach(() => {
@@ -374,5 +402,111 @@ describe("connection-session visibility", () => {
 		} finally {
 			_closeConnectionSession("conn-vis-http");
 		}
+	});
+
+	it("a bump touching a PARKED parton doesn't lane; the flip-in re-renders it fresh", async () => {
+		const conn = "conn-vis-parked";
+		await withLiveDrive(
+			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a,cull-b`,
+			Page,
+			freshLiveScope("conn-vis"),
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				const seg0 = await drainPayloadSegment(first.value);
+				expect(seg0).toContain("a:full:1");
+				expect(seg0).toContain("b:full:1");
+
+				// Park b (flip it out). The flip's own lane renders the skeleton
+				// — that lane IS the state transition, never skipped.
+				expect(
+					reportConnectionVisibility(conn, 1, ["cull-b"], ["cull-a"]),
+				).toBe(true);
+				const second = await h.segments.next();
+				if (second.done || second.value.kind !== "lanes")
+					throw new Error("expected lanes segment");
+				const laneIter = second.value.lanes[Symbol.asyncIterator]();
+				const laneOut = await nextLane(laneIter);
+				expect(laneOut.partonId).toBe("cull-b");
+				expect((await decodeLane(laneOut)).bodyText).toContain(
+					"b:skeleton:2",
+				);
+
+				// Bump parked b, then visible a. b must NOT lane — the next lane
+				// on the wire is a's.
+				refreshSelector("cull-b");
+				refreshSelector("cull-a");
+				const laneA = await nextLane(laneIter);
+				expect(laneA.partonId).toBe("cull-a");
+				expect((await decodeLane(laneA)).bodyText).toContain("a:full:2");
+				expect(renders.b).toBe(2);
+
+				// Flip b back in: the returning state's fp folds the bump that
+				// landed while parked, so the lane re-renders fresh — the
+				// catch-up — instead of confirming the stale parked copy.
+				expect(
+					reportConnectionVisibility(conn, 2, ["cull-b"], ["cull-a", "cull-b"]),
+				).toBe(true);
+				const laneIn = await nextLane(laneIter);
+				expect(laneIn.partonId).toBe("cull-b");
+				expect((await decodeLane(laneIn)).bodyText).toContain("b:full:3");
+
+				await h.shutdown("cull-b");
+			},
+		);
+	});
+
+	it("a parked parton's due expiresAt neither lanes nor hot-spins the wake loop", async () => {
+		const conn = "conn-vis-parked-exp";
+		await withLiveDrive(
+			`http://localhost/pulse?live=1&__conn=${conn}&visible=cull-pulse`,
+			() => (
+				<PartialRoot>
+					<CullPulse />
+				</PartialRoot>
+			),
+			freshLiveScope("conn-vis"),
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				expect(await drainPayloadSegment(first.value)).toContain(
+					"pulse:full:1",
+				);
+
+				// The declared boundary drives a lane while visible.
+				const second = await h.segments.next();
+				if (second.done || second.value.kind !== "lanes")
+					throw new Error("expected lanes segment");
+				const laneIter = second.value.lanes[Symbol.asyncIterator]();
+				const tick = await nextLane(laneIter);
+				expect(tick.partonId).toBe("cull-pulse");
+				expect((await decodeLane(tick)).bodyText).toContain("pulse:full:2");
+
+				// Park it. The culled snapshot still carries a ~120ms deadline;
+				// while parked, that deadline must neither lane (nothing to
+				// show) nor arm the expiry timer (a past-due deadline that
+				// never lanes would wake→skip→re-arm in a hot loop).
+				expect(
+					reportConnectionVisibility(conn, 1, ["cull-pulse"], []),
+				).toBe(true);
+				const laneOut = await nextLane(laneIter);
+				expect((await decodeLane(laneOut)).bodyText).toContain(
+					"pulse:skeleton:3",
+				);
+				await new Promise((r) => setTimeout(r, 350));
+				expect(renders3.pulse).toBe(3);
+
+				// Flip-in catches up and re-arms the boundary.
+				expect(
+					reportConnectionVisibility(conn, 2, ["cull-pulse"], ["cull-pulse"]),
+				).toBe(true);
+				const laneIn = await nextLane(laneIter);
+				expect((await decodeLane(laneIn)).bodyText).toContain("pulse:full:4");
+
+				await h.shutdown("cull-pulse");
+			},
+		);
 	});
 });

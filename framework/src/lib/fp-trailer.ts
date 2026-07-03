@@ -386,6 +386,21 @@ export function wrapStreamWithFpTrailer(
      *  never fp-skip on the connection: its promoted emitted fp is
      *  permanently one drift behind the next render's candidate. */
     onUpdates?: (updates: FpUpdatesPayload) => void
+    /** Scope the flush fold to this parton's subtree — the id plus
+     *  every snapshot whose parentPath contains it. Lane renders pass
+     *  their parton id: a lane is one parton's render, so its flush
+     *  heals only what that render could have moved. Unscoped, every
+     *  lane frame on a many-parton route recomputes — and re-ships —
+     *  the standing drift of EVERY route snapshot (a snapshot's
+     *  emittedFp only advances when IT re-renders, so cold→warm drift
+     *  stands forever): O(route) hashing per frame and the same
+     *  multi-KB payload repeating on every frame. Ancestors are
+     *  deliberately outside the scope — an ancestor's fold needs
+     *  contributions from ALL its descendants, which only a route-wide
+     *  pass computes honestly; their heals ride whole-tree segments.
+     *  Whole-tree renders leave this unset: their flush is the
+     *  route-wide cold→warm heal. */
+    flushScopeId?: string
   },
 ): ReadableStream<Uint8Array> {
   // Capture per-request state at wrap time. The registry ALS is NOT
@@ -509,7 +524,7 @@ export function wrapStreamWithFpTrailer(
         // drifted after its settle emission (an invalidation bump landing
         // between a parton's settle and stream end). No wire bytes when
         // the settle-time entries already covered everything.
-        if (!foldUpdates()) return
+        if (!foldUpdates(opts?.flushScopeId)) return
         emitDelta(controller)
       },
     }),

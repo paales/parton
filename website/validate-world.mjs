@@ -7,6 +7,12 @@
  * scrolling → refresh. Asserts at every step: no error cards, chunks
  * in the runway actually load, no failed requests, no page errors,
  * and the post-interaction refresh renders a non-blank world.
+ *
+ * Live-stream byte budgets (via CDP Network.dataReceived, decoded
+ * bytes on `?live=1` responses) guard the two wire pathologies the
+ * world surfaced: fp-trailer markers re-shipping the whole route's
+ * standing drift on every lane frame, and lanes rendering for parked
+ * (scrolled-past) partons at full ticker rate forever.
  */
 import { spawn } from "node:child_process"
 import { chromium } from "playwright"
@@ -65,7 +71,24 @@ try {
   page.on("requestfailed", (r) => { if (!r.failure()?.errorText.includes("ERR_ABORTED")) netFails.push(`FAILED ${r.failure()?.errorText} ${r.url().slice(0, 100)}`) })
   page.on("pageerror", (e) => pageErrors.push(e.message.slice(0, 200)))
 
+  // Live-stream byte accounting: decoded bytes per data event on any
+  // held `?live=1` response, timestamped so assertions can budget a
+  // window. dataLength (decoded) rather than encodedDataLength so the
+  // budget doesn't depend on compression behavior.
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send("Network.enable")
+  const liveRequestIds = new Set()
+  const liveChunks = []
+  cdp.on("Network.requestWillBeSent", (e) => {
+    if (e.request.url.includes("live=1")) liveRequestIds.add(e.requestId)
+  })
+  cdp.on("Network.dataReceived", (e) => {
+    if (liveRequestIds.has(e.requestId)) liveChunks.push({ t: Date.now(), n: e.dataLength })
+  })
+  const liveBytesSince = (t0) => liveChunks.filter((c) => c.t >= t0).reduce((s, c) => s + c.n, 0)
+
   // ── Step 1: load, let pulses run a few seconds ──
+  const soakStart = Date.now()
   await page.goto(BASE)
   await page.waitForSelector('[data-testid="chunk-0,0"][data-loaded]', { timeout: 15000 })
   await page.waitForTimeout(5000)
@@ -73,6 +96,10 @@ try {
   check(errCards1 === 0, "no error cards after 5s of pulses", `${errCards1} cards`)
   const pulse1 = await page.$eval('[data-testid="chunk-0,0"] .chunk__pulse', (el) => el.textContent).catch(() => null)
   check(pulse1 !== null, "origin pulse rendering", String(pulse1))
+  // Whole-tree live segment + ~25 seed pulses' lanes. The broken shape
+  // (route-wide fp markers on every lane frame) blew past 4MB here.
+  const soakBytes = liveBytesSince(soakStart)
+  check(soakBytes < 1_500_000, "live stream lean during pulse soak", `${Math.round(soakBytes / 1024)}KB (budget 1500KB)`)
 
   // ── Step 2: scroll up a bit — cells should load ──
   await page.evaluate(() => document.querySelector('[data-testid="world-scroller"]').scrollBy(0, -900))
@@ -123,6 +150,16 @@ try {
   const cyHere = Math.floor((pos.y + pos.h / 2) / 512) - 32
   const inView = await page.$(`[data-testid="chunk-0,${cyHere}"][data-loaded]`)
   check(inView !== null, `viewport-center chunk 0,${cyHere} is loaded after stress`)
+
+  // ── Step 4c: parked partons must go QUIET on the wire ──
+  // Hundreds of chunks were visited and scrolled past; their tickers
+  // keep writing server-side, but only the ~dozen chunks at the current
+  // position may lane. The broken shape streamed every ever-visited
+  // chunk at full ticker rate, forever.
+  const quietStart = Date.now()
+  await page.waitForTimeout(6000)
+  const quietBytes = liveBytesSince(quietStart)
+  check(quietBytes < 600_000, "parked chunks stay off the live stream", `${Math.round(quietBytes / 1024)}KB over 6s (budget 600KB)`)
 
   // ── Step 5: refresh after interaction — page must not be blank ──
   await page.reload()

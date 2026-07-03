@@ -9,10 +9,12 @@
  *   1. after the initial segment, a relevant bump renders ONLY the
  *      touched parton, emitted as a `mux` lane (the untouched sibling
  *      never re-renders);
- *   2. the lane's body is a complete Flight payload of that parton's
- *      fresh content, carrying its own fp-trailer entries — including
- *      `{from,to}` updates for ANCESTORS whose descendant fold moved,
- *      without the ancestors re-rendering;
+ *   2. the lane's fp-trailer is scoped to the lane's OWN SUBTREE —
+ *      ancestors and siblings never ride it. A snapshot's emittedFp
+ *      only advances when IT re-renders, so any unscoped fold would
+ *      re-detect and re-ship the whole route's standing drift on every
+ *      lane frame (multi-KB payloads duplicated per frame on a
+ *      many-parton route). Ancestor heals ride whole-tree segments;
  *   3. an `expiresAt` boundary wakes a lane for the declaring parton.
  */
 
@@ -102,7 +104,7 @@ afterEach(() => {
 });
 
 describe("live segment driver — per-parton lanes", () => {
-	it("a relevant bump emits a lane for ONLY the touched parton, with ancestor fp updates on its trailer", async () => {
+	it("a relevant bump emits a lane for ONLY the touched parton, with a subtree-scoped fp trailer", async () => {
 		await withLiveDrive(
 			"http://localhost/lanes?live=1",
 			Page,
@@ -137,13 +139,16 @@ describe("live segment driver — per-parton lanes", () => {
 				expect(renders.wrapper).toBe(1);
 				expect(bodyText).not.toContain("slow-");
 
-				// The lane's trailer refreshes the ANCESTOR's fp: the wrapper's
-				// descendant fold moved with the child's invalidation, and the
-				// {from,to} update rides the child's lane without the wrapper
-				// re-rendering.
-				expect(fp).not.toBeNull();
-				expect(fp?.["lane-wrapper"]).toBeDefined();
-				expect(fp?.["lane-wrapper"].to).not.toBe(fp?.["lane-wrapper"].from);
+				// The lane's trailer is scoped to the lane's own subtree. The
+				// wrapper's descendant fold DID move with the child's bump, but
+				// an honest ancestor fold needs every descendant's contribution
+				// — a route-wide pass — and the sibling's cold→warm drift stands
+				// forever (its emittedFp never advances without a re-render), so
+				// an unscoped fold would re-ship both on every frame. Neither
+				// rides the lane; the wrapper over-fetches on its next
+				// whole-tree render, whose route-wide trailer heals it.
+				expect(fp?.["lane-wrapper"]).toBeUndefined();
+				expect(fp?.["lane-slow"]).toBeUndefined();
 
 				await h.shutdown("lane-fast");
 			},

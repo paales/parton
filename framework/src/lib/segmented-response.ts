@@ -268,14 +268,28 @@ interface LaneRuntime {
  * hole renders concurrently), and each wake re-enters a fresh registry
  * pass so descendant folds read the latest committed canonical rather
  * than the initial segment's memoized view. Each lane's
- * `wrapStreamWithFpTrailer` commits at its own flush and re-emits
- * `{from,to}` fp updates for EVERY route snapshot whose recomputed fp
- * drifted — which is how ancestors' descendant-fold refreshes ride the
- * child's lane without the ancestors ever re-rendering.
+ * `wrapStreamWithFpTrailer` commits at its own flush and emits
+ * `{from,to}` fp updates scoped to the LANE'S OWN SUBTREE — the only
+ * snapshots this render could have moved. Ancestors' fold drift is not
+ * healed here (an honest ancestor fold needs every descendant's
+ * contribution, a route-wide pass) — it rides the next whole-tree
+ * segment; until then the ancestor over-fetches on its next render,
+ * never serves stale.
  *
  * The `settled` milestone is written at quiesce (every lane drained),
  * marking a safe abort point; mid-lane aborts are also safe client-side
  * because a torn lane rejects only its own un-committed decode.
+ *
+ * Bump and expiry wakes skip PARKED partons — ids whose own snapshot,
+ * or a cullable ancestor's, is outside the session's measured visible
+ * set (`isParkedOnConnection`). A parked parton's client copy is a
+ * hidden Activity slot; streaming lanes at it burns render + wire on
+ * pixels nobody sees, and on a world-sized route it never stops: every
+ * parton the client EVER scrolled past keeps its snapshot, so without
+ * the skip the connection lane-renders all of them at full invalidation
+ * rate, forever. Staleness is impossible: the flip-in revalidation
+ * re-renders the returning state fresh (its fp folds every bump that
+ * landed while parked, so it can't false-skip).
  *
  * Visibility flips are the fourth wake: a report POST updates the
  * connection session's visible set and names the flipped ids, and the
@@ -383,16 +397,18 @@ async function driveLaneStream(
 					_captureCommitHandle(),
 					{
 						incremental: false,
+						// A lane's trailer heals only its own subtree — see
+						// `flushScopeId`. Without the scope, every lane frame on a
+						// many-parton route re-computes and re-ships the standing
+						// drift of every route snapshot: O(route) hashing per
+						// frame, and the same multi-KB fp payload duplicated onto
+						// every frame of the stream.
+						flushScopeId: id,
 						// Fold this lane's warm fps into the connection's cached
 						// override alongside the client-bound trailer, so the
-						// server-side skip check tracks the same cold→warm drift
-						// the client heals. Without it, a drifted parton (any
-						// ancestor of live descendants — a cullable chunk over a
-						// ticking pulse) can never fp-skip on this connection:
-						// its promoted emitted fp stays one drift behind the
-						// next candidate, and every culling flip re-ships bytes
-						// that the client's lane-updated parked copy already
-						// shows.
+						// server-side skip check tracks the same drift the client
+						// heals (a bump landing between this lane's render and
+						// its flush moves the recomputed fp past the emitted one).
 						onUpdates: promoteFpUpdatesToCachedOverride,
 					},
 				);
@@ -418,7 +434,10 @@ async function driveLaneStream(
 				// wrap commits at flush). Promote the fresh emittedFps into the
 				// request's cached override so this parton's next lane render —
 				// and every other lane's descendants — fp-skip against them.
-				promoteSnapshotsToCachedOverride();
+				// Scoped to the lane's subtree: only those snapshots are fresh
+				// from this render; walking the whole route map per drain is
+				// O(route) churn for entries the drain didn't touch.
+				promoteSnapshotsToCachedOverride(id);
 				if (!runtime.dirty) return;
 			}
 		} finally {
@@ -456,6 +475,7 @@ async function driveLaneStream(
 						excludeExpiryIds: openLaneIds,
 						laneDrained,
 						visibilityFlip: session?.flipped,
+						session,
 					});
 		if (wake === false) break;
 		if (wake === "lane-drained") {
@@ -501,20 +521,26 @@ async function driveLaneStream(
 			if (!touched.includes(id)) touched.push(id);
 		}
 		if (wake === "bump") {
-			touched.push(..._routeMatchingBumpIds(snapshots, since));
+			// Parked partons don't lane (see the parked-skip note above);
+			// their catch-up is the flip-in revalidation.
+			for (const id of _routeMatchingBumpIds(snapshots, since)) {
+				if (isParkedOnConnection(id, snapshots, session)) continue;
+				touched.push(id);
+			}
 			since = _currentTs();
 		} else if (wake !== "visibility") {
 			// Expiry wake, or a drained lane whose fresh snapshot may carry
 			// a due deadline: render every parton past its `expiresAt`.
 			// Open lanes are skipped — their stale snapshots still show the
 			// deadline being serviced; the dirty flag / lane-drained arm
-			// covers them.
+			// covers them. Parked partons are skipped like on a bump wake.
 			const now = Date.now();
 			for (const [id, snap] of snapshots) {
 				if (openLaneIds.has(id)) continue;
 				const exp = effectiveExpiresAt(snap);
 				if (exp === undefined || !Number.isFinite(exp)) continue;
-				if (exp <= now) touched.push(id);
+				if (exp <= now && !isParkedOnConnection(id, snapshots, session))
+					touched.push(id);
 			}
 		}
 		if (touched.length === 0) continue;
@@ -552,6 +578,14 @@ interface SegmentWakeOptions {
 	 *  connection session (per-parton driver only). The caller drains
 	 *  the flipped ids via `takeConnectionFlips`, which re-arms. */
 	visibilityFlip?: Promise<void>;
+	/** The live connection's session (per-parton driver only). Parked
+	 *  partons' `expiresAt` deadlines must not arm the expiry timer —
+	 *  the driver skips their lanes, so arming on a parked parton's
+	 *  past-due deadline would hot-spin the wake loop (immediate expiry
+	 *  wake → nothing laned → re-arm on the same deadline). Read live
+	 *  at arm time so a report landing between wakes moves the very
+	 *  next arm. */
+	session?: ConnectionSession | null;
 }
 
 /**
@@ -579,7 +613,10 @@ async function waitForSegmentWake(
 	options?: SegmentWakeOptions,
 ): Promise<SegmentWake> {
 	const keepaliveDeadline = Date.now() + KEEPALIVE_MS;
-	const expiresAtDelay = computeNextExpiresAtDelay(options?.excludeExpiryIds);
+	const expiresAtDelay = computeNextExpiresAtDelay(
+		options?.excludeExpiryIds,
+		options?.session,
+	);
 	const expiresAtDeadline =
 		expiresAtDelay !== null ? Date.now() + Math.max(0, expiresAtDelay) : null;
 	let since = sinceTs;
@@ -659,6 +696,7 @@ function routeHasRelevantBump(sinceTs: number): boolean {
  */
 function computeNextExpiresAtDelay(
 	excludeIds?: ReadonlySet<string>,
+	session?: ConnectionSession | null,
 ): number | null {
 	let request: Request;
 	let scope: string;
@@ -677,10 +715,44 @@ function computeNextExpiresAtDelay(
 		const exp = effectiveExpiresAt(snap);
 		if (exp === undefined) continue;
 		if (!Number.isFinite(exp)) continue;
+		if (session && isParkedOnConnection(id, snapshots, session)) continue;
 		if (exp < min) min = exp;
 	}
 	if (!Number.isFinite(min)) return null;
 	return min - Date.now();
+}
+
+/**
+ * True iff `id`'s own snapshot, or a cullable ancestor's, sits outside
+ * the connection's measured visible set — the parton is PARKED: its
+ * client copy is a hidden Activity slot (cull-to-park), so lanes at it
+ * ship bytes nobody sees. Reads the same two signals `visible()` reads:
+ * the snapshot's recorded `visible:<id>` dep marks the parton cullable,
+ * and the session's current set is its viewport state. `visible: null`
+ * (no report yet) parks nothing — the seed state is authoritative until
+ * the client measures. Skipping is staleness-free: every bump that
+ * lands while parked moves the in-state fp, so the flip-in
+ * revalidation's skip check can only miss (re-render fresh), never
+ * false-match.
+ */
+function isParkedOnConnection(
+	id: string,
+	snapshots: ReadonlyMap<string, PartialSnapshot>,
+	session: ConnectionSession | null,
+): boolean {
+	const visible = session?.visible;
+	if (visible == null) return false;
+	const snap = snapshots.get(id);
+	if (!snap) return false;
+	if (snap.deps?.has(`visible:${id}`) && !visible.has(id)) return true;
+	for (const ancestorId of snap.parentPath) {
+		if (ancestorId === id) continue;
+		const ancestor = snapshots.get(ancestorId);
+		if (!ancestor) continue;
+		if (ancestor.deps?.has(`visible:${ancestorId}`) && !visible.has(ancestorId))
+			return true;
+	}
+	return false;
 }
 
 /** Inspect the active request's URL for a `?live=1` flag — the live-
@@ -770,7 +842,7 @@ function promoteFpUpdatesToCachedOverride(updates: FpUpdatesPayload): void {
 	}
 }
 
-export function promoteSnapshotsToCachedOverride(): void {
+export function promoteSnapshotsToCachedOverride(withinId?: string): void {
 	let request: Request;
 	let scope: string;
 	try {
@@ -786,6 +858,14 @@ export function promoteSnapshotsToCachedOverride(): void {
 	if (snapshots.size === 0) return;
 
 	for (const [id, snap] of snapshots) {
+		// `withinId` scopes the walk to one parton's subtree — a lane
+		// drain promotes only the snapshots its render just committed.
+		if (
+			withinId !== undefined &&
+			id !== withinId &&
+			!snap.parentPath.includes(withinId)
+		)
+			continue;
 		if (!snap.emittedFp || !snap.matchKey) continue;
 		let fpSet = override.fingerprints.get(id);
 		if (!fpSet) {

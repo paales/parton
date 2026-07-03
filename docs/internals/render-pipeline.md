@@ -458,6 +458,15 @@ moving parts, end to end:
   state and carries no marker); a moved fp answers with fresh bytes.
   Flip lanes keep their promoted fps — the per-state variants make an
   fp-skip restore the right state's body by construction.
+- **While parked, the server stays quiet.** On a live connection,
+  bump/expiry wakes skip any parton whose own snapshot or cullable
+  ancestor's is outside the session's measured visible set
+  (`isParkedOnConnection` in `segmented-response.ts` — see
+  [`streaming.md`](./streaming.md)): the parked copy is a hidden
+  Activity slot, so lanes at it would ship bytes nobody sees — and
+  they'd never stop, since snapshots persist for everything ever
+  rendered. The flip-in revalidation is the catch-up: its fp folds
+  every bump that landed while parked, so it re-renders fresh.
 - **Drop-on-drift** (`cull-park.ts`). The content slot's `<Activity>`
   is keyed by a per-id GENERATION. A fresh content store for an id
   whose mounted fiber has been parked since its bytes were minted

@@ -86,10 +86,34 @@ any selector-routing logic that could replace it.
    render is still suspended, so no update waits on the slowest
    Suspense boundary. One lane per parton id at a time: a wake that
    touches an open lane marks it dirty and the pump re-renders on
-   drain. Ancestors never re-run — each lane's fp trailer carries
-   `{from,to}` updates for every route snapshot whose recomputed fp
-   drifted, which includes ancestors whose descendant fold the lane's
-   commit just moved.
+   drain. Ancestors never re-run, and each lane's fp trailer is scoped
+   to the lane's OWN subtree (`flushScopeId` on
+   `wrapStreamWithFpTrailer`): a snapshot's `emittedFp` only advances
+   when it re-renders, so an unscoped flush fold would re-detect —
+   and re-ship — the whole route's standing cold→warm drift on every
+   lane frame (multi-KB fp payloads duplicated per frame, O(route)
+   hashing per frame on a many-parton route). Ancestor fold drift is
+   NOT healed on lanes — an honest ancestor fold needs every
+   descendant's contribution, a route-wide pass — it rides the next
+   whole-tree segment; until then the ancestor over-fetches on its
+   next render, never serves stale.
+
+   **Parked partons don't lane.** Bump and expiry wakes drop ids whose
+   own snapshot, or a cullable ancestor's, is outside the session's
+   measured visible set (`isParkedOnConnection` — the same
+   `visible:<id>` dep + session-set signal `visible()` reads). A
+   parked parton's client copy is a hidden Activity slot
+   (cull-to-park); lanes at it ship bytes nobody sees, and since
+   route snapshots persist for everything ever rendered, a held
+   connection would otherwise lane-render every parton the client
+   ever scrolled past at full invalidation rate, forever. A parked
+   parton's due `expiresAt` is likewise excluded from the expiry arm
+   (arming on a deadline that never lanes would hot-spin the wake
+   loop). Staleness is impossible: the flip-in revalidation's fp
+   folds every bump that landed while parked, so it re-renders fresh
+   — it can only miss, never false-match. Visibility flips bypass
+   the skip: they ARE the state transition. An unmeasured session
+   (`visible: null`) parks nothing.
 5. **The client demuxes and commits per lane.** The splitter
    (`splitSegments`) classifies the region off the server's `lanes`
    marker and yields each lane's body — itself shaped like a
@@ -268,8 +292,8 @@ The pieces:
   parton); a deferred flip keeps the override as promoted, since the
   materializing render's just-promoted fps are exactly what the
   client's slot received. Per-lane fp-trailers also fold their warm
-  fps back into the override (`onUpdates`), so drifted ancestors of
-  live descendants stay skippable. Lanes start in report order — the
+  fps back into the override (`onUpdates`), so a drift between a
+  lane's render and its flush stays tracked. Lanes start in report order — the
   controller sends in-view flips before cull-outs, so the visible
   world's renders lead. A flip whose id has NO route snapshot yet
   (the report raced the render that first materializes its parton —
