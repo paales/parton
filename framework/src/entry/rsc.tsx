@@ -292,7 +292,21 @@ export function createRscHandler(config: RscHandlerConfig): {
 				}),
 				{
 					status: actionStatus,
-					headers: { "content-type": "text/x-component;charset=utf-8" },
+					headers: {
+						"content-type": "text/x-component;charset=utf-8",
+						// The segment driver's byte timing IS the protocol: a live
+						// connection parks between wakes and each lane must reach
+						// the client the moment it drains. A compressing
+						// intermediary that buffers whole blocks (an nginx gzip
+						// default, a CDN transform) would hold framed lanes until
+						// its block fills — on a stream whose traffic has gone
+						// quiet, indefinitely. `no-transform` is the spec-level
+						// instruction that these bytes must pass through
+						// unmodified. (The framework's own dev/preview compressor —
+						// `vite/compression.ts` — flushes per write and owns the
+						// encoding decision, so it stays compatible.)
+						"cache-control": "no-transform",
+					},
 				},
 			);
 		}

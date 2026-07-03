@@ -457,6 +457,33 @@ connection. Lanes regions are always safe to abort immediately: a
 torn lane rejects only its own un-committed decode, never a committed
 tree, so the deferred-abort gate applies only to payload segments.
 
+## The stream must pass through untransformed
+
+The segment driver's byte timing IS the protocol: a live connection
+parks between wakes, and each framed lane must reach the client the
+moment it drains. A compressing intermediary that buffers whole
+blocks (a non-flushing brotli/gzip middleware, an nginx default, a
+CDN transform) holds those frames until its block fills — on a
+stream whose traffic has gone quiet, indefinitely. The observable
+failure is a client pipeline frozen mid-stream with the connection
+"open": the server keeps framing lanes into the compressor's buffer
+and the demux never sees another byte (the world's
+hard-scroll-edge chunks never materializing was exactly this).
+
+Two guards keep transforms off the wire:
+
+- The segment-driver response declares `Cache-Control: no-transform`
+  — the spec-level instruction that the payload must not be
+  modified in transit. Real deployments' proxies honor it.
+- The framework's dev/preview compressor
+  (`framework/src/vite/compression.ts`, the `rscCompression()` vite
+  plugin) honors `no-transform` at its compress decision AND strips
+  the request's `Accept-Encoding` after capturing it, so every
+  downstream compressor (vite preview ships its own, non-flushing
+  one) stands down. Compressible one-shot responses (documents,
+  refetches) still compress — with a flush per write, so
+  progressive rows keep their timing.
+
 ## `expires()` vs `cache`
 
 Two separate concepts:
