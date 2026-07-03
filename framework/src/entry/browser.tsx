@@ -158,6 +158,7 @@ async function main() {
 			"page",
 			"__frame",
 			"__frameUrl",
+			"__cullFlip",
 		]) {
 			u.searchParams.delete(k);
 		}

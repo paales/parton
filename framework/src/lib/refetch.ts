@@ -121,6 +121,13 @@ interface RefetchBatchEntry {
    *  Mirrors `FrameworkReloadOptions.params` — ephemeral per-request
    *  view state read via tracked `searchParam()` reads. */
   params?: Record<string, string>
+  /** This fire is a culling flip (only the visibility controller sets
+   *  it — see `visibility.tsx`). Its targets are REVALIDATIONS, not
+   *  forces: their cached fp tokens stay in `?cached=` (a normal
+   *  explicit target's are stripped) and the request carries
+   *  `?__cullFlip=1`, so the server may fp-skip an explicit target —
+   *  the placeholder that confirms the client's parked copy. */
+  cullFlip?: boolean
   /** Resolver for this entry's `streaming` milestone — called when the
    *  flushed batch's first segment lands. */
   resolveStreaming: () => void
@@ -155,13 +162,23 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
   }
 
   const labelSet = new Set<string>()
+  // Labels wanted by a NON-cull-flip entry — the force-refetch
+  // targets whose cached tokens must be stripped below. A label
+  // wanted only by cull-flip entries keeps its tokens (fp-skip is
+  // the point of a culling revalidation).
+  const forcedLabels = new Set<string>()
   let streamingMode = false
   let liveMode = false
+  let cullFlip = false
   const extraParams = new Map<string, string>()
   for (const entry of batch) {
-    for (const l of entry.labels) labelSet.add(l)
+    for (const l of entry.labels) {
+      labelSet.add(l)
+      if (!entry.cullFlip) forcedLabels.add(l)
+    }
     if (entry.streaming) streamingMode = true
     if (entry.live) liveMode = true
+    if (entry.cullFlip) cullFlip = true
     if (entry.params) for (const [k, v] of Object.entries(entry.params)) extraParams.set(k, v)
   }
 
@@ -187,18 +204,26 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
   // `?streaming=1` (client commit mode). Only the heartbeat sets it;
   // targeted refetches stay one-shot and the connection closes.
   if (liveMode) url.searchParams.set("live", "1")
+  // The culling-flip stamp — the explicit producer-written signal
+  // that lets the server fp-skip this fire's targets (see
+  // `PartialRequestState.cullFlip`). Transport-only; match gates
+  // never see it.
+  if (cullFlip) url.searchParams.set("__cullFlip", "1")
 
   // Send cached fingerprints so the server can fp-skip unchanged
   // partials. With a selector, strip cached tokens whose id prefix
-  // matches a wanted label (those entries are the explicit refetch
-  // targets — server must re-render them, not match-and-skip). With
-  // no selector (streaming heartbeat, full-page refetch), send every
-  // cached entry so the fp-skip cascade prunes the page to deltas.
+  // matches a FORCED label (those entries are explicit refetch
+  // targets — server must re-render them, not match-and-skip);
+  // cull-flip targets keep theirs, so the server can confirm a
+  // parked copy with a placeholder instead of re-shipping bytes.
+  // With no selector (streaming heartbeat, full-page refetch), send
+  // every cached entry so the fp-skip cascade prunes the page to
+  // deltas.
   const cachedIds = getCachedPartialIds()
   if (cachedIds.length > 0) {
-    const targetPrefixes = [...labelSet].map((l) => `${l}:`)
+    const targetPrefixes = [...forcedLabels].map((l) => `${l}:`)
     const cached =
-      labelSet.size > 0
+      targetPrefixes.length > 0
         ? cachedIds.filter((t) => !targetPrefixes.some((p) => t.startsWith(p)))
         : cachedIds
     if (cached.length > 0) url.searchParams.set("cached", cached.join(","))

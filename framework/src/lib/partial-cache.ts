@@ -16,6 +16,8 @@ import {
 	type ReactNode,
 	Suspense,
 } from "react";
+import { isCulledKey } from "./cull-key.ts";
+import { contentSlotConfirmed, contentSlotStored } from "./cull-park.ts";
 import type { FpUpdatesPayload } from "./fp-trailer-marker.ts";
 import {
 	_applyFpUpdates,
@@ -25,6 +27,7 @@ import {
 	notifyLaneCommit,
 	type PartialCache,
 	registerClientPartial,
+	touchClientPartial,
 } from "./partial-client-state.ts";
 
 /**
@@ -400,11 +403,18 @@ export function unwrapLazy(node: unknown): unknown {
  * skip the template/derive/substitute machinery and return `children`
  * directly so the rendered tree matches the SSR HTML exactly. The cache
  * walk that DID complete is still safe to keep (any wrappers that were
- * walked are cached); a later PartialsClient render with the lazies
- * resolved will fill in the gaps.
+ * walked are cached).
+ *
+ * `thenables` collects each pending lazy's underlying Flight chunk (a
+ * thenable), so the caller can re-walk THIS payload the moment its
+ * rows land (`PartialsClient`'s `scheduleRewalkOnResolve`) instead of
+ * hoping a later render re-walks it. Without that, a payload
+ * superseded before any re-render loses its still-streaming wrappers
+ * permanently — the bytes arrived but never reached the cache.
  */
 export interface LazyWalkStats {
 	pending: number;
+	thenables?: PromiseLike<unknown>[];
 }
 
 /**
@@ -448,11 +458,22 @@ export function cacheFromStreamingChildren(
 	}
 	const unwrapped = unwrapLazy(node);
 	if (unwrapped !== node) {
-		if (unwrapped === LAZY_PENDING && stats) stats.pending++;
+		if (unwrapped === LAZY_PENDING && stats) {
+			stats.pending++;
+			// Capture the in-flight Flight chunk so the caller can re-walk
+			// this payload when the row lands (see LazyWalkStats).
+			const payload = (node as { _payload?: unknown })._payload;
+			if (
+				payload != null &&
+				typeof (payload as PromiseLike<unknown>).then === "function"
+			) {
+				(stats.thenables ??= []).push(payload as PromiseLike<unknown>);
+			}
+		}
 		// Errored OR pending lazy — can't descend to find wrappers. The
 		// template-derive keeps the lazy in place so React resolves it
-		// through native Suspense; a re-render after resolution will
-		// populate the cache for whatever wrappers are inside.
+		// through native Suspense; the resolve-time re-walk populates the
+		// cache for whatever wrappers are inside.
 		if (unwrapped == null || unwrapped === LAZY_PENDING) return;
 		cacheFromStreamingChildren(unwrapped as ReactNode, cache, seen, stats);
 		return;
@@ -464,7 +485,16 @@ export function cacheFromStreamingChildren(
 		if (id) {
 			const mk = getPartialMatchKey(node) ?? "";
 			if (seen) addSeen(seen, id, mk);
+			touchClientPartial(id);
 			cacheStore(cache, id, mk, node);
+			// A base-variant (content-slot) store for a parton whose
+			// mounted content has been parked since its bytes were minted
+			// is a RETURNING render — the fp moved while parked, so the
+			// parked fiber must be dropped, not reconciled into. The
+			// cull-park generation bump does that (see `cull-slot.tsx`);
+			// skeleton-variant stores and ordinary live updates are
+			// untouched.
+			if (!isCulledKey(mk)) contentSlotStored(id);
 			// Populate the fingerprint map synchronously from the tree walk
 			// rather than waiting for each `<PartialErrorBoundary>` to
 			// commit on the client. The commit order is non-deterministic
@@ -494,7 +524,25 @@ export function cacheFromStreamingChildren(
 		// placeholder in the DOM — blanking the partial's region until a
 		// hard reload.
 		const id = getPlaceholderId(node);
-		if (id && seen) addSeen(seen, id, getPlaceholderMatchKey(node) ?? "");
+		if (id) {
+			const mk = getPlaceholderMatchKey(node) ?? "";
+			if (seen) addSeen(seen, id, mk);
+			// The server still emits this id — refresh its recency so the
+			// pool-cap FIFO never ages out an id that only ever fp-skips
+			// (the page shell, long-stable chrome).
+			touchClientPartial(id);
+			// A CONFIRMATION placeholder (fp-skip verdict, `data-partial-confirm`
+			// — see partial.tsx's placeholderFor) for a content slot: the
+			// parked copy is provably current, so it counts as a live
+			// instance again — later stores reconcile in place instead of
+			// dropping the fiber.
+			if (
+				!isCulledKey(mk) &&
+				(node.props as Record<string, unknown>)["data-partial-confirm"] === true
+			) {
+				contentSlotConfirmed(id);
+			}
+		}
 		return;
 	}
 

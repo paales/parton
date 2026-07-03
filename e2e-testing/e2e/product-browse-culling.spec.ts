@@ -43,11 +43,22 @@ async function centeredPage(page: Page) {
   })
 }
 
-// How many page sections currently have products (are "full" — fetched).
+// How many page sections currently SHOW products (are "full"). Culled
+// pages park their product DOM under a hidden Activity (cull-to-park),
+// so presence alone doesn't mean full — a card counts only when it's
+// actually rendered (display:none ancestors give offsetParent === null).
 async function fullPageCount(page: Page) {
   return page.evaluate((cardSel) => {
     let n = 0
-    for (const s of document.querySelectorAll("[data-page]")) if (s.querySelector(cardSel)) n++
+    for (const s of document.querySelectorAll("[data-page]")) {
+      const cards = s.querySelectorAll<HTMLElement>(cardSel)
+      for (const c of cards) {
+        if (c.offsetParent !== null) {
+          n++
+          break
+        }
+      }
+    }
     return n
   }, card)
 }

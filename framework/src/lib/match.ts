@@ -91,13 +91,14 @@ export interface CompiledMatch {
  *  (`live`) and their connection id (`__conn`), commit mode
  *  (`streaming`), the viewport-visibility report set (`visible` — read
  *  by the `visible()` HOOK, a tracked dependency, never a match
- *  dimension), and frame routing (`__frame`, `__frameUrl`). Match never
- *  sees them: the SAME page arrives with and without them (SSR vs
- *  targeted refetch vs live heartbeat), and a wildcard search capture
- *  (`"*q=:query"`) would otherwise swallow them into the named param —
- *  splitting variant identity by transport noise, so a heartbeat render
- *  mints a phantom variant that supersedes (and hides) the real one on
- *  the client. */
+ *  dimension), the culling-flip stamp (`__cullFlip`), and frame
+ *  routing (`__frame`, `__frameUrl`). Match never sees them: the SAME
+ *  page arrives with and without them (SSR vs targeted refetch vs
+ *  live heartbeat), and a wildcard search capture (`"*q=:query"`)
+ *  would otherwise swallow them into the named param — splitting
+ *  variant identity by transport noise, so a heartbeat render mints a
+ *  phantom variant that supersedes (and hides) the real one on the
+ *  client. */
 export const TRANSPORT_PARAMS = [
   "partials",
   "cached",
@@ -107,6 +108,7 @@ export const TRANSPORT_PARAMS = [
   "__conn",
   "__frame",
   "__frameUrl",
+  "__cullFlip",
 ] as const
 
 /** The request URL as the app sees it — transport params stripped. */

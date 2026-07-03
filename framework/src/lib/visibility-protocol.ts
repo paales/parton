@@ -39,6 +39,17 @@ export interface VisibilityReport {
 	/** The complete visible set as of this report. Replaces the
 	 *  connection's set wholesale (no incremental merge). */
 	visible: string[];
+	/** The client's CURRENT cached tokens (`id:matchKey:fp`) for the
+	 *  `changed` ids — its actual holdings at flip time. For a direct
+	 *  flip the driver REPLACES the connection override's entries for
+	 *  the id with these before the lane renders, so the lane's fp-skip
+	 *  verdict is exactly as sound as a reload's `?cached=`: the
+	 *  connection's additive override alone drifts from the client
+	 *  (prunes, evictions, slot overwrites), and a skip against
+	 *  something the client no longer holds would confirm a copy that
+	 *  isn't there — blanking the parton until an unrelated re-render.
+	 *  An id with NO tokens forces its lane to render. */
+	cached: string[];
 }
 
 /** Runtime validation for a decoded report body. */
@@ -52,6 +63,8 @@ export function isVisibilityReport(value: unknown): value is VisibilityReport {
 		Array.isArray(v.changed) &&
 		v.changed.every((x) => typeof x === "string") &&
 		Array.isArray(v.visible) &&
-		v.visible.every((x) => typeof x === "string")
+		v.visible.every((x) => typeof x === "string") &&
+		Array.isArray(v.cached) &&
+		v.cached.every((x) => typeof x === "string")
 	);
 }

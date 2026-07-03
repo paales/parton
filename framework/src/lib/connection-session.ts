@@ -47,6 +47,13 @@ export interface ConnectionSession {
 	 *  send in-view flips first, so lanes for the visible world start
 	 *  before stale cull-outs'. */
 	readonly pendingFlips: Set<string>;
+	/** Per flipped id: the client's cached tokens (`id:matchKey:fp`) as
+	 *  of the report — its ACTUAL holdings, which the driver swaps into
+	 *  the connection's cached override before the flip's lane renders
+	 *  (see the report protocol's `cached` field). Consumed with the
+	 *  flip; a flip that defers past its report drops its tokens (they
+	 *  would be stale by the time the deferred lane runs). */
+	readonly reportedCached: Map<string, string[]>;
 	/** Resolves when a report lands — the segment driver's visibility
 	 *  wake arm. Re-armed by `takeConnectionFlips`. */
 	flipped: Promise<void>;
@@ -73,6 +80,7 @@ export function _openConnectionSession(
 		visible: initialVisible,
 		lastSeq: 0,
 		pendingFlips: new Set(),
+		reportedCached: new Map(),
 		flipped: Promise.resolve(),
 		_signalFlip: () => {},
 	};
@@ -103,10 +111,23 @@ export function reportConnectionVisibility(
 	seq: number,
 	changed: readonly string[],
 	visible: readonly string[],
+	cached?: readonly string[],
 ): boolean {
 	const session = sessions.get(id);
 	if (!session) return false;
-	for (const c of changed) session.pendingFlips.add(c);
+	for (const c of changed) {
+		session.pendingFlips.add(c);
+		// The client's holdings for this flip. An EMPTY list is a
+		// statement ("I hold nothing for this id" — the flip's lane must
+		// render rather than confirm a phantom copy); an ABSENT `cached`
+		// makes no statement and leaves the override as promoted.
+		if (cached !== undefined) {
+			session.reportedCached.set(
+				c,
+				cached.filter((t) => t.startsWith(`${c}:`)),
+			);
+		}
+	}
 	if (seq > session.lastSeq) {
 		session.lastSeq = seq;
 		session.visible = new Set(visible);
@@ -150,6 +171,7 @@ export async function handleVisibilityReport(
 		report.seq,
 		report.changed,
 		report.visible,
+		report.cached,
 	);
 	return new Response(null, { status: applied ? 204 : 404 });
 }

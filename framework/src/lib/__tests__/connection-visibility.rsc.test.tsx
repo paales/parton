@@ -13,9 +13,11 @@
  *      whole-tree first segment (no cold-anchor clobber);
  *   2. a report wakes a lane for EXACTLY the flipped parton, rendered
  *      against the reported set — untouched siblings never re-render;
- *   3. a flip cycle (in → out → in) re-renders every time: the fp a
- *      visibility flip cycles back to must not fp-skip against the
- *      cached override's pre-flip entry;
+ *   3. a flip cycle (in → out → in) settles the returning state with
+ *      fp-skip semantics: each state is its own cache variant
+ *      (cull-to-park), so cycling back to an unchanged state answers
+ *      with the zero-byte confirmation placeholder — the body never
+ *      re-runs for content the client provably holds;
  *   4. a flip whose parton has no route snapshot yet (the report raced
  *      the render that first materializes it) is DEFERRED, not dropped —
  *      it resolves into a lane on a later wake once the snapshot lands;
@@ -180,16 +182,22 @@ describe("connection-session visibility", () => {
 				expect((await decodeLane(laneOut)).bodyText).toContain("b:skeleton:3");
 
 				// …and back IN. The fp b cycles back to is byte-identical to the
-				// one its first flip-in emitted — a stale cached-override entry
-				// would fp-skip this render to a placeholder while the client's
-				// cache slot holds the skeleton. The flip wake drops the id's
-				// override fps, so the body must re-run.
+				// one its first flip-in emitted — and under cull-to-park that is
+				// the ZERO-BYTE flip: the in-view state is its own cache variant
+				// (the client's content slot still holds this exact body), so
+				// the lane answers with the confirmation placeholder instead of
+				// re-running the body. The confirm marker is what re-arms the
+				// restored fiber as a live instance client-side.
 				expect(
 					reportConnectionVisibility(conn, 3, ["cull-b"], ["cull-a", "cull-b"]),
 				).toBe(true);
 				const laneBack = await nextLane(laneIter);
 				expect(laneBack.partonId).toBe("cull-b");
-				expect((await decodeLane(laneBack)).bodyText).toContain("b:full:4");
+				const backBody = (await decodeLane(laneBack)).bodyText;
+				expect(backBody).not.toContain("b:full");
+				expect(backBody).toContain('"data-partial-id":"cull-b"');
+				expect(backBody).toContain('"data-partial-confirm":true');
+				expect(renders.b).toBe(3);
 				expect(renders.a).toBe(1);
 
 				await h.shutdown("cull-b");
@@ -279,10 +287,16 @@ describe("connection-session visibility", () => {
 
 				// The child's flip was deferred, not dropped: the parent lane's
 				// drain is a wake, the child's snapshot now exists, and the
-				// deferred flip resolves into the child's own lane.
+				// deferred flip resolves into the child's own lane. The parent's
+				// materializing render already read the current set, so the
+				// child's fp matches its just-promoted entry and the lane is the
+				// cheap confirmation placeholder — fp-skip as the precise
+				// stale-detector.
 				const childLane = await nextLane(laneIter);
 				expect(childLane.partonId).toBe("cull-child-late");
-				expect((await decodeLane(childLane)).bodyText).toContain("child:full");
+				const childBody = (await decodeLane(childLane)).bodyText;
+				expect(childBody).toContain('"data-partial-id":"cull-child-late"');
+				expect(childBody).toContain('"data-partial-confirm":true');
 
 				await h.shutdown("cull-parent");
 			},
@@ -336,6 +350,7 @@ describe("connection-session visibility", () => {
 					seq: 1,
 					changed: ["a"],
 					visible: ["a"],
+					cached: [],
 				}),
 			);
 			expect(ok.status).toBe(204);
@@ -347,6 +362,7 @@ describe("connection-session visibility", () => {
 					seq: 1,
 					changed: [],
 					visible: [],
+					cached: [],
 				}),
 			);
 			expect(gone.status).toBe(404);

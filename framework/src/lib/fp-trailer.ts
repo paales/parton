@@ -71,12 +71,12 @@ function computeFpUpdates(
   request: Request,
 ): FpUpdatesPayload | null {
   // Per-snapshot side-data we compute once and reuse across folds +
-  // own-fp recompute. parsedVaryInputs goes into queryMatchingTs;
+  // own-fp recompute. constraintSurface goes into queryMatchingTs;
   // contribution is the descendant's contribution string the fold
   // hashes; selfRequest resolves frame redirection once for both the
   // contribution and the recompute.
   interface SideData {
-    parsedVaryInputs: Record<string, unknown> | null
+    constraintSurface: Record<string, unknown> | null
     contribution: string
     selfRequest: Request
     depsKey: string
@@ -84,9 +84,19 @@ function computeFpUpdates(
   const sideById = new Map<string, SideData>()
   for (const [id, snap] of snapshots) {
     const parsedVaryInputs = parseVaryKey(snap.varyKey)
+    // The invalidation constraint surface mirrors the live fold exactly:
+    // match params PLUS the snapshot's bound-cell args. Without the
+    // constraintArgs half, a partition-scoped bump
+    // (`cell:<id>?cx=1&cy=0`) never matches here — the recomputed fp
+    // omits the ts the render-time fold folds, so the "warm" fp this
+    // trailer ships can never equal a future render's candidate for any
+    // spec over partitioned live data.
+    const constraintSurface = snap.constraintArgs
+      ? { ...(parsedVaryInputs ?? {}), ...snap.constraintArgs }
+      : parsedVaryInputs
     const selfRequest =
       snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath, request) : request
-    const ts = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
+    const ts = queryMatchingTs(snap.labels ?? [], constraintSurface)
     const invKey = ts > 0 ? `|inv=${ts}` : ""
     // Tracked-read deps re-read at this request — mirrors the live
     // descendantContribution / own-fp fold in partial.tsx so the warm fp
@@ -96,7 +106,7 @@ function computeFpUpdates(
     // any spec that records no tracked reads.
     const depsKey = evalDepKeys(snap.deps, selfRequest)
     const contribution = `${id}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}${invKey}${depsKey}`
-    sideById.set(id, { parsedVaryInputs, contribution, selfRequest, depsKey })
+    sideById.set(id, { constraintSurface, contribution, selfRequest, depsKey })
   }
 
   // Build the fold map in one pass. Each descendant contributes its
@@ -129,7 +139,7 @@ function computeFpUpdates(
     const recomputed = recomputeFpWithFold(
       id,
       snap,
-      side.parsedVaryInputs,
+      side.constraintSurface,
       folds.get(id) ?? "",
       side.selfRequest.url,
       side.depsKey,
@@ -186,14 +196,14 @@ function parseVaryKey(varyKey: string | undefined): Record<string, unknown> | nu
  * the round-trip. If the formula in `partial.tsx` changes, mirror
  * the change here.
  *
- * `parsedVaryInputs` and `fold` come from the precompute pass in
+ * `constraintSurface` and `fold` come from the precompute pass in
  * `computeFpUpdates`; the helper itself does no JSON parsing or
  * snapshot-map walks.
  */
 function recomputeFpWithFold(
   id: string,
   snap: PartialSnapshot,
-  parsedVaryInputs: Record<string, unknown> | null,
+  constraintSurface: Record<string, unknown> | null,
   fold: string,
   frameRequestUrl: string,
   depsKey: string,
@@ -216,7 +226,7 @@ function recomputeFpWithFold(
   // the term verbatim; its position (between vary and props) must match
   // the live formula exactly.
   const schemaKey = snap.schemaKey ?? ""
-  const invalidationTs = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
+  const invalidationTs = queryMatchingTs(snap.labels ?? [], constraintSurface)
   const invalidationKey = invalidationTs > 0 ? `|inv=${invalidationTs}` : ""
   const ownStructuralFp = hash(
     `${id}|matchKey=${matchKey}|vary=${varyKey}${schemaKey}${propsKey}${invalidationKey}${depsKey}`,
@@ -368,6 +378,14 @@ export function wrapStreamWithFpTrailer(
      *  fires at that parton's completion — and lanes run concurrently,
      *  which the one-sink-per-request slot doesn't model. */
     incremental?: boolean
+    /** Observer for every update entry this response ships. The live
+     *  connection passes one that folds each warm fp into its cached
+     *  override, so the SERVER-side skip check tracks the same
+     *  cold→warm drift the client's `?cached=` heals track — without
+     *  it, a drifted parton (any ancestor of live descendants) can
+     *  never fp-skip on the connection: its promoted emitted fp is
+     *  permanently one drift behind the next render's candidate. */
+    onUpdates?: (updates: FpUpdatesPayload) => void
   },
 ): ReadableStream<Uint8Array> {
   // Capture per-request state at wrap time. The registry ALS is NOT
@@ -412,6 +430,7 @@ export function wrapStreamWithFpTrailer(
     }
     if (Object.keys(delta).length === 0) return
     emitTrailer(controller, delta)
+    opts?.onUpdates?.(delta)
     Object.assign(emitted, delta)
   }
 

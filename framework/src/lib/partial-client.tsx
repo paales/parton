@@ -50,6 +50,7 @@ import {
 	getCurrentPagePartials,
 	getTemplate,
 	getTemplateRoute,
+	notifyLaneCommit,
 	pruneToLive,
 	setTemplate,
 	subscribeLaneCommits,
@@ -117,6 +118,37 @@ interface PartialsClientProps {
  */
 let _walkedChildren: ReactNode = null;
 let _walkComplete = false;
+
+/**
+ * Arrange a re-walk of `children` for the moment its in-flight Flight
+ * rows land. An incomplete walk skips wrappers still inside pending
+ * lazies; without this, those wrappers only reach the cache if a
+ * LATER render happens to re-walk the same children — and on a busy
+ * page (lane commits, serialized culling flushes) a newer payload
+ * replaces `_walkedChildren` first, losing the streamed bytes
+ * permanently: the targeted partial's fresh content never lands, so
+ * its region keeps showing the prior cache entry. Resolving the
+ * captured thenables is the real completion signal.
+ *
+ * The resolution handler only NUDGES a re-render (the lane-commit
+ * channel); the actual re-walk runs inside that render through the
+ * ordinary incomplete-walk path. Walking here, in the microtask,
+ * would force lazy initialization outside React's render lifecycle —
+ * which wedges hydration on pages whose payload streams chunks
+ * progressively (the RemoteFrame routes). Superseded payloads are
+ * skipped — walking a stale payload would overwrite newer cache
+ * entries, the same hazard the `_walkedChildren` guard exists for.
+ */
+function scheduleRewalkOnResolve(
+	children: ReactNode,
+	thenables: readonly PromiseLike<unknown>[],
+): void {
+	if (thenables.length === 0) return;
+	void Promise.allSettled(thenables.map((t) => Promise.resolve(t))).then(() => {
+		if (_walkedChildren !== children || _walkComplete) return;
+		notifyLaneCommit();
+	});
+}
 
 export function PartialsClient({
 	mode = "cache",
@@ -217,12 +249,16 @@ export function PartialsClient({
 		// but whose own region was fp-skipped — leaving `substituteNested`
 		// no entry to fill the placeholder with on the next render.
 		const seen = new Map<string, Set<string>>();
-		const stats: LazyWalkStats = { pending: 0 };
+		const stats: LazyWalkStats = { pending: 0, thenables: [] };
 		cacheFromStreamingChildren(children, cache, seen, stats);
 		// Route this payload renders for — keys the template reuse below so a
 		// cross-route nav never reuses the prior route's template.
 		const route = templateRouteKey();
 		if (stats.pending > 0) {
+			// Re-walk when the in-flight rows land, so this payload's
+			// still-streaming wrappers reach the cache even if a newer
+			// payload replaces `children` before any re-render.
+			scheduleRewalkOnResolve(children, stats.thenables ?? []);
 			// A Flight chunk hadn't arrived when we walked the children tree, so
 			// the cache walk is incomplete — a wrapper inside a pending lazy was
 			// missed. We still must substitute the fp-skipped CHROME (the nav,
@@ -340,9 +376,14 @@ export function PartialsClient({
 	// walk (pending lazy) re-runs so late-resolving wrappers still land.
 	if (!(_walkedChildren === children && _walkComplete)) {
 		_walkedChildren = children;
-		const walkStats: LazyWalkStats = { pending: 0 };
+		const walkStats: LazyWalkStats = { pending: 0, thenables: [] };
 		cacheFromStreamingChildren(children, cache, undefined, walkStats);
 		_walkComplete = walkStats.pending === 0;
+		// Re-walk when the in-flight rows land — a targeted refetch's
+		// still-streaming partial otherwise never reaches the cache if a
+		// newer payload arrives first (its region would keep the prior
+		// content: the lost-pending-walk race).
+		if (!_walkComplete) scheduleRewalkOnResolve(children, walkStats.thenables ?? []);
 	}
 
 	const rendered = renderTemplate(getTemplate(), cache);

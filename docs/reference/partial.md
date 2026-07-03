@@ -293,6 +293,30 @@ rationale in [`../notes/view-culling.md`](../notes/view-culling.md);
 wire mechanics in
 [`../internals/streaming.md`](../internals/streaming.md).
 
+**Cull-to-park.** For a keepalive spec (the default), the culled
+state is a parked VARIANT, not a replacement. The parton renders as
+a stable two-slot pair — a content slot (cache variant `matchKey`)
+and a skeleton slot (variant `matchKey~cull`) — and a culling flip
+is an `<Activity>` mode change on the pair: the out-of-view content
+PARKS (fiber alive, DOM kept, `useState` / `useRef` / DOM state
+preserved, effects unmounted) behind the visible skeleton, and the
+slots swap the moment the observer reports, before any network.
+
+The flip's refetch is a REVALIDATION (`?__cullFlip=1` — the one case
+where an explicit `?partials=` target may fp-skip). The response
+settles the restored copy: an fp match returns the confirmation
+placeholder — zero content bytes, the parked subtree is current —
+while a moved fp (data changed while parked) returns fresh bytes that
+REPLACE the slot and drop the parked fiber (a real remount). Repeat
+flips whose states are unchanged are near-zero-byte round trips: each
+state advertises its own fingerprints.
+
+Parked-by-culling subtrees are budgeted: an LRU of the 64
+most-recently-culled ids keeps its content slots alive; past the
+budget the oldest parked content is destroyed (the skeleton keeps
+holding the space) and a return visit renders cold — the behavior a
+non-keepalive cullable spec (`keepalive: false`) has on every flip.
+
 ### Timing — store-and-reread
 
 Body reads are recorded during the render, but the fp was computed

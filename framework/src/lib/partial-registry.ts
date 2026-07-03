@@ -36,6 +36,7 @@ import {
   getScope,
 } from "../runtime/context.ts"
 import type { CacheOptions } from "./cache-options.ts"
+import { baseKey, culledKey } from "./cull-key.ts"
 import type { WakeHints } from "./current-parton.ts"
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
@@ -152,6 +153,13 @@ export interface PartialSnapshot {
    *  skip. Absent boundary → no time-based wake; fp moves only via
    *  `refreshSelector` (CRUD path). */
   wakeHints?: WakeHints
+  /** This snapshot is the parton's CULLED render (a cullable keepalive
+   *  spec whose `visible()` read was `false`). The culled state is a
+   *  VARIANT — it stores beside the in-view snapshot (`variantKeyOf`
+   *  suffixes the variant key), so each state keeps its own dep
+   *  record and a culling flip's fp folds the record of the state it
+   *  is entering (see `lookupPartial`'s `culled` preference). */
+  culled?: boolean
 }
 
 /** This snapshot's freshness boundary — the live box `expires()` wrote
@@ -202,7 +210,8 @@ function scopeStore(scope: string): ScopeStore {
 }
 
 function variantKeyOf(snap: PartialSnapshot): string {
-  return hash(stableStringify([snap.parentPath, snap.parentFrameChain]))
+  const base = hash(stableStringify([snap.parentPath, snap.parentFrameChain]))
+  return snap.culled ? culledKey(base) : base
 }
 
 function touchHint(store: ScopeStore, routeKey: string, hint: Map<string, string>): void {
@@ -410,7 +419,33 @@ export function registerPartial(id: string, snapshot: PartialSnapshot): void {
   }
 }
 
-export function lookupPartial(id: string): PartialSnapshot | undefined {
+/**
+ * Look up the prior snapshot for `id`.
+ *
+ * `culled` (optional) selects between a cullable spec's two per-state
+ * variants: the in-view record and the `~cull` skeleton record store
+ * side by side under variant keys that differ only by the culled
+ * suffix. Prefer the state the current render is entering — its dep
+ * record is what the fp must fold for the fp-match against the
+ * client's advertised same-state fingerprint. When that state has
+ * never rendered, fall back to the sibling state's snapshot: its deps
+ * are the best available fold surface, and a cross-state fp can never
+ * collide because the `visible:` dep folds a different token per
+ * state — the fallback over-fetches, never serves stale.
+ */
+export function lookupPartial(id: string, culled?: boolean): PartialSnapshot | undefined {
+  const withStatePreference = (
+    variants: Map<string, PartialSnapshot> | undefined,
+    vk: string,
+  ): PartialSnapshot | undefined => {
+    if (!variants) return undefined
+    if (culled === undefined) return variants.get(vk)
+    const base = baseKey(vk)
+    const preferred = culled ? culledKey(base) : base
+    const sibling = culled ? base : culledKey(base)
+    return variants.get(preferred) ?? variants.get(sibling)
+  }
+
   const ctx = registryAls.getStore()
   // Check pending state first — a partial registered in this same
   // request must be visible BEFORE the canonical store is consulted,
@@ -429,7 +464,7 @@ export function lookupPartial(id: string): PartialSnapshot | undefined {
   if (ctx) {
     const pendingVk = ctx.pendingHints.get(id)
     if (pendingVk) {
-      const snap = store.partials.get(id)?.get(pendingVk)
+      const snap = withStatePreference(store.partials.get(id), pendingVk)
       if (snap) return snap
     }
   }
@@ -439,7 +474,7 @@ export function lookupPartial(id: string): PartialSnapshot | undefined {
   const hint = store.hints.get(routeKey)
   const variantKey = hint?.get(id)
   if (!variantKey) return undefined
-  return store.partials.get(id)?.get(variantKey)
+  return withStatePreference(store.partials.get(id), variantKey)
 }
 
 /**

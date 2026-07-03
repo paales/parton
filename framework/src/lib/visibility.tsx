@@ -14,8 +14,11 @@
  *
  * Reports funnel into a module-level controller (mirroring the refetch
  * batch / partial cache — client state lives at module scope, not in
- * context). The controller coalesces a frame's worth of reports and
- * delivers the flips over one of two transports:
+ * context). Every flip is mirrored into the cull-park display state
+ * (`cull-park.ts`) first — the parton's Activity slots swap the moment
+ * the observer reports (see `cull-slot.tsx`); the dispatch below is the
+ * REVALIDATION, not the swap. The controller coalesces a frame's worth
+ * of reports and delivers the flips over one of two transports:
  *
  *   - **Live connection open** (`_getLiveConnectionId()` non-null): a
  *     fire-and-forget POST to the framework's visibility endpoint
@@ -27,16 +30,31 @@
  *     falls the batch back to the reload path.
  *   - **No live connection**: SELF-REFETCH the flipped partons by id,
  *     carrying the full visible set as `?visible=` so each re-rendered
- *     parton's `visible()` reads its own bit. fp-skip prunes the rest.
+ *     parton's `visible()` reads its own bit, stamped `?__cullFlip=1`
+ *     so the explicit targets may fp-skip (the culling revalidation).
  *
- * Both transports serialize: one dispatch in flight, re-firing with the
- * latest set when it changes.
+ * Either way a flipped parton's bytes settle its parked state through
+ * the commit walk: fresh bytes drop the parked fiber, a confirmation
+ * placeholder re-arms it as a live instance (see `cull-park.ts`).
+ * fp-skip prunes the rest. Both transports serialize: one dispatch in
+ * flight, re-firing with the latest set when it changes.
+ *
+ * A cullable parton's observer lives in whichever of its two slots is
+ * currently visible (a hidden Activity unmounts its effects), so a
+ * flip HANDS OFF observation between slots — possibly across render
+ * passes. Observer teardown is therefore refcounted with a post-flush
+ * sweep (`registerCullObserver`), never read as a page departure.
  */
 
 import React, { useEffect, useRef } from "react"
-import { _windowNav } from "./partial-client.tsx"
-import { _getLiveConnectionId, _setLiveConnectionId } from "./partial-client-state.ts"
+import { registerCullObserver, reportCullState } from "./cull-park.ts"
 import type { VisibleOptions } from "./current-parton.ts"
+import {
+	_getLiveConnectionId,
+	_setLiveConnectionId,
+	cachedTokensFor,
+} from "./partial-client-state.ts"
+import { enqueueRefetch } from "./refetch.ts"
 import { VISIBILITY_ENDPOINT, type VisibilityReport } from "./visibility-protocol.ts"
 
 /** How far beyond the viewport a parton counts as "in view" — the runway,
@@ -61,9 +79,9 @@ const POST_FLUSH_BATCH = 256
  *  installed react-dom exposes these; `@types/react` may not type a
  *  Fragment `ref` yet, so we shape it locally and cast at the ref site. */
 interface FragmentInstance {
-  observeUsing(observer: IntersectionObserver): void
-  unobserveUsing(observer: IntersectionObserver): void
-  getClientRects(): DOMRect[]
+	observeUsing(observer: IntersectionObserver): void
+	unobserveUsing(observer: IntersectionObserver): void
+	getClientRects(): DOMRect[]
 }
 
 // ─── Controller (module-level client state) ───────────────────────────
@@ -85,14 +103,17 @@ let rafScheduled = false
 let inFlight = false
 
 /** Report a cullable parton's viewport state. Idempotent per state; only a
- *  real flip schedules a refetch. */
+ *  real flip schedules a dispatch. Every flip also updates the cull-park
+ *  display state, so the parton's Activity slots swap immediately —
+ *  the scheduled dispatch is the revalidation, not the swap. */
 export function reportVisible(id: string, isInView: boolean): void {
-  measured = true
-  if (inView.has(id) === isInView) return
-  if (isInView) inView.add(id)
-  else inView.delete(id)
-  changed.add(id)
-  schedule()
+	measured = true
+	if (inView.has(id) === isInView) return
+	if (isInView) inView.add(id)
+	else inView.delete(id)
+	changed.add(id)
+	reportCullState(id, isInView)
+	schedule()
 }
 
 /** The current visible set as a `?visible=` param value, or `undefined`
@@ -101,8 +122,8 @@ export function reportVisible(id: string, isInView: boolean): void {
  *  connection session starts from the client's measured set and the
  *  whole-tree first segment already renders against it. */
 export function _visibleSetParam(): string | undefined {
-  if (!measured) return undefined
-  return [...inView].join(",")
+	if (!measured) return undefined
+	return [...inView].join(",")
 }
 
 /** Push the full current visible set to a just-established live
@@ -114,132 +135,147 @@ export function _visibleSetParam(): string | undefined {
  *  a failed sync means the connection is gone, which the heartbeat's
  *  own settle path already handles by clearing the id. */
 export function _syncConnectionVisibility(connection: string): void {
-  if (!measured) return
-  void postVisibilityReport(connection, [])
+	if (!measured) return
+	void postVisibilityReport(connection, [])
 }
 
-/** A cullable boundary unmounted (scrolled out of the window entirely).
- *  Drop it from the set so `?visible=` doesn't carry a stale id — but
- *  don't refetch it (it's gone); the cleanup rides the next real flush. */
-export function reportGone(id: string): void {
-  inView.delete(id)
-  changed.delete(id)
+/** Every observer of a cullable parton released past a commit flush.
+ *  Drop it from the live set so the visible set doesn't carry a stale
+ *  id. `changed` is deliberately NOT touched: a pending flip must still
+ *  revalidate. Observer teardown is not a page-departure signal — an
+ *  Activity flip can unmount one slot's observer in an earlier render
+ *  pass than it mounts the other's, so the count passes through zero
+ *  while the parton is very much on the page; cancelling its pending
+ *  flip here would strand a restored subtree unrevalidated. A truly
+ *  departed id costs at most one harmless extra dispatch target, and
+ *  the hygiene self-heals: a re-mounting observer's initial
+ *  IntersectionObserver callback re-reports the id. Page-membership
+ *  teardown for the cull-park state rides the merge layer's prune
+ *  instead (see `cull-park.ts`). */
+function reportGone(id: string): void {
+	inView.delete(id)
 }
 
 function schedule(): void {
-  if (rafScheduled || typeof requestAnimationFrame === "undefined") return
-  rafScheduled = true
-  requestAnimationFrame(() => {
-    rafScheduled = false
-    void flush()
-  })
+	if (rafScheduled || typeof requestAnimationFrame === "undefined") return
+	rafScheduled = true
+	requestAnimationFrame(() => {
+		rafScheduled = false
+		void flush()
+	})
 }
 
 async function flush(): Promise<void> {
-  // Serialize: one dispatch in flight. Newer flips accumulate in `changed`
-  // and fire when it lands (the `finally` re-checks).
-  if (inFlight || changed.size === 0) return
+	// Serialize: one dispatch in flight. Newer flips accumulate in `changed`
+	// and fire when it lands (the `finally` re-checks).
+	if (inFlight || changed.size === 0) return
 
-  // Live connection open: deliver the flips as a fire-and-forget report
-  // POST. The response carries no body — the flipped partons' bytes come
-  // down the live stream as lane segments. No navigation-transition
-  // deferral here: a report commits nothing client-side, so it cannot
-  // supersede or tear a mid-flight route swap the way a reload can.
-  const connection = _getLiveConnectionId()
-  if (connection !== null) {
-    // Viewport first — the same rule as the reload path below: flips the
-    // user can SEE outrank stale cull-outs, both across batches (the cap
-    // slices in-view flips first) and within one report (the server
-    // starts lanes in `changed` order, so in-view renders lead).
-    const all = [...changed]
-    const inViewFlips = all.filter((id) => inView.has(id))
-    const outFlips = all.filter((id) => !inView.has(id))
-    const ordered = [...inViewFlips, ...outFlips]
-    const targets = ordered.slice(0, POST_FLUSH_BATCH)
-    changed = new Set(ordered.slice(POST_FLUSH_BATCH))
-    inFlight = true
-    try {
-      const delivered = await postVisibilityReport(connection, targets)
-      if (!delivered) {
-        // The server's explicit "connection not open" signal (or the
-        // POST never reached it). Clear the published id so the batch —
-        // and everything after it, until the heartbeat re-establishes —
-        // rides the render-reload fallback.
-        if (_getLiveConnectionId() === connection) _setLiveConnectionId(null)
-        for (const id of targets) changed.add(id)
-      }
-    } finally {
-      inFlight = false
-      if (changed.size > 0) schedule()
-    }
-    return
-  }
+	// Live connection open: deliver the flips as a fire-and-forget report
+	// POST. The response carries no body — the flipped partons' bytes come
+	// down the live stream as lane segments. No navigation-transition
+	// deferral here: a report commits nothing client-side, so it cannot
+	// supersede or tear a mid-flight route swap the way a reload can.
+	const connection = _getLiveConnectionId()
+	if (connection !== null) {
+		// Viewport first — the same rule as the reload path below: flips the
+		// user can SEE outrank stale cull-outs, both across batches (the cap
+		// slices in-view flips first) and within one report (the server
+		// starts lanes in `changed` order, so in-view renders lead).
+		const all = [...changed]
+		const inViewFlips = all.filter((id) => inView.has(id))
+		const outFlips = all.filter((id) => !inView.has(id))
+		const ordered = [...inViewFlips, ...outFlips]
+		const targets = ordered.slice(0, POST_FLUSH_BATCH)
+		changed = new Set(ordered.slice(POST_FLUSH_BATCH))
+		inFlight = true
+		try {
+			const delivered = await postVisibilityReport(connection, targets)
+			if (!delivered) {
+				// The server's explicit "connection not open" signal (or the
+				// POST never reached it). Clear the published id so the batch —
+				// and everything after it, until the heartbeat re-establishes —
+				// rides the render-reload fallback.
+				if (_getLiveConnectionId() === connection) _setLiveConnectionId(null)
+				for (const id of targets) changed.add(id)
+			}
+		} finally {
+			inFlight = false
+			if (changed.size > 0) schedule()
+		}
+		return
+	}
 
-  // Reload fallback (no live connection): culling is a POST-SETTLE
-  // operation. A refetch fired while a page navigation is still
-  // committing supersedes it and tears the route swap — the old route
-  // stays visible and the new one never lands (the IO fires as the new
-  // route's cold partons mount, i.e. mid-navigation). Defer until the
-  // in-flight navigation finishes, then re-flush. `navigation.transition`
-  // is the real signal (non-null only while a navigation is committing),
-  // so this doesn't guess.
-  const transition = (
-    window as unknown as { navigation?: { transition?: { finished: Promise<unknown> } | null } }
-  ).navigation?.transition
-  if (transition) {
-    transition.finished.then(schedule, schedule)
-    return
-  }
-  // Viewport first: flips the user can SEE (currently in view — their
-  // content needs to paint) outrank flips for partons already scrolled
-  // past (their cull-to-shell can wait). A continuous scroll otherwise
-  // buries the live viewport at the tail of a FIFO of stale cull-outs
-  // and the visible world stops filling until the queue drains.
-  const all = [...changed]
-  const inViewFlips = all.filter((id) => inView.has(id))
-  const outFlips = all.filter((id) => !inView.has(id))
-  const targets = [...inViewFlips, ...outFlips].slice(0, FLUSH_BATCH)
-  changed = new Set([...inViewFlips, ...outFlips].slice(FLUSH_BATCH))
-  inFlight = true
-  try {
-    await _windowNav().reload({
-      selector: targets.map((id) => `#${id}`),
-      params: { visible: [...inView].join(",") },
-    }).finished
-  } catch {
-    // AbortError on supersede / NavigationError on a racing nav — both
-    // benign here; the next flush re-fires with the current set.
-  } finally {
-    inFlight = false
-    if (changed.size > 0) schedule()
-  }
+	// Reload fallback (no live connection): culling is a POST-SETTLE
+	// operation. A refetch fired while a page navigation is still
+	// committing supersedes it and tears the route swap — the old route
+	// stays visible and the new one never lands (the IO fires as the new
+	// route's cold partons mount, i.e. mid-navigation). Defer until the
+	// in-flight navigation finishes, then re-flush. `navigation.transition`
+	// is the real signal (non-null only while a navigation is committing),
+	// so this doesn't guess.
+	const transition = (
+		window as unknown as { navigation?: { transition?: { finished: Promise<unknown> } | null } }
+	).navigation?.transition
+	if (transition) {
+		transition.finished.then(schedule, schedule)
+		return
+	}
+	// Viewport first: flips the user can SEE (currently in view — their
+	// content needs to paint) outrank flips for partons already scrolled
+	// past (their cull-to-shell can wait). A continuous scroll otherwise
+	// buries the live viewport at the tail of a FIFO of stale cull-outs
+	// and the visible world stops filling until the queue drains.
+	const all = [...changed]
+	const inViewFlips = all.filter((id) => inView.has(id))
+	const outFlips = all.filter((id) => !inView.has(id))
+	const targets = [...inViewFlips, ...outFlips].slice(0, FLUSH_BATCH)
+	changed = new Set([...inViewFlips, ...outFlips].slice(FLUSH_BATCH))
+	inFlight = true
+	try {
+		await enqueueRefetch({
+			labels: targets,
+			streaming: false,
+			live: false,
+			cullFlip: true,
+			params: { visible: [...inView].join(",") },
+		}).finished
+	} catch {
+		// AbortError on supersede / NavigationError on a racing nav — both
+		// benign here; the next flush re-fires with the current set.
+	} finally {
+		inFlight = false
+		if (changed.size > 0) schedule()
+	}
 }
 
 /** POST one visibility report to the framework endpoint. `true` iff the
  *  server applied it (`204`); `false` on any other answer or a network
  *  failure — the caller's fall-back-to-reload signal. */
 async function postVisibilityReport(
-  connection: string,
-  changedIds: string[],
+	connection: string,
+	changedIds: string[],
 ): Promise<boolean> {
-  const report: VisibilityReport = {
-    connection,
-    seq: ++reportSeq,
-    changed: changedIds,
-    visible: [...inView],
-  }
-  try {
-    const res = await fetch(VISIBILITY_ENDPOINT, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(report),
-      // Fire-and-forget: let an in-flight report survive a page unload.
-      keepalive: true,
-    })
-    return res.status === 204
-  } catch {
-    return false
-  }
+	const report: VisibilityReport = {
+		connection,
+		seq: ++reportSeq,
+		changed: changedIds,
+		visible: [...inView],
+		// The client's actual holdings for the flipped ids — what the
+		// server may confirm with a placeholder instead of re-rendering.
+		cached: cachedTokensFor(changedIds),
+	}
+	try {
+		const res = await fetch(VISIBILITY_ENDPOINT, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(report),
+			// Fire-and-forget: let an in-flight report survive a page unload.
+			keepalive: true,
+		})
+		return res.status === 204
+	} catch {
+		return false
+	}
 }
 
 // ─── Boundary observer ────────────────────────────────────────────────
@@ -256,47 +292,52 @@ async function postVisibilityReport(
  * the observer starts only on the client, in an effect.
  */
 export function VisibilityObserver({
-  id,
-  options,
-  children,
+	id,
+	options,
+	children,
 }: {
-  id: string
-  options?: VisibleOptions
-  children: React.ReactNode
+	id: string
+	options?: VisibleOptions
+	children: React.ReactNode
 }): React.ReactNode {
-  const ref = useRef<FragmentInstance | null>(null)
-  const rootMargin = options?.rootMargin ?? RUNWAY
-  useEffect(() => {
-    const inst = ref.current
-    if (!inst || typeof inst.observeUsing !== "function") return
-    // An IO callback batch contains only the nodes whose intersection
-    // CHANGED — with many observed children (a fragment of chunk
-    // subtrees), one leaving node must not read as "the whole parton
-    // left". Track per-node state and report the aggregate.
-    const nodeState = new Map<Element, boolean>()
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) nodeState.set(e.target, e.isIntersecting)
-        for (const el of [...nodeState.keys()]) {
-          if (!el.isConnected) nodeState.delete(el)
-        }
-        reportVisible(id, [...nodeState.values()].some(Boolean))
-      },
-      { rootMargin },
-    )
-    inst.observeUsing(io)
-    return () => {
-      try {
-        inst.unobserveUsing(io)
-      } catch {
-        // unobserve after the fragment's nodes already left the tree
-      }
-      io.disconnect()
-      reportGone(id)
-    }
-  }, [id, rootMargin])
-  // `ref` on a Fragment yields a FragmentInstance (React 19.3). Built via
-  // `createElement` so the ref prop isn't gated by the JSX intrinsic types
-  // (the installed react-dom supports it even where `@types/react` doesn't).
-  return React.createElement(React.Fragment, { ref } as never, children)
+	const ref = useRef<FragmentInstance | null>(null)
+	const rootMargin = options?.rootMargin ?? RUNWAY
+	useEffect(() => {
+		const inst = ref.current
+		if (!inst || typeof inst.observeUsing !== "function") return
+		// This slot now observes the parton. A culling flip hands the
+		// observation to the parton's other slot; the refcount + sweep
+		// distinguishes that handoff from the parton actually leaving
+		// the page.
+		const release = registerCullObserver(id, reportGone)
+		// An IO callback batch contains only the nodes whose intersection
+		// CHANGED — with many observed children (a fragment of chunk
+		// subtrees), one leaving node must not read as "the whole parton
+		// left". Track per-node state and report the aggregate.
+		const nodeState = new Map<Element, boolean>()
+		const io = new IntersectionObserver(
+			(entries) => {
+				for (const e of entries) nodeState.set(e.target, e.isIntersecting)
+				for (const el of [...nodeState.keys()]) {
+					if (!el.isConnected) nodeState.delete(el)
+				}
+				reportVisible(id, [...nodeState.values()].some(Boolean))
+			},
+			{ rootMargin },
+		)
+		inst.observeUsing(io)
+		return () => {
+			try {
+				inst.unobserveUsing(io)
+			} catch {
+				// unobserve after the fragment's nodes already left the tree
+			}
+			io.disconnect()
+			release()
+		}
+	}, [id, rootMargin])
+	// `ref` on a Fragment yields a FragmentInstance (React 19.3). Built via
+	// `createElement` so the ref prop isn't gated by the JSX intrinsic types
+	// (the installed react-dom supports it even where `@types/react` doesn't).
+	return React.createElement(React.Fragment, { ref } as never, children)
 }

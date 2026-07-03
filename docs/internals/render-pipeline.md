@@ -103,7 +103,9 @@ placeholder instead of the body only when ALL of these hold:
   (always-authoritative surfaces like the CMS editor chrome do);
 - the request's `?cached=` set contains the computed fp;
 - the id is not an explicit `?partials=` target — an explicit
-  refetch must re-render;
+  refetch must re-render — UNLESS the request carries `?__cullFlip=1`
+  (a culling revalidation; the skip's placeholder is the
+  restore-with-zero-bytes confirmation — see *Cull-to-park*);
 - the spec wasn't called with `children`: a transparent wrapper's
   output IS its children, which the JSX parent renders directly,
   so there is nothing for fp-skip to gate;
@@ -208,9 +210,10 @@ Client merge layer:
 
 | Module | Owns |
 |---|---|
-| `partial-client-state.ts` | ALL module-level mutable state, behind accessors: the partial cache + fingerprint maps (`cacheStore`, `registerClientPartial`, `_applyFpUpdates`, `getCachedPartialIds`, `pruneToLive`; the `?cached=` manifest is doubly bounded — `FP_CAP_PER_VARIANT` fps per variant, `CACHED_MANIFEST_CAP` entries total newest-registration-first, since it travels in the request URL and a many-parton page would otherwise blow the server's request-line limit), the persisted template (`getTemplate` / `setTemplate`), the lane-commit subscription (`subscribeLaneCommits` / `notifyLaneCommit`), the in-flight registry (`abortPredecessors` — frame long-polls only), and the frame-URL cache. |
-| `partial-cache.ts` | The tree walks: wrapper/placeholder detection, `harvestPartialIds`, `cacheFromStreamingChildren`, `substituteNested`, `unwrapLazy` + the `LAZY_PENDING` sentinel, `treeHasPendingLazy`, warm-preload (`_warmCacheFromPayload`), the per-parton lane commit (`_commitPartonLane` — synchronous cache walk + fp updates + the notify that re-renders `PartialsClient`; see [streaming.md](./streaming.md)) and the fp-trailer DOM scan. |
+| `partial-client-state.ts` | ALL module-level mutable state, behind accessors: the partial cache + fingerprint maps (`cacheStore`, `registerClientPartial`, `touchClientPartial`, `_applyFpUpdates`, `getCachedPartialIds`, `pruneToLive`; the `?cached=` manifest is doubly bounded — `FP_CAP_PER_VARIANT` fps per variant, `CACHED_MANIFEST_CAP` entries total, parked-by-culling ids first (`_setManifestPriorityIds`) then newest-sighting-first, since it travels in the request URL and a many-parton page would otherwise blow the server's request-line limit; `CLIENT_POOL_CAP` bounds distinct ids, aging out the least-recently-sighted — every walk touches the ids it sees, so recency means "still emitted by commits"), the id-pruned listener (`_setIdPrunedListener` — the page-membership teardown signal cull-park registers on), the persisted template (`getTemplate` / `setTemplate`), the lane-commit subscription (`subscribeLaneCommits` / `notifyLaneCommit`), the in-flight registry (`abortPredecessors` — frame long-polls only), and the frame-URL cache. |
+| `partial-cache.ts` | The tree walks: wrapper/placeholder detection, `harvestPartialIds`, `cacheFromStreamingChildren`, `substituteNested`, `unwrapLazy` + the `LAZY_PENDING` sentinel (pending lazies' Flight chunks are captured into `LazyWalkStats.thenables` so `PartialsClient` can arrange a re-walk when they land), `treeHasPendingLazy`, warm-preload (`_warmCacheFromPayload`), the per-parton lane commit (`_commitPartonLane` — synchronous cache walk + fp updates + the notify that re-renders `PartialsClient`; see [streaming.md](./streaming.md)) and the fp-trailer DOM scan. |
 | `partial-template.tsx` | `deriveTemplate` + `renderTemplate`. |
+| `cull-key.ts` / `cull-park.ts` / `cull-slot.tsx` | Cull-to-park (see the section below): the `~cull` variant-key grammar; the client pool state (reported viewport per id, the parked-by-culling LRU + `CULL_PARK_CAP`, the drop-on-drift generation + `parkedSince`, the observer refcount); the `CullSlot` client component (the pair's `<Activity>` slots, modes from the reported state). |
 | `refetch.ts` | `enqueueRefetch` (microtask-batched targeted refetch → `?partials=`), selector parsing, the silent-navigation info brand. |
 | `refetch-ordering.ts` | The per-selector monotonic issue sequence (`nextRefetchSeq` / `claimRefetchCommit`) — see *Selector-refetch commit ordering*. |
 | `frame-client.tsx` | The frames tree on the nav entry (read/write + the write serialiser), `FrameNameProvider`, frame refetch dispatch, and the window/frame imperative handle builders. |
@@ -381,10 +384,11 @@ Wire params:
 | `__conn` | The live connection's session id (heartbeat-minted; keys the connection-session state visibility reports address) |
 | `__frame=...&__frameUrl=...` | session-write a frame URL before render |
 | `visible` | The viewport-report id set `visible()` reads — on a live request it seeds the connection session's set |
+| `__cullFlip` | The visibility controller's revalidation stamp on the reload fallback — its explicit `?partials=` targets may fp-skip (see *Cull-to-park*) |
 | `__populateCache` | Post-action full render that repopulates the client cache without treating `?partials=` as a filter |
 
 `partials`, `cached`, `live`, `streaming`, `visible`, `__conn`,
-`__frame` and `__frameUrl` are the `TRANSPORT_PARAMS`
+`__cullFlip`, `__frame` and `__frameUrl` are the `TRANSPORT_PARAMS`
 (`lib/match.ts`) — `match` never sees them. `visible` is still a real
 request dimension — the `visible()` HOOK reads it (session-first, URL
 fallback) and it folds into fps — it is only invisible to match
@@ -406,6 +410,81 @@ snapshot whose label list contains a wanted token. Unmatched tokens
 trigger a streaming-mode fallback (so a fresh range expansion like
 `?end=N+1` re-renders the page rather than producing a registry
 miss).
+
+## Cull-to-park
+
+A cullable keepalive parton (a `visible()` reader — see
+[`partial.md`](../reference/partial.md#view-culling--visible)) treats
+its culled state as a parked VARIANT rather than a replacement. The
+moving parts, end to end:
+
+- **The `~cull` variant** (`lib/cull-key.ts`). A culled render (the
+  request's `?visible=` set excludes the id, cullability proven by the
+  prior dep record) carries `matchKey~cull` as its wire matchKey and
+  registers a per-state snapshot (the registry variant key gains the
+  same suffix — see
+  [`registry-internals.md`](./registry-internals.md)). Both states
+  ride the ordinary `(id, matchKey)` machinery side by side — cache
+  slots, advertised fps, placeholders — and each state's dep record
+  folds its own fingerprint (`lookupPartial(id, culled)` prefers the
+  state being entered, falling back to the sibling; a cross-state fp
+  can never collide because the `visible:` dep folds a distinct token
+  per state).
+- **The pair** (`emitCullPair` in `partial.tsx`, `lib/cull-slot.tsx`).
+  Every emission of a cullable keepalive parton — fresh, fp-skip,
+  match-miss park — is a stable two-slot structure: a content
+  `<CullSlot>` (base variant) and a skeleton `<CullSlot>` (`~cull`
+  variant), each wrapping its child in an `<Activity>`. The off
+  slot always emits its placeholder hole (the mounted pair lives in
+  the persisted template or an ancestor's cached wrapper; a later
+  flip's bytes can only reach the tree through a hole). A culling
+  flip is a MODE change on the two Activities, computed client-side
+  from the visibility controller's reported state
+  (`useSyncExternalStore` over `cull-park.ts`) — the flip shows the
+  moment the observer reports; the content slot stays visible until a
+  skeleton exists to hold the space.
+- **The revalidation.** With a live connection open, flips ride the
+  connection as session state (a visibility-report POST; the flipped
+  partons come back as lane segments — see
+  [`streaming.md`](./streaming.md)); otherwise the controller's flush
+  fires the reload fallback (`enqueueRefetch({cullFlip: true})`),
+  which keeps its targets' `?cached=` tokens (a normal explicit
+  target's are stripped) and stamps `?__cullFlip=1`, letting the
+  explicit targets fp-skip. On either transport the render reads the
+  connection's CURRENT visible set, so an fp match answers with a
+  CONFIRMATION placeholder (`data-partial-confirm` — a cull-capable
+  spec's skip verdict at a MEASURED visible set, distinct from a
+  plain hole; an unmeasured skip says nothing about a parked fiber's
+  state and carries no marker); a moved fp answers with fresh bytes.
+  Flip lanes keep their promoted fps — the per-state variants make an
+  fp-skip restore the right state's body by construction.
+- **Drop-on-drift** (`cull-park.ts`). The content slot's `<Activity>`
+  is keyed by a per-id GENERATION. A fresh content store for an id
+  whose mounted fiber has been parked since its bytes were minted
+  (`parkedSince` — set on the cull-out report, cleared by the
+  confirmation placeholder or consumed by the bump) bumps the
+  generation: the parked fiber is dropped and the fresh bytes mount
+  as a real remount. Ordinary in-view live updates reconcile in
+  place. Both signals ride the commit walk, so the two outcomes of a
+  revalidation cannot race each other.
+- **The parked budget** (`CULL_PARK_CAP`, 64). Culled ids form an
+  LRU (most-recently-culled kept); past the cap the oldest id's
+  content slots are destroyed (`evictCulledContent` — the `~cull`
+  skeleton entries survive, so the visible skeleton keeps holding the
+  parton's space) and its next return renders cold. Parked ids also
+  hold `?cached=` manifest slots ahead of the recency walk
+  (`_setManifestPriorityIds`): on a busy live page, lane
+  registrations would otherwise churn a parked id out of the manifest
+  and its restore could never be fp-confirmed.
+- **Page-membership teardown.** All per-id cull state dies when the
+  merge layer's prune drops the id's last cache/fp entries
+  (`_setIdPrunedListener`) — observer lifecycles are NOT that signal:
+  an Activity flip can unmount one slot's observer in a different
+  render pass than it mounts the other's, so the visibility
+  controller's gone-handling only clears the live `?visible=` set
+  (self-healing — a re-mounting observer's initial
+  IntersectionObserver callback re-reports) and never cancels a
+  pending flip.
 
 ## Selector-refetch commit ordering
 
