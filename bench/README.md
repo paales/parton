@@ -15,7 +15,7 @@ yarn bench:server                 # full matrix, DEV Flight → table + JSON
 yarn bench:server --prod          # full matrix, PRODUCTION Flight → .prod.json
 yarn bench:server --prof          # profile scaling/N=1000 under Node --cpu-prof
 yarn bench:server --prod --prof   # profile the PRODUCTION runtime
-yarn bench:server --only=depth    # one category (scaling | dashboard | depth | pulse)
+yarn bench:server --only=depth    # one category (scaling | dashboard | depth | pulse | soak)
 yarn bench:server --only=scaling/N=1000   # one exact scenario
 yarn bench:server --warmup=20 --measure=200   # shorter run while iterating
 ```
@@ -136,7 +136,8 @@ Which to use:
 | **scaling** (headline) | N ∈ {10, 50, 100, 500, 1000} | M=1, D=2 | warm-tick µs vs world size — the O(tree) tax curve |
 | **dashboard** | M ∈ {1, 10, 50, 200} | N=200, D=2 | cost per tick as change-density rises; each tick bumps ALL M cells so one segment carries M changes and the fixed overhead amortizes |
 | **depth** | D ∈ {1, 4, 16} | N=100, M=1 | descendant-fold cost of proving a deep subtree unchanged |
-| **pulse** | soak ∈ {512, 20k} | N=M=512, D=2, one shared cell | invalidation-registry query cost under ticker history — the two rows must cost the same |
+| **pulse** | bump history ∈ {512, 20k} | N=M=512, D=2, one shared cell | invalidation-registry query cost under ticker history — the two rows must cost the same |
+| **soak** | N ∈ {100, 1000, 5000} × M ∈ {0, N/10} | 3 partons/connection | per-HELD-CONNECTION cost: steady-state heap/RSS, idle wake-filter CPU, per-wake tick CPU — see [soak](#soak--what-a-held-live-connection-costs) |
 
 The fixture is `buildDashboardPage({ partons: N, liveCells: M, depth: D })`
 (`bench/server/fixture.tsx`): N addressable leaf partons, M of them live
@@ -159,6 +160,89 @@ per (name, constraints) pair, so bump history must not change fold
 cost — if `+20k` costs more than `P=512`, registry queries are
 scaling with bump count instead of partition cardinality.
 
+## soak — what a held live connection costs
+
+The warm-tick categories price a TICK; the soak category prices a
+CONNECTION — the number a channel-as-primary-transport decision needs.
+It opens N real live subscriptions in-process (each the full production
+shape: `runWithRequestAsync` request scope, `driveSegmentedResponse`,
+connection session via `?__conn=`, per-parton lanes, parked at the wake
+race) and holds them while measuring. Kernel-side per-connection cost
+(sockets, TLS, HTTP framing) is a known constant and deliberately OUT
+of scope — the client end is an in-process discarding reader; what's
+measured is the FRAMEWORK's share: the request ALS scope, the
+connection session, the parked driver's promise/timer graph, the
+route's snapshots + cached-override maps, and the per-bump wake-filter
+scan.
+
+Each connection serves its own 3-parton page (1 live leaf + 1 static
+leaf + 1 wrapper, id-prefixed) in its own state bucket — a
+per-connection `x-test-scope`, the framework's existing seam for
+isolating process-wide snapshot buckets — so one cell bump is relevant
+to exactly one connection; the other N−1 wake, run the relevance
+filter over their own snapshots, and re-arm without rendering. The
+scope seam is dev-only, so **soak is a dev-Flight category**: it probes
+the seam up front and hard-fails under `--prod` rather than silently
+measuring cross-talk (the dev→prod lane-render ratio is already
+characterized by the main table).
+
+Per scenario (N connections, M = N/10 or 0 active):
+
+- **heap/c, rss/c** — post-gc per-connection footprint: heapUsed / RSS
+  delta between "fixtures built" and "all N parked", ÷ N. A throwaway
+  connection opens (and closes) before the baseline so one-time lazy
+  initialization isn't attributed to the held set. RSS is
+  page-granular, includes allocator slack, and rarely shrinks — it is
+  process-CUMULATIVE, so scenarios after the first in one worker can
+  report near-zero deltas (they reuse pages an earlier scenario
+  retained); read the worker's FIRST scenario as the honest RSS bound.
+  Post-gc heap needs a real `global.gc`; the CLI passes `--expose-gc`
+  via NODE_OPTIONS.
+- **idle µs** — the idle keepalive path: CPU per IRRELEVANT
+  `refreshSelector` across all N. Every bump wakes every parked
+  driver's bump arm; each scans its own snapshots
+  (`routeHasRelevantBump`), misses, and re-arms fresh wake promises +
+  keepalive timer without rendering a thing. This is the standing tax
+  bump traffic levies on every held connection.
+- **p50 / cpu / µs/lane / tick B** — a wake tick: M cell bumps fired in
+  one synchronous batch (one wake round for every driver), completing
+  at the Mth `settled` marker. Wall p50 is the client-observable wake
+  latency; cpu is process-CPU per tick (including the N−M idle scans);
+  µs/lane amortizes it per delivered lane.
+- **B/wake** — heap a parked connection accretes per wake round
+  (post-gc drift ÷ wakes). Non-zero today (~1 KB): each re-arm of the
+  parked driver's wake race attaches fresh reactions to the
+  connection's long-lived `laneDrained` / visibility-flip promises,
+  which only release when those promises settle — so a parked
+  connection's heap grows with bump traffic. Production bounds the
+  accumulation via the 20s keepalive; the soak widens the keepalive
+  (`_setKeepaliveMs`, a bench-visible override in
+  `segmented-response.ts` — the production window is shorter than a
+  5000-connection scenario's span), which is what makes it measurable.
+
+The correctness gate, in the spirit of the warm-tick one, proves the
+measurement is what it claims before any number is trusted:
+
+- **Idle connections render NOTHING between wakes** — the module-level
+  render counter must not move across the idle-bump phase. Zero, not
+  "small".
+- **A tick renders exactly M bodies** — the M bumped leaves lane;
+  no sibling, no wrapper, no other connection runs. Checked on the gate
+  tick and on every measured tick.
+- **Every connection stays held to teardown** — a drive loop exiting
+  early (keepalive, crash) would silently shrink N under the
+  measurement.
+
+The run **hard-fails** on any violation. Park and tick completion are
+detected from the driver's own wire milestones — the `lanes` marker
+(switched to per-parton lanes, parked at the wake race) and the
+`settled` marker (a wake's lanes fully drained) — never from timing.
+
+Soak ticks are far heavier than warm ticks (one tick = M lane renders
+plus N−M wake-filter scans), so the category has its own defaults
+(warmup=5, measure=30); explicit `--warmup`/`--measure` apply to soak
+too. The `measure` count doubles as the idle-phase bump count.
+
 ## Reading the numbers
 
 The stdout table (and the JSON artifact) report, per scenario:
@@ -177,7 +261,9 @@ The stdout table (and the JSON artifact) report, per scenario:
 
 Each run writes a JSON artifact with every scenario's numbers plus a
 **git SHA** + **node version** + **`runtime`** (dev/prod) + warmup/measure
-settings, so two runs are directly comparable over time. The path depends
+settings, so two runs are directly comparable over time. Soak results
+ride the same artifact in their own `soak` array (their axes differ
+from the warm-tick scenarios). The path depends
 on the runtime so the dev and prod baselines coexist:
 
 - dev (default) → `bench/results/server-warm-tick.json`

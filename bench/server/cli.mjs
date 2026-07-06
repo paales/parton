@@ -68,8 +68,11 @@ if (prod) {
 // The vendored Flight server's internal `require("react")` goes through
 // Node's CJS resolver, which ignores Vite conditions — so set the
 // condition process-wide, exactly as `test:rsc` does. (The prof fork
-// also sets it via execArgv; harmless to set both.)
-const baseNodeOptions = ["--conditions=react-server"]
+// also sets it via execArgv; harmless to set both.) `--expose-gc` gives
+// the soak category's post-gc heap samples a real `global.gc` — it is
+// one of the V8 flags NODE_OPTIONS accepts, and it reaches the vitest
+// worker the same way the condition does.
+const baseNodeOptions = ["--conditions=react-server", "--expose-gc"]
 
 // Pick the config: the prof variant runs in a single forked child whose
 // execArgv carries --cpu-prof (so the profile captures the render work,

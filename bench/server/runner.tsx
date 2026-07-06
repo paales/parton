@@ -116,8 +116,9 @@ export interface RunOptions {
 const URL_BASE = "http://bench/dashboard"
 
 /** Reset all process-global framework state so scenarios don't leak into
- *  each other (registries, route-key cache, cell storage). */
-function resetWorld(): void {
+ *  each other (registries, route-key cache, cell storage). Shared with
+ *  the soak runner. */
+export function resetWorld(): void {
   setCellStorage(new MemoryCellStorage())
   clearRegistry("all")
   _clearInvalidationRegistry()
@@ -134,12 +135,15 @@ async function renderAndDrain(node: ReactNode): Promise<number> {
 }
 
 /** Yield a full macrotask so the host's event loop (timers, worker RPC)
- *  gets a turn between batches of ticks. */
-function yieldEventLoop(): Promise<void> {
+ *  gets a turn between batches of ticks. A macrotask also runs strictly
+ *  after every pending microtask, so awaiting one guarantees that any
+ *  already-resolved promise continuation (a woken segment driver's
+ *  relevance scan and re-arm) has fully run. */
+export function yieldEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-function percentile(sortedAsc: number[], p: number): number {
+export function percentile(sortedAsc: number[], p: number): number {
   if (sortedAsc.length === 0) return 0
   const idx = Math.min(sortedAsc.length - 1, Math.floor((p / 100) * sortedAsc.length))
   return sortedAsc[idx]

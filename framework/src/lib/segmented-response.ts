@@ -80,7 +80,20 @@ import {
  *  Bumped to 20s — long enough that most realtime updates land
  *  without a reconnect, short enough that idle connections don't
  *  pile up. */
-const KEEPALIVE_MS = 20_000;
+const DEFAULT_KEEPALIVE_MS = 20_000;
+
+/** Active keepalive window. Mutable only through `_setKeepaliveMs`:
+ *  the soak benchmark parks thousands of in-process connections for
+ *  longer than the production window, and an idle connection closing
+ *  mid-measurement would silently shrink the held set under it.
+ *  Production code never changes this. */
+let KEEPALIVE_MS = DEFAULT_KEEPALIVE_MS;
+
+/** Test/bench-visible keepalive override. Call with no argument to
+ *  restore the default. */
+export function _setKeepaliveMs(ms?: number): void {
+	KEEPALIVE_MS = ms ?? DEFAULT_KEEPALIVE_MS;
+}
 
 /**
  * The response stream's demand signal — the real backpressure wake.

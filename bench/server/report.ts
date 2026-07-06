@@ -7,6 +7,7 @@
  */
 
 import type { ScenarioResult } from "./runner.tsx"
+import type { SoakScenarioResult } from "./soak-runner.ts"
 
 export interface BenchArtifact {
   generatedAt: string
@@ -20,6 +21,9 @@ export interface BenchArtifact {
   warmup: number
   measure: number
   results: ScenarioResult[]
+  /** Held-connection soak category (its axes differ from the warm-tick
+   *  scenarios, so it rides its own array + table). */
+  soak: SoakScenarioResult[]
 }
 
 function pad(s: string, w: number): string {
@@ -83,6 +87,63 @@ export function renderTable(artifact: BenchArtifact): string {
   lines.push("")
   lines.push(
     "rndr = warm re-renders / cold re-renders (gate: warm « cold proves O(1)-ish, not O(tree), render work)",
+  )
+  return lines.join("\n")
+}
+
+const SOAK_COLS: Array<{ head: string; width: number }> = [
+  { head: "scenario", width: 18 },
+  { head: "N", width: 6 },
+  { head: "M", width: 5 },
+  { head: "open ms", width: 9 },
+  { head: "heap/c", width: 8 },
+  { head: "rss/c", width: 8 },
+  { head: "B/wake", width: 7 },
+  { head: "idle µs", width: 8 },
+  { head: "p50 µs", width: 10 },
+  { head: "cpu µs", width: 10 },
+  { head: "µs/lane", width: 8 },
+  { head: "tick B", width: 8 },
+  { head: "rndr", width: 9 },
+  { head: "gate", width: 5 },
+]
+
+export function renderSoakTable(artifact: BenchArtifact): string {
+  const lines: string[] = []
+  lines.push(
+    `held-connection soak  ·  ${artifact.gitSha}  ·  node ${artifact.nodeVersion}  ·  ` +
+      `${artifact.runtime} Flight`,
+  )
+  const header = SOAK_COLS.map((c) => pad(c.head, c.width)).join("  ")
+  lines.push(header)
+  lines.push("-".repeat(header.length))
+
+  for (const r of artifact.soak) {
+    const t = r.ticks
+    const cells = [
+      pad(r.name, SOAK_COLS[0].width),
+      padLeft(String(r.params.connections), SOAK_COLS[1].width),
+      padLeft(String(r.params.active), SOAK_COLS[2].width),
+      padLeft(fix(r.openMs, 0), SOAK_COLS[3].width),
+      padLeft(kb(r.heap.heapPerConnection), SOAK_COLS[4].width),
+      padLeft(kb(r.heap.rssPerConnection), SOAK_COLS[5].width),
+      padLeft(fix(r.heap.heapDriftPerConnectionPerWake, 0), SOAK_COLS[6].width),
+      padLeft(fix(r.idleWake.cpuUsPerBump, 1), SOAK_COLS[7].width),
+      padLeft(t ? fix(t.wall.p50us, 0) : "-", SOAK_COLS[8].width),
+      padLeft(t ? fix(t.cpuMeanUs, 0) : "-", SOAK_COLS[9].width),
+      padLeft(t ? fix(t.cpuPerLaneUs, 1) : "-", SOAK_COLS[10].width),
+      padLeft(t ? kb(t.bytesMeanPerTick) : "-", SOAK_COLS[11].width),
+      padLeft(`${r.gate.tickRenders}/${r.gate.coldRenders}`, SOAK_COLS[12].width),
+      padLeft(r.gate.faithful ? "ok" : "FAIL", SOAK_COLS[13].width),
+    ]
+    lines.push(cells.join("  "))
+  }
+
+  lines.push("")
+  lines.push(
+    "heap/c, rss/c = post-gc per-connection footprint · B/wake = heap a parked connection accretes per wake round · " +
+      "idle µs = CPU per irrelevant bump across all N · rndr = gate-tick renders / cold renders " +
+      "(gate additionally proves 0 renders across the idle bumps and 0 early closes)",
   )
   return lines.join("\n")
 }
