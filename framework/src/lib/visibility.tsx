@@ -29,8 +29,8 @@
  * over one of two transports:
  *
  *   - **Live connection open** (`_getLiveConnectionId()` non-null): a
- *     fire-and-forget POST to the framework's visibility endpoint
- *     ([[visibility-protocol]]), addressed to the connection by its
+ *     fire-and-forget channel envelope carrying a `visible` frame
+ *     ([[channel-protocol]]), addressed to the connection by its
  *     explicit id. No response body — the server updates the connection
  *     session's visible set and renders the flipped-IN partons as lane
  *     segments on the EXISTING stream, so flips never race the
@@ -66,7 +66,7 @@ import {
 	cachedTokensFor,
 } from "./partial-client-state.ts"
 import { enqueueRefetch } from "./refetch.ts"
-import { VISIBILITY_ENDPOINT, type VisibilityReport } from "./visibility-protocol.ts"
+import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "./channel-protocol.ts"
 
 /** How far beyond the viewport a parton counts as "in view" — the runway,
  *  so a parton fills before it's literally on screen. Expressed as an
@@ -337,28 +337,34 @@ async function flush(): Promise<void> {
 	}
 }
 
-/** POST one visibility report to the framework endpoint. `true` iff the
- *  server applied it (`204`); `false` on any other answer or a network
+/** POST one visibility statement to the channel endpoint as an
+ *  envelope carrying a single `visible` frame. `true` iff the server
+ *  applied it (`204`); `false` on any other answer or a network
  *  failure — the caller's fall-back-to-reload signal. */
 async function postVisibilityReport(
 	connection: string,
 	changedIds: string[],
 ): Promise<boolean> {
-	const report: VisibilityReport = {
+	const envelope: ChannelEnvelope = {
 		connection,
 		seq: ++reportSeq,
-		changed: changedIds,
-		visible: [...inView],
-		// The client's actual holdings for the flipped ids — what the
-		// server may confirm with a placeholder instead of re-rendering.
-		cached: cachedTokensFor(changedIds),
+		frames: [
+			{
+				kind: "visible",
+				changed: changedIds,
+				visible: [...inView],
+				// The client's actual holdings for the flipped ids — what the
+				// server may confirm with a placeholder instead of re-rendering.
+				cached: cachedTokensFor(changedIds),
+			},
+		],
 	}
 	try {
-		const res = await fetch(VISIBILITY_ENDPOINT, {
+		const res = await fetch(CHANNEL_ENDPOINT, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify(report),
-			// Fire-and-forget: let an in-flight report survive a page unload.
+			body: JSON.stringify(envelope),
+			// Fire-and-forget: let an in-flight envelope survive a page unload.
 			keepalive: true,
 		})
 		return res.status === 204

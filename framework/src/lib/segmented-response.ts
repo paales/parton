@@ -46,6 +46,7 @@ import {
 	_onNextBump,
 	_registryEpoch,
 } from "../runtime/invalidation-registry.ts";
+import { getSessionId } from "../runtime/session.ts";
 import {
 	_closeConnectionSession,
 	_openConnectionSession,
@@ -414,10 +415,13 @@ function installCatchupCachedOverride(): void {
  * Open the connection session for the active request when it is a live
  * subscription carrying a `?__conn=` connection id, seeding the visible
  * set from the request's `?visible=` param (`null` when absent — the
- * pre-measurement state). The session is stamped onto the request's ALS
- * store so `visible()` / `evalDepKeys` read it for the connection's
- * whole lifetime. Returns `null` for one-shot requests and id-less live
- * subscriptions (no POST can address those, so no session is needed).
+ * pre-measurement state) and binding the attach's scope + session
+ * identity (what every channel envelope must re-present — see
+ * `handleChannelPost` in `connection-session.ts`). The session is
+ * stamped onto the request's ALS store so the cull gate and
+ * `evalDepKeys` read it for the connection's whole lifetime. Returns
+ * `null` for one-shot requests and id-less live subscriptions (no
+ * envelope can address those, so no session is needed).
  */
 function openLiveConnectionSession(): ConnectionSession | null {
 	let request: Request;
@@ -433,7 +437,10 @@ function openLiveConnectionSession(): ConnectionSession | null {
 	const rawVisible = params.get("visible");
 	const seed =
 		rawVisible === null ? null : new Set(rawVisible.split(",").filter(Boolean));
-	const session = _openConnectionSession(id, seed);
+	const session = _openConnectionSession(id, seed, {
+		scope: getScope(),
+		sessionId: getSessionId() ?? "",
+	});
 	_setConnectionSession(session);
 	return session;
 }
@@ -738,14 +745,18 @@ async function driveLaneStream(
 	let idleDeadline = Date.now() + KEEPALIVE_MS;
 
 	let since = sinceTs;
-	while (!closed) {
-		// A report that landed while the driver was busy (rendering lanes,
-		// or between the lanes hand-off and this loop) is already queued on
-		// the session — consume it without parking on the wake arms first;
-		// a drain that landed while busy is likewise latched. Deferred
-		// flips deliberately do NOT short-circuit the wait: they only
-		// re-resolve on a real wake, so an unknown id can't busy-loop the
-		// driver.
+	// `session.detached` exits alongside `closed`: an explicit detach
+	// frame fires the flip wakes, the parked wait returns, and the
+	// condition winds the drive down — the stream closes now instead of
+	// holding a goner for the keepalive window.
+	while (!closed && session?.detached !== true) {
+		// A statement that landed while the driver was busy (rendering
+		// lanes, or between the lanes hand-off and this loop) is already
+		// queued on the session — consume it without parking on the wake
+		// arms first; a drain that landed while busy is likewise latched.
+		// Deferred flips deliberately do NOT short-circuit the wait: they
+		// only re-resolve on a real wake, so an unknown id can't busy-loop
+		// the driver.
 		const wake: SegmentWake =
 			session !== null && session.pendingFlips.size > 0
 				? "visibility"

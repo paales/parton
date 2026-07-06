@@ -345,8 +345,8 @@ export function getCachedPartialIds(): string[] {
 
 /**
  * The client's current cached tokens (`id:matchKey:fp`) for a specific
- * id set — the visibility report's holdings declaration (see
- * `visibility-protocol.ts`): a culling flip tells the server exactly
+ * id set — the `visible` frame's holdings declaration (see
+ * `channel-protocol.ts`): a culling flip tells the server exactly
  * what it holds for the flipped partons, so the lane's fp-skip verdict
  * can't confirm content the client already dropped.
  */
