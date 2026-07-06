@@ -586,6 +586,10 @@ own `fp` trailer), so the client decodes it with the same
 connection. Lanes regions are always safe to abort immediately: a
 torn lane rejects only its own un-committed decode, never a committed
 tree, so the deferred-abort gate applies only to payload segments.
+Every exit from a lanes region tears its still-open lanes the same
+way — source close, invalid frame, and a `next` delimiter arriving
+mid-payload all error the open bodies, so a lane's decode always
+settles (rejects) rather than hanging on a stream nothing closes.
 
 ## The stream must pass through untransformed
 
