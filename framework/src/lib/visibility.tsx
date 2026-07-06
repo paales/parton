@@ -14,9 +14,11 @@
  * Reports funnel into a module-level controller (mirroring the refetch
  * batch / partial cache — client state lives at module scope, not in
  * context). The controller's baseline for each id is what's actually
- * DISPLAYED: `CullPair` primes it with the server-computed state on
- * mount (`_primeVisible`), so a first measurement that agrees with the
- * server's seed is a no-op — only a real DELTA dispatches. Every delta
+ * DISPLAYED: `CullPair` primes it on mount (`_primeVisible`, the
+ * emission's server-computed state overlaid by any live report — the
+ * same precedence the pair's own display uses), so a first measurement
+ * that agrees with the server's seed is a no-op — only a real DELTA
+ * dispatches. Every delta
  * is mirrored into the cull-park display state (`cull-park.ts`) first —
  * the parton's Activity slots swap the moment the observer reports
  * (see `cull-pair.tsx`); the dispatch below is the REVALIDATION, not
@@ -57,7 +59,7 @@
  */
 
 import React, { useEffect, useRef } from "react"
-import { registerCullObserver, reportCullState } from "./cull-park.ts"
+import { registerCullObserver, reportCullState, reportedVisibility } from "./cull-park.ts"
 import {
 	_getLiveConnectionId,
 	_setLiveConnectionId,
@@ -129,17 +131,29 @@ let rafScheduled = false
 let inFlight = false
 
 /**
- * Prime an id's viewport state from its server-computed display state
- * (`CullPair`'s mount effect). Inert once the id has a real report —
- * from then on the observer is the only writer. Priming is what makes
- * the first measurement a DELTA check against what's actually shown:
- * without it, every seeded-visible parton's first "in view" report
- * would read as a flip and dispatch a page-wide revalidation at boot.
- * Doesn't touch `measured` — a primed set is still an unmeasured one.
+ * Prime an id's viewport state from its DISPLAY state (`CullPair`'s
+ * mount effect passes the emission's `culled` prop). Inert once the id
+ * has a real report — from then on the observer is the only writer.
+ * Priming is what makes the first measurement a DELTA check against
+ * what's actually shown: without it, every seeded-visible parton's
+ * first "in view" report would read as a flip and dispatch a page-wide
+ * revalidation at boot.
+ *
+ * The pair's display prefers the LIVE REPORT overlay over the emission
+ * prop (`CullPair`: `reported ?? culled`), so the prime does too: a
+ * restored parked subtree re-mounts pairs whose emissions were minted
+ * BEFORE their cull-outs, and the raw prop would prime a baseline the
+ * display contradicts — the observer's first real measurement (a
+ * genuine flip against the showing skeleton) would read as a no-delta
+ * duplicate and never dispatch, stranding the subtree as a skeleton
+ * no report can ever revive. Doesn't touch `measured` — a primed set
+ * is still an unmeasured one.
  */
 export function _primeVisible(id: string, isInView: boolean): void {
 	if (everReported.has(id)) return
-	if (isInView) inView.add(id)
+	const reported = reportedVisibility(id)
+	const displayed = reported === undefined ? isInView : reported
+	if (displayed) inView.add(id)
 	else inView.delete(id)
 }
 

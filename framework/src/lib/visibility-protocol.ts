@@ -28,16 +28,23 @@ export interface VisibilityReport {
 	/** Monotonic per-client sequence. The server applies `visible` only
 	 *  from reports newer than the last one applied, so two in-flight
 	 *  POSTs can't commit an older set over a newer one. `changed` ids
-	 *  are merged regardless — a superseded report's flips still need
-	 *  their lane render (the CURRENT set decides what they render). */
+	 *  still queue regardless — a superseded report's flips still need
+	 *  their lane render — but per id, the statement with the highest
+	 *  seq stands. */
 	seq: number;
 	/** Parton ids whose in/out state flipped since the last report — the
-	 *  ids the segment driver renders as lanes. Ordered viewport-first
-	 *  (in-view flips before cull-outs); the driver starts lanes in this
-	 *  order so the visible world's renders lead. */
+	 *  ids the segment driver resolves as flips. Each id's DIRECTION is
+	 *  its presence in this report's `visible` snapshot (present =
+	 *  in-flip, absent = out-flip): the flip resolves against its own
+	 *  report's statement, never against a later report's snapshot —
+	 *  the client reports each flip exactly once, and later snapshots
+	 *  legitimately dip mid-scroll. Ordered viewport-first (in-view
+	 *  flips before cull-outs); the driver starts lanes in this order
+	 *  so the visible world's renders lead. */
 	changed: string[];
 	/** The complete visible set as of this report. Replaces the
-	 *  connection's set wholesale (no incremental merge). */
+	 *  connection's set wholesale (no incremental merge), and states
+	 *  each `changed` id's flip direction — see `changed`. */
 	visible: string[];
 	/** The client's CURRENT cached tokens (`id:matchKey:fp`) for the
 	 *  `changed` ids — its actual holdings at flip time. For a direct

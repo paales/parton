@@ -302,27 +302,45 @@ The pieces:
   fire-and-forget JSON report `{connection, seq, changed, visible,
   cached}`; the server applies it to the session and answers `204`
   with no body — the flipped partons' bytes come down the live
-  stream as lane segments, never on this response. `seq` is a
+  stream as lane segments, never on this response. Each `changed` id
+  queues as a pending flip carrying the report's OWN statement about
+  it — the id's presence in THAT report's `visible` snapshot (present
+  = in-flip, absent = out-flip). The statement, not the latest set,
+  is what the flip resolves against: a snapshot's id-absence without
+  a `changed` entry is not testimony (the controller drops mid-swap
+  nodes from `inView` without flipping them — `reportGone` — so a
+  burst's later snapshot legitimately dips below an earlier in-flip),
+  and the client reports each flip exactly once, so resolving an
+  in-flip against a later dip would drop it forever. `seq` is a
   client-monotonic counter: the session applies `visible` only from
   reports newer than the last applied (two in-flight POSTs can't
-  commit an older set over a newer one) while `changed` ids merge
-  regardless — a superseded report's flips still get their lane
-  render, which reads the current set either way. `cached` carries
-  the client's CURRENT `id:matchKey:fp` tokens for the changed ids —
-  its actual holdings at flip time, which the driver swaps into the
-  connection's cached override before each direct flip's lane
-  renders. `404` means "no such connection" — the explicit signal
+  commit an older set over a newer one) while `changed` ids still
+  queue regardless — a superseded report's flips still get their
+  resolution, and per id the statement with the highest seq stands
+  (only an explicit later out-flip cancels a pending in-flip).
+  `cached` rides ON the statement: the client's CURRENT
+  `id:matchKey:fp` tokens for the changed ids — its actual holdings
+  at flip time, which the driver swaps into the connection's cached
+  override before each direct flip's lane renders. `404` means "no
+  such connection" — the explicit signal
   for the controller to clear its published id and deliver that
   batch (and everything until the heartbeat re-establishes) via the
   render-reload fallback.
 - **The visibility wake.** The lane driver races the session's flip
   promise alongside the bump/expiry/keepalive arms. On a flip wake
-  it drains the session's pending ids; only flips INTO the current
-  visible set lane (through the same `partialFromSnapshot` path bump
-  lanes use) — a cull-OUT is complete on the client the moment it
-  happens (the pair swaps to its inline skeleton; no server bytes
-  exist for a culled state), so an out-flip's entire server effect
-  is the session-set update the report already applied. Flip-in lane
+  it drains the session's pending statements; only in-flips lane
+  (through the same `partialFromSnapshot` path bump lanes use) — a
+  cull-OUT is complete on the client the moment it happens (the pair
+  swaps to its inline skeleton; no server bytes exist for a culled
+  state), so an out-flip's entire server effect is the session-set
+  update the report already applied. Before an in-flip's lane
+  renders, the session set LEARNS its id when the latest snapshot
+  dipped below it (a wholesale replacement, never an in-place
+  mutation): the lane's cull gate reads the session set, the lane
+  ships the in-state, and the client's pair re-primes its controller
+  from that emission — so the connection's knowledge for the id is
+  "in view". The next report still replaces the set wholesale.
+  Flip-in lane
   renders carry a request state backed by the connection's cached
   override, so a flip may FP-SKIP: a skip is the zero-byte
   confirmation that the client's parked copy is current (see
@@ -351,7 +369,10 @@ The pieces:
   until the next whole-tree reconciliation. Deferred ids re-resolve
   on every subsequent wake (the materializing lane's drain is itself
   a wake) and never arm one, so an id that never materializes can't
-  busy-loop the driver.
+  busy-loop the driver. Each deferred entry keeps its statement's
+  seq: only a NEWER statement about the id supersedes it — an
+  explicit out-flip cancels the wait, a fresh in-flip re-arms it
+  with fresh cached tokens.
 - **The read stays request-reproducible.** The cull gate and the fp
   fold's store-and-reread both resolve through one function
   (`readVisible` in `server-hooks.ts`): the connection session's set
@@ -365,11 +386,17 @@ The pieces:
   flush recompute reads the same set, so hook read and fold agree.
 
 Client-side transport selection lives in the controller
-(`lib/visibility.tsx`): the baseline per id is the DISPLAYED state
-(each `CullPair` primes it from its emission's `culled` prop on
-mount, so a first measurement that agrees with what the server
-rendered dispatches nothing — priming is inert once an id has a real
-report), real deltas coalesce per animation frame, ordered
+(`lib/visibility.tsx`): the baseline per id is the DISPLAYED state —
+each `CullPair` primes it on mount with its emission's `culled` prop,
+which the controller overlays with any live report for the id (the
+same `reported ?? culled` precedence the pair's own display uses;
+a restored parked subtree re-mounts pairs whose emissions predate
+their cull-outs, and a raw-prop prime would poison the baseline so
+the observer's genuine flip against the showing skeleton reads as a
+no-delta duplicate and never dispatches) — so a first measurement
+that agrees with what's actually shown dispatches nothing, and
+priming is inert once an id has a real report. Real deltas coalesce
+per animation frame, ordered
 viewport-first on both transports (in-view flips outrank stale
 cull-outs — across batches, since the cap slices in-view first, and
 within one dispatch), and each flush checks `_getLiveConnectionId()`

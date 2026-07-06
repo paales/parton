@@ -29,13 +29,23 @@
  *      explicit fall-back-to-reload signal), and the endpoint handler
  *      maps apply/refuse/malformed to 204/404/400;
  *   6. report ordering — a stale report (older seq) can't regress the
- *      set, but its flips still merge;
+ *      set or overwrite a newer pending statement; its flips still
+ *      queue, each carrying its own report's statement;
  *   7. PARKED partons don't lane — a bump touching a parton outside
  *      the session's measured visible set renders nothing, and a
  *      culled parton has NO wake surface at all (its snapshot records
  *      the gate's reads only: no cell labels, no expires deadline);
  *      the flip-in revalidation re-renders the returning state fresh,
- *      folding everything that landed while parked.
+ *      folding everything that landed while parked;
+ *   8. flip resolution is PER-REPORT — each pending flip resolves
+ *      against its own report's statement (the id's presence in THAT
+ *      report's `visible` snapshot), never against a later report's
+ *      snapshot: a mid-scroll burst legitimately dips the snapshot
+ *      while an earlier in-flip is still pending, and the client
+ *      reports each flip exactly once, so resolving it against the
+ *      dip would drop it forever. Only an explicit later statement
+ *      about the SAME id can turn a pending in-flip out (last
+ *      statement wins, ordered by seq).
  */
 
 import type { ReactNode } from "react";
@@ -332,13 +342,150 @@ describe("connection-session visibility", () => {
 		);
 	});
 
+	it("an in-flip resolves against its OWN report's statement, not a later report's snapshot dip", async () => {
+		const conn = "conn-vis-burst";
+		await withLiveDrive(
+			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			Page,
+			freshLiveScope("conn-vis"),
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				const seg0 = await drainPayloadSegment(first.value);
+				expect(seg0).toContain("a:full:1");
+				expect(renders.b).toBe(0);
+
+				// The burst: report 1 flips b IN (its snapshot holds b); report
+				// 2 lands before the driver drains — a exits, and the snapshot
+				// DIPS below b too (its node is mid-swap client-side) WITHOUT
+				// an out-flip for b in `changed`. b's pending in-flip must
+				// resolve against report 1's statement and lane; the client
+				// reports each flip exactly once, so resolving it against
+				// report 2's snapshot would drop it forever.
+				expect(
+					reportConnectionVisibility(conn, 1, ["cull-b"], ["cull-a", "cull-b"]),
+				).toBe(true);
+				expect(reportConnectionVisibility(conn, 2, ["cull-a"], [])).toBe(true);
+
+				const second = await h.segments.next();
+				if (second.done || second.value.kind !== "lanes")
+					throw new Error("expected lanes segment");
+				const laneIter = second.value.lanes[Symbol.asyncIterator]();
+				const laneIn = await nextLane(laneIter);
+				expect(laneIn.partonId).toBe("cull-b");
+				expect((await decodeLane(laneIn)).bodyText).toContain("b:full:1");
+				// a's out-flip laned nothing — its cull completed client-side.
+				expect(renders.a).toBe(1);
+
+				// The SET itself still took report 2's snapshot wholesale: a
+				// re-enters via an explicit flip-in, and the driver answers
+				// with a's lane.
+				expect(
+					reportConnectionVisibility(conn, 3, ["cull-a"], ["cull-a", "cull-b"]),
+				).toBe(true);
+				const laneA = await nextLane(laneIter);
+				expect(laneA.partonId).toBe("cull-a");
+
+				await h.shutdown("cull-b");
+			},
+		);
+	});
+
+	it("a later out-flip statement wins over the same id's earlier pending in-flip", async () => {
+		const conn = "conn-vis-burst-out";
+		await withLiveDrive(
+			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			Page,
+			freshLiveScope("conn-vis"),
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				await drainPayloadSegment(first.value);
+				expect(renders.b).toBe(0);
+
+				// The burst: b flips in (seq 1), then explicitly OUT again
+				// (seq 2) before the driver drains. The last statement about b
+				// wins — nothing lanes for it, its body never runs. The bump
+				// on a provides the positive signal: the next lane on the wire
+				// is a's.
+				expect(
+					reportConnectionVisibility(conn, 1, ["cull-b"], ["cull-a", "cull-b"]),
+				).toBe(true);
+				expect(
+					reportConnectionVisibility(conn, 2, ["cull-b"], ["cull-a"]),
+				).toBe(true);
+				refreshSelector("cull-a");
+
+				const second = await h.segments.next();
+				if (second.done || second.value.kind !== "lanes")
+					throw new Error("expected lanes segment");
+				const laneIter = second.value.lanes[Symbol.asyncIterator]();
+				const laneA = await nextLane(laneIter);
+				expect(laneA.partonId).toBe("cull-a");
+				expect((await decodeLane(laneA)).bodyText).toContain("a:full:2");
+				expect(renders.b).toBe(0);
+
+				await h.shutdown("cull-a");
+			},
+		);
+	});
+
+	it("a deferred in-flip is cancelled by a later report's explicit out-flip", async () => {
+		const conn = "conn-vis-defer-out";
+		await withLiveDrive(
+			`http://localhost/world?live=1&__conn=${conn}&visible=`,
+			NestedPage,
+			freshLiveScope("conn-vis"),
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				await drainPayloadSegment(first.value);
+
+				// The child flips in while it has no snapshot (parent culled →
+				// it never rendered) — the flip defers. Then an explicit
+				// out-flip lands for it: the deferred in-flip must cancel.
+				expect(
+					reportConnectionVisibility(conn, 1, ["cull-child-late"], ["cull-child-late"]),
+				).toBe(true);
+				expect(
+					reportConnectionVisibility(conn, 2, ["cull-child-late"], []),
+				).toBe(true);
+
+				// The parent's flip-in materializes the child's snapshot (as a
+				// culled pair — the session set holds only the parent). If the
+				// cancelled flip survived, it would resolve on this lane's
+				// drain and the child would lane next; instead the next lane
+				// is the parent's bump.
+				expect(
+					reportConnectionVisibility(conn, 3, ["cull-parent"], ["cull-parent"]),
+				).toBe(true);
+				const second = await h.segments.next();
+				if (second.done || second.value.kind !== "lanes")
+					throw new Error("expected lanes segment");
+				const laneIter = second.value.lanes[Symbol.asyncIterator]();
+				const parentLane = await nextLane(laneIter);
+				expect(parentLane.partonId).toBe("cull-parent");
+				expect((await decodeLane(parentLane)).bodyText).toContain("parent-full");
+
+				refreshSelector("cull-parent");
+				const nextUp = await nextLane(laneIter);
+				expect(nextUp.partonId).toBe("cull-parent");
+
+				await h.shutdown("cull-parent");
+			},
+		);
+	});
+
 	it("a report for a connection that was never opened is refused", () => {
 		expect(reportConnectionVisibility("never-opened", 1, ["x"], ["x"])).toBe(
 			false,
 		);
 	});
 
-	it("a stale report (older seq) cannot regress the set, but its flips still merge", () => {
+	it("a stale report (older seq) cannot regress the set, but its flips still queue", () => {
 		const session = _openConnectionSession("conn-vis-seq", null);
 		try {
 			expect(reportConnectionVisibility("conn-vis-seq", 2, ["x"], ["x"])).toBe(
@@ -349,15 +496,34 @@ describe("connection-session visibility", () => {
 				true,
 			);
 			expect(session.visible).toEqual(new Set(["x"]));
-			// …but the flip merged — y still gets drained, and its lane render
-			// (or out-skip) reads the (newer) current set.
-			expect(new Set(takeConnectionFlips(session))).toEqual(
-				new Set(["x", "y"]),
-			);
+			// …but the flip queued — y still gets drained, carrying its own
+			// report's statement (out: y was absent from that snapshot).
+			const flips = takeConnectionFlips(session);
+			expect([...flips.keys()]).toEqual(["x", "y"]);
+			expect(flips.get("x")).toMatchObject({ inView: true, seq: 2 });
+			expect(flips.get("y")).toMatchObject({ inView: false, seq: 1 });
 			// The drain re-armed: nothing pending until the next report.
 			expect(session.pendingFlips.size).toBe(0);
 		} finally {
 			_closeConnectionSession("conn-vis-seq");
+		}
+	});
+
+	it("a stale late report cannot overwrite a newer pending statement about the same id", () => {
+		const session = _openConnectionSession("conn-vis-stmt", null);
+		try {
+			// Newest statement lands first (in), then an older out arrives
+			// late — the pending statement keeps the newer testimony.
+			expect(reportConnectionVisibility("conn-vis-stmt", 2, ["x"], ["x"])).toBe(
+				true,
+			);
+			expect(reportConnectionVisibility("conn-vis-stmt", 1, ["x"], [])).toBe(
+				true,
+			);
+			const flips = takeConnectionFlips(session);
+			expect(flips.get("x")).toMatchObject({ inView: true, seq: 2 });
+		} finally {
+			_closeConnectionSession("conn-vis-stmt");
 		}
 	});
 

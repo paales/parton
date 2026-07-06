@@ -460,8 +460,9 @@ replacement. The moving parts, end to end:
   content — an unbacked hole is a connected zero-size node whose
   testimony would flip an in-view parton right back out (a lane-rate
   flip loop). On mount the pair PRIMES the controller with its
-  server-computed display state (`_primeVisible`), so first
-  measurements that agree with the emission dispatch nothing.
+  emission's server-computed state (`_primeVisible`), overlaid by any
+  live report for the id — the DISPLAY state — so first measurements
+  that agree with what's actually shown dispatch nothing.
 - **The revalidation.** With a live connection open, flips ride the
   connection as session state (a visibility-report POST; flipped-IN
   partons come back as lane segments, cull-OUTs lane nothing — see

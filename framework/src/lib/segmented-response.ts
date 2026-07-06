@@ -50,6 +50,7 @@ import {
 	_closeConnectionSession,
 	_openConnectionSession,
 	type ConnectionSession,
+	type PendingFlip,
 	takeConnectionFlips,
 } from "./connection-session.ts";
 import { renderToReadableStream } from "./flight-runtime.ts";
@@ -487,9 +488,10 @@ interface LaneRuntime {
  * landed while parked, so it can't false-skip).
  *
  * Visibility flips are the fourth wake: a report POST updates the
- * connection session's visible set and names the flipped ids, and the
- * driver renders exactly those ids as lanes — with `visible()` (and the
- * fp fold's store-and-reread) reading the session's CURRENT set. A
+ * connection session's visible set and queues each flipped id with the
+ * report's OWN statement about it, and the driver lanes exactly the
+ * ids whose standing statement is an in-flip — with `visible()` (and
+ * the fp fold's store-and-reread) reading the session's CURRENT set. A
  * flipped id's fps are dropped from the cached override first: a
  * visibility fp CYCLES between the same two values (in ↔ out), so a
  * stale override entry would fp-skip a re-entry to a placeholder whose
@@ -708,17 +710,20 @@ async function driveLaneStream(
 		}
 	};
 
-	// Flips whose ids had no route snapshot when their report arrived — a
-	// report racing the render that first materializes its parton (a
+	// In-flips whose ids had no route snapshot when their report arrived
+	// — a report racing the render that first materializes its parton (a
 	// chunk reported in-view while its bigChunk's flip-in lane is still
 	// streaming). Deferred, never dropped: the client reports each flip
 	// exactly once (the IntersectionObserver only fires on change), so a
 	// dropped flip would leave that parton stale until the next
 	// whole-tree reconciliation. Re-checked against fresh snapshots on
 	// every subsequent wake — the materializing lane's own drain is a
-	// wake — and resolved ids lane like any other flip. Ids that never
+	// wake — and resolved ids lane like any other flip. Each entry keeps
+	// its statement's seq, so only a NEWER statement about the id can
+	// supersede it (an explicit out-flip cancels the wait; a fresh
+	// in-flip re-arms it with fresh cached tokens). Ids that never
 	// materialize linger harmlessly until the connection closes.
-	const deferredFlips = new Set<string>();
+	const deferredFlips = new Map<string, number>();
 
 	// Keepalive anchored at the last USEFUL activity (a lane started, a
 	// flip processed) — not re-armed per wake. Bump wakes whose touched
@@ -759,45 +764,76 @@ async function driveLaneStream(
 		const snapshots = _readSnapshotsForRoute(scope, routeKey);
 		if (snapshots.size === 0) break;
 		const touched: string[] = [];
-		// Resolve flips — the wake's fresh ids after any deferred ones (a
-		// deferred flip has waited at least one wake already; reports are
-		// ordered viewport-first, and this keeps that order within each
-		// group). Only flips INTO the session's current visible set lane:
-		// a cull-out is complete on the client the moment it happens (the
-		// pair swaps to its inline skeleton — no server bytes exist for a
-		// culled state), so an out-flip's entire server-side effect is the
-		// session-set update the report already applied. An in-flip's lane
-		// may fp-skip: a skip is the zero-byte confirmation that the
-		// client's parked copy is current, and a moved fp re-renders the
-		// body as usual. The verdict must be against the client's ACTUAL
-		// holdings, so a DIRECT flip swaps its report's cached tokens into
-		// the override first (the additive override alone drifts from the
-		// client — prunes, evictions, slot overwrites — and confirming a
-		// phantom copy blanks the parton). A DEFERRED flip keeps the
-		// override as-is: its tokens are stale by lane time, while the
-		// materializing render's just-promoted fps are exactly what the
-		// client's slot received.
+		// Resolve flips. Each flip resolves against its OWN report's
+		// statement (`PendingFlip.inView` — the id's presence in that
+		// report's `visible` snapshot), never against the session's
+		// CURRENT set: a mid-scroll burst legitimately dips the latest
+		// snapshot while an earlier in-flip is still pending (old chunks
+		// exit before new skeletons mount and testify), the client
+		// reports each flip exactly once, and resolving the in-flip
+		// against the dip would drop it forever — parking the world until
+		// the heartbeat's keepalive reopen reseeds `?visible=`. Per id
+		// the statement with the highest seq wins, so only an explicit
+		// later out-flip cancels a pending in-flip. The worklist merges
+		// deferred ids first (they have waited at least one wake already;
+		// reports are ordered viewport-first, and this keeps that order
+		// within each group), then the wake's fresh statements.
+		//
+		// Only in-flips lane: a cull-out is complete on the client the
+		// moment it happens (the pair swaps to its inline skeleton — no
+		// server bytes exist for a culled state), so an out-flip's entire
+		// server-side effect is the session-set update the report already
+		// applied. An in-flip's lane may fp-skip: a skip is the zero-byte
+		// confirmation that the client's parked copy is current, and a
+		// moved fp re-renders the body as usual. The verdict must be
+		// against the client's ACTUAL holdings, so a DIRECT flip swaps
+		// its statement's cached tokens into the override first (the
+		// additive override alone drifts from the client — prunes,
+		// evictions, slot overwrites — and confirming a phantom copy
+		// blanks the parton). A DEFERRED flip carries no tokens: they are
+		// stale by lane time, while the materializing render's
+		// just-promoted fps are exactly what the client's slot received.
 		const directFlips =
 			wake === "visibility" && session !== null
 				? takeConnectionFlips(session)
-				: [];
+				: null;
+		const worklist = new Map<string, PendingFlip>();
+		for (const [id, seq] of deferredFlips)
+			worklist.set(id, { inView: true, seq });
+		if (directFlips) {
+			for (const [id, flip] of directFlips) {
+				const prior = worklist.get(id);
+				if (prior !== undefined && flip.seq < prior.seq) continue;
+				worklist.set(id, flip);
+			}
+		}
 		const override = _getCachedOverride();
-		for (const id of [...deferredFlips, ...directFlips]) {
-			const reported = session?.reportedCached.get(id);
-			session?.reportedCached.delete(id);
-			if (session?.visible != null && !session.visible.has(id)) {
-				// Flipped out (or out again by the time a deferred flip
-				// resolved) — nothing to lane, nothing to defer.
+		for (const [id, flip] of worklist) {
+			if (!flip.inView) {
+				// The id's standing statement is an out-flip — nothing to
+				// lane, and any deferred in-flip it superseded is cancelled.
 				deferredFlips.delete(id);
 				continue;
 			}
+			// The set learns the statement before the lane renders: the
+			// lane's cull gate reads the session set, the lane ships the
+			// in-state, and the client's pair re-primes its controller from
+			// that emission — so the connection's knowledge for this id IS
+			// "in view", even when the latest snapshot dipped below it
+			// (mid-swap nodes drop out of a snapshot without testimony;
+			// only `changed` testifies). Replaced, never mutated in place,
+			// so a render holding the old reference keeps a consistent
+			// view; the next report still replaces the set wholesale.
+			if (session !== null && session.visible !== null && !session.visible.has(id)) {
+				session.visible = new Set(session.visible).add(id);
+			}
 			if (!snapshots.has(id)) {
-				deferredFlips.add(id);
+				deferredFlips.set(id, flip.seq);
 				continue;
 			}
 			deferredFlips.delete(id);
-			if (reported !== undefined && override) {
-				applyReportedCached(id, reported, override);
+			if (flip.cached !== undefined && override) {
+				applyReportedCached(id, flip.cached, override);
 			}
 			if (!touched.includes(id)) touched.push(id);
 		}

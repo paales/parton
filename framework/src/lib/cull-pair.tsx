@@ -122,9 +122,11 @@ export function CullPair({
 		() => false,
 	);
 	const isServer = typeof document === "undefined";
-	// Prime the controller with this emission's display state so the
-	// first measurement is compared against what's actually shown.
-	// (`_primeVisible` is a no-op once the id has a real report.)
+	// Prime the controller with this emission's state so the first
+	// measurement is compared against what's actually shown. The
+	// controller overlays any live report for the id — the same
+	// precedence `out` uses below — and is a no-op once the id has a
+	// real observer report.
 	React.useEffect(() => {
 		_primeVisible(id, !culled);
 	}, [id, culled]);

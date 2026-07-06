@@ -291,8 +291,8 @@ boot whose seed matched the viewport revalidates nothing.
 On the client the pair's slots observe their children through a
 `<Fragment ref>` + IntersectionObserver (no wrapper element); the
 controller compares each measurement against the DISPLAYED state
-(primed from the emission) and coalesces a frame's worth of real
-flips. Delivery depends on whether the page holds a live connection:
+(primed from the emission, overlaid by any live report for the id)
+and coalesces a frame's worth of real flips. Delivery depends on whether the page holds a live connection:
 
 - **Live connection open** (the heartbeat's `?live=1` stream): the
   flips travel as a fire-and-forget POST to the framework's

@@ -31,29 +31,57 @@ import {
 	type VisibilityReport,
 } from "./visibility-protocol.ts";
 
+/**
+ * One pending flip — a report's statement about a single id, queued
+ * until the segment driver drains it. A flip resolves against ITS OWN
+ * report's testimony, never against a later report's `visible`
+ * snapshot: mid-scroll bursts legitimately dip the snapshot (old
+ * chunks exit before new skeletons mount and testify), the client
+ * reports each flip exactly once, and resolving an earlier in-flip
+ * against a later dip would drop it forever. Only an explicit later
+ * statement about the SAME id replaces a pending one.
+ */
+export interface PendingFlip {
+	/** The report's statement: `true` when the id was in THAT report's
+	 *  `visible` snapshot (an in-flip — the driver lanes it), `false`
+	 *  when it wasn't (an out-flip — the session-set update the report
+	 *  already applied is its entire server-side effect). */
+	readonly inView: boolean;
+	/** Seq of the report that made the statement. A newer statement
+	 *  about the same id replaces a pending one; a stale one (an older
+	 *  report landing late) is discarded — the last statement about an
+	 *  id wins, ordered by seq. */
+	readonly seq: number;
+	/** The client's cached tokens (`id:matchKey:fp`) for the id as of
+	 *  the report — its ACTUAL holdings, which the driver swaps into
+	 *  the connection's cached override before the flip's lane renders
+	 *  (see the report protocol's `cached` field). `undefined` when the
+	 *  report made no holdings statement (the override stays as
+	 *  promoted). Consumed with the flip; a flip that defers past its
+	 *  report drops its tokens (they would be stale by the time the
+	 *  deferred lane runs). */
+	readonly cached?: readonly string[];
+}
+
 export interface ConnectionSession {
 	readonly id: string;
 	/** The connection's current visible set. `null` until the request's
 	 *  `?visible=` seed or the first report — the pre-measurement state,
 	 *  in which reads fall back to the request URL (absent → `undefined`,
-	 *  the `visible()` cold token). Replaced wholesale per report, never
-	 *  mutated, so a render that grabbed the reference mid-report keeps a
-	 *  consistent view. */
+	 *  the `visible()` cold token). Replaced wholesale per report — and
+	 *  by the driver when it consumes an in-flip statement the latest
+	 *  snapshot dipped below (the lane ships the in-state, so the
+	 *  connection's knowledge for that id is "in view"). Always replaced,
+	 *  never mutated in place, so a render that grabbed the reference
+	 *  mid-report keeps a consistent view. */
 	visible: ReadonlySet<string> | null;
 	/** Last applied report seq — the stale-report gate for `visible`. */
 	lastSeq: number;
-	/** Flipped ids awaiting a lane render. The driver drains via
-	 *  `takeConnectionFlips`. Insertion order is delivery order — reports
-	 *  send in-view flips first, so lanes for the visible world start
-	 *  before stale cull-outs'. */
-	readonly pendingFlips: Set<string>;
-	/** Per flipped id: the client's cached tokens (`id:matchKey:fp`) as
-	 *  of the report — its ACTUAL holdings, which the driver swaps into
-	 *  the connection's cached override before the flip's lane renders
-	 *  (see the report protocol's `cached` field). Consumed with the
-	 *  flip; a flip that defers past its report drops its tokens (they
-	 *  would be stale by the time the deferred lane runs). */
-	readonly reportedCached: Map<string, string[]>;
+	/** Flipped ids awaiting a lane render, each carrying its report's
+	 *  statement. The driver drains via `takeConnectionFlips`. Insertion
+	 *  order is delivery order — reports send in-view flips first, so
+	 *  lanes for the visible world start before stale cull-outs'. */
+	readonly pendingFlips: Map<string, PendingFlip>;
 	/** The segment driver's visibility wake arm: a report notifies every
 	 *  registered listener. The driver registers one per park and
 	 *  removes it when the park ends (the wake-arm release invariant —
@@ -85,8 +113,7 @@ export function _openConnectionSession(
 		id,
 		visible: initialVisible,
 		lastSeq: 0,
-		pendingFlips: new Set(),
-		reportedCached: new Map(),
+		pendingFlips: new Map(),
 		flipWakes: new Set(),
 	};
 	sessions.set(id, session);
@@ -105,10 +132,14 @@ export function _closeConnectionSession(id: string): void {
  * caller's explicit fallback signal.
  *
  * `visible` replaces the session set only when the report is newer than
- * the last applied one (`seq` gate); `changed` ids merge into
- * `pendingFlips` unconditionally — a superseded report's flips still
- * need their lane render, and the render reads the CURRENT set either
- * way. Always notifies the flip wakes so a parked driver re-evaluates.
+ * the last applied one (`seq` gate). `changed` ids queue into
+ * `pendingFlips` carrying the report's OWN statement about each id —
+ * its presence in THIS report's snapshot — because that statement, not
+ * the latest set, is what the flip resolves against (see
+ * [[PendingFlip]]). A superseded report's flips still queue (they still
+ * need their lane render); per id, the statement with the highest seq
+ * stands. Always notifies the flip wakes so a parked driver
+ * re-evaluates.
  */
 export function reportConnectionVisibility(
 	id: string,
@@ -119,18 +150,22 @@ export function reportConnectionVisibility(
 ): boolean {
 	const session = sessions.get(id);
 	if (!session) return false;
+	const inView = new Set(visible);
 	for (const c of changed) {
-		session.pendingFlips.add(c);
-		// The client's holdings for this flip. An EMPTY list is a
-		// statement ("I hold nothing for this id" — the flip's lane must
-		// render rather than confirm a phantom copy); an ABSENT `cached`
-		// makes no statement and leaves the override as promoted.
-		if (cached !== undefined) {
-			session.reportedCached.set(
-				c,
-				cached.filter((t) => t.startsWith(`${c}:`)),
-			);
-		}
+		const prior = session.pendingFlips.get(c);
+		if (prior !== undefined && seq < prior.seq) continue;
+		session.pendingFlips.set(c, {
+			inView: inView.has(c),
+			seq,
+			// The client's holdings for this flip. An EMPTY list is a
+			// statement ("I hold nothing for this id" — the flip's lane must
+			// render rather than confirm a phantom copy); an ABSENT `cached`
+			// makes no statement and leaves the override as promoted.
+			cached:
+				cached === undefined
+					? undefined
+					: cached.filter((t) => t.startsWith(`${c}:`)),
+		});
 	}
 	if (seq > session.lastSeq) {
 		session.lastSeq = seq;
@@ -140,12 +175,14 @@ export function reportConnectionVisibility(
 	return true;
 }
 
-/** Drain the session's pending flips. A report landing right after
- *  the drain re-queues into `pendingFlips`, which the driver's
- *  wait-entry check consumes before its next park — no report
- *  vanishes into a consumed wake. */
-export function takeConnectionFlips(session: ConnectionSession): string[] {
-	const flips = [...session.pendingFlips];
+/** Drain the session's pending flips — id → the statement it resolves
+ *  against. A report landing right after the drain re-queues into
+ *  `pendingFlips`, which the driver's wait-entry check consumes
+ *  before its next park — no report vanishes into a consumed wake. */
+export function takeConnectionFlips(
+	session: ConnectionSession,
+): Map<string, PendingFlip> {
+	const flips = new Map(session.pendingFlips);
 	session.pendingFlips.clear();
 	return flips;
 }
