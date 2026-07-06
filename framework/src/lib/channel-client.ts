@@ -43,6 +43,7 @@ import {
 	type ChannelEnvelope,
 	type ChannelFrame,
 } from "./channel-protocol.ts";
+import { TAG_CONNECTION_ID } from "./fp-trailer-marker.ts";
 import {
 	_getLiveConnectionId,
 	_setLiveConnectionId,
@@ -88,17 +89,36 @@ let inFlight = false;
 let reflushPending = false;
 
 /**
- * Publish an established live connection. Called when the
- * subscription is provably open server-side; from here producers
- * address it with envelopes. Sets the `data-parton-live` liveness
- * marker and restarts the envelope seq (per-connection monotonic —
- * the server session's seq gate starts fresh with the session).
+ * Wire-entry hook for the segmented-stream reader (`splitSegments`'
+ * `onEntry`): the browser entry hands every trailer ENTRY here as it
+ * is read. The `conn` entry is the server-minted connection id — the
+ * establishment handshake. Receiving it proves the session is open
+ * (the driver mints ids only at session open), so producers can
+ * address the connection immediately, even while the first segment's
+ * render is still draining. Entries of other tags pass through
+ * untouched — their consumers read the segment's trailer map.
+ */
+export function _channelWireEntry(tag: string, body: Uint8Array): void {
+	if (tag !== TAG_CONNECTION_ID) return;
+	_channelEstablished(new TextDecoder().decode(body));
+}
+
+/**
+ * Publish an established live connection. Called from the wire entry
+ * above when the stream's `conn` handshake arrives; from here
+ * producers address the connection with envelopes. Sets the
+ * `data-parton-live` liveness marker and restarts the envelope seq
+ * (per-connection monotonic — the server session's seq gate starts
+ * fresh with the session).
  */
 export function _channelEstablished(connection: string): void {
 	envelopeSeq = 0;
 	_setLiveConnectionId(connection);
 	if (typeof document !== "undefined") {
-		document.documentElement.setAttribute("data-parton-live", connection);
+		// Presence-only: the marker says "a live push channel is
+		// established", never WHICH connection — the id is the envelope
+		// credential and stays out of the DOM.
+		document.documentElement.setAttribute("data-parton-live", "");
 	}
 	for (const cb of [...establishListeners]) cb(connection);
 }

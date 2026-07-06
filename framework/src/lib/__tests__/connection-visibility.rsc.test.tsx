@@ -215,10 +215,10 @@ async function postVisible(
 
 describe("connection-session visibility", () => {
 	it("the ?visible= seed drives the first segment; in-flips lane, out-flips don't", async () => {
-		const conn = "conn-vis-1";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			`http://localhost/world?live=1&visible=cull-a`,
 			Page,
 			scope,
 			async (h) => {
@@ -229,6 +229,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(seg0).toContain("a:full:1");
 				expect(seg0).not.toContain("b:full");
 				expect(seg0).toContain('"id":"cull-b"');
@@ -290,10 +292,10 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a flip for an id the route never rendered defers without disturbing the stream", async () => {
-		const conn = "conn-vis-2";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=`,
+			`http://localhost/world?live=1&visible=`,
 			Page,
 			scope,
 			async (h) => {
@@ -301,6 +303,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				// An EMPTY seed is a measurement too — everything out, no body
 				// runs anywhere.
 				expect(seg0).not.toContain("a:full");
@@ -343,10 +347,10 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a flip racing the render that first materializes its parton defers, then lanes once the snapshot lands", async () => {
-		const conn = "conn-vis-3";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=`,
+			`http://localhost/world?live=1&visible=`,
 			NestedPage,
 			scope,
 			async (h) => {
@@ -354,6 +358,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				// Parent culled out → the child never rendered: no snapshot for
 				// it exists anywhere yet.
 				expect(seg0).not.toContain("parent-full");
@@ -404,10 +410,10 @@ describe("connection-session visibility", () => {
 	});
 
 	it("an in-flip resolves against its OWN frame's statement, not a later frame's snapshot dip", async () => {
-		const conn = "conn-vis-burst";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			`http://localhost/world?live=1&visible=cull-a`,
 			Page,
 			scope,
 			async (h) => {
@@ -415,6 +421,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(seg0).toContain("a:full:1");
 				expect(renders.b).toBe(0);
 
@@ -455,10 +463,10 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a later out-flip statement wins over the same id's earlier pending in-flip", async () => {
-		const conn = "conn-vis-burst-out";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			`http://localhost/world?live=1&visible=cull-a`,
 			Page,
 			scope,
 			async (h) => {
@@ -466,6 +474,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(renders.b).toBe(0);
 
 				// The burst: b flips in (seq 1), then explicitly OUT again
@@ -502,10 +512,10 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a deferred in-flip is cancelled by a later frame's explicit out-flip", async () => {
-		const conn = "conn-vis-defer-out";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=`,
+			`http://localhost/world?live=1&visible=`,
 			NestedPage,
 			scope,
 			async (h) => {
@@ -513,6 +523,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 
 				// The child flips in while it has no snapshot (parent culled →
 				// it never rendered) — the flip defers. Then an explicit
@@ -604,10 +616,10 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a bump touching a PARKED parton doesn't lane; the flip-in re-renders it fresh", async () => {
-		const conn = "conn-vis-parked";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a,cull-b`,
+			`http://localhost/world?live=1&visible=cull-a,cull-b`,
 			Page,
 			scope,
 			async (h) => {
@@ -615,6 +627,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(seg0).toContain("a:full:1");
 				expect(seg0).toContain("b:full:1");
 
@@ -652,10 +666,10 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a parked parton has no wake surface: its expires() deadline neither lanes nor hot-spins", async () => {
-		const conn = "conn-vis-parked-exp";
+		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/pulse?live=1&__conn=${conn}&visible=cull-pulse`,
+			`http://localhost/pulse?live=1&visible=cull-pulse`,
 			() => (
 				<PartialRoot>
 					<CullPulse />
@@ -669,6 +683,8 @@ describe("connection-session visibility", () => {
 				expect(await drainPayloadSegment(first.value)).toContain(
 					"pulse:full:1",
 				);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 
 				// The declared boundary drives a lane while visible.
 				const second = await h.segments.next();

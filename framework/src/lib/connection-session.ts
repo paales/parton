@@ -1,7 +1,8 @@
 /**
  * Connection-session state — per-live-connection server state, keyed
- * by the explicit connection id (`?__conn=`) the client's heartbeat
- * mints for each `?live=1` stream it opens.
+ * by the SERVER-MINTED connection id the segment driver creates for
+ * each `?live=1` stream it drives and ships downstream as the
+ * stream's `conn` entry (see [[fp-trailer-marker]]).
  *
  * A live connection is long-lived (the segment driver parks it between
  * wakes), and some request dimensions move WHILE it is open. The first
@@ -18,8 +19,8 @@
  * every change to the set arrives with an explicit wake naming the ids
  * it flipped.
  *
- * Lifecycle: the segment driver opens the session when it starts
- * driving a `?live=1&__conn=` response (seeding `visible` from
+ * Lifecycle: the segment driver mints the id and opens the session
+ * when it starts driving a `?live=1` response (seeding `visible` from
  * the request's `?visible=` param, so the whole-tree first segment
  * already renders against the client's measured set; binding the
  * attach's scope + session identity for the envelope checks below) and

@@ -82,6 +82,16 @@ export type Segment =
 			lanes: AsyncIterable<DemuxedLane>;
 	  };
 
+/** Progressive entry surface: called with each trailer ENTRY the
+ *  moment it is read off the wire — payload-segment entries (which
+ *  also land in the segment's trailer map) and lanes-region framed
+ *  entries (which have no map) alike. Milestone tags never fire it.
+ *  What makes it exist: some entries are handshakes, not metadata —
+ *  the server-minted connection id (`conn`) must reach the channel
+ *  transport when it ARRIVES (ahead of the first segment's body),
+ *  not when the segment settles and its trailer map resolves. */
+export type OnWireEntry = (tag: string, body: Uint8Array) => void;
+
 /**
  * Consume a segmented-Flight stream and produce an async iterable of
  * its segments. The caller iterates with `for await (const seg of …)`,
@@ -91,10 +101,11 @@ export type Segment =
 export function splitSegments(
 	source: ReadableStream<Uint8Array>,
 	signal?: AbortSignal,
+	onEntry?: OnWireEntry,
 ): AsyncIterable<Segment> {
 	return {
 		[Symbol.asyncIterator]() {
-			return new SegmentIterator(source, signal);
+			return new SegmentIterator(source, signal, onEntry);
 		},
 	};
 }
@@ -197,10 +208,16 @@ class SegmentIterator implements AsyncIterator<Segment> {
 	// pending deferred references belong to content React already
 	// committed.
 	private lanesActive = false;
+	private onEntry?: OnWireEntry;
 
-	constructor(source: ReadableStream<Uint8Array>, signal?: AbortSignal) {
+	constructor(
+		source: ReadableStream<Uint8Array>,
+		signal?: AbortSignal,
+		onEntry?: OnWireEntry,
+	) {
 		this.reader = source.getReader();
 		this.signal = signal;
+		this.onEntry = onEntry;
 		if (signal) {
 			// Already aborted at construction: no segment is in flight, so
 			// there is nothing to tear — cancel straight away. `next`'s
@@ -470,7 +487,10 @@ class SegmentIterator implements AsyncIterator<Segment> {
 						torn("lanes segment ended with parton lanes open");
 					return;
 				}
-				// Unknown framed entry (future taxonomy) — skip its body.
+				// Framed ENTRY (the connection-id handshake on a catch-up
+				// boot, future data tags) — surface it and keep demuxing;
+				// entries a consumer doesn't handle are skipped, never errors.
+				this.onEntry?.(parsed.tag, body);
 			}
 		} finally {
 			queue.end();
@@ -560,12 +580,12 @@ class SegmentIterator implements AsyncIterator<Segment> {
 						this.exhausted = true;
 						return;
 					}
-					seg.addTrailer(
-						result.tag,
+					const entryBody =
 						result.length > 0
 							? copySlice(this.leftover, result.headerSize, totalSize)
-							: new Uint8Array(0),
-					);
+							: new Uint8Array(0);
+					seg.addTrailer(result.tag, entryBody);
+					this.onEntry?.(result.tag, entryBody);
 					this.leftover = copySlice(this.leftover, totalSize, this.leftover.length);
 					continue bodyLoop;
 				}
@@ -632,6 +652,7 @@ class SegmentIterator implements AsyncIterator<Segment> {
 				return;
 			}
 			seg.addTrailer(parsed.tag, bodyBytes);
+			this.onEntry?.(parsed.tag, bodyBytes);
 			if (this.leftover.length === 0 && this.sourceClosed) {
 				seg.resolveTrailers();
 				this.exhausted = true;

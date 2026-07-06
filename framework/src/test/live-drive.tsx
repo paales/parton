@@ -8,6 +8,7 @@
 import type { ReactNode } from "react"
 import { _captureCommitHandle, runWithRequestAsync } from "../runtime/context.ts"
 import { refreshSelector } from "../runtime/invalidation-registry.ts"
+import { TAG_CONNECTION_ID } from "../lib/fp-trailer-marker.ts"
 import { wrapStreamWithFpTrailer } from "../lib/fp-trailer.ts"
 import { type DemuxedLane, splitAtFpTrailer, splitSegments } from "../lib/fp-trailer-split.ts"
 import { driveSegmentedResponse } from "../lib/segmented-response.ts"
@@ -17,6 +18,12 @@ export interface DriveHandle {
   segments: AsyncIterator<
     ReturnType<typeof splitSegments> extends AsyncIterable<infer S> ? S : never
   >
+  /** The server-minted connection id, once the stream's `conn` entry
+   *  has been read (null before). On the full path it precedes the
+   *  first segment's Flight rows, so it is set by the time segment 0
+   *  drains; on the catch-up path it is the lanes region's first
+   *  frame, read on the way to the first lane. */
+  connectionId: () => string | null
   /** Ends the connection: cancels the client reader and wakes the
    *  parked driver with a bump so its enqueue fails and the loop
    *  exits without waiting out the 20s keepalive. */
@@ -44,9 +51,13 @@ export async function withLiveDrive(
         controller.close()
       } catch {}
     })
-    const iter = splitSegments(response)[Symbol.asyncIterator]()
+    let connectionId: string | null = null
+    const iter = splitSegments(response, undefined, (tag, body) => {
+      if (tag === TAG_CONNECTION_ID) connectionId = new TextDecoder().decode(body)
+    })[Symbol.asyncIterator]()
     await run({
       segments: iter,
+      connectionId: () => connectionId,
       shutdown: async (wakeSelector: string) => {
         await iter.return?.()
         // The parked driver only observes the torn controller on its

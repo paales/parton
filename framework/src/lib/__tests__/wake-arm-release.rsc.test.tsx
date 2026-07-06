@@ -53,7 +53,7 @@ afterEach(() => {
 describe("live segment driver — wake-arm release", () => {
 	it("expiry-driven wakes release their bump-arm registrations", async () => {
 		await withLiveDrive(
-			"http://localhost/leak?live=1&__conn=leak-conn-1",
+			"http://localhost/leak?live=1",
 			() => (
 				<PartialRoot>
 					<LeakClock />

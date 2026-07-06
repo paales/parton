@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
-import { _channelConnectionClosed, _channelEstablished } from "./channel-client.ts"
+import { _channelConnectionClosed } from "./channel-client.ts"
 import { _anyCullObservers } from "./cull-park.ts"
 import { useNavigation } from "./partial-client.tsx"
 import { _takeLiveCatchupAnchor } from "./partial-client-state.ts"
@@ -105,15 +105,15 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
         return
       }
       inFlight = new AbortController()
-      // Each fire is one connection, identified by a fresh id the
-      // server's segment driver keys its connection session on
-      // (`?__conn=`). The session is what visibility-report POSTs
-      // address; seeding the fire with the controller's current
-      // `?visible=` set (absent while unmeasured) means the whole-tree
-      // first segment already renders against the client's measured
-      // viewport instead of the cold anchor seed.
-      const connectionId = crypto.randomUUID()
-      const params: Record<string, string> = { __conn: connectionId }
+      // Each fire is one connection. The SERVER mints its id at
+      // session open and ships it down as the stream's `conn` entry;
+      // the channel transport establishes on receipt (the wire hook in
+      // `entry/browser.tsx`), so envelopes can address the session the
+      // moment the handshake arrives. Seeding the fire with the
+      // controller's current `?visible=` set (absent while unmeasured)
+      // means the whole-tree first segment already renders against the
+      // client's measured viewport instead of the cold anchor seed.
+      const params: Record<string, string> = {}
       const visibleSeed = _visibleSetParam()
       if (visibleSeed !== undefined) params.visible = visibleSeed
       // The document's registry anchor (take-once): present it so the
@@ -129,29 +129,24 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
       // `streaming: true` makes the client commit each pushed segment
       // progressively. The two are orthogonal — a targeted refetch
       // takes `streaming` without `live` and stays one-shot.
-      const { streaming, finished } = reload({
+      //
+      // Establishment is not this component's concern: the stream's
+      // `conn` entry (the server-minted id) establishes the connection
+      // with the channel transport as it is read. The transport owns
+      // the downstream signals — the `data-parton-live` liveness
+      // marker (set at establishment, removed below when the
+      // connection settles; specs and tooling wait on it instead of
+      // guessing whether a stream is open) and the establishment
+      // listeners (the visibility controller arms its full-set sync
+      // there). Fires are strictly sequential (`inFlight` gates), so
+      // one fire's close always precedes the next fire's
+      // establishment.
+      const { finished } = reload({
         streaming: true,
         live: true,
         signal: inFlight.signal,
         params,
       })
-      // Establish the connection with the channel transport when this
-      // fire's first segment has committed — the subscription is
-      // provably open and pushing, so producers can start addressing
-      // it with envelopes. The transport owns the downstream signals:
-      // the `data-parton-live` liveness marker (set at establishment,
-      // removed when the connection settles — specs and tooling wait
-      // on it instead of guessing whether a stream is open) and the
-      // establishment listeners (the visibility controller arms its
-      // full-set sync there). Fires are strictly sequential
-      // (`inFlight` gates), so one fire's close always precedes the
-      // next fire's establishment.
-      streaming
-        .then(() => {
-          if (!alive) return
-          _channelEstablished(connectionId)
-        })
-        .catch(() => {})
       finished
         .catch(() => {
           // Network error / abort. Clear the in-flight slot so the

@@ -310,11 +310,58 @@ describe("channel endpoint", () => {
 		}
 	});
 
+	it("the stream ships a SERVER-minted id; a client-chosen ?__conn= never keys a session", async () => {
+		let conn = "";
+		const scope = freshLiveScope("chan-mint");
+		await withLiveDrive(
+			// A hostile (or stale) client-chosen id on the URL is inert: the
+			// driver mints its own and ships it as the stream's `conn` entry.
+			`http://localhost/mint?live=1&__conn=chosen-by-client&visible=chan-x`,
+			Page,
+			scope,
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				const seg0 = await drainPayloadSegment(first.value);
+				expect(seg0).toContain("x:full");
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
+				expect(conn).not.toBe("chosen-by-client");
+
+				// The chosen token addresses nothing…
+				expect(
+					(
+						await post(
+							envelope("chosen-by-client", 1, [
+								{ kind: "visible", changed: [], visible: ["chan-x"] },
+							]),
+							{ "x-test-scope": scope },
+						)
+					).status,
+				).toBe(404);
+				// …the minted one addresses the open session.
+				expect(
+					(
+						await post(
+							envelope(conn, 1, [
+								{ kind: "visible", changed: [], visible: ["chan-x"] },
+							]),
+							{ "x-test-scope": scope },
+						)
+					).status,
+				).toBe(204);
+
+				await h.shutdown("chan-x");
+			},
+		);
+	});
+
 	it("a detach frame ends the held stream instead of waiting out the keepalive", async () => {
-		const conn = "chan-detach";
+		let conn = "";
 		const scope = freshLiveScope("chan-detach");
 		await withLiveDrive(
-			`http://localhost/detach?live=1&__conn=${conn}&visible=chan-x`,
+			`http://localhost/detach?live=1&visible=chan-x`,
 			Page,
 			scope,
 			async (h) => {
@@ -322,6 +369,8 @@ describe("channel endpoint", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				expect(await drainPayloadSegment(first.value)).toContain("x:full");
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 
 				expect(
 					(
