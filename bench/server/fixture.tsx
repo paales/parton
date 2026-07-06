@@ -56,6 +56,13 @@ export interface DashboardParams {
    *  registry. Exercises registry query cost under sustained ticker
    *  bumps against one name. */
   sharedPulseCell?: boolean
+  /** Prefix folded into every selector and derived id
+   *  (`#<prefix>leaf-<i>`, `#<prefix>wrap-<level>`). The soak category
+   *  builds one page per held connection; the prefix keeps their
+   *  catalog ids and invalidation selectors disjoint, so a bump for one
+   *  connection's leaf can never touch another connection's. Default
+   *  `""`. */
+  idPrefix?: string
 }
 
 export interface DashboardFixture {
@@ -72,15 +79,15 @@ export interface DashboardFixture {
 
 /** A live leaf reads a distinct inline cell, folding `cell:<id>/value`
  *  into its fp. The cell id is `<partonId>/value`; partonId derives from
- *  the leaf's first selector label (`leaf-<i>`). */
-function makeLiveLeaf(i: number) {
+ *  the leaf's first selector label (`<prefix>leaf-<i>`). */
+function makeLiveLeaf(i: number, prefix: string) {
   return parton(
     async function LiveLeafRender(_: RenderArgs) {
       renderCount++
       const v = await localCell("value", { shape: "number", initial: 0 })
       return <span data-leaf={i}>{String(v.value)}</span>
     },
-    { selector: `#leaf-${i}` },
+    { selector: `#${prefix}leaf-${i}` },
   )
 }
 
@@ -94,27 +101,27 @@ const PULSE_CELL_ID = "bench.pulse"
  *  Its fp dep is `cell:bench.pulse?part=<i>`: partition-scoped, so a
  *  bump for partition i re-renders only leaf i, but every leaf's fold
  *  queries the same `cell:bench.pulse` name in the registry. */
-function makePulseLeaf(i: number, pulse: LocalCell<number>) {
+function makePulseLeaf(i: number, pulse: LocalCell<number>, prefix: string) {
   return parton(
     async function PulseLeafRender(_: RenderArgs) {
       renderCount++
       const v = await pulse.resolve({ part: i })
       return <span data-leaf={i}>{String(v.value)}</span>
     },
-    { selector: `#leaf-${i}` },
+    { selector: `#${prefix}leaf-${i}` },
   )
 }
 
 /** A static leaf has no cell — its fp never moves, so it fp-skips every
  *  warm tick. Still addressable (selector) so it participates in the
  *  fp-skip placeholder path exactly like a live leaf that didn't change. */
-function makeStaticLeaf(i: number) {
+function makeStaticLeaf(i: number, prefix: string) {
   return parton(
     function StaticLeafRender(_: RenderArgs) {
       renderCount++
       return <span data-leaf={i}>static-{i}</span>
     },
-    { selector: `#leaf-${i}` },
+    { selector: `#${prefix}leaf-${i}` },
   )
 }
 
@@ -123,22 +130,22 @@ function makeStaticLeaf(i: number) {
  *  a descendant's invalidation into the wrapper's fp, so a changed leaf
  *  re-instantiates its wrapper chain while unchanged siblings stay
  *  parked. */
-function makeWrapper(level: number) {
+function makeWrapper(level: number, prefix: string) {
   return parton(
     function WrapperRender({ children }: RenderArgs) {
       renderCount++
       return <div data-wrapper={level}>{children}</div>
     },
-    { selector: `#wrap-${level}` },
+    { selector: `#${prefix}wrap-${level}` },
   )
 }
 
 /** Nest `inner` under `depth` distinct wrapper partons. Each wrapper id
  *  is unique per level so they're distinct catalog entries. */
-function nest(inner: ReactNode, depth: number): ReactNode {
+function nest(inner: ReactNode, depth: number, prefix: string): ReactNode {
   let node = inner
   for (let level = depth - 1; level >= 0; level--) {
-    const Wrapper = makeWrapper(level)
+    const Wrapper = makeWrapper(level, prefix)
     node = <Wrapper>{node}</Wrapper>
   }
   return node
@@ -151,6 +158,7 @@ export function buildDashboardPage(params: DashboardParams): DashboardFixture {
   const liveCells = Math.min(Math.max(0, params.liveCells), partons)
   const depth = Math.max(0, params.depth)
   const sharedPulseCell = params.sharedPulseCell ?? false
+  const idPrefix = params.idPrefix ?? ""
 
   // The shared cell all pulse leaves partition. Constructed per fixture
   // build (after the runner's resetWorld) so scenario runs don't collide
@@ -164,28 +172,28 @@ export function buildDashboardPage(params: DashboardParams): DashboardFixture {
   for (let i = 0; i < partons; i++) {
     if (i < liveCells) {
       if (pulse) {
-        const Leaf = makePulseLeaf(i, pulse)
+        const Leaf = makePulseLeaf(i, pulse, idPrefix)
         leaves.push(<Leaf key={i} />)
         // The exact selector a `pulse.set(v, {partition: {part: i}})` fires.
         liveSelectors.push(buildCellSelector(PULSE_CELL_ID, { part: i }))
       } else {
-        const Leaf = makeLiveLeaf(i)
+        const Leaf = makeLiveLeaf(i, idPrefix)
         leaves.push(<Leaf key={i} />)
         // Inline cell id is `<partonId>/value`; single-slot partition `{}`.
-        liveSelectors.push(buildCellSelector(`leaf-${i}/value`, {}))
+        liveSelectors.push(buildCellSelector(`${idPrefix}leaf-${i}/value`, {}))
       }
     } else {
-      const Leaf = makeStaticLeaf(i)
+      const Leaf = makeStaticLeaf(i, idPrefix)
       leaves.push(<Leaf key={i} />)
     }
   }
 
-  const body = nest(<>{leaves}</>, depth)
+  const body = nest(<>{leaves}</>, depth, idPrefix)
   const Page = () => <PartialRoot>{body}</PartialRoot>
 
   return {
     Page,
     liveSelectors,
-    params: { partons, liveCells, depth, sharedPulseCell },
+    params: { partons, liveCells, depth, sharedPulseCell, idPrefix },
   }
 }
