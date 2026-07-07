@@ -1,16 +1,12 @@
 "use client"
 
 import { useEffect } from "react"
+import { _channelConnectionClosed } from "./channel-client.ts"
 import { _anyCullObservers } from "./cull-park.ts"
 import { useNavigation } from "./partial-client.tsx"
-import {
-  _getLiveConnectionId,
-  _setLiveConnectionId,
-  _takeLiveCatchupAnchor,
-} from "./partial-client-state.ts"
+import { _takeLiveCatchupAnchor } from "./partial-client-state.ts"
 import {
   _onFirstMeasurement,
-  _syncConnectionVisibility,
   _visibilityMeasured,
   _visibleSetParam,
 } from "./visibility.tsx"
@@ -109,15 +105,15 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
         return
       }
       inFlight = new AbortController()
-      // Each fire is one connection, identified by a fresh id the
-      // server's segment driver keys its connection session on
-      // (`?__conn=`). The session is what visibility-report POSTs
-      // address; seeding the fire with the controller's current
-      // `?visible=` set (absent while unmeasured) means the whole-tree
-      // first segment already renders against the client's measured
-      // viewport instead of the cold anchor seed.
-      const connectionId = crypto.randomUUID()
-      const params: Record<string, string> = { __conn: connectionId }
+      // Each fire is one connection. The SERVER mints its id at
+      // session open and ships it down as the stream's `conn` entry;
+      // the channel transport establishes on receipt (the wire hook in
+      // `entry/browser.tsx`), so envelopes can address the session the
+      // moment the handshake arrives. Seeding the fire with the
+      // controller's current `?visible=` set (absent while unmeasured)
+      // means the whole-tree first segment already renders against the
+      // client's measured viewport instead of the cold anchor seed.
+      const params: Record<string, string> = {}
       const visibleSeed = _visibleSetParam()
       if (visibleSeed !== undefined) params.visible = visibleSeed
       // The document's registry anchor (take-once): present it so the
@@ -133,55 +129,31 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
       // `streaming: true` makes the client commit each pushed segment
       // progressively. The two are orthogonal — a targeted refetch
       // takes `streaming` without `live` and stays one-shot.
-      const { streaming, finished } = reload({
+      //
+      // Establishment is not this component's concern: the stream's
+      // `conn` entry (the server-minted id) establishes the connection
+      // with the channel transport as it is read. The transport owns
+      // the downstream signals — the `data-parton-live` liveness
+      // marker (set at establishment, removed below when the
+      // connection settles; specs and tooling wait on it instead of
+      // guessing whether a stream is open) and the establishment
+      // listeners (the visibility controller arms its full-set sync
+      // there). Fires are strictly sequential (`inFlight` gates), so
+      // one fire's close always precedes the next fire's
+      // establishment.
+      const { finished } = reload({
         streaming: true,
         live: true,
         signal: inFlight.signal,
         params,
       })
-      // `<html data-parton-live>` is the connection's own liveness
-      // marker: set when this fire's first segment has committed
-      // (the subscription is established and pushing), removed when
-      // the connection settles (keepalive elapsed, abort, error).
-      // Consumers that depend on a live push channel — specs waiting
-      // for a server-pushed update, tooling — wait on this signal
-      // instead of guessing whether a stream happens to be open.
-      // Fires are strictly sequential (`inFlight` gates), so the
-      // remove of one fire always precedes the set of the next.
-      // The connection id publishes on the same milestone — the first
-      // segment committing proves the server has the session open, so
-      // the visibility controller can start addressing it with report
-      // POSTs — and the sync call pushes the full current set right
-      // after: flips that fired between this fire's `?visible=` seed
-      // and now rode the reload fallback, and the session's set must
-      // catch up to them.
-      streaming
-        .then(() => {
-          if (!alive) return
-          document.documentElement.setAttribute("data-parton-live", connectionId)
-          _setLiveConnectionId(connectionId)
-          // Sync the full visible set at the first measurement — which
-          // may be BEFORE this publish (sync now) or after it (a
-          // catch-up boot can establish the connection while hydration
-          // is still adopting the observers' subtrees). Without the
-          // deferred arm, a connection published pre-measurement never
-          // learns the set: agreements with the primed display state
-          // aren't flips, so no report would ever carry it.
-          _onFirstMeasurement(() => {
-            if (_getLiveConnectionId() === connectionId) {
-              _syncConnectionVisibility(connectionId)
-            }
-          })
-        })
-        .catch(() => {})
       finished
         .catch(() => {
           // Network error / abort. Clear the in-flight slot so the
           // next interval tick can reopen.
         })
         .finally(() => {
-          document.documentElement.removeAttribute("data-parton-live")
-          if (_getLiveConnectionId() === connectionId) _setLiveConnectionId(null)
+          _channelConnectionClosed()
           inFlight = null
         })
     }

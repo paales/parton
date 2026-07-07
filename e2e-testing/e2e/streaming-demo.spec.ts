@@ -31,10 +31,11 @@ test("live tick advances over time on one rolling response", async ({ page }) =>
   await expect(tick).toBeAttached({ timeout: 10000 })
 
   // The tick only advances while the live subscription is open — the
-  // heartbeat marks `<html data-parton-live>` once its stream's first
-  // segment has committed. Wait for that signal, THEN observe an
-  // advance: the segment loop wakes at each second boundary, so a new
-  // tick must land on the same rolling response.
+  // channel transport marks `<html data-parton-live>` once the
+  // stream's `conn` handshake arrives (the session is open
+  // server-side). Wait for that signal, THEN observe an advance: the
+  // segment loop wakes at each second boundary, so a new tick must
+  // land on the same rolling response.
   await waitForLiveConnection(page)
   const initial = (await tick.textContent())?.match(/Tick #(\d+)/)?.[1]
   expect(initial).toBeDefined()

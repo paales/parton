@@ -88,13 +88,14 @@ interface RequestStore {
    *  Lazily created on the first write. */
   cellWrites?: { total: number; deferred: number }
   /** The live connection's session state — opened by the segment
-   *  driver for a `?live=1&__conn=` request and carried on the ALS
-   *  store for the connection's lifetime (the driver loops inside one
-   *  `runWithRequestAsync` scope). What the `visible()` hook and the
-   *  fingerprint fold's store-and-reread consult FIRST for the
-   *  connection's current visible set; visibility-report POSTs update
-   *  it between wakes (see `../lib/connection-session.ts`). One-shot
-   *  requests never set it and fall back to the `?visible=` URL param. */
+   *  driver for a `?live=1` request (under its server-minted id) and
+   *  carried on the ALS store for the connection's lifetime (the
+   *  driver loops inside one `runWithRequestAsync` scope). What the
+   *  cull gate and the fingerprint fold's store-and-reread consult
+   *  FIRST for the connection's current visible set; channel
+   *  envelopes' `visible` frames update it between wakes (see
+   *  `../lib/connection-session.ts`). One-shot requests never set it
+   *  and fall back to the `?visible=` URL param. */
   connectionSession?: ConnectionSessionHandle | null
 }
 
@@ -345,7 +346,7 @@ export function _getCachedOverride(): CachedOverride | null {
 
 /** Attach (or detach) the live connection's session to the request
  *  store. Called by the segment driver when it opens/closes the
- *  session for a `?live=1&__conn=` connection. */
+ *  session for a `?live=1` connection. */
 export function _setConnectionSession(session: ConnectionSessionHandle | null): void {
   const store = requestContext.getStore()
   if (store) store.connectionSession = session

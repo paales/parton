@@ -32,7 +32,7 @@ pipeline:
    runs; the wire carries its client-rendered `skeleton` + props, the
    fp folds the RESOLVED visibility (`measurement ?? seed(props)`).
    Framework transport params (`TRANSPORT_PARAMS`: partials, cached,
-   live, streaming, since, visible, __conn, __frame, __frameUrl,
+   live, streaming, since, visible, __frame, __frameUrl,
    __cullFlip) are stripped before evaluation — match never sees them.
 2. **The body reads; the read IS the dependency.** Tracked hooks —
    `searchParam()`, `cookie()`, `header()`, `pathname()`, `match()`,
@@ -132,7 +132,7 @@ export async function saveProfile(args: { name: string; bio: string }) {
 | Folder | For |
 |---|---|
 | [`docs/reference/`](./docs/reference/) | Framework contracts. `intro` · `partial` · `block` · `cells` · `frames-navigation` · `remote-frame` · `cache` · `cms` · `prior-art`. Read these to USE the framework. |
-| [`docs/internals/`](./docs/internals/) | Mechanisms. `testing` · `render-pipeline` · `streaming` · `cache-internals` · `cell-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `server-context` · `flight-gotchas`. Read these to MODIFY the framework. |
+| [`docs/internals/`](./docs/internals/) | Mechanisms. `testing` · `render-pipeline` · `streaming` · `channel` · `cache-internals` · `cell-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `server-context` · `flight-gotchas`. Read these to MODIFY the framework. |
 | [`docs/notes/`](./docs/notes/) | Active research: backlog (`IDEAS.md`), live design docs for unshipped work, framing notes. |
 | [`docs/archive/`](./docs/archive/) | Superseded designs and debugging logs. Reference only. |
 

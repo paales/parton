@@ -20,6 +20,7 @@ import {
 import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { rscStream } from "rsc-html-stream/client";
+import { _channelWireEntry } from "../lib/channel-client.ts";
 import type { FpUpdatesPayload } from "../lib/fp-trailer-marker.ts";
 import {
 	type DemuxedLane,
@@ -154,7 +155,6 @@ async function main() {
 			"streaming",
 			"live",
 			"since",
-			"__conn",
 			"visible",
 			"page",
 			"__frame",
@@ -297,7 +297,15 @@ async function main() {
 					_commitPartonLane(node, fp);
 				};
 				try {
-					for await (const segment of splitSegments(response.body, signal)) {
+					// `_channelWireEntry` watches the entries for the `conn`
+					// handshake — a live fire's server-minted connection id,
+					// established with the channel transport the moment it is
+					// read (one-shot responses never carry one).
+					for await (const segment of splitSegments(
+						response.body,
+						signal,
+						_channelWireEntry,
+					)) {
 						if (segment.kind === "lanes") {
 							// The subscription is established the moment the lanes
 							// region opens. On a catch-up boot (`?since=` honored)

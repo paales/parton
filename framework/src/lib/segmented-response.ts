@@ -46,6 +46,7 @@ import {
 	_onNextBump,
 	_registryEpoch,
 } from "../runtime/invalidation-registry.ts";
+import { getSessionId } from "../runtime/session.ts";
 import {
 	_closeConnectionSession,
 	_openConnectionSession,
@@ -58,6 +59,7 @@ import { wrapStreamWithFpTrailer } from "./fp-trailer.ts";
 import {
 	buildMarker,
 	type FpUpdatesPayload,
+	TAG_CONNECTION_ID,
 	TAG_LANES_OPEN,
 	TAG_NEXT_SEGMENT,
 	TAG_SEGMENT_SETTLED,
@@ -198,14 +200,14 @@ export async function driveSegmentedResponse(
 	const nextMarker = buildMarker(TAG_NEXT_SEGMENT, 0);
 	const settledMarker = buildMarker(TAG_SEGMENT_SETTLED, 0);
 
-	// A live subscription carrying a connection id gets a connection
-	// session — the per-connection state slot visibility-report POSTs
-	// address. Opened BEFORE the first segment renders so a report can
-	// land at any point of the connection's lifetime, and so the first
+	// A live subscription gets a connection session — the per-connection
+	// state slot channel envelopes address, under a SERVER-MINTED id.
+	// Opened BEFORE the first segment renders so an envelope can land at
+	// any point of the connection's lifetime, and so the first
 	// whole-tree segment already reads the client's measured set (the
 	// session seeds from the request's `?visible=` param). Closed when
-	// the drive loop exits: a report for a closed session gets a `404`,
-	// the client controller's explicit fall-back-to-reload signal.
+	// the drive loop exits: an envelope for a closed session gets a
+	// `404`, the client transport's explicit fall-back signal.
 	const session = openLiveConnectionSession();
 	try {
 		await driveSegments();
@@ -235,6 +237,7 @@ export async function driveSegmentedResponse(
 		if (catchUpTs !== null && session !== null) {
 			installCatchupCachedOverride();
 			controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
+			enqueueConnectionId(controller, session.id);
 			await driveLaneStream(controller, catchUpTs, settledMarker, session, demand);
 			return;
 		}
@@ -244,6 +247,16 @@ export async function driveSegmentedResponse(
 
 			if (segmentIndex > 0) {
 				controller.enqueue(nextMarker);
+			}
+
+			// The server-minted connection id, ahead of the first segment's
+			// Flight rows — an ENTRY, so the splitter surfaces it and keeps
+			// the body flowing. Shipping it FIRST means the client transport
+			// can address the session before the whole-tree render has even
+			// drained; the id's existence proves the session is open (it was
+			// minted at session open, above).
+			if (segmentIndex === 0 && session !== null) {
+				enqueueConnectionId(controller, session.id);
 			}
 
 			const flightStream = renderSegment();
@@ -412,12 +425,18 @@ function installCatchupCachedOverride(): void {
 
 /**
  * Open the connection session for the active request when it is a live
- * subscription carrying a `?__conn=` connection id, seeding the visible
- * set from the request's `?visible=` param (`null` when absent — the
- * pre-measurement state). The session is stamped onto the request's ALS
- * store so `visible()` / `evalDepKeys` read it for the connection's
- * whole lifetime. Returns `null` for one-shot requests and id-less live
- * subscriptions (no POST can address those, so no session is needed).
+ * subscription, under a SERVER-MINTED connection id (never a
+ * client-chosen URL param — that shape invites fixation and leaks the
+ * addressable token into access logs; the id ships downstream as the
+ * stream's `conn` entry instead). Seeds the visible set from the
+ * request's `?visible=` param (`null` when absent — the
+ * pre-measurement state) and binds the attach's scope + session
+ * identity (what every channel envelope must re-present — see
+ * `handleChannelPost` in `connection-session.ts`). The session is
+ * stamped onto the request's ALS store so the cull gate and
+ * `evalDepKeys` read it for the connection's whole lifetime. Returns
+ * `null` for one-shot requests — no envelope can address those, so no
+ * session is needed.
  */
 function openLiveConnectionSession(): ConnectionSession | null {
 	let request: Request;
@@ -428,14 +447,27 @@ function openLiveConnectionSession(): ConnectionSession | null {
 	}
 	const params = new URL(request.url).searchParams;
 	if (params.get("live") !== "1") return null;
-	const id = params.get("__conn");
-	if (!id) return null;
 	const rawVisible = params.get("visible");
 	const seed =
 		rawVisible === null ? null : new Set(rawVisible.split(",").filter(Boolean));
-	const session = _openConnectionSession(id, seed);
+	const session = _openConnectionSession(crypto.randomUUID(), seed, {
+		scope: getScope(),
+		sessionId: getSessionId() ?? "",
+	});
 	_setConnectionSession(session);
 	return session;
+}
+
+/** Frame the server-minted connection id as a `conn` entry — the
+ *  establishment handshake the client's channel transport keys every
+ *  upstream envelope on. Emitted once per connection. */
+function enqueueConnectionId(
+	controller: ReadableStreamDefaultController<Uint8Array>,
+	id: string,
+): void {
+	const body = new TextEncoder().encode(id);
+	controller.enqueue(buildMarker(TAG_CONNECTION_ID, body.byteLength));
+	controller.enqueue(body);
 }
 
 /** One open lane: a parton whose payload is currently rendering and
@@ -487,11 +519,12 @@ interface LaneRuntime {
  * re-renders the returning state fresh (its fp folds every bump that
  * landed while parked, so it can't false-skip).
  *
- * Visibility flips are the fourth wake: a report POST updates the
- * connection session's visible set and queues each flipped id with the
- * report's OWN statement about it, and the driver lanes exactly the
- * ids whose standing statement is an in-flip — with `visible()` (and
- * the fp fold's store-and-reread) reading the session's CURRENT set. A
+ * Visibility flips are the fourth wake: a channel envelope's `visible`
+ * frame updates the connection session's set and queues each flipped
+ * id with the frame's OWN statement about it, and the driver lanes
+ * exactly the ids whose standing statement is an in-flip — with the
+ * cull gate (and the fp fold's store-and-reread) reading the session's
+ * CURRENT set. A
  * flipped id's fps are dropped from the cached override first: a
  * visibility fp CYCLES between the same two values (in ↔ out), so a
  * stale override entry would fp-skip a re-entry to a placeholder whose
@@ -738,14 +771,18 @@ async function driveLaneStream(
 	let idleDeadline = Date.now() + KEEPALIVE_MS;
 
 	let since = sinceTs;
-	while (!closed) {
-		// A report that landed while the driver was busy (rendering lanes,
-		// or between the lanes hand-off and this loop) is already queued on
-		// the session — consume it without parking on the wake arms first;
-		// a drain that landed while busy is likewise latched. Deferred
-		// flips deliberately do NOT short-circuit the wait: they only
-		// re-resolve on a real wake, so an unknown id can't busy-loop the
-		// driver.
+	// `session.detached` exits alongside `closed`: an explicit detach
+	// frame fires the flip wakes, the parked wait returns, and the
+	// condition winds the drive down — the stream closes now instead of
+	// holding a goner for the keepalive window.
+	while (!closed && session?.detached !== true) {
+		// A statement that landed while the driver was busy (rendering
+		// lanes, or between the lanes hand-off and this loop) is already
+		// queued on the session — consume it without parking on the wake
+		// arms first; a drain that landed while busy is likewise latched.
+		// Deferred flips deliberately do NOT short-circuit the wait: they
+		// only re-resolve on a real wake, so an unknown id can't busy-loop
+		// the driver.
 		const wake: SegmentWake =
 			session !== null && session.pendingFlips.size > 0
 				? "visibility"
@@ -931,7 +968,7 @@ interface SegmentWakeOptions {
  *   - the keepalive cap, measured from the last segment so a run of
  *     irrelevant bumps can't hold the connection open indefinitely.
  *   - optionally, a lane draining (per-parton driver only).
- *   - optionally, a visibility report landing on the connection
+ *   - optionally, a channel statement landing on the connection
  *     session (per-parton driver only).
  *
  * Returns the arm that fired, or `false` to close the stream (the

@@ -1,48 +1,50 @@
 /**
  * Connection-session visibility — flips ride the OPEN live connection.
  *
- * The client's visibility controller reports viewport flips as
- * fire-and-forget POSTs addressed to the live connection's explicit
- * `__conn` id; the segment driver stores the set as connection-session
- * state and treats each report like an invalidation wake, rendering the
- * flipped-IN partons as lanes on the EXISTING stream with the cull
- * gate reading the session's CURRENT set.
+ * The client's visibility controller states viewport flips as
+ * `visible` frames on channel envelopes (`POST /__parton/channel`),
+ * addressed to the live connection's explicit id; the segment driver
+ * stores the set as connection-session state and treats each statement
+ * like an invalidation wake, rendering the flipped-IN partons as lanes
+ * on the EXISTING stream with the cull gate reading the session's
+ * CURRENT set.
  *
  * The claims under test:
  *   1. the `?visible=` seed on the `?live=1` request drives the
  *      whole-tree first segment (no cold-seed clobber): out-of-set
  *      partons emit the pair (body skipped), in-set ones render;
- *   2. a report wakes a lane for EXACTLY the flipped-IN parton,
- *      rendered against the reported set — untouched siblings never
- *      re-render, and a cull-OUT lanes NOTHING (the client swaps to
- *      its inline skeleton locally; the report's only server effect is
- *      the session-set update that keeps lane parking honest);
+ *   2. a `visible` frame wakes a lane for EXACTLY the flipped-IN
+ *      parton, rendered against the stated set — untouched siblings
+ *      never re-render, and a cull-OUT lanes NOTHING (the client swaps
+ *      to its inline skeleton locally; the statement's only server
+ *      effect is the session-set update that keeps lane parking
+ *      honest);
  *   3. a flip cycle (in → out → in) settles the returning state with
  *      fp-skip semantics: the content fp is unchanged, so cycling back
  *      answers with the zero-byte confirmation placeholder — the body
  *      never re-runs for content the client provably holds;
- *   4. a flip whose parton has no route snapshot yet (the report raced
- *      the render that first materializes it) is DEFERRED, not dropped —
- *      it resolves into a lane on a later wake once the snapshot lands;
- *   5. session lifecycle — a report for a connection that was never
- *      opened, or whose drive loop has exited, is refused (the client's
- *      explicit fall-back-to-reload signal), and the endpoint handler
- *      maps apply/refuse/malformed to 204/404/400;
- *   6. report ordering — a stale report (older seq) can't regress the
- *      set or overwrite a newer pending statement; its flips still
- *      queue, each carrying its own report's statement;
+ *   4. a flip whose parton has no route snapshot yet (the statement
+ *      raced the render that first materializes it) is DEFERRED, not
+ *      dropped — it resolves into a lane on a later wake once the
+ *      snapshot lands;
+ *   5. session lifecycle — an envelope for a connection that was never
+ *      opened, or whose drive loop has exited, answers `404` (the
+ *      client's explicit fall-back-to-reload signal);
+ *   6. envelope ordering — a stale envelope (older seq) can't regress
+ *      the set or overwrite a newer pending statement; its flips still
+ *      queue, each carrying its own frame's statement;
  *   7. PARKED partons don't lane — a bump touching a parton outside
  *      the session's measured visible set renders nothing, and a
  *      culled parton has NO wake surface at all (its snapshot records
  *      the gate's reads only: no cell labels, no expires deadline);
  *      the flip-in revalidation re-renders the returning state fresh,
  *      folding everything that landed while parked;
- *   8. flip resolution is PER-REPORT — each pending flip resolves
- *      against its own report's statement (the id's presence in THAT
- *      report's `visible` snapshot), never against a later report's
+ *   8. flip resolution is PER-STATEMENT — each pending flip resolves
+ *      against its own frame's statement (the id's presence in THAT
+ *      frame's `visible` snapshot), never against a later frame's
  *      snapshot: a mid-scroll burst legitimately dips the snapshot
  *      while an earlier in-flip is still pending, and the client
- *      reports each flip exactly once, so resolving it against the
+ *      states each flip exactly once, so resolving it against the
  *      dip would drop it forever. Only an explicit later statement
  *      about the SAME id can turn a pending in-flip out (last
  *      statement wins, ordered by seq).
@@ -54,16 +56,18 @@ import {
 	_clearInvalidationRegistry,
 	refreshSelector,
 } from "../../runtime/invalidation-registry.ts";
+import { runWithRequestAsync } from "../../runtime/context.ts";
 import {
 	decodeLane,
 	drainPayloadSegment,
 	freshLiveScope,
 	withLiveDrive,
 } from "../../test/live-drive.tsx";
+import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts";
 import {
 	_closeConnectionSession,
 	_openConnectionSession,
-	handleVisibilityReport,
+	handleChannelPost,
 	reportConnectionVisibility,
 	takeConnectionFlips,
 } from "../connection-session.ts";
@@ -71,7 +75,6 @@ import type { DemuxedLane } from "../fp-trailer-split.ts";
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx";
 import { clearRegistry } from "../partial-registry.ts";
 import { expires, time } from "../server-hooks.ts";
-import { VISIBILITY_ENDPOINT } from "../visibility-protocol.ts";
 import { SkelBox } from "./cull-skeleton-fixture.tsx";
 
 // Module-scope render counters — bumped every time a Render body runs.
@@ -169,13 +172,55 @@ async function nextLane(
 	return step.value;
 }
 
+/** POST one `visible` frame through the channel endpoint, the way the
+ *  client transport delivers it — a full envelope through the request
+ *  scope the entry wraps around `handleChannelPost`. Returns the HTTP
+ *  status (`204` applied, `404` connection gone). `scope` mirrors the
+ *  drive's own — beacons carry the same `x-test-scope` the page's
+ *  requests do (Playwright stamps the browser context). */
+async function postVisible(
+	scope: string | undefined,
+	connection: string,
+	seq: number,
+	changed: string[],
+	visible: string[],
+	cached?: string[],
+): Promise<number> {
+	const envelope: ChannelEnvelope = {
+		connection,
+		seq,
+		frames: [
+			{
+				kind: "visible",
+				changed,
+				visible,
+				...(cached !== undefined ? { cached } : {}),
+			},
+		],
+	};
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+	};
+	if (scope !== undefined) headers["x-test-scope"] = scope;
+	const request = new Request(`http://localhost${CHANNEL_ENDPOINT}`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify(envelope),
+	});
+	const { result } = await runWithRequestAsync(request, () =>
+		handleChannelPost(request),
+	);
+	return result.status;
+}
+
 describe("connection-session visibility", () => {
 	it("the ?visible= seed drives the first segment; in-flips lane, out-flips don't", async () => {
-		const conn = "conn-vis-1";
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			`http://localhost/world?live=1&visible=cull-a`,
 			Page,
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				// Segment 0: whole tree, rendered against the SEEDED set — a is
 				// in (body renders), b is out (body SKIPPED: the pair ships with
@@ -184,6 +229,8 @@ describe("connection-session visibility", () => {
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(seg0).toContain("a:full:1");
 				expect(seg0).not.toContain("b:full");
 				expect(seg0).toContain('"id":"cull-b"');
@@ -193,8 +240,8 @@ describe("connection-session visibility", () => {
 				// Flip b IN. The driver must answer with a lane for cull-b only,
 				// rendered against the updated session set.
 				expect(
-					reportConnectionVisibility(conn, 1, ["cull-b"], ["cull-a", "cull-b"]),
-				).toBe(true);
+					await postVisible(scope, conn, 1, ["cull-b"], ["cull-a", "cull-b"]),
+				).toBe(204);
 				const second = await h.segments.next();
 				if (second.done || second.value.kind !== "lanes")
 					throw new Error("expected lanes segment");
@@ -203,16 +250,16 @@ describe("connection-session visibility", () => {
 				const laneIn = await nextLane(laneIter);
 				expect(laneIn.partonId).toBe("cull-b");
 				expect((await decodeLane(laneIn)).bodyText).toContain("b:full:1");
-				// The sibling never re-ran — the report named only cull-b.
+				// The sibling never re-ran — the statement named only cull-b.
 				expect(renders.a).toBe(1);
 
 				// Flip b OUT: NOTHING lanes — the client already swapped to its
-				// inline skeleton; the report's server effect is the session-set
-				// update alone. Prove it by bumping a next: the next lane on the
-				// wire is a's, and b's body never re-ran.
-				expect(
-					reportConnectionVisibility(conn, 2, ["cull-b"], ["cull-a"]),
-				).toBe(true);
+				// inline skeleton; the statement's server effect is the
+				// session-set update alone. Prove it by bumping a next: the next
+				// lane on the wire is a's, and b's body never re-ran.
+				expect(await postVisible(scope, conn, 2, ["cull-b"], ["cull-a"])).toBe(
+					204,
+				);
 				refreshSelector("cull-a");
 				const laneA = await nextLane(laneIter);
 				expect(laneA.partonId).toBe("cull-a");
@@ -225,8 +272,8 @@ describe("connection-session visibility", () => {
 				// confirm marker is what re-arms the restored fiber as a live
 				// instance client-side.
 				expect(
-					reportConnectionVisibility(conn, 3, ["cull-b"], ["cull-a", "cull-b"]),
-				).toBe(true);
+					await postVisible(scope, conn, 3, ["cull-b"], ["cull-a", "cull-b"]),
+				).toBe(204);
 				const laneBack = await nextLane(laneIter);
 				expect(laneBack.partonId).toBe("cull-b");
 				const backBody = (await decodeLane(laneBack)).bodyText;
@@ -239,22 +286,25 @@ describe("connection-session visibility", () => {
 				await h.shutdown("cull-b");
 			},
 		);
-		// The drive loop exited — the session is closed, so a late report is
-		// refused (the client falls back to the render-reload path).
-		expect(reportConnectionVisibility(conn, 4, ["cull-b"], [])).toBe(false);
+		// The drive loop exited — the session is closed, so a late envelope
+		// answers 404 (the client falls back to the render-reload path).
+		expect(await postVisible(scope, conn, 4, ["cull-b"], [])).toBe(404);
 	});
 
 	it("a flip for an id the route never rendered defers without disturbing the stream", async () => {
-		const conn = "conn-vis-2";
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=`,
+			`http://localhost/world?live=1&visible=`,
 			Page,
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				// An EMPTY seed is a measurement too — everything out, no body
 				// runs anywhere.
 				expect(seg0).not.toContain("a:full");
@@ -262,15 +312,27 @@ describe("connection-session visibility", () => {
 				expect(renders.a).toBe(0);
 				expect(renders.b).toBe(0);
 
-				// A report naming an unknown id must not open a lane (it stays
-				// deferred); the next real flip still lanes normally on the same
-				// connection.
+				// A statement naming an unknown id must not open a lane (it
+				// stays deferred); the next real flip still lanes normally on
+				// the same connection.
 				expect(
-					reportConnectionVisibility(conn, 1, ["not-on-this-route"], ["not-on-this-route"]),
-				).toBe(true);
+					await postVisible(
+						scope,
+						conn,
+						1,
+						["not-on-this-route"],
+						["not-on-this-route"],
+					),
+				).toBe(204);
 				expect(
-					reportConnectionVisibility(conn, 2, ["cull-a"], ["cull-a", "not-on-this-route"]),
-				).toBe(true);
+					await postVisible(
+						scope,
+						conn,
+						2,
+						["cull-a"],
+						["cull-a", "not-on-this-route"],
+					),
+				).toBe(204);
 				const second = await h.segments.next();
 				if (second.done || second.value.kind !== "lanes")
 					throw new Error("expected lanes segment");
@@ -285,31 +347,36 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a flip racing the render that first materializes its parton defers, then lanes once the snapshot lands", async () => {
-		const conn = "conn-vis-3";
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=`,
+			`http://localhost/world?live=1&visible=`,
 			NestedPage,
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				// Parent culled out → the child never rendered: no snapshot for
 				// it exists anywhere yet.
 				expect(seg0).not.toContain("parent-full");
 				expect(seg0).not.toContain("child:");
 
-				// One report flips parent AND child in — the child's flip races
-				// the very render (the parent's lane) that will materialize it.
+				// One statement flips parent AND child in — the child's flip
+				// races the very render (the parent's lane) that will
+				// materialize it.
 				expect(
-					reportConnectionVisibility(
+					await postVisible(
+						scope,
 						conn,
 						1,
 						["cull-parent", "cull-child-late"],
 						["cull-parent", "cull-child-late"],
 					),
-				).toBe(true);
+				).toBe(204);
 				const second = await h.segments.next();
 				if (second.done || second.value.kind !== "lanes")
 					throw new Error("expected lanes segment");
@@ -342,31 +409,34 @@ describe("connection-session visibility", () => {
 		);
 	});
 
-	it("an in-flip resolves against its OWN report's statement, not a later report's snapshot dip", async () => {
-		const conn = "conn-vis-burst";
+	it("an in-flip resolves against its OWN frame's statement, not a later frame's snapshot dip", async () => {
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			`http://localhost/world?live=1&visible=cull-a`,
 			Page,
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(seg0).toContain("a:full:1");
 				expect(renders.b).toBe(0);
 
-				// The burst: report 1 flips b IN (its snapshot holds b); report
-				// 2 lands before the driver drains — a exits, and the snapshot
-				// DIPS below b too (its node is mid-swap client-side) WITHOUT
-				// an out-flip for b in `changed`. b's pending in-flip must
-				// resolve against report 1's statement and lane; the client
-				// reports each flip exactly once, so resolving it against
-				// report 2's snapshot would drop it forever.
+				// The burst: envelope 1 flips b IN (its snapshot holds b);
+				// envelope 2 lands before the driver drains — a exits, and the
+				// snapshot DIPS below b too (its node is mid-swap client-side)
+				// WITHOUT an out-flip for b in `changed`. b's pending in-flip
+				// must resolve against envelope 1's statement and lane; the
+				// client states each flip exactly once, so resolving it against
+				// envelope 2's snapshot would drop it forever.
 				expect(
-					reportConnectionVisibility(conn, 1, ["cull-b"], ["cull-a", "cull-b"]),
-				).toBe(true);
-				expect(reportConnectionVisibility(conn, 2, ["cull-a"], [])).toBe(true);
+					await postVisible(scope, conn, 1, ["cull-b"], ["cull-a", "cull-b"]),
+				).toBe(204);
+				expect(await postVisible(scope, conn, 2, ["cull-a"], [])).toBe(204);
 
 				const second = await h.segments.next();
 				if (second.done || second.value.kind !== "lanes")
@@ -378,12 +448,12 @@ describe("connection-session visibility", () => {
 				// a's out-flip laned nothing — its cull completed client-side.
 				expect(renders.a).toBe(1);
 
-				// The SET itself still took report 2's snapshot wholesale: a
+				// The SET itself still took envelope 2's snapshot wholesale: a
 				// re-enters via an explicit flip-in, and the driver answers
 				// with a's lane.
 				expect(
-					reportConnectionVisibility(conn, 3, ["cull-a"], ["cull-a", "cull-b"]),
-				).toBe(true);
+					await postVisible(scope, conn, 3, ["cull-a"], ["cull-a", "cull-b"]),
+				).toBe(204);
 				const laneA = await nextLane(laneIter);
 				expect(laneA.partonId).toBe("cull-a");
 
@@ -393,23 +463,32 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a later out-flip statement wins over the same id's earlier pending in-flip", async () => {
-		const conn = "conn-vis-burst-out";
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a`,
+			`http://localhost/world?live=1&visible=cull-a`,
 			Page,
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(renders.b).toBe(0);
 
 				// The burst: b flips in (seq 1), then explicitly OUT again
 				// (seq 2) before the driver drains. The last statement about b
 				// wins — nothing lanes for it, its body never runs. The bump
 				// on a provides the positive signal: the next lane on the wire
-				// is a's.
+				// is a's. Applied at the session level, not through the
+				// endpoint: the claim requires BOTH statements standing before
+				// the drain, and only a synchronous apply pins that ordering
+				// against the concurrently-parked driver (the endpoint's
+				// envelope→session parity is the endpoint suite's claim; the
+				// client transport coalesces a same-tick burst into one
+				// envelope anyway).
 				expect(
 					reportConnectionVisibility(conn, 1, ["cull-b"], ["cull-a", "cull-b"]),
 				).toBe(true);
@@ -432,27 +511,36 @@ describe("connection-session visibility", () => {
 		);
 	});
 
-	it("a deferred in-flip is cancelled by a later report's explicit out-flip", async () => {
-		const conn = "conn-vis-defer-out";
+	it("a deferred in-flip is cancelled by a later frame's explicit out-flip", async () => {
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=`,
+			`http://localhost/world?live=1&visible=`,
 			NestedPage,
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 
 				// The child flips in while it has no snapshot (parent culled →
 				// it never rendered) — the flip defers. Then an explicit
 				// out-flip lands for it: the deferred in-flip must cancel.
 				expect(
-					reportConnectionVisibility(conn, 1, ["cull-child-late"], ["cull-child-late"]),
-				).toBe(true);
-				expect(
-					reportConnectionVisibility(conn, 2, ["cull-child-late"], []),
-				).toBe(true);
+					await postVisible(
+						scope,
+						conn,
+						1,
+						["cull-child-late"],
+						["cull-child-late"],
+					),
+				).toBe(204);
+				expect(await postVisible(scope, conn, 2, ["cull-child-late"], [])).toBe(
+					204,
+				);
 
 				// The parent's flip-in materializes the child's snapshot (as a
 				// culled pair — the session set holds only the parent). If the
@@ -460,8 +548,8 @@ describe("connection-session visibility", () => {
 				// drain and the child would lane next; instead the next lane
 				// is the parent's bump.
 				expect(
-					reportConnectionVisibility(conn, 3, ["cull-parent"], ["cull-parent"]),
-				).toBe(true);
+					await postVisible(scope, conn, 3, ["cull-parent"], ["cull-parent"]),
+				).toBe(204);
 				const second = await h.segments.next();
 				if (second.done || second.value.kind !== "lanes")
 					throw new Error("expected lanes segment");
@@ -479,46 +567,46 @@ describe("connection-session visibility", () => {
 		);
 	});
 
-	it("a report for a connection that was never opened is refused", () => {
-		expect(reportConnectionVisibility("never-opened", 1, ["x"], ["x"])).toBe(
-			false,
+	it("an envelope for a connection that was never opened answers 404", async () => {
+		expect(await postVisible(undefined, "never-opened", 1, ["x"], ["x"])).toBe(
+			404,
 		);
 	});
 
-	it("a stale report (older seq) cannot regress the set, but its flips still queue", () => {
+	it("a stale envelope (older seq) cannot regress the set, but its flips still queue", async () => {
 		const session = _openConnectionSession("conn-vis-seq", null);
 		try {
-			expect(reportConnectionVisibility("conn-vis-seq", 2, ["x"], ["x"])).toBe(
-				true,
+			expect(await postVisible(undefined, "conn-vis-seq", 2, ["x"], ["x"])).toBe(
+				204,
 			);
 			// Older seq arrives late: the set stays at seq 2's value…
-			expect(reportConnectionVisibility("conn-vis-seq", 1, ["y"], [])).toBe(
-				true,
+			expect(await postVisible(undefined, "conn-vis-seq", 1, ["y"], [])).toBe(
+				204,
 			);
 			expect(session.visible).toEqual(new Set(["x"]));
 			// …but the flip queued — y still gets drained, carrying its own
-			// report's statement (out: y was absent from that snapshot).
+			// frame's statement (out: y was absent from that snapshot).
 			const flips = takeConnectionFlips(session);
 			expect([...flips.keys()]).toEqual(["x", "y"]);
 			expect(flips.get("x")).toMatchObject({ inView: true, seq: 2 });
 			expect(flips.get("y")).toMatchObject({ inView: false, seq: 1 });
-			// The drain re-armed: nothing pending until the next report.
+			// The drain re-armed: nothing pending until the next statement.
 			expect(session.pendingFlips.size).toBe(0);
 		} finally {
 			_closeConnectionSession("conn-vis-seq");
 		}
 	});
 
-	it("a stale late report cannot overwrite a newer pending statement about the same id", () => {
+	it("a stale late envelope cannot overwrite a newer pending statement about the same id", async () => {
 		const session = _openConnectionSession("conn-vis-stmt", null);
 		try {
 			// Newest statement lands first (in), then an older out arrives
 			// late — the pending statement keeps the newer testimony.
-			expect(reportConnectionVisibility("conn-vis-stmt", 2, ["x"], ["x"])).toBe(
-				true,
-			);
-			expect(reportConnectionVisibility("conn-vis-stmt", 1, ["x"], [])).toBe(
-				true,
+			expect(
+				await postVisible(undefined, "conn-vis-stmt", 2, ["x"], ["x"]),
+			).toBe(204);
+			expect(await postVisible(undefined, "conn-vis-stmt", 1, ["x"], [])).toBe(
+				204,
 			);
 			const flips = takeConnectionFlips(session);
 			expect(flips.get("x")).toMatchObject({ inView: true, seq: 2 });
@@ -527,68 +615,27 @@ describe("connection-session visibility", () => {
 		}
 	});
 
-	it("the endpoint maps apply / unknown-connection / malformed to 204 / 404 / 400", async () => {
-		const post = (body: string) =>
-			handleVisibilityReport(
-				new Request(`http://localhost${VISIBILITY_ENDPOINT}`, {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body,
-				}),
-			);
-
-		_openConnectionSession("conn-vis-http", null);
-		try {
-			const ok = await post(
-				JSON.stringify({
-					connection: "conn-vis-http",
-					seq: 1,
-					changed: ["a"],
-					visible: ["a"],
-					cached: [],
-				}),
-			);
-			expect(ok.status).toBe(204);
-			expect(ok.body).toBeNull();
-
-			const gone = await post(
-				JSON.stringify({
-					connection: "conn-vis-gone",
-					seq: 1,
-					changed: [],
-					visible: [],
-					cached: [],
-				}),
-			);
-			expect(gone.status).toBe(404);
-
-			expect((await post("not json")).status).toBe(400);
-			expect((await post(JSON.stringify({ connection: "" }))).status).toBe(
-				400,
-			);
-		} finally {
-			_closeConnectionSession("conn-vis-http");
-		}
-	});
-
 	it("a bump touching a PARKED parton doesn't lane; the flip-in re-renders it fresh", async () => {
-		const conn = "conn-vis-parked";
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&__conn=${conn}&visible=cull-a,cull-b`,
+			`http://localhost/world?live=1&visible=cull-a,cull-b`,
 			Page,
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
 				const seg0 = await drainPayloadSegment(first.value);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 				expect(seg0).toContain("a:full:1");
 				expect(seg0).toContain("b:full:1");
 
 				// Park b (flip it out) — no lane; the client's swap is local.
-				expect(
-					reportConnectionVisibility(conn, 1, ["cull-b"], ["cull-a"]),
-				).toBe(true);
+				expect(await postVisible(scope, conn, 1, ["cull-b"], ["cull-a"])).toBe(
+					204,
+				);
 
 				// Bump parked b, then visible a. b must NOT lane — the next lane
 				// on the wire is a's.
@@ -607,8 +654,8 @@ describe("connection-session visibility", () => {
 				// landed while parked, so the lane re-renders fresh — the
 				// catch-up — instead of confirming the stale parked copy.
 				expect(
-					reportConnectionVisibility(conn, 2, ["cull-b"], ["cull-a", "cull-b"]),
-				).toBe(true);
+					await postVisible(scope, conn, 2, ["cull-b"], ["cull-a", "cull-b"]),
+				).toBe(204);
 				const laneIn = await nextLane(laneIter);
 				expect(laneIn.partonId).toBe("cull-b");
 				expect((await decodeLane(laneIn)).bodyText).toContain("b:full:2");
@@ -619,15 +666,16 @@ describe("connection-session visibility", () => {
 	});
 
 	it("a parked parton has no wake surface: its expires() deadline neither lanes nor hot-spins", async () => {
-		const conn = "conn-vis-parked-exp";
+		let conn = "";
+		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/pulse?live=1&__conn=${conn}&visible=cull-pulse`,
+			`http://localhost/pulse?live=1&visible=cull-pulse`,
 			() => (
 				<PartialRoot>
 					<CullPulse />
 				</PartialRoot>
 			),
-			freshLiveScope("conn-vis"),
+			scope,
 			async (h) => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
@@ -635,6 +683,8 @@ describe("connection-session visibility", () => {
 				expect(await drainPayloadSegment(first.value)).toContain(
 					"pulse:full:1",
 				);
+				conn = h.connectionId() ?? "";
+				expect(conn).not.toBe("");
 
 				// The declared boundary drives a lane while visible.
 				const second = await h.segments.next();
@@ -648,17 +698,15 @@ describe("connection-session visibility", () => {
 				// Park it: no out-lane, and the culled snapshot carries NO
 				// deadline (the gate records only its own reads) — so while
 				// parked, nothing lanes and nothing hot-spins the wake loop.
-				expect(
-					reportConnectionVisibility(conn, 1, ["cull-pulse"], []),
-				).toBe(true);
+				expect(await postVisible(scope, conn, 1, ["cull-pulse"], [])).toBe(204);
 				await new Promise((r) => setTimeout(r, 350));
 				expect(renders3.pulse).toBe(2);
 
 				// Flip-in catches up (the content snapshot's deadline elapsed
 				// while parked → fp-skip declines) and re-arms the boundary.
 				expect(
-					reportConnectionVisibility(conn, 2, ["cull-pulse"], ["cull-pulse"]),
-				).toBe(true);
+					await postVisible(scope, conn, 2, ["cull-pulse"], ["cull-pulse"]),
+				).toBe(204);
 				const laneIn = await nextLane(laneIter);
 				expect((await decodeLane(laneIn)).bodyText).toContain("pulse:full:3");
 

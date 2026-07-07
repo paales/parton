@@ -25,11 +25,12 @@ model below is the ORIGINAL design; its read-value tri-state fold is
 what the gate's resolved fold replaced.
 
 The refetch dispatch described below is now the NO-LIVE-CONNECTION
-fallback: with the heartbeat's stream open, flips travel as
-fire-and-forget report POSTs onto the connection's session and come
+fallback: with the heartbeat's stream open, flips travel as `visible`
+frames on channel envelopes onto the connection's session and come
 back as lane segments — see
 [`../internals/streaming.md`](../internals/streaming.md) §Visibility
-rides the connection.
+rides the connection and
+[`../internals/channel.md`](../internals/channel.md).
 
 Cull-to-park closed the note's original gap: a culling flip no longer
 replaces the mounted content (which destroyed client state and made

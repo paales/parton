@@ -345,8 +345,8 @@ export function getCachedPartialIds(): string[] {
 
 /**
  * The client's current cached tokens (`id:matchKey:fp`) for a specific
- * id set — the visibility report's holdings declaration (see
- * `visibility-protocol.ts`): a culling flip tells the server exactly
+ * id set — the `visible` frame's holdings declaration (see
+ * `channel-protocol.ts`): a culling flip tells the server exactly
  * what it holds for the flipped partons, so the lane's fp-skip verdict
  * can't confirm content the client already dropped.
  */
@@ -473,13 +473,13 @@ export function _takeLiveCatchupAnchor(): { epoch: string; ts: number } | null {
 
 /**
  * The connection id of the currently-established live stream, or
- * `null` when none is open. Owned by `<LivePageHeartbeat>`: it mints a
- * fresh id per fire (sent as `?__conn=` on the `?live=1` request),
- * publishes it here when the subscription's first segment commits (the
- * server has the session open by then), and clears it when the
- * connection settles. The visibility controller reads it to decide the
- * flip transport: id in hand → fire-and-forget report POST onto the
- * open connection; `null` → the one-shot render-reload fallback.
+ * `null` when none is open. SERVER-minted: the segment driver creates
+ * it at session open and ships it down as the stream's `conn` entry;
+ * the channel transport (`channel-client.ts`) publishes it here on
+ * receipt and clears it when the connection settles or an envelope's
+ * delivery fails. Producers read it to decide the statement
+ * transport: id in hand → frames on channel envelopes addressed to
+ * the open connection; `null` → their discrete fallback.
  */
 let _liveConnectionId: string | null = null;
 

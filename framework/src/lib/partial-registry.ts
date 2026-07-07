@@ -154,7 +154,7 @@ export interface PartialSnapshot {
    *  `refreshSelector` (CRUD path). */
   wakeHints?: WakeHints
   /** This snapshot is the parton's CULLED render (a cullable keepalive
-   *  spec whose `visible()` read was `false`). The culled state is a
+   *  spec whose cull gate resolved out-of-view). The culled state is a
    *  VARIANT — it stores beside the in-view snapshot (`variantKeyOf`
    *  suffixes the variant key), so each state keeps its own dep
    *  record and a culling flip's fp folds the record of the state it

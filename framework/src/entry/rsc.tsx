@@ -31,14 +31,14 @@ import {
 } from "@vitejs/plugin-rsc/rsc";
 import type { ComponentType, ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
-import { handleVisibilityReport } from "../lib/connection-session.ts";
+import { CHANNEL_ENDPOINT } from "../lib/channel-protocol.ts";
+import { handleChannelPost } from "../lib/connection-session.ts";
 import {
 	wrapSsrStreamWithFpTrailer,
 	wrapStreamWithCommitOnly,
 	wrapStreamWithFpTrailer,
 } from "../lib/fp-trailer.ts";
 import { createSegmentedResponse } from "../lib/segmented-response.ts";
-import { VISIBILITY_ENDPOINT } from "../lib/visibility-protocol.ts";
 import { warmCmsCache } from "../runtime/cms-runtime.ts";
 import {
 	_actionSuppressesCommit,
@@ -104,16 +104,27 @@ export function createRscHandler(config: RscHandlerConfig): {
 
 		const url = new URL(request.url);
 
-		// Visibility reports — fire-and-forget POSTs from the client's
-		// culling controller, addressed to an open live connection by its
-		// explicit `__conn` token. Applied to the connection session and
-		// answered `204` with no body: the flipped partons' bytes travel
-		// down the live stream as lane segments, never on this response.
-		// `404` (connection not open) is the client's signal to fall back
-		// to the render-reload path. Framework-owned, dispatched before
-		// the app's `fetch` hook like the remote endpoints above.
-		if (request.method === "POST" && url.pathname === VISIBILITY_ENDPOINT) {
-			return handleVisibilityReport(request);
+		// Channel envelopes — fire-and-forget POSTs from the client's
+		// channel transport, addressed to an open live connection by its
+		// explicit id. Applied to the connection session and answered
+		// `204` with no body: every rendered consequence travels down the
+		// live stream as lane segments, never on this response. `404`
+		// (connection not open, or an attach-binding mismatch) is the
+		// client's signal to fall back to the discrete path.
+		// Framework-owned, dispatched before the app's `fetch` hook like
+		// the remote endpoints above — but INSIDE a request scope: no
+		// render runs, yet the scope resolves through the ALS and this
+		// response is the one place a channel interaction can mint
+		// Set-Cookie (the held stream's headers are long gone by the time
+		// a frame arrives).
+		if (request.method === "POST" && url.pathname === CHANNEL_ENDPOINT) {
+			const { result, cookies } = await runWithRequestAsync(request, () =>
+				handleChannelPost(request),
+			);
+			for (const cookie of cookies) {
+				result.headers.append("set-cookie", cookie);
+			}
+			return result;
 		}
 
 		if (config.fetch) {

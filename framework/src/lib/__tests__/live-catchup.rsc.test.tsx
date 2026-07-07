@@ -88,9 +88,8 @@ describe("live catch-up (?since=)", () => {
     // Something bumps after the document rendered — the catch-up's job.
     refreshSelector("live-b")
 
-    const conn = "conn-catchup-1"
     await withLiveDrive(
-      `http://localhost/page?live=1&__conn=${conn}&since=${_registryEpoch()}:${anchorTs}`,
+      `http://localhost/page?live=1&since=${_registryEpoch()}:${anchorTs}`,
       Page,
       scope,
       async (h) => {
@@ -102,6 +101,9 @@ describe("live catch-up (?since=)", () => {
         const laneIter = first.value.lanes[Symbol.asyncIterator]()
         const step = await laneIter.next()
         if (step.done) throw new Error("expected a catch-up lane")
+        // The server-minted connection id rides the lanes region as its
+        // first framed entry — in hand by the first lane.
+        expect(h.connectionId()).not.toBeNull()
         expect(step.value.partonId).toBe("live-b")
         expect((await decodeLane(step.value)).bodyText).toContain("b:2")
         // The untouched sibling never re-rendered and never laned.
@@ -124,9 +126,8 @@ describe("live catch-up (?since=)", () => {
     await new Response(stream).text()
     const anchorTs = _currentTs()
 
-    const conn = "conn-catchup-2"
     await withLiveDrive(
-      `http://localhost/page?live=1&__conn=${conn}&since=stale-epoch:${anchorTs}`,
+      `http://localhost/page?live=1&since=stale-epoch:${anchorTs}`,
       Page,
       scope,
       async (h) => {

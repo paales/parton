@@ -143,6 +143,16 @@ export const TAG_SEGMENT_SETTLED = "settled";
  *  segment off this marker BEFORE handing it to a decoder, so a lanes
  *  segment is never mistaken for an (empty) payload document. */
 export const TAG_LANES_OPEN = "lanes";
+/** The live connection's SERVER-MINTED id: body is the id (UTF-8).
+ *  The segment driver mints it at session open and ships it once per
+ *  connection, as the first bytes ahead of the initial segment's
+ *  Flight rows (an ENTRY — it interleaves, the body keeps flowing) or
+ *  immediately after the `lanes` marker on the catch-up path. The
+ *  client's channel transport addresses every upstream envelope with
+ *  it — receiving the entry IS the establishment handshake, since the
+ *  driver only mints ids for sessions it has opened. Never appears on
+ *  one-shot responses. */
+export const TAG_CONNECTION_ID = "conn";
 /** One chunk of one parton's Flight payload: body is
  *  `<parton-id>\n<bytes>`. Frames from different partons interleave
  *  freely; a parton's own frames arrive in render order. */
