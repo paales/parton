@@ -243,9 +243,9 @@ export interface ConnectionSession {
 	 *  which case its optimistic promotions are EVICTED instead (the
 	 *  client received but did not hold it). Dies with the connection if
 	 *  never acked. Bounded by the unacked delivery window — the same
-	 *  signal that stops new lanes stops new records. An empty
-	 *  matchKey marks a JOIN-ONLY token (a trailer heal — the same
-	 *  content, warmed): it never evicts a slot. */
+	 *  signal that stops new lanes stops new records. Tokens land in
+	 *  emission order: a subtree's promotes first, then the flush's warm
+	 *  heals, each carrying the matchKey of the slot it warms. */
 	readonly pendingDeliveries: Map<
 		number,
 		{
@@ -494,24 +494,24 @@ function foldAckedTokens(
 		// The client's slot rule: the committed content REPLACES its
 		// `(id, matchKey)` slot — prior fps for the slot are evicted
 		// client-side at the same commit, so they leave the acked layer
-		// too. A join-only token (empty matchKey — a trailer heal)
-		// adds without evicting: it names the same content, warmed.
-		if (mk !== "") {
-			let idSlots = session.ackedSlots.get(id);
-			if (!idSlots) {
-				idSlots = new Map();
-				session.ackedSlots.set(id, idSlots);
-			}
-			let slot = idSlots.get(mk);
-			if (!slot) {
-				slot = new Set();
-				idSlots.set(mk, slot);
-			}
-			if (!slot.has(fp)) {
-				for (const old of slot) set.delete(old);
-				slot.clear();
-				slot.add(fp);
-			}
+		// too. A delivery's tokens land in emission order (subtree promotes
+		// first, then the flush's warm heals), so a heal's warm fp replaces
+		// its slot's cold fp under the same matchKey — never stranded past
+		// the slot's next eviction.
+		let idSlots = session.ackedSlots.get(id);
+		if (!idSlots) {
+			idSlots = new Map();
+			session.ackedSlots.set(id, idSlots);
+		}
+		let slot = idSlots.get(mk);
+		if (!slot) {
+			slot = new Set();
+			idSlots.set(mk, slot);
+		}
+		if (!slot.has(fp)) {
+			for (const old of slot) set.delete(old);
+			slot.clear();
+			slot.add(fp);
 		}
 		set.add(fp);
 		capOverrideSet(set);

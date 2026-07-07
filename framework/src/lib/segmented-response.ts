@@ -1126,6 +1126,12 @@ async function driveLaneStream(
 				// during the flush — become acked holdings when the client
 				// commits it. Captured per iteration.
 				const carried: Array<readonly [string, string, string]> = [];
+				// The trailer heals this iteration's flush emitted, folded into
+				// the mirror AFTER the drain promote establishes each rendered
+				// id's slot (below) — so the warm `to` fp joins the slot holding
+				// its cold `from` (the client's `_applyFpUpdates` rule) instead
+				// of landing slotless and un-evictable by a later variant.
+				const laneHeals: FpUpdatesPayload = {};
 				// Per-iteration producer attribution: the render runs inside a
 				// nested probe scope so `markConnectionLive()` marks THIS lane
 				// (lane renders share one request store — the store-level flag
@@ -1183,21 +1189,16 @@ async function driveLaneStream(
 							// frame, and the same multi-KB fp payload duplicated onto
 							// every frame of the stream.
 							flushScopeId: id,
-							// Fold this lane's warm fps into the connection's cached
-							// override alongside the client-bound trailer, so the
-							// server-side skip check tracks the same drift the client
-							// heals (a bump landing between this lane's render and
-							// its flush moves the recomputed fp past the emitted one).
-							// The healed fps ride this delivery's holdings record too —
-							// the client applies the trailer at the same commit.
+							// Stash this lane's warm heals; they fold into the mirror
+							// (and this delivery's holdings) AFTER the drain promote
+							// below, so each `to` joins the slot the promote just
+							// established for its `from`. Folding here — before the
+							// slot exists — would land `to` slotless, un-evictable by
+							// a later sibling variant (the return-toggle stale-body
+							// class). The fold still lands before the next lane's skip
+							// check, so it tracks the same drift the client heals.
 							onUpdates: (updates) => {
-								promoteFpUpdatesToCachedOverride(updates);
-								for (const [uid, entry] of Object.entries(updates)) {
-									// A heal joins its slot (the same content, warmed) —
-									// the empty matchKey marks a join-only token: the
-									// acked fold must not evict a slot for it.
-									carried.push([uid, "", entry.to]);
-								}
+								Object.assign(laneHeals, updates);
 							},
 						},
 					);
@@ -1321,6 +1322,13 @@ async function driveLaneStream(
 				// walk records the delivery's holdings — one pass, no second
 				// walk per drain.
 				promoteSnapshotsToCachedOverride(id, (tid, mk, fp) =>
+					carried.push([tid, mk, fp]),
+				);
+				// The flush's warm heals fold in NOW, after the slots exist: the
+				// `to` fp joins the slot holding its `from` (dropping when the
+				// slot fp-skipped away), then rides this delivery's holdings so
+				// the acked layer folds it under the same matchKey.
+				promoteFpUpdatesToCachedOverride(laneHeals, (tid, mk, fp) =>
 					carried.push([tid, mk, fp]),
 				);
 				if (session !== null && deliverySeq !== null) {
@@ -2666,38 +2674,38 @@ function promoteSlotFpToOverride(
 }
 
 /** Fold a trailer's `{from, to}` warm-fp entries into the live
- *  connection's cached override — the server-side mirror of the
- *  client's `_applyFpUpdates`: `to` joins the SLOT holding `from`
- *  (the same content, warmed — the client keeps both), never a slot
- *  of its own. With no slot holding `from` (the heal outran the
- *  promote, or the id never promoted here), the pair lands as a
- *  fresh slot promotion under the snapshot's matchKey when one is
- *  known; a bare add otherwise (over-claim bounded by the next
- *  slot promotion's eviction). */
-function promoteFpUpdatesToCachedOverride(updates: FpUpdatesPayload): void {
+ *  connection's cached override — the exact server-side mirror of the
+ *  client's `_applyFpUpdates`: `to` joins the SLOT still holding `from`
+ *  (the same content, warmed — kept alongside `from`, evicted with it
+ *  when a sibling variant later overwrites the slot). A heal whose
+ *  `from` no slot holds is superseded and DROPPED — never added
+ *  slotlessly, which would strand it past the slot's eviction and let a
+ *  return-toggle fp-skip against a phantom. `onToken` records the join
+ *  under its resolved matchKey so the acked layer folds it the same
+ *  way. */
+function promoteFpUpdatesToCachedOverride(
+	updates: FpUpdatesPayload,
+	onToken?: (id: string, matchKey: string, fp: string) => void,
+): void {
 	const override = _getCachedOverride();
 	if (!override) return;
 	for (const [id, entry] of Object.entries(updates)) {
-		let fpSet = override.fingerprints.get(id);
-		if (!fpSet) {
-			fpSet = new Set();
-			override.fingerprints.set(id, fpSet);
-		}
 		const idSlots = override.slots.get(id);
-		let joined = false;
-		if (idSlots) {
-			for (const slot of idSlots.values()) {
-				if (slot.has(entry.from)) {
-					slot.add(entry.to);
-					capOverrideSet(slot);
-					joined = true;
-					break;
-				}
+		if (!idSlots) continue;
+		for (const [mk, slot] of idSlots) {
+			if (!slot.has(entry.from)) continue;
+			slot.add(entry.to);
+			capOverrideSet(slot);
+			let fpSet = override.fingerprints.get(id);
+			if (!fpSet) {
+				fpSet = new Set();
+				override.fingerprints.set(id, fpSet);
 			}
+			fpSet.add(entry.to);
+			capOverrideSet(fpSet);
+			onToken?.(id, mk, entry.to);
+			break;
 		}
-		void joined;
-		fpSet.add(entry.to);
-		capOverrideSet(fpSet);
 	}
 }
 
