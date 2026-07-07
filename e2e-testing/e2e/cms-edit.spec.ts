@@ -1,4 +1,11 @@
-import { clearCaches, expect, test, waitForPageInteractive, waitForRscIdle } from "./fixtures.ts"
+import {
+  clearCaches,
+  expect,
+  recordPartialDispatches,
+  test,
+  waitForPageInteractive,
+  waitForRscIdle,
+} from "./fixtures.ts"
 import type { Response } from "@playwright/test"
 
 /** The response of a server-action POST — discriminated by the
@@ -415,47 +422,30 @@ test.describe("CMS editor — smoke", () => {
     // against).
     await waitForRscIdle(page)
 
-    // Capture every request fired during the click. The selector-
-    // targeted nav goes through `enqueueRefetch` on a microtask after
-    // the Navigation API commit, so an `await waitForRequest` after
-    // the click can race the request — it's already in-flight by the
-    // time the listener is attached. A persistent listener attached
-    // before the click avoids that.
-    const seen: string[] = []
-    const onReq = (r: import("@playwright/test").Request) => {
-      if (r.url().includes("/cms-demo_.rsc")) seen.push(r.url())
-    }
-    page.on("request", onReq)
-    // Set up the response wait BEFORE the click. The selector-targeted
-    // refetch fires synchronously from `nav.navigate` → `enqueueRefetch`
-    // → microtask, so the response can arrive before `click()` resolves
-    // on faster reconciliation paths. Setting up `waitForResponse`
-    // first ensures the listener is armed for the in-flight request.
-    const responseP = page.waitForResponse((r) => r.url().includes("/cms-demo_.rsc"), {
-      timeout: 10000,
-    })
-    try {
-      await page.getByTestId("cms-edit-tree-entry-composed-hero-1").click()
-      await responseP
-    } finally {
-      page.off("request", onReq)
-    }
-    expect(seen.length).toBeGreaterThan(0)
-    const reqUrl = new URL(seen[0])
-    const partials = reqUrl.searchParams.get("partials")
-    expect(partials).not.toBeNull()
-    // Tree + fields ARE in the requested set; the preview pane and
-    // the previewed-page root are not — the selector-targeted
-    // refetch carries `partials=cms-edit-tree,cms-edit-fields`.
-    const requested = partials!.split(",")
+    // Observe the refetch on the CHANNEL. The selector-targeted nav is a
+    // `url` frame stating the page URL with a `?__force=` overlay (the
+    // whole-tree segment's forced targets), on a `/__parton/channel`
+    // envelope — the GET `_.rsc?partials=` transport is retired. A
+    // persistent recorder attached BEFORE the click catches the
+    // fire-and-forget envelope regardless of timing.
+    const dispatches = recordPartialDispatches(page)
+    await page.getByTestId("cms-edit-tree-entry-composed-hero-1").click()
+
+    // The field panel ends up resolved to the clicked id — the refetch
+    // landed and reconciled.
+    await expect(page.getByTestId("cms-edit-selected-id")).toContainText("composed-hero-1")
+    // Preview content stays put (the selector refetch didn't remount it).
+    await expect(page.getByTestId("page-shell")).toContainText("Welcome to the CMS demo")
+
+    // Exactly the selector-targeted refetch fired: its `__force` overlay
+    // carries the tree + fields, NOT the preview pane or the previewed-
+    // page root.
+    const forced = dispatches.filter((d) => d.partials !== null)
+    expect(forced.length).toBeGreaterThan(0)
+    const requested = forced[0].partials!.split(",")
     expect(requested).not.toContain("cms-demo-root")
     expect(requested).toContain("cms-edit-tree")
     expect(requested).toContain("cms-edit-fields")
-
-    // And the field panel ends up resolved to the clicked id.
-    await expect(page.getByTestId("cms-edit-selected-id")).toContainText("composed-hero-1")
-    // Preview content is still visible.
-    await expect(page.getByTestId("page-shell")).toContainText("Welcome to the CMS demo")
   })
 
   // Regression: editing a slot child whose previous draft override

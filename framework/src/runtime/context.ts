@@ -79,6 +79,14 @@ interface RequestStore {
    *  `url.toString()` + `new Request(...)` per segment — ~7% of CPU in
    *  the streaming case. */
   cachedOverride?: CachedOverride
+  /** The ids being FORCE-refetched on the current render — a selector
+   *  nav's `__force` targets, resolved to ids. The descendant fold
+   *  excludes these (and their subtrees) so an ancestor can fp-skip
+   *  while the forced target re-lanes independently (parent-valid,
+   *  child-invalid). Set by the segment driver around a navigation's
+   *  whole-tree segment render; absent on every other render (a full
+   *  fold). */
+  foldExclusionIds?: ReadonlySet<string> | null
   /** Per-request cell-write accounting for the deferred-commit
    *  decision. `total` counts every successful cell write made during
    *  this request; `deferred` counts those whose cell declared
@@ -97,14 +105,14 @@ interface RequestStore {
    *  `../lib/connection-session.ts`). One-shot requests never set it
    *  and fall back to the `?visible=` URL param. */
   connectionSession?: ConnectionSessionHandle | null
-  /** The attach request's decoded body statement — the client's full
-   *  manifest (`cached`), catch-up anchor (`since`), and viewport seed
-   *  (`visible`), stashed by the entry (or the live-drive harness)
-   *  before any render runs and constant for the request's lifetime.
-   *  What `PartialRoot` and the segment driver's catch-up/seed paths
-   *  read instead of the `?cached=`/`?visible=` URL params a discrete
-   *  GET carries (the anchor has no URL form at all). Absent on every
-   *  non-attach request. */
+  /** The attach request's decoded body statement — the client's URL
+   *  statement (`url`), full manifest (`cached`), catch-up anchor
+   *  (`since`), viewport seed (`visible`), and pre-establishment frame
+   *  intent (`frames`), stashed by the entry (or the live-drive
+   *  harness) before any render runs and constant for the request's
+   *  lifetime. Its presence IS the live-subscription signal: the
+   *  segment driver opens a connection session iff a statement is
+   *  bound. Absent on every other request (actions, SSR documents). */
   attachStatement?: AttachStatementHandle | null
 }
 
@@ -125,19 +133,36 @@ export interface ConnectionSessionHandle {
  *  for the same reason as `ConnectionSessionHandle`: the wire grammar
  *  (and its decoder) lives in `../lib/channel-protocol.ts`. */
 export interface AttachStatementHandle {
+  readonly url: string
   readonly cached: readonly string[]
   readonly since: { readonly epoch: string; readonly ts: number } | null
   readonly visible: readonly string[] | null
   readonly applied?: number
+  readonly frames?: ReadonlyArray<{
+    readonly url: string
+    readonly frame?: readonly string[]
+  }>
 }
 
-/** In-memory mirror of `?cached=…`. Same identity Maps shared across
- *  the cold-render parse and every subsequent segment's mutate-and-read
- *  cycle. The driver mutates these directly between segments; PartialRoot
- *  reads via identity so its `state.cachedFingerprints` IS the carrier. */
+/** In-memory mirror of the client manifest. Same identity Maps shared
+ *  across the first render's parse and every subsequent emission's
+ *  mutate-and-read cycle. The driver mutates these directly between
+ *  emissions; PartialRoot reads via identity so its
+ *  `state.cachedFingerprints` IS the carrier.
+ *
+ *  `slots` is the truthfulness bookkeeping behind `fingerprints`: the
+ *  client keeps ONE content per `(id, matchKey)` slot (`cacheStore`
+ *  overwrites evict the slot's prior fps), so the mirror keys its fps
+ *  the same way — a fresh fp promoted for a slot EVICTS that slot's
+ *  other fps from both maps. Without the slot rule, an A→B→A content
+ *  cycle would fp-skip against a slot the client overwrote at B,
+ *  confirming phantom content (a blank parton). An fp folds its
+ *  matchKey, so each fp belongs to exactly one slot and flat-set
+ *  surgery is exact. */
 export interface CachedOverride {
   fingerprints: Map<string, Set<string>>
   matchKeys: Map<string, Set<string>>
+  slots: Map<string, Map<string, Set<string>>>
 }
 
 /** Wire shape for the `url`-tagged trailer entry. Client applies
@@ -401,6 +426,22 @@ export function _getCachedOverride(): CachedOverride | null {
   return requestContext.getStore()?.cachedOverride ?? null
 }
 
+/** Set the ids being force-refetched on the current render (a selector
+ *  nav's targets) — the descendant fold excludes them and their
+ *  subtrees. `null` clears it (a full fold). Called by the segment
+ *  driver around a navigation's whole-tree segment render. */
+export function _setFoldExclusionIds(ids: ReadonlySet<string> | null): void {
+  const store = requestContext.getStore()
+  if (store) store.foldExclusionIds = ids
+}
+
+/** The ids the descendant fold excludes on the current render, or
+ *  `null` when nothing is force-refetched (the common case — a full
+ *  fold). */
+export function _getFoldExclusionIds(): ReadonlySet<string> | null {
+  return requestContext.getStore()?.foldExclusionIds ?? null
+}
+
 /** Attach (or detach) the live connection's session to the request
  *  store. Called by the segment driver when it opens/closes the
  *  session for a `?live=1` connection. */
@@ -450,6 +491,34 @@ export async function _runWithWarmRenderScope<T>(
     scope: store.scope,
     ephemeralCellStorage: store.ephemeralCellStorage,
     connectionSession: { visible, ackedFps: new Map() },
+  }
+  return requestContext.run(warmStore, fn)
+}
+
+/**
+ * Run `fn` inside a NESTED request scope whose request is `url` — the
+ * segment driver's preload-warm scope (a `warm` frame's target). Same
+ * discipline as `_runWithWarmRenderScope`: the clone carries the
+ * request identity (headers/cookies, scope, ephemeral cell storage)
+ * and NONE of the response-coupled state — no cached override (the
+ * warm render never fp-skips and never touches the client mirror), no
+ * connection session (the target route's cull gates evaluate their
+ * cold seeds — exactly a fresh navigation's first paint), no attach
+ * statement, no commit hook. The driver's continuation resumes with
+ * its own store.
+ */
+export async function _runWithWarmRequestScope<T>(
+  url: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const store = getStore()
+  const warmStore: RequestStore = {
+    request: new Request(new URL(url, store.request.url), {
+      headers: store.request.headers,
+    }),
+    cookies: [],
+    scope: store.scope,
+    ephemeralCellStorage: store.ephemeralCellStorage,
   }
   return requestContext.run(warmStore, fn)
 }

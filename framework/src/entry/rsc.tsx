@@ -31,10 +31,16 @@ import {
 } from "@vitejs/plugin-rsc/rsc";
 import type { ComponentType, ReactNode } from "react";
 import type { ReactFormState } from "react-dom/client";
-import { CHANNEL_ENDPOINT } from "../lib/channel-protocol.ts";
 import {
-	applyAttachStatement,
+	ATTACH_ENDPOINT,
+	type AttachStatement,
+	CHANNEL_ENDPOINT,
+	decodeAttachStatement,
+} from "../lib/channel-protocol.ts";
+import {
+	bindAttachStatement,
 	handleChannelPost,
+	isSameOriginPost,
 } from "../lib/connection-session.ts";
 import {
 	wrapSsrStreamWithFpTrailer,
@@ -55,7 +61,7 @@ import {
 import { reportServerRenderError } from "../runtime/errors.ts";
 import { runInvalidationTransaction } from "../runtime/invalidation-registry.ts";
 import { createRemoteHandler } from "../runtime/remote-endpoints.tsx";
-import { parseRenderRequest } from "../runtime/request.tsx";
+import { HEADER_RSC_RENDER, parseRenderRequest } from "../runtime/request.tsx";
 
 export type RscPayload = {
 	root: ReactNode;
@@ -116,13 +122,13 @@ export function createRscHandler(config: RscHandlerConfig): {
 		// `204` with no body: every rendered consequence travels down the
 		// live stream as lane segments, never on this response. `404`
 		// (connection not open, or an attach-binding mismatch) is the
-		// client's signal to fall back to the discrete path.
-		// Framework-owned, dispatched before the app's `fetch` hook like
-		// the remote endpoints above — but INSIDE a request scope: no
-		// render runs, yet the scope resolves through the ALS and this
-		// response is the one place a channel interaction can mint
-		// Set-Cookie (the held stream's headers are long gone by the time
-		// a frame arrives).
+		// client's signal that the connection is gone — the transport
+		// reattaches. Framework-owned, dispatched before the app's
+		// `fetch` hook like the remote endpoints above — but INSIDE a
+		// request scope: no render runs, yet the scope resolves through
+		// the ALS and this response is the one place a channel
+		// interaction can mint Set-Cookie (the held stream's headers are
+		// long gone by the time a frame arrives).
 		if (request.method === "POST" && url.pathname === CHANNEL_ENDPOINT) {
 			const { result, cookies } = await runWithRequestAsync(request, () =>
 				handleChannelPost(request),
@@ -131,6 +137,56 @@ export function createRscHandler(config: RscHandlerConfig): {
 				result.headers.append("set-cookie", cookie);
 			}
 			return result;
+		}
+
+		// The attach — the connection's opening statement, and the whole
+		// interactive transport's only render POST besides actions. The
+		// dedicated path IS the dispatch signal: the JSON body is the
+		// full client statement, the render request is built from the
+		// statement's `url` (same-origin-validated — route key, match
+		// gates and tracked reads all evaluate the stated URL), and the
+		// response is the held segmented stream. The statement's one-shot
+		// `?__force=` overlay never enters request state — the driver
+		// reads it off the statement and lanes the targets after the
+		// region opens.
+		if (request.method === "POST" && url.pathname === ATTACH_ENDPOINT) {
+			if (!isSameOriginPost(request)) return new Response(null, { status: 403 });
+			let statement: AttachStatement | null;
+			try {
+				statement = decodeAttachStatement(await request.json());
+			} catch {
+				statement = null;
+			}
+			if (statement === null) return new Response(null, { status: 400 });
+			const origin = new URL(request.url).origin;
+			let stated: URL;
+			try {
+				stated = new URL(statement.url, origin);
+			} catch {
+				return new Response(null, { status: 400 });
+			}
+			if (stated.origin !== origin) return new Response(null, { status: 400 });
+			for (const frame of statement.frames ?? []) {
+				try {
+					if (new URL(frame.url, origin).origin !== origin)
+						return new Response(null, { status: 400 });
+				} catch {
+					return new Response(null, { status: 400 });
+				}
+			}
+			stated.searchParams.delete("__force");
+			const headers = new Headers(request.headers);
+			headers.set(HEADER_RSC_RENDER, "1");
+			const renderRequest = new Request(stated, { headers });
+			await warmCmsCache();
+			const { result: response, cookies } = await runWithRequestAsync(
+				renderRequest,
+				() => handleAttach(statement),
+			);
+			for (const cookie of cookies) {
+				response.headers.append("set-cookie", cookie);
+			}
+			return response;
 		}
 
 		if (config.fetch) {
@@ -195,6 +251,37 @@ export function createRscHandler(config: RscHandlerConfig): {
 		return response;
 	}
 
+	// The attach's response body — runs inside `runWithRequestAsync` on
+	// the render request the endpoint built from the statement's URL.
+	// Binding the statement is the first act (frame intents' session
+	// writes land in this scope, so a freshly-minted session cookie
+	// rides this response's headers); the drive is a live GET's exact
+	// shape: the segmented driver, the fp-trailer wrap, `no-transform`.
+	async function handleAttach(statement: AttachStatement): Promise<Response> {
+		bindAttachStatement(statement);
+		const renderOnce = (): ReadableStream<Uint8Array> =>
+			wrapStreamWithFpTrailer(
+				renderToReadableStream<RscPayload>(
+					{ root: <Root /> },
+					{ onError: onRscRenderError },
+				),
+				_captureCommitHandle(),
+			);
+		return new Response(createSegmentedResponse(renderOnce), {
+			headers: {
+				"content-type": "text/x-component;charset=utf-8",
+				// The segment driver's byte timing IS the protocol: the held
+				// connection parks between wakes, and each framed lane must
+				// reach the client the moment it drains. A compressor between
+				// the driver and the browser holds frames in its buffer — a
+				// block-buffering intermediary indefinitely. `no-transform`
+				// keeps every transform off; documents and action responses
+				// still compress.
+				"cache-control": "no-transform",
+			},
+		});
+	}
+
 	async function handleRequest(
 		renderRequest: ReturnType<typeof parseRenderRequest>,
 	): Promise<Response> {
@@ -212,21 +299,6 @@ export function createRscHandler(config: RscHandlerConfig): {
 		// back on the response so the client's optimistic overlay holds
 		// until its committed watermark covers them.
 		const consequenceBox: { seqs: number[] | null } = { seqs: null };
-
-		// The attach — the heartbeat's live fire as a POST whose body is
-		// the client statement (manifest + catch-up anchor + viewport
-		// seed). Dispatched on the explicit request marker
-		// (`parseRenderRequest`), never the body's shape: an action POST
-		// with a statement-shaped body stays an action, and this POST
-		// never decodes as one. The statement lands on the request store
-		// here so the segment driver and `PartialRoot` read it in place
-		// of the `?cached=`/`?visible=` URL params a discrete GET
-		// carries; the response falls through to the full segmented
-		// drive + fp-trailer path exactly as a live GET's does.
-		if (renderRequest.isAttach) {
-			const statement = await applyAttachStatement(request);
-			if (statement === null) return new Response(null, { status: 400 });
-		}
 
 		if (renderRequest.isAction === true) {
 			if (renderRequest.actionId) {
@@ -293,75 +365,34 @@ export function createRscHandler(config: RscHandlerConfig): {
 			formState,
 			returnValue,
 		});
-		// RSC path renders inside the segment driver via `renderOnce`; it
-		// may be invoked multiple times if any render signals
-		// `markConnectionLive()`. SSR path renders once below (the rsc bytes
-		// are inlined into `<script>FLIGHT_DATA</script>` tags so we can't
-		// run multiple Flight documents through it).
-		const renderOnce = (): ReadableStream<Uint8Array> => {
-			const stream = renderToReadableStream<RscPayload>(buildRscPayload(), {
-				temporaryReferences,
-				onError: onRscRenderError,
-			});
-			// Action POSTs skip the trailer — Flight stops reading once the
-			// root row resolves on the action-result path, and a splitter
-			// waiting for the trailer past that point can stall under
-			// backpressure. Non-action GETs get the length-prefixed binary
-			// fp-trailer.
-			const wrap = renderRequest.isAction
-				? wrapStreamWithCommitOnly
-				: wrapStreamWithFpTrailer;
-			return wrap(stream, _captureCommitHandle());
-		};
-
 		if (renderRequest.isRsc) {
-			// Single segment for action POSTs (one render + return). GETs get
-			// the multi-segment driver: if any render signals
-			// `markConnectionLive()` (e.g. the chat's ChunkSlot awaiting the
-			// next log entry), the response stays open and re-renders on every
-			// `refreshSelector` bump until a render finishes without signalling
-			// live. Single-segment GETs (the common case) emit one segment and
-			// close immediately — byte-identical to the pre-loop behavior.
-			if (renderRequest.isAction) {
-				const headers: Record<string, string> = {
-					"content-type": "text/x-component;charset=utf-8",
-				};
-				// The consequence seqs the client's overlay gate holds on —
-				// see `_reserveActionConsequences`. Absent without a live
-				// connection (or with nothing reserved): unchanged behavior.
-				if (consequenceBox.seqs !== null && consequenceBox.seqs.length > 0) {
-					headers["x-parton-consequences"] = consequenceBox.seqs.join(",");
-				}
-				return new Response(renderOnce(), {
-					status: actionStatus,
-					headers,
-				});
+			// The one `_.rsc` request kind: an action POST — one render, one
+			// segment, one return value. Every other interactive render
+			// rides the channel (the attach endpoint above); documents fall
+			// through to SSR below. The action render skips the fp-trailer —
+			// Flight stops reading once the root row resolves on the
+			// action-result path, and a splitter waiting for the trailer
+			// past that point can stall under backpressure.
+			const headers: Record<string, string> = {
+				"content-type": "text/x-component;charset=utf-8",
+			};
+			// The consequence seqs the client's overlay gate holds on —
+			// see `_reserveActionConsequences`. Absent without a live
+			// connection (or with nothing reserved): unchanged behavior.
+			if (consequenceBox.seqs !== null && consequenceBox.seqs.length > 0) {
+				headers["x-parton-consequences"] = consequenceBox.seqs.join(",");
 			}
 			return new Response(
-				// The response stream's pull is the driver's demand signal:
-				// lane output parks while the consumer's queue is full, so a
-				// slow reader on a held connection never buffers unboundedly
-				// server-side.
-				createSegmentedResponse(renderOnce),
+				wrapStreamWithCommitOnly(
+					renderToReadableStream<RscPayload>(buildRscPayload(), {
+						temporaryReferences,
+						onError: onRscRenderError,
+					}),
+					_captureCommitHandle(),
+				),
 				{
 					status: actionStatus,
-					headers: {
-						"content-type": "text/x-component;charset=utf-8",
-						// The segment driver's byte timing IS the protocol: a
-						// connection that holds open (an explicit `?live=1`
-						// subscription, or a plain GET whose render calls
-						// `markConnectionLive()` — unknowable at header time)
-						// parks between wakes, and each framed lane must reach
-						// the client the moment it drains. A compressor between
-						// the driver and the browser holds frames in its buffer
-						// — a block-buffering intermediary indefinitely, and
-						// even the framework's own per-write-flush compressor
-						// measurably delays mid-stream pushes (the chat's
-						// progressive rows flake under it). `no-transform` on
-						// every segmented response keeps all of them off;
-						// documents and action responses still compress.
-						"cache-control": "no-transform",
-					},
+					headers,
 				},
 			);
 		}

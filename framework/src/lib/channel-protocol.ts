@@ -19,12 +19,13 @@
  *     keepalive backstop, the cumulative ack watermark), so a lost
  *     envelope costs nothing durable. These never enter the transport's
  *     retransmit buffer.
- *   - **lossy** (`telemetry`) — newest-wins, droppable. Only the
- *     latest statement has value (an old scroll vector describes a
- *     viewport that no longer exists), so the transport keeps at most
- *     one pending frame, a failed delivery is simply dropped, and no
- *     discrete fallback exists. The class is in the grammar NOW so a
- *     datagram transport can map onto it later without a redesign.
+ *   - **lossy** (`telemetry`, `warm`) — newest-wins, droppable. Only
+ *     the latest statement has value (an old scroll vector describes a
+ *     viewport that no longer exists; a preload is advisory), so the
+ *     transport keeps at most one pending frame per producer, a failed
+ *     delivery is simply dropped, and no fallback exists. The class is
+ *     in the grammar NOW so a datagram transport can map onto it later
+ *     without a redesign.
  *   - **reliable** (`url`, `cancel`) — buffered by the client
  *     transport (per its producer's `reliable` declaration, see
  *     [[channel-client]]) until the downstream `applied` marker covers
@@ -43,13 +44,13 @@
  *  request scope (see [[connection-session]]'s `handleChannelPost`). */
 export const CHANNEL_ENDPOINT = "/__parton/channel";
 
-/** Request-shape marker for the ATTACH — the heartbeat's live fire as
- *  a POST whose body carries the client statement below. The explicit
- *  dispatch signal `parseRenderRequest` keys on: an `_.rsc` POST with
- *  this header is the attach (full segmented drive + fp-trailer), one
- *  with `x-rsc-action` is an action (commit-only, one segment) — the
- *  body's shape decides nothing. */
-export const ATTACH_HEADER = "x-parton-attach";
+/** POST target for the ATTACH — the connection's opening statement.
+ *  The dedicated path IS the dispatch signal: a POST here carries the
+ *  full client statement as its JSON body and is answered by the held
+ *  segmented stream. The server builds the connection's request state
+ *  from the statement's `url` (same-origin-validated); no page URL
+ *  ever carries transport params for it. */
+export const ATTACH_ENDPOINT = "/__parton/live";
 
 /** Max delivery seqs a connection may have in flight past the client's
  *  cumulative ack before the driver stops opening lanes — the server's
@@ -65,10 +66,18 @@ export const UNACKED_DELIVERY_WINDOW = 64;
  * The attach statement — the full client statement presented when a
  * live connection opens, as the attach POST's JSON body:
  *
+ *   - `url` — the client's window URL statement (path + search). The
+ *     server builds the connection's request state from it — route
+ *     key, match gates, tracked reads all evaluate the stated URL —
+ *     after validating it same-origin against the POST itself. A
+ *     one-shot `?__force=` overlay may ride its query (a selector
+ *     refetch that fired pre-establishment — the same overlay a `url`
+ *     frame carries); the server strips it from request state and
+ *     lanes the named targets after the region opens.
  *   - `cached` — the manifest: every `id:matchKey:fp` token the client
  *     holds, stating WHAT it has. Uncapped: the body has no
  *     request-line limit, and the client pool bounds it structurally
- *     (the discrete `?cached=` URL form keeps its cap).
+ *     (the action POST's `?cached=` URL form keeps its cap).
  *   - `since` — the catch-up anchor, stating WHEN the client last
  *     heard: the document's registry timeline point. `null` when the
  *     client has no anchor (reopens, post-navigation fires).
@@ -86,14 +95,26 @@ export const UNACKED_DELIVERY_WINDOW = 64;
  *     assume already announced), and delivery acks bound the mirror —
  *     three statements about three different clocks, never competing
  *     resync mechanisms.
+ *   - `frames` — attach-with-intent: FRAME-scoped `url` statements
+ *     that fired before the connection existed, riding the attach they
+ *     triggered (first interaction never waits). Applied inside the
+ *     attach's own request scope — the session frame URL writes land
+ *     there, where a fresh session cookie can ride the response — so
+ *     the whole-tree first render already reads them. WINDOW intent
+ *     needs no frame entry: the statement's `url` IS the window
+ *     statement (the attach subsumes the URL timeline).
  */
 export interface AttachStatement {
+	url: string;
 	cached: readonly string[];
 	since: { epoch: string; ts: number } | null;
 	visible: readonly string[] | null;
 	/** Optional on the wire (absent = 0 — a client stating no upstream
 	 *  watermark); the decoder always normalizes it in. */
 	applied?: number;
+	/** Optional on the wire; entries MUST carry a frame path (window
+	 *  intent folds into `url` — a window-scoped entry is malformed). */
+	frames?: UrlFrame[];
 }
 
 /**
@@ -106,6 +127,7 @@ export interface AttachStatement {
 export function decodeAttachStatement(value: unknown): AttachStatement | null {
 	if (value === null || typeof value !== "object") return null;
 	const v = value as Record<string, unknown>;
+	if (typeof v.url !== "string" || v.url.length === 0) return null;
 	if (!isStringArray(v.cached)) return null;
 	let since: AttachStatement["since"] = null;
 	if (v.since !== null && v.since !== undefined) {
@@ -133,7 +155,28 @@ export function decodeAttachStatement(value: unknown): AttachStatement | null {
 			return null;
 		applied = v.applied;
 	}
-	return { cached: v.cached, since, visible, applied };
+	// Attach-with-intent: frame-scoped url statements riding the attach
+	// they triggered. Window intent has no place here — the statement's
+	// `url` IS the window statement — so a frame-less entry is malformed.
+	let frames: UrlFrame[] | undefined;
+	if (v.frames !== null && v.frames !== undefined) {
+		if (!Array.isArray(v.frames)) return null;
+		frames = [];
+		for (const raw of v.frames) {
+			if (raw === null || typeof raw !== "object") return null;
+			const decoded = decodeUrlFrameShape(raw as Record<string, unknown>);
+			if (decoded === null || decoded.frame === undefined) return null;
+			frames.push(decoded);
+		}
+	}
+	return {
+		url: v.url,
+		cached: v.cached,
+		since,
+		visible,
+		applied,
+		...(frames !== undefined && frames.length > 0 ? { frames } : {}),
+	};
 }
 
 /**
@@ -182,10 +225,23 @@ export interface DetachFrame {
  * what advances the mirror's ACKED layer (the fps the acked emissions
  * carried become client-proven holdings) and what frees the unacked
  * delivery window the driver gates lane opening on.
+ *
+ * `dropped` names delivery seqs WITHIN the newly-acked range the client
+ * received but did NOT hold: the content rendered as-of a navigation
+ * point the client had already left, so its as-of guard
+ * (`_channelDeliveryCommittable`) dropped it at arrival. The seq still
+ * advances the client's contiguous watermark (a permanent gap would
+ * wedge the window), so it rides the cumulative `delivered` — but the
+ * server must not treat it as a holding: it EVICTS the delivery's
+ * optimistic mirror promotions and never folds them into the acked
+ * layer. Absent (or empty) = the client held every acked delivery. An
+ * explicit drop statement, not a server-side inference: only the client
+ * knows which arrivals its live navigation point superseded.
  */
 export interface AckFrame {
 	kind: "ack";
 	delivered: number;
+	dropped?: number[];
 }
 
 /**
@@ -253,24 +309,41 @@ export interface UrlFrame {
 	kind: "url";
 	url: string;
 	intent: "push" | "replace" | "silent";
+	streaming?: boolean;
 	frame?: string[];
 }
 
 /**
- * Explicit supersede of a scope's in-flight renders — the frame
- * long-poll's deferred-abort supersede expressed as a statement
- * instead of a connection abort. `scope` names a frame's top-level
- * name (the same narrowing the discrete twin's `?partials=<frame[0]>`
- * uses); the server aborts the open lanes whose parton belongs to that
- * scope — a superseding frame navigation sends `cancel` + `url` in ONE
- * envelope, and the in-order pass applies cancel-then-url. RELIABLE
- * class; idempotence is the per-scope seq gate (a retransmitted cancel
- * at or below the last applied seq for its scope is a no-op, so it can
- * never abort a newer statement's render).
+ * Explicit supersede of a scope's in-flight renders. `scope` names a
+ * frame's top-level name; the server aborts the open lanes whose
+ * parton belongs to that scope — a superseding frame navigation sends
+ * `cancel` + `url` in ONE envelope, and the in-order pass applies
+ * cancel-then-url. RELIABLE class; idempotence is the per-scope seq
+ * gate (a retransmitted cancel at or below the last applied seq for
+ * its scope is a no-op, so it can never abort a newer statement's
+ * render).
  */
 export interface CancelFrame {
 	kind: "cancel";
 	scope: string;
+}
+
+/**
+ * Warm intent — the client states a route it expects to visit
+ * (`useNavigation().preload(target)` on hover). The LOSSY class, like
+ * telemetry: newest-wins (one pending target — the latest hover),
+ * droppable, no fallback — a preload is advisory. Applying one
+ * replaces the session's warm slot and wakes the driver, whose park
+ * point runs ONE byte-silent whole-tree render of the target URL into
+ * the server's caches (same rules as the telemetry warm pass:
+ * bounded, window-respecting, never keepalive activity) — the
+ * navigation statement that follows renders against warm caches.
+ * Same-origin-validated at the endpoint like `url` frames: the target
+ * becomes a render's request state.
+ */
+export interface WarmFrame {
+	kind: "warm";
+	url: string;
 }
 
 /** The frame kinds shipped today. The grammar is open: an envelope may
@@ -283,7 +356,8 @@ export type ChannelFrame =
 	| AckFrame
 	| TelemetryFrame
 	| UrlFrame
-	| CancelFrame;
+	| CancelFrame
+	| WarmFrame;
 
 export interface ChannelEnvelope {
 	/** The live connection this envelope addresses. An explicit token,
@@ -347,7 +421,23 @@ export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 				f.delivered < 0
 			)
 				return null;
-			frames.push({ kind: "ack", delivered: f.delivered });
+			// `dropped` is optional; when present it must be an array of
+			// non-negative finite numbers — a malformed one is a protocol
+			// violation like any known-kind field's (the envelope 400s).
+			let dropped: number[] | undefined;
+			if (f.dropped !== undefined && f.dropped !== null) {
+				if (!Array.isArray(f.dropped)) return null;
+				for (const d of f.dropped) {
+					if (typeof d !== "number" || !Number.isFinite(d) || d < 0)
+						return null;
+				}
+				dropped = f.dropped as number[];
+			}
+			frames.push({
+				kind: "ack",
+				delivered: f.delivered,
+				...(dropped !== undefined && dropped.length > 0 ? { dropped } : {}),
+			});
 			continue;
 		}
 		if (f.kind === "telemetry") {
@@ -370,26 +460,9 @@ export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 			// Strict-known: a malformed url frame is a protocol violation.
 			// Same-origin validation needs the request and lives with the
 			// endpoint (`handleChannelPost`) — the decoder checks shape only.
-			if (typeof f.url !== "string" || f.url.length === 0) return null;
-			if (
-				f.intent !== "push" &&
-				f.intent !== "replace" &&
-				f.intent !== "silent"
-			)
-				return null;
-			// Frame scope: a non-empty path of non-empty segment names.
-			let framePath: string[] | undefined;
-			if (f.frame !== undefined && f.frame !== null) {
-				if (!isStringArray(f.frame) || f.frame.length === 0) return null;
-				if (f.frame.some((s) => s.length === 0)) return null;
-				framePath = f.frame;
-			}
-			frames.push({
-				kind: "url",
-				url: f.url,
-				intent: f.intent,
-				...(framePath ? { frame: framePath } : {}),
-			});
+			const decoded = decodeUrlFrameShape(f);
+			if (decoded === null) return null;
+			frames.push(decoded);
 			continue;
 		}
 		if (f.kind === "cancel") {
@@ -398,9 +471,39 @@ export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 			frames.push({ kind: "cancel", scope: f.scope });
 			continue;
 		}
+		if (f.kind === "warm") {
+			// Strict-known: a malformed warm frame is a protocol violation.
+			// Same-origin validation lives with the endpoint, like `url`.
+			if (typeof f.url !== "string" || f.url.length === 0) return null;
+			frames.push({ kind: "warm", url: f.url });
+			continue;
+		}
 		// Unknown kind — skipped, never an error.
 	}
 	return { connection: v.connection, seq: v.seq, frames };
+}
+
+/** Decode the `url`-frame field shape (`kind` already established, or
+ *  implied — the attach statement's `frames` entries). `null` when
+ *  malformed. Frame scope, when present, is a non-empty path of
+ *  non-empty segment names. */
+function decodeUrlFrameShape(f: Record<string, unknown>): UrlFrame | null {
+	if (typeof f.url !== "string" || f.url.length === 0) return null;
+	if (f.intent !== "push" && f.intent !== "replace" && f.intent !== "silent")
+		return null;
+	let framePath: string[] | undefined;
+	if (f.frame !== undefined && f.frame !== null) {
+		if (!isStringArray(f.frame) || f.frame.length === 0) return null;
+		if (f.frame.some((s) => s.length === 0)) return null;
+		framePath = f.frame;
+	}
+	return {
+		kind: "url",
+		url: f.url,
+		intent: f.intent,
+		...(f.streaming === true ? { streaming: true } : {}),
+		...(framePath ? { frame: framePath } : {}),
+	};
 }
 
 function isStringArray(value: unknown): value is string[] {

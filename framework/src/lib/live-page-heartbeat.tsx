@@ -6,16 +6,15 @@ import {
   _channelConnectionClosed,
   _channelConsumeWindowNavClaim,
   _channelIsDegraded,
+  _registerAttachRequester,
   _registerLiveStreamAbort,
 } from "./channel-client.ts"
 import { _anyCullObservers } from "./cull-park.ts"
-import { useNavigation } from "./partial-client.tsx"
 import { _takeLiveCatchupAnchor } from "./partial-client-state.ts"
 import {
   _onFirstMeasurement,
   _visibilityMeasured,
   _visibleSetIds,
-  _visibleSetParam,
 } from "./visibility.tsx"
 import { getNavigation } from "../runtime/navigation-api.ts"
 
@@ -27,13 +26,25 @@ interface Props {
   intervalMs?: number
 }
 
+/** The attach transport the browser entry installs — POSTs the full
+ *  client statement to `/__parton/live` and consumes the held
+ *  segmented stream (see `../entry/browser.tsx`). */
+type AttachTransport = (
+  halves: {
+    since: { epoch: string; ts: number } | null
+    visible: string[] | null
+    applied: number
+  },
+  signal?: AbortSignal,
+) => { streaming: Promise<void>; finished: Promise<void> }
+
 /**
- * Client component that holds the live connection to the current URL
- * open — each fire is an ATTACH: a `?live=1` POST whose body carries
- * the full client statement (manifest + catch-up anchor + viewport
- * seed; see `channel-protocol.ts`), answered by the held segmented
- * stream. Mounted once near the React root by the
- * framework's browser bootstrap (`../entry/browser.tsx`); an app
+ * Client component that holds the live connection open — each fire is
+ * an ATTACH: a `POST /__parton/live` whose body carries the full
+ * client statement (URL + manifest + catch-up anchor + viewport seed +
+ * any pre-establishment intent; see `channel-protocol.ts`), answered
+ * by the held segmented stream. Mounted once near the React root by
+ * the framework's browser bootstrap (`../entry/browser.tsx`); an app
  * assembling its own bootstrap mounts it the same way:
  *
  *   <BrowserRoot />
@@ -57,42 +68,46 @@ interface Props {
  *
  * (1) is satisfied by being inside a useEffect. (2) is satisfied
  * by waiting on `document.readyState === "complete"` or a
- * `load` listener.
+ * `load` listener. A pre-establishment INTERACTION jumps both
+ * queues: the channel transport requests an immediate fire
+ * (`_registerAttachRequester`) so the statement rides the attach it
+ * triggered — a cold-manifest attach over-fetches, never waits.
  *
  * Behaviour:
- *   - Mount → fire one `reload({streaming: true, live: true, attach})`.
- *     `live` holds the connection open as a subscription; `streaming`
- *     commits each pushed segment progressively. Batches with any
- *     in-tick client-side activator fires (when-mounted, when-visible)
- *     via `enqueueRefetch`'s per-microtask coalescer.
+ *   - Mount → one attach fire; the transport (channel-client)
+ *     establishes on the stream's `conn` handshake.
  *   - Every `intervalMs` (default 5s), re-fires IF no stream is
  *     currently open. While a stream is open the tick is a no-op.
- *     When the server's keepalive elapses, the next tick reopens.
- *   - On any `navigate`, aborts the in-flight stream; the next
- *     interval tick opens a fresh connection on the now-current URL.
- *     Every page change is a partial change here, so the stream is
- *     always reopened for the new URL — there is no "same page" to
- *     keep it for. The abort is cooperative: the transport
+ *     When the server's keepalive elapses, the next tick reattaches —
+ *     the transient-reconnect recovery loop.
+ *   - On a DEGRADED page (`_channelIsDegraded()` — the explicit
+ *     degrade signals: a failed first-ack envelope, an
+ *     interaction-riding attach that never established) the heartbeat
+ *     stops firing entirely: the page is browser-native from here —
+ *     links and form posts are document loads, and every document
+ *     load is a fresh SSR render.
+ *   - On a `navigate`, the deferred abort check consumes the
+ *     channel's navigation claim: a CLAIMED navigation (the navigate
+ *     listener stated it on the channel) KEEPS the stream — the
+ *     navigation segment arrives on it. An unclaimed one aborts the
+ *     in-flight stream; the next tick reattaches on the now-current
+ *     state. The abort is cooperative: the transport
  *     (`splitSegments`) holds it until the in-flight segment's render
- *     has settled, so it never closes a body mid-render (which would
- *     reject the committed payload's pending references —
- *     "Connection closed." — and tear the visible page). See
- *     `docs/internals/streaming.md`.
+ *     has settled, so it never closes a body mid-render.
  *
  * Actions complete with one-shot responses and call
  * `refreshSelector` inside their bodies. The already-open stream
- * wakes on the bump and emits the next segment. There's never
+ * wakes on the bump and emits the next lanes. There's never
  * more than one streaming connection per page lifetime.
  */
 export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = {}) {
-  const [reload] = useNavigation().reload()
-
   useEffect(() => {
     // When `window.__partonHeartbeatDisabled` is set, the heartbeat
-    // holds no connection and never fires. e2e specs that assert on
-    // deterministic RSC traffic or interaction state set it (via
-    // `page.addInitScript`) so the periodic streaming connection
-    // doesn't add background requests they'd otherwise observe.
+    // holds no connection and never fires — the page opts out of the
+    // interactive transport entirely (the navigate listener stands
+    // down too; every navigation is a document load). e2e specs that
+    // assert on document-shaped behavior set it via
+    // `page.addInitScript`.
     if ((window as unknown as { __partonHeartbeatDisabled?: boolean }).__partonHeartbeatDisabled) {
       return
     }
@@ -102,6 +117,15 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
     const fire = () => {
       if (!alive) return
       if (inFlight) return
+      // DEGRADED channel: the transport proved itself broken (a failed
+      // first-ack envelope, an interaction's attach that never
+      // established). No fire — document navigation is the page's
+      // freshness from here. Sticky for the page lifetime.
+      if (_channelIsDegraded()) return
+      const attach = (
+        window as Window & { __rsc_live_attach?: AttachTransport }
+      ).__rsc_live_attach
+      if (!attach) return
       // A page with mounted viewport observers ALWAYS measures (the
       // IntersectionObserver fires an initial callback per target), so
       // wait for the first measurement rather than open an unmeasured
@@ -115,96 +139,53 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
         return
       }
       inFlight = new AbortController()
-      // DEGRADED channel (the transport proved the duplex broken — a
-      // connection committed deliveries but its first ack never got
-      // through, e.g. an ad-blocked `/__parton/*` POST path): stop
-      // holding lanes-first live attaches — with no upstream, the
-      // held stream's unacked window can never free and the server
-      // degrade-closes it anyway. Each interval tick instead fires a
-      // one-shot DISCRETE reload: GET-shaped (capped `?cached=`, per
-      // the degraded-mode pin), carrying the measured viewport as the
-      // `?visible=` param so cull state stays honest. Liveness becomes
-      // periodic polling at the heartbeat's own cadence — degraded,
-      // never frozen. Sticky for the page lifetime.
-      if (_channelIsDegraded()) {
-        const visible = _visibleSetParam()
-        const { finished } = reload({
-          streaming: true,
-          signal: inFlight.signal,
-          params: visible === undefined ? undefined : { visible },
-        })
-        finished
-          .catch(() => {
-            // Network error / abort — the next interval tick refires.
-          })
-          .finally(() => {
-            inFlight = null
-          })
-        return
-      }
       // Each fire is one connection — an ATTACH: a POST whose body
-      // carries the full client statement (see `channel-protocol.ts`):
-      // the manifest states WHAT the client holds (filled by the
-      // refetch dispatcher, uncapped — the body has no request-line
-      // limit), the anchor states WHEN it last heard, the seed states
-      // what it SEES. This component contributes the anchor + seed
-      // halves. The SERVER mints the fire's id at
-      // session open and ships it down as the stream's `conn` entry;
-      // the channel transport establishes on receipt (the wire hook in
-      // `entry/browser.tsx`), so envelopes can address the session the
-      // moment the handshake arrives. Seeding the fire with the
-      // controller's current visible set (`null` while unmeasured)
-      // means the whole-tree first segment already renders against the
-      // client's measured viewport instead of the cold anchor seed.
+      // carries the full client statement (see `channel-protocol.ts`).
+      // This component contributes the anchor + seed + watermark
+      // halves; the transport folds in the URL statement, the uncapped
+      // manifest, and any pre-establishment intent at fire time. The
+      // SERVER mints the fire's connection id at session open and
+      // ships it down as the stream's `conn` entry; the channel
+      // transport establishes on receipt (setting the presence-only
+      // `data-parton-live` marker), so envelopes can address the
+      // session the moment the handshake arrives.
       //
       // The document's registry anchor (take-once): presenting it lets
       // the server open the connection straight into lanes — only what
       // bumped after the document rendered — instead of replaying the
-      // whole route the document just delivered. Reopened connections
-      // (anchor consumed) attach with `since: null` and take the full
-      // initial segment.
-      const anchor = _takeLiveCatchupAnchor()
-      // `live: true` holds the connection open as a whole-route
-      // subscription (the server parks it for the keepalive and pushes
-      // a segment on every relevant bump / expiresAt boundary).
-      // `streaming: true` makes the client commit each pushed segment
-      // progressively. The two are orthogonal — a targeted refetch
-      // takes `streaming` without `live` and stays one-shot.
-      //
-      // Establishment is not this component's concern: the stream's
-      // `conn` entry (the server-minted id) establishes the connection
-      // with the channel transport as it is read. The transport owns
-      // the downstream signals — the `data-parton-live` liveness
-      // marker (set at establishment, removed below when the
-      // connection settles; specs and tooling wait on it instead of
-      // guessing whether a stream is open) and the establishment
-      // listeners (the visibility controller arms its full-set sync
-      // there). Fires are strictly sequential (`inFlight` gates), so
-      // one fire's close always precedes the next fire's
-      // establishment.
-      const { finished } = reload({
-        streaming: true,
-        live: true,
-        signal: inFlight.signal,
-        attach: {
-          since: anchor,
+      // whole route the document just delivered. Reattaches (anchor
+      // consumed) present `since: null` and take the full initial
+      // segment.
+      const { finished } = attach(
+        {
+          since: _takeLiveCatchupAnchor(),
           visible: _visibleSetIds() ?? null,
           // The upstream watermark the client last heard applied — the
           // new session's `applied` gate seeds from it, keeping the
           // downstream marker on the page-lifetime envelope timeline.
           applied: _channelAppliedWatermark(),
         },
-      })
+        inFlight.signal,
+      )
       finished
-        .catch(() => {
-          // Network error / abort. Clear the in-flight slot so the
-          // next interval tick can reopen.
-        })
-        .finally(() => {
-          _channelConnectionClosed()
+        .then(
+          () => false,
+          // Our own supersede (the navigate abort, teardown) is never a
+          // degrade signal — the transport's close arbitration needs to
+          // know the difference.
+          (err) => err instanceof Error && err.name === "AbortError",
+        )
+        .then((aborted) => {
           inFlight = null
+          _channelConnectionClosed({ aborted })
         })
     }
+
+    // A pre-establishment statement's ride: the channel transport
+    // requests an immediate fire so the interaction rides the attach
+    // it triggered. No-op while a fire is in flight (the statement
+    // flushes on that fire's establishment instead).
+    _registerAttachRequester(fire)
 
     // Defer the initial fire until BOTH have happened:
     //   1. React's first commit (we're here, that's done).
@@ -238,12 +219,12 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
       // and this listener registered FIRST (child effects run before
       // the parent's), so the check defers one microtask — after every
       // listener ran, before the intercept handler. Unclaimed
-      // navigations (discrete GETs, frame session updates, pre-attach)
-      // abort as always: the stream reopens for the now-current URL on
-      // the next interval tick. The abort is cooperative — the
-      // transport (`splitSegments`) holds it until the in-flight
-      // segment's render has settled, so it never tears a mid-render
-      // body.
+      // navigations (pre-establishment interactions racing an in-flight
+      // attach on the old URL, frame session updates) abort as always:
+      // the settle's arbitration reattaches on the now-current state.
+      // The abort is cooperative — the transport (`splitSegments`)
+      // holds it until the in-flight segment's render has settled, so
+      // it never tears a mid-render body.
       queueMicrotask(() => {
         if (_channelConsumeWindowNavClaim()) return
         if (inFlight) inFlight.abort()
@@ -251,9 +232,8 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
     }
     nav?.addEventListener("navigate", onNavigate as EventListener)
 
-    // The escape hatch a claimed-then-unroutable navigation pulls (the
-    // connection died between the claim and the fire): abort the kept
-    // stream so the next tick reopens on the now-current URL instead of
+    // The escape hatch the envelope-failure path pulls: abort the kept
+    // stream so its settle re-attaches on the current state instead of
     // idling on the old one for the keepalive.
     _registerLiveStreamAbort(() => {
       if (inFlight) inFlight.abort()
@@ -265,9 +245,10 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
       window.removeEventListener("load", startCadence)
       nav?.removeEventListener("navigate", onNavigate as EventListener)
       _registerLiveStreamAbort(null)
+      _registerAttachRequester(null)
       if (inFlight) inFlight.abort()
     }
-  }, [reload, intervalMs])
+  }, [intervalMs])
 
   return null
 }

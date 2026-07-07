@@ -18,10 +18,13 @@
  *      navigation render is aborted server-side (its truncated segment
  *      never settles) and exactly one settled navigation segment lands
  *      — the newest statement's, as-of ITS envelope seq;
- *   5. the nav-consume prune + the ack fold gate keep the mirror
- *      honest: pre-navigation unacked deliveries never fold into the
- *      acked layer (the client as-of-drops them), while the ack still
- *      advances the watermark — the window frees;
+ *   5. the mirror SURVIVES navigation: held pre-navigation deliveries
+ *      stay in the mirror across a nav (the client keeps them, parked)
+ *      and fold as holdings on the covering ack, so a return nav
+ *      fp-skips them without any intervening ack; a delivery the client
+ *      REPORTS dropped (`ack.dropped`) is evicted from the optimistic
+ *      layer and never folds — the drop is the client's explicit
+ *      statement, not a server inference from seq order;
  *   6. a stale url restatement (seq at or below the consumed
  *      navigation) applies as a no-op — retransmit idempotence.
  */
@@ -50,8 +53,9 @@ import {
 import type { DemuxedLane } from "../fp-trailer-split.ts";
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx";
 import { clearRegistry } from "../partial-registry.ts";
+import { searchParam } from "../server-hooks.ts";
 
-const renders = { shared: 0, a: 0, b: 0, slow: 0 };
+const renders = { shared: 0, a: 0, b: 0, slow: 0, outer: 0, child: 0 };
 
 // The mid-render supersede's controllable stall — re-armed per test.
 let releaseSlow: () => void = () => {};
@@ -92,6 +96,37 @@ const NavSlow = parton(
 	{ match: "/nav-slow", selector: "nav-slow" },
 );
 
+// A nested wrapper + addressable child that reads a searchParam — the
+// fold-exclusion fixture. `#fold-outer` folds `#fold-child`'s deps, so
+// without the exclusion a `?x=` change on the child moves the wrapper's
+// fp and re-renders it; with the child force-refetched, the wrapper's
+// fold excludes it and the wrapper fp-skips.
+const FoldChild = parton(
+	function FoldChildRender(_: RenderArgs) {
+		renders.child++;
+		const x = searchParam("x") ?? "";
+		return <div data-fold-child>{`child:${x}:${renders.child}`}</div>;
+	},
+	{ selector: "fold-child" },
+);
+const FoldOuter = parton(
+	function FoldOuterRender(_: RenderArgs) {
+		renders.outer++;
+		return (
+			<div data-fold-outer>
+				{`outer:${renders.outer}`}
+				<FoldChild />
+			</div>
+		);
+	},
+	{ match: "/fold", selector: "fold-outer" },
+);
+const PageFold = (): ReactNode => (
+	<PartialRoot>
+		<FoldOuter />
+	</PartialRoot>
+);
+
 const PageNav = (): ReactNode => (
 	<PartialRoot>
 		<NavShared />
@@ -107,6 +142,8 @@ beforeEach(() => {
 	renders.a = 0;
 	renders.b = 0;
 	renders.slow = 0;
+	renders.outer = 0;
+	renders.child = 0;
 	armSlowGate();
 });
 
@@ -533,8 +570,8 @@ describe("mid-render supersede", () => {
 });
 
 describe("the mirror stays honest across navigations", () => {
-	it("nav-consume prunes pre-navigation unacked deliveries; the covering ack folds only post-nav holdings", async () => {
-		const scope = freshLiveScope("nav-honest");
+	it("held pre-navigation deliveries survive the nav and fold as holdings on the covering ack", async () => {
+		const scope = freshLiveScope("nav-held");
 		await withLiveDrive(
 			"http://localhost/nav-a?live=1",
 			PageNav,
@@ -543,19 +580,26 @@ describe("the mirror stays honest across navigations", () => {
 				const first = await h.segments.next();
 				if (first.done || first.value.kind !== "payload")
 					throw new Error("expected payload segment 0");
-				await drainPayloadSegment(first.value);
+				const seg0 = await drainPayloadSegment(first.value);
+				expect(seg0).toContain("shared:1");
 				const conn = h.connectionId() ?? "";
 				const lanesSeg = await h.segments.next();
 				if (lanesSeg.done || lanesSeg.value.kind !== "lanes")
 					throw new Error("expected lanes segment");
 				const laneIter = lanesSeg.value.lanes[Symbol.asyncIterator]();
 
-				// A pre-navigation lane delivery (seq 2, as-of 0).
+				// A pre-navigation lane delivery (seq 2, as-of 0), committed by
+				// the client at navigation point 0 — a HELD delivery.
 				refreshSelector("nav-a");
 				const lane = await nextLane(laneIter);
 				expect(lane.partonId).toBe("nav-a");
 				await decodeLane(lane);
 
+				// Navigate to /nav-b WITHOUT an intervening ack: the mirror
+				// RETAINS the pre-nav promotions (no prune), so the navigation
+				// segment fp-skips the shared parton to a placeholder — its body
+				// never re-runs. This is the keystone: fp-skip against the
+				// OPTIMISTIC layer alone, no ack required.
 				expect(
 					await post(scope, {
 						connection: conn,
@@ -566,19 +610,20 @@ describe("the mirror stays honest across navigations", () => {
 				const navSeg = await h.segments.next();
 				if (navSeg.done || navSeg.value.kind !== "payload")
 					throw new Error("expected the navigation segment");
-				await drainPayloadSegment(navSeg.value);
+				const navBody = await drainPayloadSegment(navSeg.value);
+				expect(navBody).toContain("route-b:1");
+				expect(navBody).toContain('"data-partial-id":"nav-shared"');
+				expect(renders.shared).toBe(1);
 
-				// The consume pruned every pre-navigation record — only the
-				// navigation segment's own (seq 3, as-of 9) pends.
+				// Nothing was pruned — every pre-nav delivery still pends, plus
+				// the navigation segment's own (seq 3, as-of 9).
 				const session = _peekConnectionSession(conn);
 				if (!session) throw new Error("session gone");
-				expect([...session.pendingDeliveries.keys()]).toEqual([3]);
-				expect(session.pendingDeliveries.get(3)?.asOf).toBe(9);
+				expect([...session.pendingDeliveries.keys()]).toEqual([1, 2, 3]);
 
-				// The client processed everything through seq 3 (the pre-nav
-				// lane was an as-of drop — processed, not held). The watermark
-				// advances — the window frees — and ONLY the post-nav
-				// holdings fold into the acked layer.
+				// The client HELD them all (no drop reported) — the covering
+				// ack folds each into the acked layer as a client holding, and
+				// frees the window.
 				expect(
 					await post(scope, {
 						connection: conn,
@@ -588,7 +633,8 @@ describe("the mirror stays honest across navigations", () => {
 				).toBe(204);
 				expect(session.ackedDeliverySeq).toBe(3);
 				expect(session.pendingDeliveries.size).toBe(0);
-				expect(session.ackedFps.has("nav-a")).toBe(false);
+				expect(session.ackedFps.has("nav-a")).toBe(true);
+				expect(session.ackedFps.has("nav-shared")).toBe(true);
 				expect(session.ackedFps.has("nav-b")).toBe(true);
 
 				await h.shutdown("nav-b");
@@ -596,46 +642,208 @@ describe("the mirror stays honest across navigations", () => {
 		);
 	});
 
-	it("the fold gate: an ack covering a pre-latch delivery discards it instead of folding", async () => {
+	it("a base parton fp-skips on the return nav — the mirror retained it across A→B→A without an ack", async () => {
+		const scope = freshLiveScope("nav-return");
+		await withLiveDrive(
+			"http://localhost/nav-a?live=1",
+			PageNav,
+			scope,
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				const seg0 = await drainPayloadSegment(first.value);
+				expect(seg0).toContain("route-a:1");
+				expect(seg0).toContain("shared:1");
+				const conn = h.connectionId() ?? "";
+				await h.segments.next(); // lanes
+
+				// A→B, no ack. nav-shared fp-skips (the mirror holds it).
+				expect(
+					await post(scope, {
+						connection: conn,
+						seq: 3,
+						frames: [{ kind: "url", url: "/nav-b", intent: "push" }],
+					}),
+				).toBe(204);
+				const navB = await h.segments.next();
+				if (navB.done || navB.value.kind !== "payload")
+					throw new Error("expected the /nav-b navigation segment");
+				const navBBody = await drainPayloadSegment(navB.value);
+				expect(navBBody).toContain("route-b:1");
+				expect(navBBody).toContain('"data-partial-id":"nav-shared"');
+				await h.segments.next(); // reopened lanes
+
+				// B→A (return), still no ack ever sent. nav-a AND nav-shared
+				// both fp-skip — the mirror retained them across the round trip.
+				// A pruned mirror would re-render nav-a here (renders.a → 2);
+				// the retained mirror skips it (renders.a stays 1).
+				expect(
+					await post(scope, {
+						connection: conn,
+						seq: 4,
+						frames: [{ kind: "url", url: "/nav-a", intent: "push" }],
+					}),
+				).toBe(204);
+				const navA = await h.segments.next();
+				if (navA.done || navA.value.kind !== "payload")
+					throw new Error("expected the /nav-a return segment");
+				const navABody = await drainPayloadSegment(navA.value);
+				expect(navABody).toContain('"data-partial-id":"nav-a"');
+				expect(navABody).toContain('"data-partial-id":"nav-shared"');
+				expect(renders.a).toBe(1);
+				expect(renders.shared).toBe(1);
+
+				await h.shutdown("nav-a");
+			},
+		);
+	});
+
+	it("an ack naming a delivery DROPPED evicts its optimistic promotions and never folds them", async () => {
 		const session = _openConnectionSession("nav-gate", null);
 		try {
-			_recordDelivery(session, 1, [["x", "f1"]], 0);
-			// The url statement latches (statedNavSeq advances at APPLY, ahead
-			// of the driver's consume) …
-			expect(
-				await post(undefined, {
-					connection: "nav-gate",
-					seq: 7,
-					frames: [{ kind: "url", url: "/next", intent: "push" }],
-				}),
-			).toBe(204);
-			expect(session.statedNavSeq).toBe(7);
-			// … so the ack that follows — computed by a client whose
-			// navigation point was already 7 — frees the window WITHOUT
-			// folding the dropped delivery's fps.
+			// Mirror the driver's link: the two deliveries promoted `x` and
+			// `y` into the optimistic layer at emission.
+			session.cachedOverride = {
+				fingerprints: new Map([
+					["x", new Set(["f1"])],
+					["y", new Set(["f2"])],
+				]),
+				matchKeys: new Map([
+					["x", new Set(["mk"])],
+					["y", new Set(["mk"])],
+				]),
+				slots: new Map([
+					["x", new Map([["mk", new Set(["f1"])]])],
+					["y", new Map([["mk", new Set(["f2"])]])],
+				]),
+			};
+			_recordDelivery(session, 1, [["x", "mk", "f1"]], 0);
+			_recordDelivery(session, 2, [["y", "mk", "f2"]], 0);
+
+			// The ack covers both but names seq 1 DROPPED: the client received
+			// it yet had navigated past its as-of, so it holds none of it.
 			expect(
 				await post(undefined, {
 					connection: "nav-gate",
 					seq: 8,
-					frames: [{ kind: "ack", delivered: 1 }],
+					frames: [{ kind: "ack", delivered: 2, dropped: [1] }],
 				}),
 			).toBe(204);
-			expect(session.ackedDeliverySeq).toBe(1);
-			expect(session.ackedFps.has("x")).toBe(false);
+			expect(session.ackedDeliverySeq).toBe(2);
 			expect(session.pendingDeliveries.size).toBe(0);
 
-			// A post-navigation delivery folds as usual.
-			_recordDelivery(session, 2, [["y", "f2"]], 7);
+			// The dropped delivery never folds AND its optimistic promotions
+			// are evicted — no phantom holding survives to fp-skip against.
+			expect(session.ackedFps.has("x")).toBe(false);
+			expect(session.cachedOverride.fingerprints.get("x")?.has("f1")).toBe(
+				false,
+			);
 			expect(
-				await post(undefined, {
-					connection: "nav-gate",
-					seq: 9,
-					frames: [{ kind: "ack", delivered: 2 }],
-				}),
-			).toBe(204);
+				session.cachedOverride.slots.get("x")?.get("mk")?.has("f1"),
+			).toBe(false);
+
+			// The held delivery folds as usual, and stays in the optimistic
+			// layer.
 			expect([...(session.ackedFps.get("y") ?? [])]).toEqual(["f2"]);
+			expect(session.cachedOverride.fingerprints.get("y")?.has("f2")).toBe(
+				true,
+			);
 		} finally {
 			_closeConnectionSession("nav-gate");
 		}
+	});
+});
+
+describe("the descendant fold excludes forced targets", () => {
+	it("a forced child's dep change does not re-render its fp-skipping ancestor", async () => {
+		const scope = freshLiveScope("fold-excl");
+		await withLiveDrive(
+			"http://localhost/fold?live=1",
+			PageFold,
+			scope,
+			async (h) => {
+				const first = await h.segments.next();
+				if (first.done || first.value.kind !== "payload")
+					throw new Error("expected payload segment 0");
+				const seg0 = await drainPayloadSegment(first.value);
+				expect(seg0).toContain("outer:1");
+				expect(seg0).toContain("child::1");
+				const conn = h.connectionId() ?? "";
+				await h.segments.next(); // initial lanes
+				expect(
+					await post(scope, {
+						connection: conn,
+						seq: 2,
+						frames: [{ kind: "ack", delivered: 1 }],
+					}),
+				).toBe(204);
+
+				// Force-refetch fold-child with ?x=1. The wrapper's fold now
+				// EXCLUDES the forced child, so its fp differs from seg0's (which
+				// folded the child) — a one-time mismatch re-renders the wrapper
+				// (over-fetch, never stale) and promotes the excluded fp.
+				expect(
+					await post(scope, {
+						connection: conn,
+						seq: 3,
+						frames: [
+							{
+								kind: "url",
+								url: "/fold?x=1&__force=fold-child",
+								intent: "push",
+							},
+						],
+					}),
+				).toBe(204);
+				const nav1 = await h.segments.next();
+				if (nav1.done || nav1.value.kind !== "payload")
+					throw new Error("expected the first refetch segment");
+				await drainPayloadSegment(nav1.value);
+				const lanes1 = await h.segments.next(); // reopened lanes (forced)
+				if (lanes1.done || lanes1.value.kind !== "lanes")
+					throw new Error("expected reopened lanes");
+				const laneIter1 = lanes1.value.lanes[Symbol.asyncIterator]();
+				const forced1 = await nextLane(laneIter1);
+				expect(forced1.partonId).toBe("fold-child");
+				await decodeLane(forced1);
+				expect(renders.outer).toBe(2);
+
+				// Force-refetch again with ?x=2. The wrapper's fp EXCLUDES the
+				// child, so x=1→x=2 does NOT move it — the mirror holds the
+				// excluded fp and the wrapper fp-skips to a placeholder
+				// (renders.outer stays 2). Only fold-child re-lanes fresh.
+				expect(
+					await post(scope, {
+						connection: conn,
+						seq: 4,
+						frames: [
+							{
+								kind: "url",
+								url: "/fold?x=2&__force=fold-child",
+								intent: "push",
+							},
+						],
+					}),
+				).toBe(204);
+				const nav2 = await h.segments.next();
+				if (nav2.done || nav2.value.kind !== "payload")
+					throw new Error("expected the second refetch segment");
+				const nav2Body = await drainPayloadSegment(nav2.value);
+				expect(nav2Body).toContain('"data-partial-id":"fold-outer"');
+				expect(nav2Body).not.toContain("outer:3");
+				expect(renders.outer).toBe(2);
+
+				const lanes2 = await h.segments.next();
+				if (lanes2.done || lanes2.value.kind !== "lanes")
+					throw new Error("expected the second reopened lanes");
+				const laneIter2 = lanes2.value.lanes[Symbol.asyncIterator]();
+				const forced2 = await nextLane(laneIter2);
+				expect(forced2.partonId).toBe("fold-child");
+				expect((await decodeLane(forced2)).bodyText).toContain("child:2:");
+
+				await h.shutdown("fold-outer");
+			},
+		);
 	});
 });

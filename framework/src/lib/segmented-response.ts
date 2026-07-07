@@ -32,15 +32,14 @@
 
 import {
 	_captureCommitHandle,
-	_clearConnectionLive,
-	_clearRequestEphemeralStorage,
 	_createConnectionLiveProbe,
 	_getAttachStatement,
 	_getCachedOverride,
-	_isConnectionLive,
 	_runWithWarmRenderScope,
+	_runWithWarmRequestScope,
 	_setCachedOverride,
 	_setConnectionSession,
+	_setFoldExclusionIds,
 	getRequest,
 	getScope,
 	setRequest,
@@ -365,23 +364,25 @@ export async function driveSegmentedResponse(
 	}
 
 	async function driveSegments(): Promise<void> {
-		let segmentIndex = 0;
-		let lastTs = _currentTs();
+		const lastTs = _currentTs();
 
-		// Live catch-up: the attach's first fire presents the document's
-		// registry anchor (the statement's `since`, minted into the SSR
-		// trailing comment). The document IS the page state as of that
-		// point, so re-rendering the whole route here would only re-ship
-		// bytes the client already holds — skip the initial segment
-		// entirely and open straight into lanes anchored at the document's
-		// timestamp: the first wake lanes exactly what bumped or expired
-		// after the document rendered. Honored only when the anchor's
-		// epoch names THIS registry timeline (a restart or clear starts a
-		// new one) and the route still has snapshots (an HMR dispose wipes
-		// them); otherwise fall through to the full initial render.
+		// Live catch-up: the attach presents the document's registry
+		// anchor (the statement's `since`, minted into the SSR trailing
+		// comment). The document IS the page state as of that point, so
+		// re-rendering the whole route here would only re-ship bytes the
+		// client already holds — skip the initial segment entirely and
+		// open straight into lanes anchored at the document's timestamp:
+		// the first wake lanes exactly what bumped or expired after the
+		// document rendered. Honored only when the anchor's epoch names
+		// THIS registry timeline (a restart or clear starts a new one),
+		// the route still has snapshots (an HMR dispose wipes them), and
+		// the statement carries no intent (a `__force` overlay or a
+		// frame statement needs the full render's covering pass);
+		// otherwise fall through to the full initial render.
 		const catchUpTs = liveCatchupTs();
 		if (catchUpTs !== null && session !== null) {
 			installCatchupCachedOverride();
+			linkOverrideToSession(session);
 			controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
 			enqueueConnectionId(controller, session.id);
 			await driveLaneStream(
@@ -395,142 +396,104 @@ export async function driveSegmentedResponse(
 			return;
 		}
 
-		while (true) {
-			_clearConnectionLive();
-
-			if (segmentIndex > 0) {
-				controller.enqueue(nextMarker);
-			}
-
-			// The server-minted connection id, ahead of the first segment's
-			// Flight rows — an ENTRY, so the splitter surfaces it and keeps
-			// the body flowing. Shipping it FIRST means the client transport
-			// can address the session before the whole-tree render has even
-			// drained; the id's existence proves the session is open (it was
-			// minted at session open, above).
-			if (segmentIndex === 0 && session !== null) {
-				enqueueConnectionId(controller, session.id);
-			}
-
-			// A live connection's payload segment is a DELIVERY: mint its
-			// per-connection seq and ship it as an entry ahead of the Flight
-			// rows, so the client holds the seq before the segment can
-			// commit (commit time is when it records — and acks — it).
-			// One-shot responses have no session and carry no seqs.
-			let deliverySeq: number | null = null;
-			if (session !== null) {
-				deliverySeq = ++session.deliverySeq;
-				controller.enqueue(
-					segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq),
-				);
-			}
-
-			const flightStream = renderSegment();
-			const reader = flightStream.getReader();
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					if (value) {
-						// Pull-gated: a chunk is only enqueued once the consumer
-						// has room for it. Not reading the NEXT chunk until then
-						// propagates the wait into the Flight stream itself
-						// (whose renderer paces on its own desiredSize).
-						await waitForDemand(controller, demand);
-						controller.enqueue(value);
-					}
-				}
-			} finally {
-				reader.releaseLock();
-			}
-
-			// The render for this segment has fully drained — its body bytes and
-			// the `fp`/`url` trailers are all on the wire. Emit the `settled`
-			// milestone so the client knows the iteration is complete: from this
-			// point the connection is parked (held open awaiting the next bump),
-			// and an abort can cancel the reader WITHOUT tearing a mid-render
-			// body. The client's cooperative abort (the live heartbeat tearing
-			// down on navigate) gates on this marker — see `SegmentIterator` in
-			// `fp-trailer-split.ts`.
-			controller.enqueue(settledMarker);
-
-			// The delivery is fully on the wire — the client's ack
-			// obligation starts here (the never-acked degrade deadline's
-			// anchor).
-			if (session !== null && deliverySeq !== null) {
-				session.firstDeliverySettledAt ??= Date.now();
-			}
-
-			if (onSegmentEnd) onSegmentEnd();
-
-			// Live subscription (`?live=1`, the heartbeat's long-poll): after
-			// the initial whole-tree segment, the connection switches to
-			// per-parton lanes — each wake renders only the partons the bump /
-			// expiresAt boundary actually touched, and their payloads
-			// interleave as independent `mux` frames, so one parton's slow
-			// Suspense boundary never head-of-line-blocks another parton's
-			// next update. Relevance false-negatives (a dependency the
-			// label/dep surface doesn't capture) are reconciled by the next
-			// whole-tree render: the keepalive close forces the heartbeat to
-			// reopen, and the reopened connection's first segment is always
-			// whole-tree.
-			if (isLiveSubscription()) {
-				// Promote into the optimistic layer AND capture the same walk
-				// as the delivery's holdings record — what this segment carried
-				// becomes acked evidence when the client commits it.
-				const tokens: Array<readonly [string, string]> = [];
-				promoteSnapshotsToCachedOverride(undefined, (id, fp) =>
-					tokens.push([id, fp]),
-				);
-				if (session !== null && deliverySeq !== null) {
-					_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
-				}
-				controller.enqueue(nextMarker);
-				controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
-				await driveLaneStream(
-					controller,
-					lastTs,
-					settledMarker,
-					session,
-					demand,
-					renderSegment,
-				);
-				return;
-			}
-
-			// Server-side multi-segment opt-in: this segment's render called
-			// `markConnectionLive()` (producer-await sentinels like the chat's
-			// `ChunkSlot`). Those stay whole-tree — their next content comes
-			// from the render itself resolving, not from a relevance-matched
-			// bump, so per-parton lanes have nothing to key on. A bare
-			// `?streaming=1` targeted refetch is NOT a subscription — it's a
-			// one-shot that commits its segment and closes.
-			if (!_isConnectionLive()) break;
-
-			// Promote just-emitted (id, matchKey, fp) tokens into the
-			// request-scoped cached override so the NEXT segment's render
-			// fp-skips the unchanged partials. We append to the in-memory
-			// Maps shared with PartialRoot's state — no URL rewrite, no
-			// re-parse. Safe under live partials because the descendant-fold
-			// (both live in `descendantContribution` and snapshot-based in
-			// `descendantContributionFromSnapshot`) folds each descendant's
-			// invalidation ts in — when a hot-bumping descendant's `|inv=N`
-			// shifts, the ancestor's fold moves with it, the ancestor's fp
-			// moves, the promoted fp from the prior segment no longer
-			// matches, the ancestor body re-runs, and the descendant is
-			// re-instantiated.
-			promoteSnapshotsToCachedOverride();
-
-			// Wait for a reason to emit the next segment, or for the keepalive
-			// to elapse. Only a bump RELEVANT to this route's rendered partials
-			// (or an expiresAt boundary) emits another segment; bumps in other
-			// sessions/scopes — which this stream would only fp-skip — re-arm
-			// without re-rendering. See waitForSegmentWake.
-			const proceed = await waitForSegmentWake(lastTs);
-			if (proceed === false) break;
-			lastTs = _currentTs();
-			segmentIndex++;
+		// The server-minted connection id, ahead of the first segment's
+		// Flight rows — an ENTRY, so the splitter surfaces it and keeps
+		// the body flowing. Shipping it FIRST means the client transport
+		// can address the session before the whole-tree render has even
+		// drained; the id's existence proves the session is open (it was
+		// minted at session open, above).
+		if (session !== null) {
+			enqueueConnectionId(controller, session.id);
 		}
+
+		// A live connection's payload segment is a DELIVERY: mint its
+		// per-connection seq and ship it as an entry ahead of the Flight
+		// rows, so the client holds the seq before the segment can
+		// commit (commit time is when it records — and acks — it).
+		// One-shot responses have no session and carry no seqs.
+		let deliverySeq: number | null = null;
+		if (session !== null) {
+			deliverySeq = ++session.deliverySeq;
+			controller.enqueue(
+				segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq),
+			);
+		}
+
+		const flightStream = renderSegment();
+		const reader = flightStream.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value) {
+					// Pull-gated: a chunk is only enqueued once the consumer
+					// has room for it. Not reading the NEXT chunk until then
+					// propagates the wait into the Flight stream itself
+					// (whose renderer paces on its own desiredSize).
+					await waitForDemand(controller, demand);
+					controller.enqueue(value);
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+
+		// The render for this segment has fully drained — its body bytes and
+		// the `fp`/`url` trailers are all on the wire. Emit the `settled`
+		// milestone so the client knows the iteration is complete: from this
+		// point the connection is parked (held open awaiting the next bump),
+		// and an abort can cancel the reader WITHOUT tearing a mid-render
+		// body. The client's cooperative abort gates on this marker — see
+		// `SegmentIterator` in `fp-trailer-split.ts`.
+		controller.enqueue(settledMarker);
+
+		// The delivery is fully on the wire — the client's ack
+		// obligation starts here (the never-acked degrade deadline's
+		// anchor).
+		if (session !== null && deliverySeq !== null) {
+			session.firstDeliverySettledAt ??= Date.now();
+		}
+
+		if (onSegmentEnd) onSegmentEnd();
+
+		// One-shot render (no connection session — an in-process drive
+		// without an attach statement): one segment, close.
+		if (session === null) return;
+
+		// The attach's connection: after the initial whole-tree segment,
+		// the connection switches to per-parton lanes — each wake renders
+		// only the partons the bump / expiresAt boundary actually
+		// touched, and their payloads interleave as independent `mux`
+		// frames, so one parton's slow Suspense boundary never
+		// head-of-line-blocks another parton's next update. Relevance
+		// false-negatives (a dependency the label/dep surface doesn't
+		// capture) are reconciled by the next whole-tree render: the
+		// keepalive close forces the heartbeat to reattach, and the
+		// reattached connection's first segment is always whole-tree.
+		//
+		// Promote into the optimistic layer AND capture the same walk
+		// as the delivery's holdings record — what this segment carried
+		// becomes acked evidence when the client commits it.
+		const tokens: Array<readonly [string, string, string]> = [];
+		promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) =>
+			tokens.push([id, mk, fp]),
+		);
+		// PartialRoot installed the override during this render; link it to
+		// the session so the channel endpoint can evict client-reported drops.
+		linkOverrideToSession(session);
+		if (deliverySeq !== null) {
+			_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
+		}
+		controller.enqueue(nextMarker);
+		controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
+		await driveLaneStream(
+			controller,
+			lastTs,
+			settledMarker,
+			session,
+			demand,
+			renderSegment,
+		);
 	}
 }
 
@@ -557,15 +520,17 @@ async function waitForDemand(
 }
 
 /**
- * Resolve the request's live catch-up anchor — the attach statement's
- * `since` (the document's registry anchor the heartbeat's first fire
- * presents; see [[channel-protocol]]'s `AttachStatement`). The anchor
- * rides ONLY the attach body — no URL form exists — so a discrete live
- * GET always takes the full initial render. Returns the anchor
- * timestamp when it is honorable: a live subscription, the epoch names
- * the CURRENT registry timeline, and the route still has snapshots to
- * lane from. `null` otherwise — the caller falls through to the full
- * initial render (over-fetch, never stale).
+ * Resolve the attach's live catch-up anchor — the statement's `since`
+ * (the document's registry anchor the heartbeat's first fire presents;
+ * see [[channel-protocol]]'s `AttachStatement`). Returns the anchor
+ * timestamp when it is honorable: the epoch names the CURRENT registry
+ * timeline, the route still has snapshots to lane from, and the
+ * statement carries no frame intent (an attach-with-intent frame
+ * statement needs the full render as its covering pass — its targets
+ * may not have route snapshots to lane from yet). `null` otherwise —
+ * the caller falls through to the full initial render (over-fetch,
+ * never stale). A `__force` overlay does NOT refuse the anchor: forced
+ * targets lane EXPLICIT the moment the region opens, on either path.
  */
 function liveCatchupTs(): number | null {
 	let request: Request;
@@ -576,13 +541,31 @@ function liveCatchupTs(): number | null {
 	} catch {
 		return null;
 	}
-	if (new URL(request.url).searchParams.get("live") !== "1") return null;
-	const since = _getAttachStatement()?.since ?? null;
+	const statement = _getAttachStatement();
+	if (statement === null) return null;
+	if ((statement.frames?.length ?? 0) > 0) return null;
+	const since = statement.since ?? null;
 	if (since === null) return null;
 	if (since.epoch !== _registryEpoch()) return null;
 	const routeKey = computeRouteKey(request.url);
 	if (_readSnapshotsForRoute(scope, routeKey).size === 0) return null;
 	return since.ts;
+}
+
+/** The attach statement's one-shot `__force` overlay — the selector a
+ *  pre-establishment refetch folded into the statement's URL. Read off
+ *  the statement (the entry strips it from request state before any
+ *  render); `null` when the statement carries none. */
+function attachForceSelector(): string | null {
+	const statement = _getAttachStatement();
+	if (statement === null) return null;
+	try {
+		return new URL(statement.url, "http://parton.local").searchParams.get(
+			"__force",
+		);
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -601,18 +584,30 @@ function installCatchupCachedOverride(): void {
 	_setCachedOverride({
 		fingerprints: parsed.fingerprints,
 		matchKeys: parsed.matchKeys,
+		slots: parsed.slots,
 	});
 }
 
+/** Link the connection's optimistic override — the object the driver's
+ *  renders promote into (`_getCachedOverride()` in this request scope) —
+ *  onto the session, so the channel endpoint (a SEPARATE request scope)
+ *  can evict a client-reported dropped delivery's promotions from the
+ *  very same object. Called once the driver has installed the override
+ *  (the cold render's first promote, or the catch-up install). The
+ *  override identity is stable for the connection's lifetime, so the
+ *  link is a one-shot reference, not a per-segment refresh. */
+function linkOverrideToSession(session: ConnectionSession): void {
+	session.cachedOverride = _getCachedOverride();
+}
+
 /**
- * Open the connection session for the active request when it is a live
- * subscription, under a SERVER-MINTED connection id (never a
- * client-chosen URL param — that shape invites fixation and leaks the
- * addressable token into access logs; the id ships downstream as the
- * stream's `conn` entry instead). Seeds the visible set from the
- * attach statement's `visible` — the in-process live GET's `?visible=`
- * param is the statement-less carrier — with `null` as the
- * pre-measurement state, and binds the attach's scope + session
+ * Open the connection session for the active request when it carries
+ * an attach statement — the ONE live-subscription signal — under a
+ * SERVER-MINTED connection id (never a client-chosen URL param — that
+ * shape invites fixation and leaks the addressable token into access
+ * logs; the id ships downstream as the stream's `conn` entry instead).
+ * Seeds the visible set from the statement's `visible`, with `null` as
+ * the pre-measurement state, and binds the attach's scope + session
  * identity (what every channel envelope must re-present — see
  * `handleChannelPost` in `connection-session.ts`). Every attach binds
  * its OWN request's identity, which makes it the explicit rebind
@@ -620,8 +615,8 @@ function installCatchupCachedOverride(): void {
  * moment the next attach presents it. The session is
  * stamped onto the request's ALS store so the cull gate and
  * `evalDepKeys` read it for the connection's whole lifetime. Returns
- * `null` for one-shot requests — no envelope can address those, so no
- * session is needed.
+ * `null` for statement-less renders — no envelope can address those,
+ * so no session is needed and the drive is one segment.
  */
 function openLiveConnectionSession(): ConnectionSession | null {
 	let request: Request;
@@ -630,19 +625,10 @@ function openLiveConnectionSession(): ConnectionSession | null {
 	} catch {
 		return null;
 	}
-	const params = new URL(request.url).searchParams;
-	if (params.get("live") !== "1") return null;
 	const statement = _getAttachStatement();
-	let seed: ReadonlySet<string> | null;
-	if (statement !== null) {
-		seed = statement.visible === null ? null : new Set(statement.visible);
-	} else {
-		const rawVisible = params.get("visible");
-		seed =
-			rawVisible === null
-				? null
-				: new Set(rawVisible.split(",").filter(Boolean));
-	}
+	if (statement === null) return null;
+	const seed: ReadonlySet<string> | null =
+		statement.visible === null ? null : new Set(statement.visible);
 	const session = _openConnectionSession(crypto.randomUUID(), seed, {
 		scope: getScope(),
 		sessionId: getSessionId() ?? "",
@@ -789,6 +775,14 @@ interface LaneRuntime {
 	 *  exit aborts producer reads (an unbounded await must not hold the
 	 *  wind-down). */
 	producer: boolean;
+	/** The current iteration renders an EXPLICIT force whose content
+	 *  has not drained. A navigation tear catching it re-forces the id
+	 *  after the reopen — the force was never satisfied, and the torn
+	 *  body's replacement lanes as-of the new statement (a silent
+	 *  restatement must not lose a disjoint target's refetch). Cleared
+	 *  at drain; a `cancel` is a deliberate supersede and never
+	 *  re-forces. */
+	forced: boolean;
 }
 
 /**
@@ -973,6 +967,7 @@ async function driveLaneStream(
 				snap?.framePath[0] === cancelScope;
 			if (!inScope) continue;
 			runtime.cancelled = true;
+			runtime.forced = false;
 			runtime.abortRead?.();
 		}
 		for (const release of [...gateWaiters]) release();
@@ -1063,6 +1058,7 @@ async function driveLaneStream(
 			abortRead: null,
 			cancelled: false,
 			producer: false,
+			forced: false,
 		};
 		lanes.set(id, runtime);
 		openLaneIds.add(id);
@@ -1088,11 +1084,11 @@ async function driveLaneStream(
 		// path. One-shot: the force is consumed here; re-lanes of the same
 		// parton skip and defer as usual.
 		const forced = forcedLaneIds.delete(id);
+		runtime.forced = forced;
 		if (laneOverride || forced) {
 			enterPartialState({
 				requestedIds: null,
 				isPartialRefetch: true,
-				populateCache: false,
 				cachedFingerprints: laneOverride?.fingerprints ?? new Map(),
 				cachedMatchKeys: laneOverride?.matchKeys ?? new Map(),
 				// The mirror's ACKED layer — client-proven holdings the
@@ -1101,7 +1097,6 @@ async function driveLaneStream(
 				// verifiably committed).
 				ackedFingerprints: session?.ackedFps ?? null,
 				explicitIds: forced ? new Set([id]) : new Set(),
-				cullFlip: false,
 				seenIds: new Set(),
 			});
 		}
@@ -1130,7 +1125,13 @@ async function driveLaneStream(
 				// client — subtree promotions at drain plus any trailer heals
 				// during the flush — become acked holdings when the client
 				// commits it. Captured per iteration.
-				const carried: Array<readonly [string, string]> = [];
+				const carried: Array<readonly [string, string, string]> = [];
+				// The trailer heals this iteration's flush emitted, folded into
+				// the mirror AFTER the drain promote establishes each rendered
+				// id's slot (below) — so the warm `to` fp joins the slot holding
+				// its cold `from` (the client's `_applyFpUpdates` rule) instead
+				// of landing slotless and un-evictable by a later variant.
+				const laneHeals: FpUpdatesPayload = {};
 				// Per-iteration producer attribution: the render runs inside a
 				// nested probe scope so `markConnectionLive()` marks THIS lane
 				// (lane renders share one request store — the store-level flag
@@ -1141,11 +1142,53 @@ async function driveLaneStream(
 				// live) so the client commits progressively; a normal lane
 				// announces at drain, just before its `muxend`.
 				let announcedSeq: number | null = null;
+				let bufferUntilDrain =
+					runtime.forced &&
+					navSeq === undefined &&
+					session?.consumedNavStreaming !== true;
+				const bufferedFrames: Uint8Array[] = [];
+				const flushBufferedFrames = async (): Promise<boolean> => {
+					if (bufferedFrames.length === 0) {
+						bufferUntilDrain = false;
+						return true;
+					}
+					for (const frame of bufferedFrames) {
+						if (!(await awaitDemand(runtime))) return false;
+						if (!enqueue(frame)) return false;
+					}
+					bufferedFrames.length = 0;
+					bufferUntilDrain = false;
+					return true;
+				};
+				// A window-force lane (a selector nav's `__force` target, not a
+				// frame lane — those carry a `navSeq`) announces its delivery seq
+				// EARLY: a plain seq entry before the body, so the client holds it
+				// at root-ready and can commit progressively when the covering nav
+				// asked for streaming (matching the whole-tree segment). It stays a
+				// NORMAL (non-`muxlive`) delivery — the client buffers it by
+				// default; only the streaming-preferred branch commits root-ready.
+				// Frame lanes and producers keep their own `muxlive` announcement:
+				// setting the seq here would suppress it (`maybeAnnounceProducer`
+				// gates on `announcedSeq`).
+				if (
+					runtime.forced &&
+					navSeq === undefined &&
+					session?.consumedNavStreaming === true
+				) {
+					announcedSeq = assignedSeq ?? ++session.deliverySeq;
+					if (
+						!enqueue(
+							laneDeliverySeqEntry(id, announcedSeq, session.consumedNavSeq, navSeq),
+						)
+					)
+						return;
+				}
 				let wroteBytes = false;
-				const maybeAnnounceProducer = (): boolean => {
+				const maybeAnnounceProducer = async (): Promise<boolean> => {
 					if (announcedSeq !== null || session === null) return true;
 					if (!wroteBytes || !probe.live()) return true;
 					runtime.producer = true;
+					if (bufferUntilDrain && !(await flushBufferedFrames())) return false;
 					announcedSeq = assignedSeq ?? ++session.deliverySeq;
 					return enqueue(
 						muxLiveEntry(id, announcedSeq, session.consumedNavSeq, navSeq),
@@ -1169,18 +1212,16 @@ async function driveLaneStream(
 							// frame, and the same multi-KB fp payload duplicated onto
 							// every frame of the stream.
 							flushScopeId: id,
-							// Fold this lane's warm fps into the connection's cached
-							// override alongside the client-bound trailer, so the
-							// server-side skip check tracks the same drift the client
-							// heals (a bump landing between this lane's render and
-							// its flush moves the recomputed fp past the emitted one).
-							// The healed fps ride this delivery's holdings record too —
-							// the client applies the trailer at the same commit.
+							// Stash this lane's warm heals; they fold into the mirror
+							// (and this delivery's holdings) AFTER the drain promote
+							// below, so each `to` joins the slot the promote just
+							// established for its `from`. Folding here — before the
+							// slot exists — would land `to` slotless, un-evictable by
+							// a later sibling variant (the return-toggle stale-body
+							// class). The fold still lands before the next lane's skip
+							// check, so it tracks the same drift the client heals.
 							onUpdates: (updates) => {
-								promoteFpUpdatesToCachedOverride(updates);
-								for (const [uid, entry] of Object.entries(updates)) {
-									carried.push([uid, entry.to]);
-								}
+								Object.assign(laneHeals, updates);
 							},
 						},
 					);
@@ -1203,26 +1244,30 @@ async function driveLaneStream(
 								// propagates the wait into the lane's Flight stream, so a
 								// stalled reader holds at most one frame per lane
 								// server-side instead of every wake's full payload.
-								if (
-									!(await awaitDemand(runtime)) ||
-									tearingLanesForNav ||
-									runtime.cancelled
-								) {
-									await reader.cancel().catch(() => {});
-									return runtime.cancelled || tearingLanesForNav
-										? "torn"
-										: "closed";
-								}
-								if (!enqueue(muxFrame(id, value))) {
-									await reader.cancel().catch(() => {});
-									return "closed";
+								if (bufferUntilDrain) {
+									bufferedFrames.push(muxFrame(id, value));
+								} else {
+									if (
+										!(await awaitDemand(runtime)) ||
+										tearingLanesForNav ||
+										runtime.cancelled
+									) {
+										await reader.cancel().catch(() => {});
+										return runtime.cancelled || tearingLanesForNav
+											? "torn"
+											: "closed";
+									}
+									if (!enqueue(muxFrame(id, value))) {
+										await reader.cancel().catch(() => {});
+										return "closed";
+									}
 								}
 								wroteBytes = true;
 							}
 							// Producer announcement — checked at every pump step so
 							// the mark lands on the wire before the render's producer
 							// await stalls the body.
-							if (!maybeAnnounceProducer()) {
+							if (!(await maybeAnnounceProducer())) {
 								await reader.cancel().catch(() => {});
 								return "closed";
 							}
@@ -1275,6 +1320,12 @@ async function driveLaneStream(
 					}
 					return;
 				}
+				if (!(await flushBufferedFrames())) {
+					if (assignedSeq !== null && announcedSeq === null) {
+						session?.voidSeqs.add(assignedSeq);
+					}
+					return;
+				}
 				// The delivery announcement precedes the `muxend` on the wire,
 				// so the client's per-parton seq queue holds it before the lane
 				// body closes — its decode, then commit, then ack all follow. A
@@ -1303,12 +1354,21 @@ async function driveLaneStream(
 				// O(route) churn for entries the drain didn't touch. The same
 				// walk records the delivery's holdings — one pass, no second
 				// walk per drain.
-				promoteSnapshotsToCachedOverride(id, (tid, fp) =>
-					carried.push([tid, fp]),
+				promoteSnapshotsToCachedOverride(id, (tid, mk, fp) =>
+					carried.push([tid, mk, fp]),
+				);
+				// The flush's warm heals fold in NOW, after the slots exist: the
+				// `to` fp joins the slot holding its `from` (dropping when the
+				// slot fp-skipped away), then rides this delivery's holdings so
+				// the acked layer folds it under the same matchKey.
+				promoteFpUpdatesToCachedOverride(laneHeals, (tid, mk, fp) =>
+					carried.push([tid, mk, fp]),
 				);
 				if (session !== null && deliverySeq !== null) {
 					_recordDelivery(session, deliverySeq, carried, session.consumedNavSeq);
 				}
+				// The force is satisfied — its content drained.
+				runtime.forced = false;
 				if (!runtime.dirty) return;
 			}
 		} finally {
@@ -1419,6 +1479,47 @@ async function driveLaneStream(
 		!deliveryWindowExceeded() &&
 		_getWarmProjector() !== null;
 
+	// The preload-warm latch: a `warm` frame's stated target awaits its
+	// park-point render. Same window discipline as the telemetry pass —
+	// a window-skip keeps the slot, so the freeing ack's wake warms the
+	// same statement; the consume below nulls it, so the latch can never
+	// spin the wait-entry loop.
+	const pendingPreloadWarm = (): boolean =>
+		session !== null &&
+		session.pendingWarmUrl !== null &&
+		!deliveryWindowExceeded();
+
+	// ONE byte-silent whole-tree render of the stated target — explicit
+	// intent needs no projector: the route is named directly. The render
+	// runs inside a nested request scope for the target URL
+	// (`_runWithWarmRequestScope`) and drains into the void; the durable
+	// effects are the caches it fills (`<Cache>` byte-cache entries,
+	// loader caches) and the target route's registered snapshots — the
+	// navigation statement that follows renders warm.
+	const warmPreloadTarget = async (): Promise<void> => {
+		if (session === null) return;
+		const warm = session.pendingWarmUrl;
+		if (warm === null || deliveryWindowExceeded()) return;
+		session.pendingWarmUrl = null;
+		try {
+			await _runWithWarmRequestScope(warm.url, async () => {
+				const reader = renderFullSegment().getReader();
+				try {
+					while (true) {
+						const { done } = await reader.read();
+						if (done) break;
+					}
+				} finally {
+					reader.releaseLock();
+				}
+			});
+		} catch {
+			// Speculative by definition: a failed warm render costs
+			// nothing — the navigation renders cold, exactly as if the
+			// statement never arrived.
+		}
+	};
+
 	const warmProjectedPartons = async (): Promise<void> => {
 		if (session === null) return;
 		const telemetry = session.telemetry;
@@ -1459,13 +1560,11 @@ async function driveLaneStream(
 					enterPartialState({
 						requestedIds: null,
 						isPartialRefetch: true,
-						populateCache: false,
-						cachedFingerprints: new Map(),
+								cachedFingerprints: new Map(),
 						cachedMatchKeys: new Map(),
 						ackedFingerprints: null,
 						explicitIds: new Set(),
-						cullFlip: false,
-						seenIds: new Set(),
+								seenIds: new Set(),
 					});
 					const reader = renderToReadableStream(
 						partialFromSnapshot(id, snap),
@@ -1543,9 +1642,9 @@ async function driveLaneStream(
 		if (!(await awaitDemand())) return false;
 		if (!enqueue(settledMarker)) return false;
 		if (session !== null) session.firstDeliverySettledAt ??= Date.now();
-		const tokens: Array<readonly [string, string]> = [];
-		promoteSnapshotsToCachedOverride(undefined, (id, fp) =>
-			tokens.push([id, fp]),
+		const tokens: Array<readonly [string, string, string]> = [];
+		promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) =>
+			tokens.push([id, mk, fp]),
 		);
 		if (session !== null && deliverySeq !== null) {
 			_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
@@ -1570,10 +1669,11 @@ async function driveLaneStream(
 	// nav-latch arm on the session's wake set (disposer-registered, one
 	// per emission — the wake-arm release invariant), the reader is
 	// cancelled (aborting the Flight render), and the caller consumes
-	// the newer statement. The truncated segment is closed by the next
-	// `next` delimiter; the client drains it without decoding past the
-	// as-of check, and its consumed-not-recorded seq stays honest via
-	// the processed-drop ack.
+	// the newer statement. Non-streaming navs buffer their Flight bytes
+	// until drain, so a superseded delivery has only its early seq entry
+	// on the wire; the next `next` delimiter closes an empty, stale
+	// segment and the client consumes its processed-drop ack without
+	// handing React a partial payload.
 	const emitNavSegment = async (): Promise<"done" | "superseded" | "closed"> => {
 		if (!enqueue(nextMarker)) return "closed";
 		let deliverySeq: number | null = null;
@@ -1585,6 +1685,18 @@ async function driveLaneStream(
 				return "closed";
 		}
 		const consumedSeq = session?.consumedNavSeq ?? 0;
+		const bufferUntilDrain =
+			session !== null && session.consumedNavStreaming !== true;
+		const bufferedSegment: Uint8Array[] = [];
+		const flushBufferedSegment = async (): Promise<boolean> => {
+			if (!bufferUntilDrain || bufferedSegment.length === 0) return true;
+			for (const chunk of bufferedSegment) {
+				if (!(await awaitDemand())) return false;
+				if (!enqueue(chunk)) return false;
+			}
+			bufferedSegment.length = 0;
+			return true;
+		};
 		const supersededBy = (): boolean =>
 			session !== null &&
 			session.pendingNav !== null &&
@@ -1625,13 +1737,17 @@ async function driveLaneStream(
 				const { done, value } = winner.r;
 				if (done) break;
 				if (value && value.byteLength > 0) {
-					if (!(await awaitDemand())) {
-						await reader.cancel().catch(() => {});
-						return "closed";
-					}
-					if (!enqueue(value)) {
-						await reader.cancel().catch(() => {});
-						return "closed";
+					if (bufferUntilDrain) {
+						bufferedSegment.push(value);
+					} else {
+						if (!(await awaitDemand())) {
+							await reader.cancel().catch(() => {});
+							return "closed";
+						}
+						if (!enqueue(value)) {
+							await reader.cancel().catch(() => {});
+							return "closed";
+						}
 					}
 				}
 			}
@@ -1640,12 +1756,13 @@ async function driveLaneStream(
 			reader.releaseLock();
 		}
 		if (supersededBy()) return "superseded";
+		if (!(await flushBufferedSegment())) return "closed";
 		if (!(await awaitDemand())) return "closed";
 		if (!enqueue(settledMarker)) return "closed";
 		if (session !== null) session.firstDeliverySettledAt ??= Date.now();
-		const tokens: Array<readonly [string, string]> = [];
-		promoteSnapshotsToCachedOverride(undefined, (id, fp) =>
-			tokens.push([id, fp]),
+		const tokens: Array<readonly [string, string, string]> = [];
+		promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) =>
+			tokens.push([id, mk, fp]),
 		);
 		if (session !== null && deliverySeq !== null) {
 			_recordDelivery(session, deliverySeq, tokens, consumedSeq);
@@ -1658,13 +1775,20 @@ async function driveLaneStream(
 	// segment — the newest statement's. Applies each statement to the
 	// connection's request state through the same seam a server-side
 	// `getServerNavigation().navigate` uses (`setRequest` on the ALS
-	// store), refreshes the route reads, prunes the unacked pre-nav
-	// deliveries (their client commits are as-of-dropped by protocol —
-	// the optimistic promotions they carried must not confirm phantom
-	// holdings), and reopens the lanes region after the final segment.
-	// Returns false when the connection closed under it.
+	// store), refreshes the route reads, and reopens the lanes region
+	// after the final segment. The mirror SURVIVES the consume: the
+	// client keeps its pre-navigation partons (parked), so the covering
+	// segment fp-skips them — a phantom is evicted only when the client
+	// explicitly reports the delivery dropped (`ack.dropped`). Returns
+	// false when the connection closed under it.
 	const handleNavigation = async (): Promise<boolean> => {
 		if (session === null) return true;
+		// Explicit forces whose lanes this consume tears were never
+		// satisfied — they re-lane after the reopen alongside the new
+		// statement's own forces.
+		const unfulfilledForces = [...lanes.entries()]
+			.filter(([, rt]) => rt.forced)
+			.map(([id]) => id);
 		await tearLanesForNavigation();
 		// The route is left behind: consequence seqs assigned for its
 		// lanes can never emit (their client commits would be
@@ -1674,69 +1798,86 @@ async function driveLaneStream(
 		for (const [, seq] of session.assignedLaneSeqs) session.voidSeqs.add(seq);
 		session.assignedLaneSeqs.clear();
 		laneNavSeqs.clear();
-		// The final consumed statement's `__force` selector — the targets
-		// that lane after the region reopens. Superseded statements' force
-		// sets are moot (the covering statement's stands).
-		let forceSelector: string | null = null;
-		while (true) {
-			const nav = takeConnectionNavigation(session);
-			if (nav === null) break;
-			const current = new URL(request.url);
-			const target = new URL(nav.url, current.origin);
-			// `__force` is the statement's one-shot overlay, never part of
-			// the request state: forced targets render as LANES below —
-			// isolated snapshot renders, the same path a discrete
-			// `?partials=` refetch takes — because a whole-tree render
-			// cannot force a target whose ANCESTOR fp-skips (the ancestor's
-			// fold doesn't move on a force, so its placeholder would cut
-			// the target out of the tree) or whose ancestor replays a byte
-			// cache.
-			forceSelector = target.searchParams.get("__force");
-			for (const p of ["partials", "cached", "__populateCache", "__cullFlip", "__force"]) {
-				target.searchParams.delete(p);
+		// The union of the consumed statements' `__force` selectors — the
+		// targets that lane after the region reopens. Superseded
+		// statements' URLS are moot (the covering statement's stands),
+		// but their FORCES are not: a silent restatement with a disjoint
+		// target must not lose the earlier statement's refetch.
+		// Resolve `__force` selectors (+ torn unfulfilled forces) to the
+		// ids they hit on the current route: id match first, then label
+		// fan-out — the same narrowing the reopened forced lanes take.
+		const resolveForcedIds = (
+			labels: ReadonlySet<string>,
+			extra: readonly string[],
+		): Set<string> => {
+			const snapshots = _readSnapshotsForRoute(scope, routeKey);
+			const wanted = [...labels];
+			const ids = new Set<string>();
+			for (const id of extra) if (snapshots.has(id)) ids.add(id);
+			for (const name of wanted) if (snapshots.has(name)) ids.add(name);
+			for (const [id, snap] of snapshots) {
+				if (ids.has(id)) continue;
+				if (snap.labels.some((l) => wanted.includes(l))) ids.add(id);
 			}
-			// The connection's own transport flags describe the CONNECTION,
-			// not the page — carry them across the statement's page URL.
-			for (const p of ["live", "streaming"]) {
-				const v = current.searchParams.get(p);
-				if (v !== null && !target.searchParams.has(p)) {
-					target.searchParams.set(p, v);
+			return ids;
+		};
+		const forceLabels = new Set<string>();
+		try {
+			while (true) {
+				const nav = takeConnectionNavigation(session);
+				if (nav === null) break;
+				const current = new URL(request.url);
+				const target = new URL(nav.url, current.origin);
+				// `__force` is the statement's one-shot overlay, never part of
+				// the request state: forced targets render as LANES below —
+				// isolated snapshot renders, the same path a discrete
+				// `?partials=` refetch takes. The whole-tree segment fp-skips
+				// them (and their subtrees) via the fold exclusion below, so a
+				// forced target's ancestor can answer with a placeholder while
+				// the forced lane re-renders it fresh.
+				for (const label of (target.searchParams.get("__force") ?? "")
+					.split(",")
+					.map((t) => t.trim())
+					.filter(Boolean)) {
+					forceLabels.add(label);
 				}
+				target.searchParams.delete("__force");
+				setRequest(new Request(target, { headers: request.headers }));
+				request = getRequest();
+				routeKey = computeRouteKey(request.url);
+				session.routeKey = routeKey;
+				session.consumedNavSeq = nav.seq;
+				session.consumedNavStreaming = nav.streaming === true;
+				// Exclude the forced targets (and their subtrees) from every
+				// ancestor's descendant fold on THIS segment render: the force
+				// re-lanes them independently, so their change must not move an
+				// ancestor's fp — the ancestor fp-skips, the forced lane covers
+				// the change (parent-valid, child-invalid).
+				if (forceLabels.size > 0 || unfulfilledForces.length > 0) {
+					_setFoldExclusionIds(resolveForcedIds(forceLabels, unfulfilledForces));
+				}
+				const outcome = await emitNavSegment();
+				if (outcome === "closed") return false;
+				if (outcome === "superseded") continue;
 			}
-			setRequest(new Request(target, { headers: request.headers }));
-			request = getRequest();
-			routeKey = computeRouteKey(request.url);
-			session.routeKey = routeKey;
-			session.consumedNavSeq = nav.seq;
-			pruneDeliveriesBeforeNav(session, nav.seq);
-			const outcome = await emitNavSegment();
-			if (outcome === "closed") return false;
-			if (outcome === "superseded") continue;
+		} finally {
+			// A later invalidation lane or reconcile on this connection folds
+			// in full — the exclusion is one nav segment's concern only.
+			_setFoldExclusionIds(null);
 		}
 		lastFullSegmentAt = Date.now();
 		since = _currentTs();
 		if (!enqueue(nextMarker)) return false;
 		if (!enqueue(lanesMarker)) return false;
 		// The statement's forced targets lane on the reopened region:
-		// resolved against the new route's just-committed snapshots (id
-		// match first, then label fan-out — the same resolution a discrete
-		// `?partials=` takes) and rendered EXPLICIT (`forcedLaneIds` — the
-		// lane state's explicitIds), so fp-skip and the defer gate both
-		// yield: a refetch target must re-render, never match-and-skip.
-		if (forceSelector !== null) {
-			const snapshots = _readSnapshotsForRoute(scope, routeKey);
-			const wanted = forceSelector
-				.split(",")
-				.map((s) => s.trim())
-				.filter(Boolean);
-			const ids = new Set<string>();
-			for (const name of wanted) {
-				if (snapshots.has(name)) ids.add(name);
-			}
-			for (const [id, snap] of snapshots) {
-				if (ids.has(id)) continue;
-				if (snap.labels.some((l) => wanted.includes(l))) ids.add(id);
-			}
+		// rendered EXPLICIT (`forcedLaneIds` — the lane state's
+		// explicitIds), so fp-skip and the defer gate both yield: a
+		// refetch target must re-render, never match-and-skip.
+		// Torn-but-unfulfilled forces re-lane alongside (their id must
+		// still snapshot on the new route — a real route change
+		// legitimately drops them).
+		if (forceLabels.size > 0 || unfulfilledForces.length > 0) {
+			const ids = resolveForcedIds(forceLabels, unfulfilledForces);
 			if (ids.size > 0) {
 				enterRequestRegistry(routeKey, "cache");
 				for (const id of ids) {
@@ -1847,6 +1988,41 @@ async function driveLaneStream(
 	const onCancelScope = (s: string): void => cancelScopeLanes(s);
 	session?.cancelListeners.add(onCancelScope);
 
+	// The attach statement's `__force` targets — a selector refetch that
+	// fired pre-establishment and folded its overlay into the statement's
+	// URL — lane EXPLICIT the moment the region opens, resolved against
+	// the route's snapshots exactly like a consumed url statement's
+	// (id first, then label fan-out). On the full path the whole-tree
+	// initial segment has just rendered (fp-skip may have placeholdered
+	// the targets — a whole-tree render cannot force a target whose
+	// ancestor skips); on the catch-up path there was no segment at all.
+	// Either way the forced lane is the covering render.
+	{
+		const force = attachForceSelector();
+		if (force !== null && session !== null) {
+			const snapshots = _readSnapshotsForRoute(scope, routeKey);
+			const wanted = force
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
+			const ids = new Set<string>();
+			for (const name of wanted) {
+				if (snapshots.has(name)) ids.add(name);
+			}
+			for (const [id, snap] of snapshots) {
+				if (ids.has(id)) continue;
+				if (snap.labels.some((l) => wanted.includes(l))) ids.add(id);
+			}
+			if (ids.size > 0) {
+				enterRequestRegistry(routeKey, "cache");
+				for (const id of ids) {
+					forcedLaneIds.add(id);
+					startLane(id);
+				}
+			}
+		}
+	}
+
 	// `session.detached` exits alongside `closed`: an explicit detach
 	// frame fires the flip wakes, the parked wait returns, and the
 	// condition winds the drive down — the stream closes now instead of
@@ -1893,14 +2069,17 @@ async function driveLaneStream(
 								? "window"
 								: null;
 		let wake: SegmentWake | null = latchedWake();
-		while (wake === null && pendingWarmStatement()) {
-			// About to park with an unconsumed telemetry statement — the
-			// predictive warm point: no latched work, so speculative
-			// renders crowd out nothing. Statements that land while
-			// warming latch on the session; the loop re-checks both
-			// latches, so a flip preempts further passes and a fresh
-			// telemetry statement gets its own pass before the park.
-			await warmProjectedPartons();
+		while (wake === null && (pendingPreloadWarm() || pendingWarmStatement())) {
+			// About to park with an unconsumed warm intent or telemetry
+			// statement — the predictive warm point: no latched work, so
+			// speculative renders crowd out nothing. Explicit intent
+			// (a stated preload target) outranks scroll projection.
+			// Statements that land while warming latch on the session; the
+			// loop re-checks every latch, so a flip preempts further
+			// passes and a fresh statement gets its own pass before the
+			// park.
+			if (pendingPreloadWarm()) await warmPreloadTarget();
+			else await warmProjectedPartons();
 			wake = latchedWake();
 		}
 		if (wake === null) {
@@ -2380,35 +2559,6 @@ function computeNextExpiresAtDelay(
 }
 
 /**
- * Drop the unacked delivery records rendered before `navSeq`, undoing
- * their optimistic promotions. Their client commits are as-of-dropped
- * by protocol (the client's navigation point is exactly `navSeq`), so
- * neither layer of the mirror may keep treating those fps as holdings:
- * the acked layer never sees them (the record dies here; the fold gate
- * covers the latch→consume window), and the optimistic entries they
- * promoted are removed — an evicted entry costs an over-fetch, a kept
- * phantom would blank a parton. Genuinely-committed-but-unacked
- * pre-nav deliveries are pruned too: conservative, never stale.
- * MatchKeys stay — without a matching fp they confirm nothing; they
- * only shape hidden-variant emission.
- */
-function pruneDeliveriesBeforeNav(
-	session: ConnectionSession,
-	navSeq: number,
-): void {
-	const override = _getCachedOverride();
-	for (const [seq, record] of session.pendingDeliveries) {
-		if (record.asOf >= navSeq) continue;
-		if (override) {
-			for (const [id, fp] of record.tokens) {
-				override.fingerprints.get(id)?.delete(fp);
-			}
-		}
-		session.pendingDeliveries.delete(seq);
-	}
-}
-
-/**
  * True iff `id`'s own snapshot, or a cullable ancestor's, sits outside
  * the connection's measured visible set — the parton is PARKED: its
  * client copy is a hidden Activity slot (cull-to-park), so lanes at it
@@ -2453,20 +2603,6 @@ function isParkedOnConnection(
 	return false;
 }
 
-/** Inspect the active request's URL for a `?live=1` flag — the live-
- *  subscription opt-in set by `<LivePageHeartbeat>` (a whole-route
- *  long-poll that wants the connection held open for pushes). Targeted
- *  refetches and one-shot navs never set it, so they emit their
- *  segment and close. Returning false here keeps the driver's
- *  first-and-only segment behaviour byte-identical to a one-shot. */
-function isLiveSubscription(): boolean {
-	try {
-		return new URL(getRequest().url).searchParams.get("live") === "1";
-	} catch {
-		return false;
-	}
-}
-
 /**
  * Read the just-committed snapshots for the current route and append
  * each `(id, matchKey, fp)` tuple into the request-scoped cached
@@ -2503,11 +2639,13 @@ function applyReportedCached(
 	override: {
 		fingerprints: Map<string, Set<string>>;
 		matchKeys: Map<string, Set<string>>;
+		slots: Map<string, Map<string, Set<string>>>;
 	},
 	ackedFps?: Map<string, Set<string>>,
 ): void {
 	const fps = new Set<string>();
 	const mks = new Set<string>();
+	const idSlots = new Map<string, Set<string>>();
 	for (const token of tokens) {
 		const fpIdx = token.lastIndexOf(":");
 		if (fpIdx <= 0) continue;
@@ -2515,42 +2653,121 @@ function applyReportedCached(
 		const rest = token.slice(0, fpIdx);
 		const mkIdx = rest.lastIndexOf(":");
 		if (mkIdx <= 0) continue;
+		const mk = rest.slice(mkIdx + 1);
 		fps.add(fp);
-		mks.add(rest.slice(mkIdx + 1));
+		mks.add(mk);
+		let slot = idSlots.get(mk);
+		if (!slot) {
+			slot = new Set();
+			idSlots.set(mk, slot);
+		}
+		slot.add(fp);
 	}
 	override.fingerprints.set(id, fps);
 	override.matchKeys.set(id, mks);
+	override.slots.set(id, idSlots);
 	// The stated tokens are client-attested holdings — the acked layer's
 	// truth class — so they REPLACE its entry rather than clearing it.
 	ackedFps?.set(id, new Set(fps));
 }
 
+/**
+ * Promote one `(id, matchKey, fp)` into the override with the
+ * client's SLOT semantics: the client keeps one content per
+ * `(id, matchKey)` (`cacheStore` overwrites evict the slot's prior
+ * fps), so a fresh fp for a slot EVICTS that slot's other fps from
+ * the verdict set — an A→B→A content cycle must re-render at each
+ * step, never fp-skip against a slot the client overwrote. An fp
+ * folds its matchKey, so it belongs to exactly one slot and the
+ * flat-set surgery is exact. A re-promotion of an fp the slot already
+ * holds is a no-op (the same content re-rendered).
+ */
+function promoteSlotFpToOverride(
+	override: {
+		fingerprints: Map<string, Set<string>>;
+		matchKeys: Map<string, Set<string>>;
+		slots: Map<string, Map<string, Set<string>>>;
+	},
+	id: string,
+	matchKey: string,
+	fp: string,
+): void {
+	let idSlots = override.slots.get(id);
+	if (!idSlots) {
+		idSlots = new Map();
+		override.slots.set(id, idSlots);
+	}
+	let slot = idSlots.get(matchKey);
+	if (!slot) {
+		slot = new Set();
+		idSlots.set(matchKey, slot);
+	}
+	let fpSet = override.fingerprints.get(id);
+	if (!fpSet) {
+		fpSet = new Set();
+		override.fingerprints.set(id, fpSet);
+	}
+	if (!slot.has(fp)) {
+		// Fresh content for the slot: the client's commit evicted every
+		// prior fp the slot advertised — mirror the eviction.
+		for (const old of slot) fpSet.delete(old);
+		slot.clear();
+		slot.add(fp);
+	}
+	fpSet.add(fp);
+	capOverrideSet(fpSet);
+	let mkSet = override.matchKeys.get(id);
+	if (!mkSet) {
+		mkSet = new Set();
+		override.matchKeys.set(id, mkSet);
+	}
+	mkSet.add(matchKey);
+	capOverrideSet(mkSet);
+}
+
 /** Fold a trailer's `{from, to}` warm-fp entries into the live
- *  connection's cached override — the server-side mirror of the
- *  client's `_applyFpUpdates`. The override's fp sets are per id;
- *  additions are safe (a candidate fp is computed fresh each render,
- *  so matching any accumulated fp means the fold values genuinely
- *  coincide) and bounded per set by `capOverrideSet`. */
-function promoteFpUpdatesToCachedOverride(updates: FpUpdatesPayload): void {
+ *  connection's cached override — the exact server-side mirror of the
+ *  client's `_applyFpUpdates`: `to` joins the SLOT still holding `from`
+ *  (the same content, warmed — kept alongside `from`, evicted with it
+ *  when a sibling variant later overwrites the slot). A heal whose
+ *  `from` no slot holds is superseded and DROPPED — never added
+ *  slotlessly, which would strand it past the slot's eviction and let a
+ *  return-toggle fp-skip against a phantom. `onToken` records the join
+ *  under its resolved matchKey so the acked layer folds it the same
+ *  way. */
+function promoteFpUpdatesToCachedOverride(
+	updates: FpUpdatesPayload,
+	onToken?: (id: string, matchKey: string, fp: string) => void,
+): void {
 	const override = _getCachedOverride();
 	if (!override) return;
 	for (const [id, entry] of Object.entries(updates)) {
-		let fpSet = override.fingerprints.get(id);
-		if (!fpSet) {
-			fpSet = new Set();
-			override.fingerprints.set(id, fpSet);
+		const idSlots = override.slots.get(id);
+		if (!idSlots) continue;
+		for (const [mk, slot] of idSlots) {
+			if (!slot.has(entry.from)) continue;
+			slot.add(entry.to);
+			capOverrideSet(slot);
+			let fpSet = override.fingerprints.get(id);
+			if (!fpSet) {
+				fpSet = new Set();
+				override.fingerprints.set(id, fpSet);
+			}
+			fpSet.add(entry.to);
+			capOverrideSet(fpSet);
+			onToken?.(id, mk, entry.to);
+			break;
 		}
-		fpSet.add(entry.to);
-		capOverrideSet(fpSet);
 	}
 }
 
 export function promoteSnapshotsToCachedOverride(
 	withinId?: string,
 	// The delivery-record sink: the lane/segment drivers capture the
-	// promoted `(id, fp)` pairs as the emission's holdings in the SAME
-	// walk (no second pass per drain) — see `_recordDelivery`.
-	onToken?: (id: string, fp: string) => void,
+	// promoted `(id, matchKey, fp)` triples as the emission's holdings
+	// in the SAME walk (no second pass per drain) — see
+	// `_recordDelivery`.
+	onToken?: (id: string, matchKey: string, fp: string) => void,
 ): void {
 	let request: Request;
 	let scope: string;
@@ -2576,21 +2793,8 @@ export function promoteSnapshotsToCachedOverride(
 		)
 			continue;
 		if (!snap.emittedFp || !snap.matchKey) continue;
-		let fpSet = override.fingerprints.get(id);
-		if (!fpSet) {
-			fpSet = new Set();
-			override.fingerprints.set(id, fpSet);
-		}
-		fpSet.add(snap.emittedFp);
-		capOverrideSet(fpSet);
-		onToken?.(id, snap.emittedFp);
-		let mkSet = override.matchKeys.get(id);
-		if (!mkSet) {
-			mkSet = new Set();
-			override.matchKeys.set(id, mkSet);
-		}
-		mkSet.add(snap.matchKey);
-		capOverrideSet(mkSet);
+		promoteSlotFpToOverride(override, id, snap.matchKey, snap.emittedFp);
+		onToken?.(id, snap.matchKey, snap.emittedFp);
 	}
 }
 

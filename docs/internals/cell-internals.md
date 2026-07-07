@@ -59,7 +59,7 @@ increments a per-request `{total, deferred}` tally on the context store.
 After the action body runs, `_actionSuppressesCommit()` reads it: true iff
 `total > 0 && total === deferred` — at least one write, all to `deferred`
 cells. The framework's RSC handler consults it to emit a **null-root** action
-response (no re-render; the value rides the open heartbeat stream
+response (no re-render; the value rides the held live connection
 instead), and the client skips committing a null root. A mixed batch
 (`total !== deferred`) renders normally. See
 [`../reference/cells.md`](../reference/cells.md#deferred-stream-only-writes)
@@ -157,9 +157,9 @@ Two storage tiers, accessed via different module functions:
   `MemoryCellStorage`. Lazily created on first access via
   `_getRequestEphemeralStorage` (an ALS hook on the `RequestStore`).
   Discarded when the connection closes. The "connection" here is
-  one ALS request context — same scope across all segments a
-  streaming heartbeat emits, separate from concurrent POSTs and
-  other tabs' heartbeats. `gqlCell` + `fragmentCell` always use
+  one ALS request context — same scope across all segments and lanes
+  a held live connection emits, separate from concurrent POSTs and
+  other tabs' connections. `gqlCell` + `fragmentCell` always use
   this; `localCell` can opt in via `storage: getEphemeralCellStorage`.
 
 The cell handle carries `storage: () => CellStorage` — a *getter*,

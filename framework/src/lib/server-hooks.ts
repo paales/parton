@@ -156,23 +156,20 @@ export function session(): { readonly id: string } {
 }
 
 /** Resolve a parton's visibility from the connection's current visible
- *  set — the read behind the spec-level `cull` option. Two carriers,
- *  one precedence order: a live connection's session set first (seeded
- *  from the `?live=1` request's `?visible=` param and updated by
- *  channel envelopes' `visible` frames — see
- *  `../runtime/context.ts::_getConnectionVisibleSet`), then the
- *  request's own `?visible=<id>,…` param (one-shot culling reloads, the
- *  no-connection fallback). Absent from both → `undefined` (cold /
- *  pre-measurement). Shared by `evalDepKeys`' store-and-reread AND the
+ *  set — the read behind the spec-level `cull` option. One carrier:
+ *  the live connection's session set (seeded from the attach
+ *  statement's `visible` and updated by channel envelopes' `visible`
+ *  frames — see `../runtime/context.ts::_getConnectionVisibleSet`).
+ *  No session (an SSR document, an action render) or a session before
+ *  its first statement → `undefined` (cold / pre-measurement — the
+ *  seed decides). Shared by `evalDepKeys`' store-and-reread AND the
  *  spec wrapper's culled-state derivation (partial.tsx) so no consumer
  *  of the visibility signal can drift: every one reads the
  *  connection's CURRENT set at its own evaluation time. */
-export function readVisible(search: URLSearchParams, id: string): boolean | undefined {
+export function readVisible(id: string): boolean | undefined {
   const connectionSet = _getConnectionVisibleSet()
   if (connectionSet !== null) return connectionSet.has(id)
-  const raw = search.get("visible")
-  if (raw === null) return undefined
-  return raw.split(",").includes(id)
+  return undefined
 }
 
 // URLPattern helpers — mirror the parton `match` option's compilation
@@ -325,7 +322,7 @@ export function evalDepKeys(
       // is a function of the placement's props, so its VALUE rides the
       // key; its tracked-read inputs ride the dep set alongside).
       // Re-read the connection's current visible set (store-and-
-      // reread; session-first, `?visible=` URL fallback) and fold the
+      // reread) and fold the
       // RESOLVED state — measurement when present, the seed before
       // one. Unmeasured and measured renders that resolve the same
       // way fold the same fp: the first client report moves only the
@@ -334,7 +331,7 @@ export function evalDepKeys(
       const q = name.indexOf("?seed=")
       const pid = q === -1 ? name : name.slice(0, q)
       const seed = q === -1 ? undefined : name.slice(q + 6) === "1"
-      const v = readVisible(url.searchParams, pid) ?? seed
+      const v = readVisible(pid) ?? seed
       value = v === undefined ? "u" : v ? "1" : "0"
     } else {
       const custom = depKindEvaluators.get(kind)

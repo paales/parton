@@ -18,7 +18,9 @@
  *      watermark stalls at the drop and later commits stay correctly
  *      attributed; an AS-OF drop (`_laneDeliveryDroppedStale` — a
  *      continuing stream whose delivery predates the navigation
- *      point) consumes PROCESSED, advancing the watermark;
+ *      point) consumes PROCESSED, advancing the watermark, and a
+ *      reported drop (`_reportAsOfDrop`) rides the next ack's `dropped`
+ *      set so the server evicts the delivery's mirror promotions;
  *   4. segment-form `seq` entries are fetch-local: `_segmentDelivery`
  *      parses them (seq + as-of), `_channelWireEntry` ignores them;
  *   5. frames from `reliable: true` producers buffer per envelope and
@@ -39,6 +41,7 @@ import {
 	_laneDeliveryCommitted,
 	_laneDeliveryDropped,
 	_laneDeliveryDroppedStale,
+	_reportAsOfDrop,
 	_resetChannelClient,
 	_segmentDelivery,
 	_segmentDeliveryCommitted,
@@ -295,11 +298,51 @@ describe("delivery tracking + the ack producer", () => {
 		laneSeqEntry("p", 2, 3)
 		// A pre-navigation lane dropped by the as-of guard on a stream
 		// that lives on: processed, not held — the frontier moves so the
-		// window frees; the server's fold gate keeps it out of the mirror.
+		// window frees. The reported drop (`_reportAsOfDrop`, at the browser
+		// entry's drop site) is what keeps it out of the server's mirror.
 		_laneDeliveryDroppedStale("p")
 		_laneDeliveryCommitted("p")
 		await flushOnce()
 		expect(sentEnvelopes()[0].frames).toEqual([{ kind: "ack", delivered: 2 }])
+	})
+
+	it("a reported as-of drop rides the next ack's `dropped` set once the watermark covers it", async () => {
+		_channelEstablished("c1")
+		laneSeqEntry("p", 1, 0)
+		laneSeqEntry("p", 2, 0)
+		// Seq 1 is an as-of drop the browser entry reports; seq 2 the client
+		// holds. Both advance the contiguous watermark.
+		_reportAsOfDrop(1)
+		_laneDeliveryDroppedStale("p")
+		_laneDeliveryCommitted("p")
+		await flushOnce()
+		// The ack carries the cumulative watermark AND names seq 1 dropped —
+		// the server evicts its mirror promotions instead of folding them.
+		expect(sentEnvelopes()[0].frames).toEqual([
+			{ kind: "ack", delivered: 2, dropped: [1] },
+		])
+
+		// The report cleared once sent — a later ack repeats nothing.
+		laneSeqEntry("p", 3, 0)
+		_laneDeliveryCommitted("p")
+		await flushOnce()
+		expect(sentEnvelopes()[1].frames).toEqual([{ kind: "ack", delivered: 3 }])
+	})
+
+	it("a drop past the contiguous frontier waits for the watermark to cover it", async () => {
+		_channelEstablished("c1")
+		laneSeqEntry("p", 1, 0)
+		laneSeqEntry("p", 2, 0)
+		// Seq 2 drops while seq 1 is still uncommitted — the frontier is at
+		// 0, so the drop can't ride yet (the server has no settled record to
+		// evict). The commit for seq 2 arrives out of order.
+		_reportAsOfDrop(2)
+		_laneDeliveryDropped("p") // seq 1 decoded but not committed (stalls)
+		_laneDeliveryDroppedStale("p") // seq 2 processed — but frontier stalls at 0
+		await flushOnce()
+		// Nothing acks: the watermark is still 0 (seq 1 never committed), so
+		// the drop for seq 2 is not yet in range.
+		expect(fetchCalls).toHaveLength(0)
 	})
 
 	it("segment-form seq entries are fetch-local; commits advance the same watermark", async () => {

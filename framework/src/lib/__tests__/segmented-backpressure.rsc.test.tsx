@@ -27,6 +27,7 @@ import {
 } from "../fp-trailer-marker.ts";
 import { wrapStreamWithFpTrailer } from "../fp-trailer.ts";
 import { PartialRoot, parton } from "../partial.tsx";
+import { bindAttachStatement } from "../connection-session.ts";
 import { clearRegistry } from "../partial-registry.ts";
 import {
 	createSegmentedResponse,
@@ -109,10 +110,18 @@ afterEach(() => {
 describe("live segment driver — downstream backpressure", () => {
 	it("lane output parks while the consumer's queue is full", async () => {
 		const scope = freshLiveScope("bp-rsc");
-		const request = new Request("http://localhost/pressure?live=1", {
+		const request = new Request("http://localhost/pressure", {
 			headers: { "x-test-scope": scope },
 		});
 		await runWithRequestAsync(request, async () => {
+			// The statement is the live-subscription signal — a bare attach
+			// makes this drive a held connection.
+			bindAttachStatement({
+				url: "/pressure",
+				cached: [],
+				since: null,
+				visible: null,
+			});
 			// The response stream with production demand wiring: `pull`
 			// releases parked pumps, `cancel` marks the demand dead.
 			let real!: ReadableStreamDefaultController<Uint8Array>;
@@ -228,10 +237,16 @@ describe("live segment driver — downstream backpressure", () => {
 
 	it("createSegmentedResponse wires pull/cancel as the demand signal end to end", async () => {
 		const scope = freshLiveScope("bp-wire");
-		const request = new Request("http://localhost/pressure-wire?live=1", {
+		const request = new Request("http://localhost/pressure-wire", {
 			headers: { "x-test-scope": scope },
 		});
 		await runWithRequestAsync(request, async () => {
+			bindAttachStatement({
+				url: "/pressure-wire",
+				cached: [],
+				since: null,
+				visible: null,
+			});
 			const renderOnce = (): ReadableStream<Uint8Array> =>
 				wrapStreamWithFpTrailer(
 					renderServerToFlight(pressurePage()),

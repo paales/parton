@@ -1,6 +1,7 @@
 /**
- * The attach statement — the live fire's POST body (`{cached, since,
- * visible}`, see [[channel-protocol]]) driving catch-up and fp-skip.
+ * The attach statement — the live fire's POST body (`{url, cached,
+ * since, visible}`, see [[channel-protocol]]) driving catch-up and
+ * fp-skip.
  *
  * The document's SSR trailer carries a registry anchor; the attach
  * presents it as the statement's `since`. The claims:
@@ -13,8 +14,9 @@
  *      the full initial render, over-fetch never stale.
  *   3. the anchor rides ONLY the attach body — a live GET carrying the
  *      old `?since=` URL form takes the full initial render.
- *   4. the body manifest is the `?cached=` URL form's equal: the same
- *      tokens produce the same fp-skip verdicts on either transport.
+ *   4. the body manifest is the action leg's `?cached=` URL form's
+ *      equal: the same tokens produce the same fp-skip verdicts on
+ *      either carrier.
  *   5. the body manifest is UNCAPPED — tokens past the URL form's
  *      request-line cap (96) are still honored.
  */
@@ -206,24 +208,16 @@ describe("the attach — manifest (statement.cached)", () => {
     if (!urlTokenA || !urlTokenB) throw new Error("expected tokens for both partons")
     let baseline = { a: renders.a, b: renders.b }
 
-    // URL form: a live GET presenting both tokens in ?cached=.
-    // Counter assertions sit BEFORE shutdown — the shutdown wake is a
-    // bump whose lane render (into the torn stream) would count.
-    let urlSegment = ""
-    await withLiveDrive(
-      `http://localhost/page?live=1&cached=${encodeURIComponent(`${urlTokenA},${urlTokenB}`)}`,
-      Page,
-      scope,
-      async (h) => {
-        const first = await h.segments.next()
-        if (first.done || first.value.kind !== "payload")
-          throw new Error("expected payload segment 0")
-        urlSegment = await drainPayloadSegment(first.value)
-        expect(renders.a).toBe(baseline.a)
-        expect(renders.b).toBe(baseline.b)
-        await h.shutdown("live-a")
-      },
+    // URL form: the action leg's carrier — a one-shot render
+    // presenting both tokens in `?cached=`.
+    const { stream } = await renderWithRequest(
+      `http://localhost/page?cached=${encodeURIComponent(`${urlTokenA},${urlTokenB}`)}`,
+      <Page />,
+      { headers: { "x-test-scope": scope } },
     )
+    const urlSegment = await new Response(stream).text()
+    expect(renders.a).toBe(baseline.a)
+    expect(renders.b).toBe(baseline.b)
     expect(urlSegment).toContain('"data-partial-id":"live-a"')
     expect(urlSegment).toContain('"data-partial-id":"live-b"')
 

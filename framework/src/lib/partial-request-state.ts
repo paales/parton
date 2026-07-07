@@ -15,23 +15,23 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 
 export interface PartialRequestState {
-  /** Effective ids explicitly requested via `?partials=` (resolved
-   *  from selector labels). Null = no filter, render everything. */
+  /** Effective ids explicitly requested (a lane render's own target).
+   *  Null = no filter, render everything. */
   requestedIds: Set<string> | null
-  /** Whether the request is a partial-refetch (cache mode) vs a full render (streaming mode). */
+  /** Whether the render is an isolated snapshot reconstruction (a lane
+   *  render) vs a whole-tree render (streaming mode). */
   isPartialRefetch: boolean
-  /** `?__populateCache=1` — server-action flow that repopulates the client cache on first post-action render. */
-  populateCache: boolean
-  /** `?cached=id:matchKey:fp,…` — fingerprints the client already has
-   *  in `_currentPageFingerprints`. Multi-fp per id supported (cold/warm
-   *  fp drift); fingerprint-skip decisions consult this map. */
+  /** The client manifest's fingerprints (`id:matchKey:fp` tokens — the
+   *  attach statement's `cached`, or an action POST's capped `?cached=`
+   *  URL form). Multi-fp per id supported (cold/warm fp drift);
+   *  fingerprint-skip decisions consult this map. */
   cachedFingerprints: Map<string, Set<string>>
-  /** `?cached=id:matchKey:fp,…` — matchKeys the client already has cached
-   *  per id, derived from the same wire tokens. Drives hidden Activity
-   *  sibling emission so navigating across variants of the same spec
-   *  (`/pokemon/1` ↔ `/pokemon/2`) parks the prior variant rather than
-   *  unmounting it. matchKey is `stableStringify(matchParams)`, stable
-   *  across vary refreshes of the same route. */
+  /** The manifest's matchKeys per id, derived from the same wire
+   *  tokens. Drives hidden Activity sibling emission so navigating
+   *  across variants of the same spec (`/pokemon/1` ↔ `/pokemon/2`)
+   *  parks the prior variant rather than unmounting it. matchKey is
+   *  `stableStringify(matchParams)`, stable across refreshes of the
+   *  same route. */
   cachedMatchKeys: Map<string, Set<string>>
   /** The live connection's ACKED mirror layer — fps whose delivering
    *  emission the client COMMITTED (cumulative delivery acks; see
@@ -42,15 +42,10 @@ export interface PartialRequestState {
    *  optimistic per-id cap evicted still skips. Absent on requests
    *  without a connection session. */
   ackedFingerprints?: ReadonlyMap<string, ReadonlySet<string>> | null
-  /** Effective ids explicitly targeted this request (resolved from `?partials=`). Never skipped —
-   *  except on a culling flip (see `cullFlip`). */
+  /** Effective ids explicitly targeted this render (a url statement's
+   *  `__force` labels resolved to ids, a forced lane). Never skipped —
+   *  the refetch contract. */
   explicitIds: Set<string>
-  /** `?__cullFlip=1` — this refetch is a culling flip fired by the
-   *  client's visibility controller. Its explicit targets are
-   *  REVALIDATIONS, not forces: an fp match may skip them, emitting the
-   *  placeholder that confirms the client's parked copy (restore with
-   *  zero bytes). Only the visibility controller mints the param. */
-  cullFlip: boolean
   /** Effective ids seen this request — debug-only record of what
    *  rendered. Multiple placements of the same keyless spec are
    *  allowed; this set is a `Set` but the values aren't unique. */

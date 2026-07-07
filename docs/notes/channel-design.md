@@ -330,8 +330,11 @@ Each package is a worktree branch, lands green (`yarn test` +
   whole-tree navigation segments in stream order with `?__force=`
   targets laning explicit after the reopen, the as-of correlation on
   every `seq` entry (the pageUrlKey guard generalized into the
-  protocol; processed drops keep the ack watermark contiguous, the
-  fold gate + nav-consume prune keep the mirror honest), the
+  protocol; processed drops keep the ack watermark contiguous and are
+  reported to the server as `ack.dropped` so it evicts them — the
+  mirror SURVIVES navigation, held partons fold on the covering ack;
+  a nav's forced targets are excluded from their ancestors' descendant
+  fold so the ancestor can fp-skip), the
   heartbeat's navigation claim (a channel-carried navigation KEEPS
   the held stream), the attach as the URL-timeline subsume point, the
   internal mid-render supersede seam (a newer url frame aborts the

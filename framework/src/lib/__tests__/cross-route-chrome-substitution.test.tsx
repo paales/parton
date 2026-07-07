@@ -57,13 +57,13 @@ const pendingChunk = React.lazy(
 // never-resolving `<Suspense>`, which the client renderer commits as its
 // fallback rather than throwing (legacy server renderer) or hanging
 // (streaming server renderer waiting for the boundary).
-function commitAt(route: string, mode: "streaming" | "cache", body: ReactNode): string {
+function commitAt(route: string, body: ReactNode): string {
   window.history.pushState({}, "", route)
   const container = document.createElement("div")
   const root = createRoot(container)
   act(() => {
     root.render(
-      <PartialsClient mode={mode}>
+      <PartialsClient>
         <main>{body}</main>
       </PartialsClient>,
     )
@@ -76,14 +76,14 @@ function commitAt(route: string, mode: "streaming" | "cache", body: ReactNode): 
 beforeEach(() => {
   // Reset the module-level cache + template: an empty streaming render
   // prunes every prior (id, matchKey) entry.
-  commitAt("/", "streaming", null)
+  commitAt("/", null)
 })
 
 describe("cross-route nav to a still-streaming page", () => {
   it("substitutes fp-skipped chrome from cache instead of blanking it", () => {
     // 1. Fully render the "/" route: the nav renders fresh, so it's
     //    cached, and `_template` is derived for "/".
-    commitAt("/", "streaming", [
+    commitAt("/", [
       fresh(
         "app-nav",
         <nav data-testid="the-nav">
@@ -97,7 +97,7 @@ describe("cross-route nav to a still-streaming page", () => {
     //    nav (a placeholder, because the client advertised its fp) and
     //    the new page's content is still streaming (a pending Flight
     //    chunk). This is the moment the bug bit.
-    const html = commitAt("/other", "streaming", [
+    const html = commitAt("/other", [
       placeholder("app-nav"),
       <Suspense key="pending" fallback={<div data-testid="pending-fallback" />}>
         {pendingChunk}
@@ -122,12 +122,12 @@ describe("cross-route nav to a still-streaming page", () => {
     // still-streaming "/other". The prior route's `home-content` must NOT
     // leak into the new page — reusing the old template was the
     // `/magento → /` stuck-page regression the raw-children path avoided.
-    commitAt("/", "streaming", [
+    commitAt("/", [
       fresh("app-nav", <nav data-testid="the-nav" />),
       fresh("home-content", <div data-testid="home-content" />),
     ])
 
-    const html = commitAt("/other", "streaming", [
+    const html = commitAt("/other", [
       placeholder("app-nav"),
       <Suspense key="pending" fallback={<div data-testid="pending-fallback" />}>
         {pendingChunk}

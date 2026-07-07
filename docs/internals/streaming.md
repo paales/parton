@@ -414,7 +414,10 @@ The pieces:
   materializing render's just-promoted fps are exactly what the
   client's slot received. Per-lane fp-trailers also fold their warm
   fps back into the override (`onUpdates`), so a drift between a
-  lane's render and its flush stays tracked. Every promotion path
+  lane's render and its flush stays tracked — folded AFTER the drain
+  promote so the warm `to` joins the slot holding its cold `from`
+  (dropped when no slot holds `from`), never landing slotless where a
+  later sibling variant could not evict it. Every promotion path
   bounds the override's per-id fp/matchKey sets at `OVERRIDE_SET_CAP`
   (8), oldest-first — the server-side mirror of the client's
   `FP_CAP_PER_VARIANT`: a parton drifting every lane would otherwise
