@@ -563,68 +563,6 @@ export function setTemplate(template: ReactNode, route: string): void {
 	_templateRoute = route;
 }
 
-// ─── In-flight queue + deferred abort (frame long-polls only) ─────
-//
-// SCOPE: this machinery serves ONLY frame navigation, whose
-// segment-loop fetch can be an unbounded long-poll (the chat overlay
-// streams tick updates for the lifetime of `?chat=open`). A newer
-// frame nav must cancel the older infinite stream or it streams
-// forever and races the newer commit — so here, deferred abort is
-// correct and necessary.
-//
-// Window-scoped targeted refetches (`navigate({selector})` /
-// `reload({selector})`) do NOT use this. They are finite documents;
-// aborting one mid-decode rejects the whole Flight document and
-// crashes the page through the nearest error boundary. They drain and
-// commit on supersede, ordered by the monotonic commit guard
-// (`refetch-ordering.ts`): each fire carries a per-selector issue seq,
-// and a late-arriving OLDER fire's commit is dropped rather than
-// clobbering a newer one — last ISSUED wins, not last to arrive. That
-// real signal is what keeps a `reload({selector})` of live server state
-// correct when responses race (the URL is identical, so it can't
-// arbitrate). They are cancelled only by the caller's own
-// `options.signal`.
-//
-// Abort is DEFERRED: the older fire keeps streaming into its Suspense
-// boundaries until the newer fire's first segment lands, then
-// `abortPredecessors` cancels the older fetches. Selector identity is
-// the sorted, comma-joined label set.
-
-export interface InFlightEntry {
-	controller: AbortController;
-}
-
-const _inFlight = new Map<string, InFlightEntry[]>();
-
-export function inFlightKey(labels: string[]): string | null {
-	if (labels.length === 0) return null;
-	return labels.slice().sort().join(",");
-}
-
-export function registerInFlight(key: string, entry: InFlightEntry): void {
-	const stack = _inFlight.get(key);
-	if (stack) stack.push(entry);
-	else _inFlight.set(key, [entry]);
-}
-
-export function unregisterInFlight(key: string, entry: InFlightEntry): void {
-	const stack = _inFlight.get(key);
-	if (!stack) return;
-	const idx = stack.indexOf(entry);
-	if (idx >= 0) stack.splice(idx, 1);
-	if (stack.length === 0) _inFlight.delete(key);
-}
-
-/** Abort every entry older than `entry` in this selector's stack. */
-export function abortPredecessors(key: string, entry: InFlightEntry): void {
-	const stack = _inFlight.get(key);
-	if (!stack) return;
-	const idx = stack.indexOf(entry);
-	if (idx <= 0) return;
-	for (let i = 0; i < idx; i++) stack[i].controller.abort();
-	stack.splice(0, idx);
-}
-
 // ─── Frame URLs ───────────────────────────────────────────────────
 
 /**

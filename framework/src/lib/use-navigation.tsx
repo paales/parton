@@ -38,6 +38,7 @@ import {
   type ReloadStatus,
 } from "../runtime/navigation-api.ts"
 import { NavigationError, toNavigationError } from "../runtime/navigation-error.ts"
+import { _channelIsDegraded, _channelWarm } from "./channel-client.ts"
 import {
   buildFrameHandle,
   buildWindowNavigationHandle,
@@ -373,38 +374,48 @@ function attachMilestoneWatchers(
   milestones.finished.then(onSuccess("finished"), onRejection)
 }
 
-// ─── Preload (warm-only fetch, no commit) ─────────────────────────
+// ─── Preload (warm intent) ────────────────────────────────────────
 //
-// `useNavigation().preload(target)` warms a destination's partials into
-// the client cache without navigating. The browser entry's
-// `__rsc_partial_preload` transport fetches `target` as a read-only
-// render and walks the response into the client cache + fingerprint
-// maps (via `_warmCacheFromPayload`), with NO `setPayload`. Nothing
-// mounts, no effects run, the URL is untouched. A later navigation to
-// `target` then fp-skips the warmed partials and `renderTemplate`
-// substitutes them from cache on the first commit while the fresh
-// render revalidates in the background.
+// `useNavigation().preload(target)` states a route the user is about
+// to visit — a WARM intent, advisory by nature. Two carriers, matched
+// to the page's transport:
+//
+//   - Attached: a `warm` frame on the channel (`_channelWarm` — the
+//     lossy class, newest-wins). The server's driver runs one
+//     byte-silent whole-tree render of the target at its park point,
+//     so the navigation statement that follows renders against warm
+//     caches. Nothing reaches the client until the navigation itself.
+//   - Degraded (document-nav mode): a Speculation Rules prefetch on
+//     the document — the browser warms the target DOCUMENT's HTTP
+//     cache entry, which is exactly what a degraded navigation loads.
+//   - Pre-establishment: dropped. A preload must never trigger an
+//     attach (the navigation itself will), and a stale hint is worth
+//     less than none.
 
-/** At most one preload is in flight at a time. A newer `preload()`
- *  aborts the prior one so a pointer sweeping across a nav bar doesn't
- *  leave a trail of live warm-fetches. Immediate abort is safe — a
- *  preload never commits to the React root, so cancelling mid-decode
- *  just stops the warm and discards partial bytes. */
-let _preloadController: AbortController | null = null
+/** Targets already speculated on this document — one rule per URL. */
+const _speculated = new Set<string>()
+
+/** Append a `<script type="speculationrules">` prefetch rule for
+ *  `url` — the degraded page's preload carrier. The browser dedupes
+ *  and schedules; one rule per target keeps the head bounded. */
+function speculateDocumentPrefetch(url: string): void {
+  if (typeof document === "undefined" || _speculated.has(url)) return
+  _speculated.add(url)
+  const script = document.createElement("script")
+  script.type = "speculationrules"
+  script.textContent = JSON.stringify({
+    prefetch: [{ source: "list", urls: [url] }],
+  })
+  document.head.appendChild(script)
+}
 
 function doPreload(target: NavigateTarget, frameName: string | null): Promise<void> {
   if (typeof window === "undefined") return Promise.resolve()
-  const handler = (
-    window as Window & {
-      __rsc_partial_preload?: (url: string, signal?: AbortSignal) => Promise<void>
-    }
-  ).__rsc_partial_preload
-  if (!handler) return Promise.resolve()
   // Window-scoped only today: a frame handle's preload is a no-op.
-  // Warming a frame's destination would need the `?__frame=&__frameUrl=`
-  // round-trip; deferred until a caller needs it. preload is a
-  // best-effort hint, so an unsupported scope degrades silently rather
-  // than throwing into an event handler.
+  // A frame's content is session-scoped subtree state with no
+  // standalone route to warm; preload is a best-effort hint, so an
+  // unsupported scope degrades silently rather than throwing into an
+  // event handler.
   if (frameName !== null) return Promise.resolve()
   let url: string
   try {
@@ -412,25 +423,21 @@ function doPreload(target: NavigateTarget, frameName: string | null): Promise<vo
   } catch {
     return Promise.resolve()
   }
-  // Coalesce: a newer preload supersedes any still in flight, so a
-  // pointer sweeping across a nav bar doesn't pile up live fetches.
-  // Immediate abort is safe — a preload never commits to the React
-  // root; cancelling mid-decode just discards partial bytes. The warm
-  // walk is per-partial atomic (each wrapper's `cacheStore` +
-  // `registerClientPartial` run together), so a navigation reading the
-  // maps concurrently always sees whole entries, never a torn one —
-  // hover-then-immediately-click stays correct without special-casing.
-  if (_preloadController) _preloadController.abort()
-  const controller = new AbortController()
-  _preloadController = controller
-  return handler(url, controller.signal)
-    .catch(() => {
-      // preload is a hint — failures (network / decode / supersede) are
-      // swallowed; the next navigation just pays full freight.
-    })
-    .finally(() => {
-      if (_preloadController === controller) _preloadController = null
-    })
+  const parsed = new URL(url, window.location.origin)
+  if (parsed.origin !== window.location.origin) return Promise.resolve()
+  // Warming the page you're on states nothing new.
+  if (
+    parsed.pathname + parsed.search ===
+    window.location.pathname + window.location.search
+  ) {
+    return Promise.resolve()
+  }
+  if (_channelIsDegraded()) {
+    speculateDocumentPrefetch(parsed.href)
+    return Promise.resolve()
+  }
+  _channelWarm(parsed.pathname + parsed.search)
+  return Promise.resolve()
 }
 
 /**

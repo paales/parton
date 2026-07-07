@@ -32,13 +32,11 @@
 
 import {
 	_captureCommitHandle,
-	_clearConnectionLive,
-	_clearRequestEphemeralStorage,
 	_createConnectionLiveProbe,
 	_getAttachStatement,
 	_getCachedOverride,
-	_isConnectionLive,
 	_runWithWarmRenderScope,
+	_runWithWarmRequestScope,
 	_setCachedOverride,
 	_setConnectionSession,
 	getRequest,
@@ -365,20 +363,21 @@ export async function driveSegmentedResponse(
 	}
 
 	async function driveSegments(): Promise<void> {
-		let segmentIndex = 0;
-		let lastTs = _currentTs();
+		const lastTs = _currentTs();
 
-		// Live catch-up: the attach's first fire presents the document's
-		// registry anchor (the statement's `since`, minted into the SSR
-		// trailing comment). The document IS the page state as of that
-		// point, so re-rendering the whole route here would only re-ship
-		// bytes the client already holds — skip the initial segment
-		// entirely and open straight into lanes anchored at the document's
-		// timestamp: the first wake lanes exactly what bumped or expired
-		// after the document rendered. Honored only when the anchor's
-		// epoch names THIS registry timeline (a restart or clear starts a
-		// new one) and the route still has snapshots (an HMR dispose wipes
-		// them); otherwise fall through to the full initial render.
+		// Live catch-up: the attach presents the document's registry
+		// anchor (the statement's `since`, minted into the SSR trailing
+		// comment). The document IS the page state as of that point, so
+		// re-rendering the whole route here would only re-ship bytes the
+		// client already holds — skip the initial segment entirely and
+		// open straight into lanes anchored at the document's timestamp:
+		// the first wake lanes exactly what bumped or expired after the
+		// document rendered. Honored only when the anchor's epoch names
+		// THIS registry timeline (a restart or clear starts a new one),
+		// the route still has snapshots (an HMR dispose wipes them), and
+		// the statement carries no intent (a `__force` overlay or a
+		// frame statement needs the full render's covering pass);
+		// otherwise fall through to the full initial render.
 		const catchUpTs = liveCatchupTs();
 		if (catchUpTs !== null && session !== null) {
 			installCatchupCachedOverride();
@@ -395,142 +394,101 @@ export async function driveSegmentedResponse(
 			return;
 		}
 
-		while (true) {
-			_clearConnectionLive();
-
-			if (segmentIndex > 0) {
-				controller.enqueue(nextMarker);
-			}
-
-			// The server-minted connection id, ahead of the first segment's
-			// Flight rows — an ENTRY, so the splitter surfaces it and keeps
-			// the body flowing. Shipping it FIRST means the client transport
-			// can address the session before the whole-tree render has even
-			// drained; the id's existence proves the session is open (it was
-			// minted at session open, above).
-			if (segmentIndex === 0 && session !== null) {
-				enqueueConnectionId(controller, session.id);
-			}
-
-			// A live connection's payload segment is a DELIVERY: mint its
-			// per-connection seq and ship it as an entry ahead of the Flight
-			// rows, so the client holds the seq before the segment can
-			// commit (commit time is when it records — and acks — it).
-			// One-shot responses have no session and carry no seqs.
-			let deliverySeq: number | null = null;
-			if (session !== null) {
-				deliverySeq = ++session.deliverySeq;
-				controller.enqueue(
-					segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq),
-				);
-			}
-
-			const flightStream = renderSegment();
-			const reader = flightStream.getReader();
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					if (value) {
-						// Pull-gated: a chunk is only enqueued once the consumer
-						// has room for it. Not reading the NEXT chunk until then
-						// propagates the wait into the Flight stream itself
-						// (whose renderer paces on its own desiredSize).
-						await waitForDemand(controller, demand);
-						controller.enqueue(value);
-					}
-				}
-			} finally {
-				reader.releaseLock();
-			}
-
-			// The render for this segment has fully drained — its body bytes and
-			// the `fp`/`url` trailers are all on the wire. Emit the `settled`
-			// milestone so the client knows the iteration is complete: from this
-			// point the connection is parked (held open awaiting the next bump),
-			// and an abort can cancel the reader WITHOUT tearing a mid-render
-			// body. The client's cooperative abort (the live heartbeat tearing
-			// down on navigate) gates on this marker — see `SegmentIterator` in
-			// `fp-trailer-split.ts`.
-			controller.enqueue(settledMarker);
-
-			// The delivery is fully on the wire — the client's ack
-			// obligation starts here (the never-acked degrade deadline's
-			// anchor).
-			if (session !== null && deliverySeq !== null) {
-				session.firstDeliverySettledAt ??= Date.now();
-			}
-
-			if (onSegmentEnd) onSegmentEnd();
-
-			// Live subscription (`?live=1`, the heartbeat's long-poll): after
-			// the initial whole-tree segment, the connection switches to
-			// per-parton lanes — each wake renders only the partons the bump /
-			// expiresAt boundary actually touched, and their payloads
-			// interleave as independent `mux` frames, so one parton's slow
-			// Suspense boundary never head-of-line-blocks another parton's
-			// next update. Relevance false-negatives (a dependency the
-			// label/dep surface doesn't capture) are reconciled by the next
-			// whole-tree render: the keepalive close forces the heartbeat to
-			// reopen, and the reopened connection's first segment is always
-			// whole-tree.
-			if (isLiveSubscription()) {
-				// Promote into the optimistic layer AND capture the same walk
-				// as the delivery's holdings record — what this segment carried
-				// becomes acked evidence when the client commits it.
-				const tokens: Array<readonly [string, string]> = [];
-				promoteSnapshotsToCachedOverride(undefined, (id, fp) =>
-					tokens.push([id, fp]),
-				);
-				if (session !== null && deliverySeq !== null) {
-					_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
-				}
-				controller.enqueue(nextMarker);
-				controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
-				await driveLaneStream(
-					controller,
-					lastTs,
-					settledMarker,
-					session,
-					demand,
-					renderSegment,
-				);
-				return;
-			}
-
-			// Server-side multi-segment opt-in: this segment's render called
-			// `markConnectionLive()` (producer-await sentinels like the chat's
-			// `ChunkSlot`). Those stay whole-tree — their next content comes
-			// from the render itself resolving, not from a relevance-matched
-			// bump, so per-parton lanes have nothing to key on. A bare
-			// `?streaming=1` targeted refetch is NOT a subscription — it's a
-			// one-shot that commits its segment and closes.
-			if (!_isConnectionLive()) break;
-
-			// Promote just-emitted (id, matchKey, fp) tokens into the
-			// request-scoped cached override so the NEXT segment's render
-			// fp-skips the unchanged partials. We append to the in-memory
-			// Maps shared with PartialRoot's state — no URL rewrite, no
-			// re-parse. Safe under live partials because the descendant-fold
-			// (both live in `descendantContribution` and snapshot-based in
-			// `descendantContributionFromSnapshot`) folds each descendant's
-			// invalidation ts in — when a hot-bumping descendant's `|inv=N`
-			// shifts, the ancestor's fold moves with it, the ancestor's fp
-			// moves, the promoted fp from the prior segment no longer
-			// matches, the ancestor body re-runs, and the descendant is
-			// re-instantiated.
-			promoteSnapshotsToCachedOverride();
-
-			// Wait for a reason to emit the next segment, or for the keepalive
-			// to elapse. Only a bump RELEVANT to this route's rendered partials
-			// (or an expiresAt boundary) emits another segment; bumps in other
-			// sessions/scopes — which this stream would only fp-skip — re-arm
-			// without re-rendering. See waitForSegmentWake.
-			const proceed = await waitForSegmentWake(lastTs);
-			if (proceed === false) break;
-			lastTs = _currentTs();
-			segmentIndex++;
+		// The server-minted connection id, ahead of the first segment's
+		// Flight rows — an ENTRY, so the splitter surfaces it and keeps
+		// the body flowing. Shipping it FIRST means the client transport
+		// can address the session before the whole-tree render has even
+		// drained; the id's existence proves the session is open (it was
+		// minted at session open, above).
+		if (session !== null) {
+			enqueueConnectionId(controller, session.id);
 		}
+
+		// A live connection's payload segment is a DELIVERY: mint its
+		// per-connection seq and ship it as an entry ahead of the Flight
+		// rows, so the client holds the seq before the segment can
+		// commit (commit time is when it records — and acks — it).
+		// One-shot responses have no session and carry no seqs.
+		let deliverySeq: number | null = null;
+		if (session !== null) {
+			deliverySeq = ++session.deliverySeq;
+			controller.enqueue(
+				segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq),
+			);
+		}
+
+		const flightStream = renderSegment();
+		const reader = flightStream.getReader();
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value) {
+					// Pull-gated: a chunk is only enqueued once the consumer
+					// has room for it. Not reading the NEXT chunk until then
+					// propagates the wait into the Flight stream itself
+					// (whose renderer paces on its own desiredSize).
+					await waitForDemand(controller, demand);
+					controller.enqueue(value);
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+
+		// The render for this segment has fully drained — its body bytes and
+		// the `fp`/`url` trailers are all on the wire. Emit the `settled`
+		// milestone so the client knows the iteration is complete: from this
+		// point the connection is parked (held open awaiting the next bump),
+		// and an abort can cancel the reader WITHOUT tearing a mid-render
+		// body. The client's cooperative abort gates on this marker — see
+		// `SegmentIterator` in `fp-trailer-split.ts`.
+		controller.enqueue(settledMarker);
+
+		// The delivery is fully on the wire — the client's ack
+		// obligation starts here (the never-acked degrade deadline's
+		// anchor).
+		if (session !== null && deliverySeq !== null) {
+			session.firstDeliverySettledAt ??= Date.now();
+		}
+
+		if (onSegmentEnd) onSegmentEnd();
+
+		// One-shot render (no connection session — an in-process drive
+		// without an attach statement): one segment, close.
+		if (session === null) return;
+
+		// The attach's connection: after the initial whole-tree segment,
+		// the connection switches to per-parton lanes — each wake renders
+		// only the partons the bump / expiresAt boundary actually
+		// touched, and their payloads interleave as independent `mux`
+		// frames, so one parton's slow Suspense boundary never
+		// head-of-line-blocks another parton's next update. Relevance
+		// false-negatives (a dependency the label/dep surface doesn't
+		// capture) are reconciled by the next whole-tree render: the
+		// keepalive close forces the heartbeat to reattach, and the
+		// reattached connection's first segment is always whole-tree.
+		//
+		// Promote into the optimistic layer AND capture the same walk
+		// as the delivery's holdings record — what this segment carried
+		// becomes acked evidence when the client commits it.
+		const tokens: Array<readonly [string, string]> = [];
+		promoteSnapshotsToCachedOverride(undefined, (id, fp) =>
+			tokens.push([id, fp]),
+		);
+		if (deliverySeq !== null) {
+			_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
+		}
+		controller.enqueue(nextMarker);
+		controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
+		await driveLaneStream(
+			controller,
+			lastTs,
+			settledMarker,
+			session,
+			demand,
+			renderSegment,
+		);
 	}
 }
 
@@ -557,15 +515,17 @@ async function waitForDemand(
 }
 
 /**
- * Resolve the request's live catch-up anchor — the attach statement's
- * `since` (the document's registry anchor the heartbeat's first fire
- * presents; see [[channel-protocol]]'s `AttachStatement`). The anchor
- * rides ONLY the attach body — no URL form exists — so a discrete live
- * GET always takes the full initial render. Returns the anchor
- * timestamp when it is honorable: a live subscription, the epoch names
- * the CURRENT registry timeline, and the route still has snapshots to
- * lane from. `null` otherwise — the caller falls through to the full
- * initial render (over-fetch, never stale).
+ * Resolve the attach's live catch-up anchor — the statement's `since`
+ * (the document's registry anchor the heartbeat's first fire presents;
+ * see [[channel-protocol]]'s `AttachStatement`). Returns the anchor
+ * timestamp when it is honorable: the epoch names the CURRENT registry
+ * timeline, the route still has snapshots to lane from, and the
+ * statement carries no frame intent (an attach-with-intent frame
+ * statement needs the full render as its covering pass — its targets
+ * may not have route snapshots to lane from yet). `null` otherwise —
+ * the caller falls through to the full initial render (over-fetch,
+ * never stale). A `__force` overlay does NOT refuse the anchor: forced
+ * targets lane EXPLICIT the moment the region opens, on either path.
  */
 function liveCatchupTs(): number | null {
 	let request: Request;
@@ -576,13 +536,31 @@ function liveCatchupTs(): number | null {
 	} catch {
 		return null;
 	}
-	if (new URL(request.url).searchParams.get("live") !== "1") return null;
-	const since = _getAttachStatement()?.since ?? null;
+	const statement = _getAttachStatement();
+	if (statement === null) return null;
+	if ((statement.frames?.length ?? 0) > 0) return null;
+	const since = statement.since ?? null;
 	if (since === null) return null;
 	if (since.epoch !== _registryEpoch()) return null;
 	const routeKey = computeRouteKey(request.url);
 	if (_readSnapshotsForRoute(scope, routeKey).size === 0) return null;
 	return since.ts;
+}
+
+/** The attach statement's one-shot `__force` overlay — the selector a
+ *  pre-establishment refetch folded into the statement's URL. Read off
+ *  the statement (the entry strips it from request state before any
+ *  render); `null` when the statement carries none. */
+function attachForceSelector(): string | null {
+	const statement = _getAttachStatement();
+	if (statement === null) return null;
+	try {
+		return new URL(statement.url, "http://parton.local").searchParams.get(
+			"__force",
+		);
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -605,14 +583,13 @@ function installCatchupCachedOverride(): void {
 }
 
 /**
- * Open the connection session for the active request when it is a live
- * subscription, under a SERVER-MINTED connection id (never a
- * client-chosen URL param — that shape invites fixation and leaks the
- * addressable token into access logs; the id ships downstream as the
- * stream's `conn` entry instead). Seeds the visible set from the
- * attach statement's `visible` — the in-process live GET's `?visible=`
- * param is the statement-less carrier — with `null` as the
- * pre-measurement state, and binds the attach's scope + session
+ * Open the connection session for the active request when it carries
+ * an attach statement — the ONE live-subscription signal — under a
+ * SERVER-MINTED connection id (never a client-chosen URL param — that
+ * shape invites fixation and leaks the addressable token into access
+ * logs; the id ships downstream as the stream's `conn` entry instead).
+ * Seeds the visible set from the statement's `visible`, with `null` as
+ * the pre-measurement state, and binds the attach's scope + session
  * identity (what every channel envelope must re-present — see
  * `handleChannelPost` in `connection-session.ts`). Every attach binds
  * its OWN request's identity, which makes it the explicit rebind
@@ -620,8 +597,8 @@ function installCatchupCachedOverride(): void {
  * moment the next attach presents it. The session is
  * stamped onto the request's ALS store so the cull gate and
  * `evalDepKeys` read it for the connection's whole lifetime. Returns
- * `null` for one-shot requests — no envelope can address those, so no
- * session is needed.
+ * `null` for statement-less renders — no envelope can address those,
+ * so no session is needed and the drive is one segment.
  */
 function openLiveConnectionSession(): ConnectionSession | null {
 	let request: Request;
@@ -630,19 +607,10 @@ function openLiveConnectionSession(): ConnectionSession | null {
 	} catch {
 		return null;
 	}
-	const params = new URL(request.url).searchParams;
-	if (params.get("live") !== "1") return null;
 	const statement = _getAttachStatement();
-	let seed: ReadonlySet<string> | null;
-	if (statement !== null) {
-		seed = statement.visible === null ? null : new Set(statement.visible);
-	} else {
-		const rawVisible = params.get("visible");
-		seed =
-			rawVisible === null
-				? null
-				: new Set(rawVisible.split(",").filter(Boolean));
-	}
+	if (statement === null) return null;
+	const seed: ReadonlySet<string> | null =
+		statement.visible === null ? null : new Set(statement.visible);
 	const session = _openConnectionSession(crypto.randomUUID(), seed, {
 		scope: getScope(),
 		sessionId: getSessionId() ?? "",
@@ -1092,7 +1060,6 @@ async function driveLaneStream(
 			enterPartialState({
 				requestedIds: null,
 				isPartialRefetch: true,
-				populateCache: false,
 				cachedFingerprints: laneOverride?.fingerprints ?? new Map(),
 				cachedMatchKeys: laneOverride?.matchKeys ?? new Map(),
 				// The mirror's ACKED layer — client-proven holdings the
@@ -1101,7 +1068,6 @@ async function driveLaneStream(
 				// verifiably committed).
 				ackedFingerprints: session?.ackedFps ?? null,
 				explicitIds: forced ? new Set([id]) : new Set(),
-				cullFlip: false,
 				seenIds: new Set(),
 			});
 		}
@@ -1419,6 +1385,47 @@ async function driveLaneStream(
 		!deliveryWindowExceeded() &&
 		_getWarmProjector() !== null;
 
+	// The preload-warm latch: a `warm` frame's stated target awaits its
+	// park-point render. Same window discipline as the telemetry pass —
+	// a window-skip keeps the slot, so the freeing ack's wake warms the
+	// same statement; the consume below nulls it, so the latch can never
+	// spin the wait-entry loop.
+	const pendingPreloadWarm = (): boolean =>
+		session !== null &&
+		session.pendingWarmUrl !== null &&
+		!deliveryWindowExceeded();
+
+	// ONE byte-silent whole-tree render of the stated target — explicit
+	// intent needs no projector: the route is named directly. The render
+	// runs inside a nested request scope for the target URL
+	// (`_runWithWarmRequestScope`) and drains into the void; the durable
+	// effects are the caches it fills (`<Cache>` byte-cache entries,
+	// loader caches) and the target route's registered snapshots — the
+	// navigation statement that follows renders warm.
+	const warmPreloadTarget = async (): Promise<void> => {
+		if (session === null) return;
+		const warm = session.pendingWarmUrl;
+		if (warm === null || deliveryWindowExceeded()) return;
+		session.pendingWarmUrl = null;
+		try {
+			await _runWithWarmRequestScope(warm.url, async () => {
+				const reader = renderFullSegment().getReader();
+				try {
+					while (true) {
+						const { done } = await reader.read();
+						if (done) break;
+					}
+				} finally {
+					reader.releaseLock();
+				}
+			});
+		} catch {
+			// Speculative by definition: a failed warm render costs
+			// nothing — the navigation renders cold, exactly as if the
+			// statement never arrived.
+		}
+	};
+
 	const warmProjectedPartons = async (): Promise<void> => {
 		if (session === null) return;
 		const telemetry = session.telemetry;
@@ -1459,13 +1466,11 @@ async function driveLaneStream(
 					enterPartialState({
 						requestedIds: null,
 						isPartialRefetch: true,
-						populateCache: false,
-						cachedFingerprints: new Map(),
+								cachedFingerprints: new Map(),
 						cachedMatchKeys: new Map(),
 						ackedFingerprints: null,
 						explicitIds: new Set(),
-						cullFlip: false,
-						seenIds: new Set(),
+								seenIds: new Set(),
 					});
 					const reader = renderToReadableStream(
 						partialFromSnapshot(id, snap),
@@ -1692,17 +1697,7 @@ async function driveLaneStream(
 			// the target out of the tree) or whose ancestor replays a byte
 			// cache.
 			forceSelector = target.searchParams.get("__force");
-			for (const p of ["partials", "cached", "__populateCache", "__cullFlip", "__force"]) {
-				target.searchParams.delete(p);
-			}
-			// The connection's own transport flags describe the CONNECTION,
-			// not the page — carry them across the statement's page URL.
-			for (const p of ["live", "streaming"]) {
-				const v = current.searchParams.get(p);
-				if (v !== null && !target.searchParams.has(p)) {
-					target.searchParams.set(p, v);
-				}
-			}
+			target.searchParams.delete("__force");
 			setRequest(new Request(target, { headers: request.headers }));
 			request = getRequest();
 			routeKey = computeRouteKey(request.url);
@@ -1847,6 +1842,41 @@ async function driveLaneStream(
 	const onCancelScope = (s: string): void => cancelScopeLanes(s);
 	session?.cancelListeners.add(onCancelScope);
 
+	// The attach statement's `__force` targets — a selector refetch that
+	// fired pre-establishment and folded its overlay into the statement's
+	// URL — lane EXPLICIT the moment the region opens, resolved against
+	// the route's snapshots exactly like a consumed url statement's
+	// (id first, then label fan-out). On the full path the whole-tree
+	// initial segment has just rendered (fp-skip may have placeholdered
+	// the targets — a whole-tree render cannot force a target whose
+	// ancestor skips); on the catch-up path there was no segment at all.
+	// Either way the forced lane is the covering render.
+	{
+		const force = attachForceSelector();
+		if (force !== null && session !== null) {
+			const snapshots = _readSnapshotsForRoute(scope, routeKey);
+			const wanted = force
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
+			const ids = new Set<string>();
+			for (const name of wanted) {
+				if (snapshots.has(name)) ids.add(name);
+			}
+			for (const [id, snap] of snapshots) {
+				if (ids.has(id)) continue;
+				if (snap.labels.some((l) => wanted.includes(l))) ids.add(id);
+			}
+			if (ids.size > 0) {
+				enterRequestRegistry(routeKey, "cache");
+				for (const id of ids) {
+					forcedLaneIds.add(id);
+					startLane(id);
+				}
+			}
+		}
+	}
+
 	// `session.detached` exits alongside `closed`: an explicit detach
 	// frame fires the flip wakes, the parked wait returns, and the
 	// condition winds the drive down — the stream closes now instead of
@@ -1893,14 +1923,17 @@ async function driveLaneStream(
 								? "window"
 								: null;
 		let wake: SegmentWake | null = latchedWake();
-		while (wake === null && pendingWarmStatement()) {
-			// About to park with an unconsumed telemetry statement — the
-			// predictive warm point: no latched work, so speculative
-			// renders crowd out nothing. Statements that land while
-			// warming latch on the session; the loop re-checks both
-			// latches, so a flip preempts further passes and a fresh
-			// telemetry statement gets its own pass before the park.
-			await warmProjectedPartons();
+		while (wake === null && (pendingPreloadWarm() || pendingWarmStatement())) {
+			// About to park with an unconsumed warm intent or telemetry
+			// statement — the predictive warm point: no latched work, so
+			// speculative renders crowd out nothing. Explicit intent
+			// (a stated preload target) outranks scroll projection.
+			// Statements that land while warming latch on the session; the
+			// loop re-checks every latch, so a flip preempts further
+			// passes and a fresh statement gets its own pass before the
+			// park.
+			if (pendingPreloadWarm()) await warmPreloadTarget();
+			else await warmProjectedPartons();
 			wake = latchedWake();
 		}
 		if (wake === null) {
@@ -2451,20 +2484,6 @@ function isParkedOnConnection(
 			return true;
 	}
 	return false;
-}
-
-/** Inspect the active request's URL for a `?live=1` flag — the live-
- *  subscription opt-in set by `<LivePageHeartbeat>` (a whole-route
- *  long-poll that wants the connection held open for pushes). Targeted
- *  refetches and one-shot navs never set it, so they emit their
- *  segment and close. Returning false here keeps the driver's
- *  first-and-only segment behaviour byte-identical to a one-shot. */
-function isLiveSubscription(): boolean {
-	try {
-		return new URL(getRequest().url).searchParams.get("live") === "1";
-	} catch {
-		return false;
-	}
 }
 
 /**

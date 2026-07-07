@@ -17,8 +17,9 @@
  *      another producer's), as the full-set sync frame;
  *   3. a real flip still drives its own flush;
  *   4. the establishment full-set sync still drives its own flush;
- *   5. the no-connection fallback keeps its semantics: measurement
- *      syncs are consumed without a reload, in-view flips reload.
+ *   5. pre-establishment statements PEND — nothing fires with no
+ *      connection; the fresh connection's first-measurement sync
+ *      carries the queued flips.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -31,11 +32,6 @@ import {
 import type { ChannelEnvelope, VisibleFrame } from "../channel-protocol.ts"
 import { _resetCullPark } from "../cull-park.ts"
 import { _primeVisible, _resetVisibilityController, reportVisible } from "../visibility.tsx"
-
-vi.mock("../refetch.ts", () => ({
-	enqueueRefetch: vi.fn(() => ({ finished: Promise.resolve() })),
-}))
-import { enqueueRefetch } from "../refetch.ts"
 
 // Deterministic rAF: callbacks queue here and run via `raf()`.
 let rafQueue: FrameRequestCallback[] = []
@@ -68,7 +64,6 @@ beforeEach(() => {
 	_resetChannelClient()
 	_resetVisibilityController()
 	_resetCullPark()
-	vi.mocked(enqueueRefetch).mockClear()
 	rafQueue = []
 	fetchCalls = []
 	vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
@@ -171,27 +166,27 @@ describe("visibility statement cadence", () => {
 		expect(frame.visible).toEqual(["agrees"])
 	})
 
-	it("fallback: measurement-only state never reloads; an in-view flip does", async () => {
-		// No connection established. A measurement-only state is moot
-		// without a session — even a flush another caller drives consumes
-		// it without a reload.
+	it("pre-establishment statements pend and ride the fresh connection's sync", async () => {
+		// No connection established. Statements latch — nothing fires
+		// (the next attach's seed states the full truth, and its
+		// whole-tree first segment materializes anything in view).
 		_primeVisible("cold-out", false)
 		reportVisible("cold-out", false)
-		scheduleChannelFlush()
-		expect(await flushWindow()).toBe(0)
-		expect(enqueueRefetch).not.toHaveBeenCalled()
-		// A real in-view flip rides the discrete reload with the set.
 		_primeVisible("cold-in", false)
 		reportVisible("cold-in", true)
+		scheduleChannelFlush()
+		expect(await flushWindow()).toBe(0)
+		// Establishment: the first-measurement sync drives a flush and
+		// the queued flip rides it as a `changed` id — the flip's lane
+		// then fp-skips to a confirmation where the attach's segment
+		// already delivered the bytes.
+		_channelEstablished("conn-late")
 		raf()
 		await settle()
-		expect(fetchCalls).toHaveLength(0) // no envelope — no connection
-		expect(enqueueRefetch).toHaveBeenCalledExactlyOnceWith(
-			expect.objectContaining({
-				labels: ["cold-in"],
-				cullFlip: true,
-				params: { visible: "cold-in" },
-			}),
-		)
+		const frames = sentFrames()
+		expect(frames).toHaveLength(1)
+		expect(frames[0].changed).toContain("cold-in")
+		expect(frames[0].visible).toContain("cold-in")
+		expect(frames[0].visible).not.toContain("cold-out")
 	})
 })

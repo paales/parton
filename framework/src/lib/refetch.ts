@@ -3,23 +3,21 @@
  *
  * `enqueueRefetch` is the single dispatch point every selector-scoped
  * refetch goes through — microtask-batched so multiple fires in one
- * tick coalesce into one HTTP request, stamped with a monotonic issue
- * seq (see `refetch-ordering.ts`) so late-arriving superseded
- * responses can't clobber newer trees.
+ * tick coalesce into one channel statement. A batch states the page
+ * URL with the labels as its one-shot `?__force=` overlay (intent
+ * "silent"); the response arrives on the held stream as a whole-tree
+ * payload segment with the targets laned explicit after the reopen.
+ * Pre-establishment batches latch and ride the attach they trigger
+ * (`_channelNavigate`'s attach-with-intent). A DEGRADED page has no
+ * freshness transport: fires resolve as no-ops — the page is
+ * browser-native, and document loads are its renders.
  *
  * Also home to the framework-internal "silent navigation" info brand
  * (the signal a `nav.navigate()` initiator sends so the page-level
  * intercept stands down) and the client-side selector parser.
  */
 
-import { _channelNavAvailable, _channelNavigate } from "./channel-client.ts"
-import type { AttachStatement } from "./channel-protocol.ts"
-import {
-  getAllCachedPartialTokens,
-  getCachedPartialIds,
-  inFlightKey,
-} from "./partial-client-state.ts"
-import { claimRefetchCommit, nextRefetchSeq } from "./refetch-ordering.ts"
+import { _channelNavigate } from "./channel-client.ts"
 
 // ─── Framework-internal navigation info ───────────────────────────
 //
@@ -90,61 +88,40 @@ export function parseSelectorClient(input: string | string[] | undefined): {
 // ─── Microtask-batched targeted-refetch dispatcher ────────────────
 //
 // Multiple `reload` / `navigate({ selector })` calls in the same tick
-// coalesce into one refetch request. Keeps tag-fanout and multi-id
+// coalesce into one channel statement. Keeps tag-fanout and multi-id
 // event handlers cheap: three buttons clicked in the same frame
-// produce one request with `?partials=a,b,c`. Each batched entry
+// produce one statement with `?__force=a,b,c`. Each batched entry
 // carries its own `streaming` / `finished` deferreds so the batched
-// request can fan out its two milestones (first-segment received,
-// full body drained) back to every caller separately.
+// statement can fan out its two milestones (covering segment
+// committed, covering segment settled) back to every caller
+// separately.
 
-/** Two-milestone return mirroring the host's `fetchRscPayload`. */
+/** Two-milestone return mirroring the navigation handles. */
 export interface RefetchMilestones {
   streaming: Promise<void>
   finished: Promise<void>
 }
 
 interface RefetchBatchEntry {
-  /** Selector labels — become `?partials=…` on the wire. The server
-   *  walks snapshots looking for matching labels (or matching ids)
-   *  and re-renders each match. */
+  /** Selector labels — become the statement's `?__force=` overlay. The
+   *  server resolves them against the route's snapshots (id first,
+   *  then label fan-out) and lanes each target EXPLICIT. */
   labels: string[]
   /** Render mode for the commit — `false` (default) wraps in
    *  `startTransition`; `true` opts into progressive streaming with
    *  Suspense fallbacks. Mirrors the `streaming` option on
    *  `FrameworkNavigateOptions` / `FrameworkReloadOptions`. */
   streaming: boolean
-  /** Open as a live subscription — adds `?live=1` so the server's
-   *  segment driver holds the connection open and pushes future
-   *  segments. Only the heartbeat sets this; targeted refetches are
-   *  one-shot. Mirrors `FrameworkReloadOptions.live`. */
-  live: boolean
-  /** Abort signal for the in-flight HTTP fetch on this entry. Per-
-   *  selector supersede sets this to a fresh `AbortController`'s signal
-   *  and aborts predecessors when the newer fire's `streaming`
-   *  resolves. Passed straight through to `__rsc_partial_refetch`. */
+  /** Abort signal for this entry — per-selector supersede sets this to
+   *  a fresh `AbortController`'s signal; a superseded fire's record
+   *  rejects with AbortError. */
   signal?: AbortSignal
-  /** Extra query params appended to the refetch url (not the page url).
-   *  Mirrors `FrameworkReloadOptions.params` — ephemeral per-request
-   *  view state read via tracked `searchParam()` reads. */
-  params?: Record<string, string>
-  /** This fire is a culling flip (only the visibility controller sets
-   *  it — see `visibility.tsx`). Its targets are REVALIDATIONS, not
-   *  forces: their cached fp tokens stay in `?cached=` (a normal
-   *  explicit target's are stripped) and the request carries
-   *  `?__cullFlip=1`, so the server may fp-skip an explicit target —
-   *  the placeholder that confirms the client's parked copy. */
-  cullFlip?: boolean
-  /** The live fire's attach halves (anchor + seed) — the transport
-   *  fills the manifest and ships the batch as an attach POST whose
-   *  body is the full client statement. Only the heartbeat sets it.
-   *  Mirrors `FrameworkReloadOptions.attach`. */
-  attach?: Omit<AttachStatement, "cached">
-  /** Resolver for this entry's `streaming` milestone — called when the
-   *  flushed batch's first segment lands. */
+  /** Resolver for this entry's `streaming` milestone — the covering
+   *  segment's commit. */
   resolveStreaming: () => void
   rejectStreaming: (err: unknown) => void
-  /** Resolver for this entry's `finished` milestone — called when the
-   *  flushed batch's full response drains. */
+  /** Resolver for this entry's `finished` milestone — the covering
+   *  segment's settle. */
   resolveFinished: () => void
   rejectFinished: (err: unknown) => void
 }
@@ -153,56 +130,18 @@ let _batchRef: RefetchBatchEntry[] = []
 let _batchScheduled = false
 
 function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
-  const handler = (
-    window as Window & {
-      __rsc_partial_refetch?: (
-        url: string,
-        signal?: AbortSignal,
-        claimCommit?: () => boolean,
-        attach?: AttachStatement,
-      ) => RefetchMilestones
-    }
-  ).__rsc_partial_refetch
-  if (!handler) {
-    // Host bundle hasn't wired the handler yet (SSR / pre-hydration).
-    // Resolve every entry as a no-op so callers don't hang.
-    for (const e of batch) {
-      e.resolveStreaming()
-      e.resolveFinished()
-    }
-    return
-  }
-
   const labelSet = new Set<string>()
-  // Labels wanted by a NON-cull-flip entry — the force-refetch
-  // targets whose cached tokens must be stripped below. A label
-  // wanted only by cull-flip entries keeps its tokens (fp-skip is
-  // the point of a culling revalidation).
-  const forcedLabels = new Set<string>()
   let streamingMode = false
-  let liveMode = false
-  let cullFlip = false
-  let attach: Omit<AttachStatement, "cached"> | undefined
-  const extraParams = new Map<string, string>()
   for (const entry of batch) {
-    for (const l of entry.labels) {
-      labelSet.add(l)
-      if (!entry.cullFlip) forcedLabels.add(l)
-    }
+    for (const l of entry.labels) labelSet.add(l)
     if (entry.streaming) streamingMode = true
-    if (entry.live) liveMode = true
-    if (entry.cullFlip) cullFlip = true
-    // At most one attach per batch by construction: the heartbeat is
-    // the sole producer and its fires are strictly sequential.
-    if (entry.attach) attach = entry.attach
-    if (entry.params) for (const [k, v] of Object.entries(entry.params)) extraParams.set(k, v)
   }
 
-  // Combine per-entry signals so the batched fetch aborts when any
+  // Combine per-entry signals so the batched statement aborts when any
   // caller superseded. Batched callers share fate by construction —
-  // they're one HTTP request. (In practice batched entries usually
-  // come from the same event handler; cross-supersede happens only
-  // across microtasks so each fire is in its own batch.)
+  // they're one statement. (In practice batched entries usually come
+  // from the same event handler; cross-supersede happens only across
+  // microtasks so each fire is in its own batch.)
   const signals = batch
     .map((e) => e.signal)
     .filter((s): s is AbortSignal => s != null)
@@ -213,132 +152,35 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
         ? signals[0]
         : AbortSignal.any(signals)
 
-  // Channel routing. An attached, non-degraded page states a batched
-  // selector refetch as a `url` frame — the page URL with the batch's
-  // `?__force=` overlay, intent "silent" — and the response arrives
-  // as a payload segment on the held stream (milestones wired to that
-  // segment's commit/settle by `_channelNavigate`'s records, so the
-  // [fire, {committed, streaming, finished}] contract is unchanged).
-  // `__force`, not `partials`: the statement's segment is WHOLE-TREE
-  // (the URL may have moved with the batch — a `navigate({selector})`
-  // — and every parton must re-evaluate it; fp-skip prunes the
-  // unchanged to placeholders), with the named targets forced past
-  // fp-skip server-side (`explicitForces`). No `?cached=` and no
-  // forced-label strip: the connection's mirror is the manifest. No
-  // issue seq and no pageUrlKey capture either — stream order plus
-  // the as-of guard subsume both; their twins live on below for the
-  // discrete path. Stays discrete: attach fires (they ARE the
-  // channel's discrete leg), live subscriptions, culling flips (only
-  // minted with no connection), and batches carrying ephemeral
-  // `params` (a discrete-GET concept — the channel statement is the
-  // page URL, which must not absorb one-shot view state).
-  if (
-    !attach &&
-    !liveMode &&
-    !cullFlip &&
-    extraParams.size === 0 &&
-    labelSet.size > 0 &&
-    _channelNavAvailable()
-  ) {
-    const stated = new URL(window.location.href)
+  // The batch as a url statement: the page URL with the labels as its
+  // `?__force=` overlay, intent "silent". `__force`, not a target
+  // list: the statement's segment is WHOLE-TREE (the URL may have
+  // moved with the batch — a `navigate({selector})` — and every parton
+  // must re-evaluate it; fp-skip prunes the unchanged to placeholders),
+  // with the named targets forced past fp-skip server-side. The
+  // connection's mirror is the manifest — nothing re-advertises.
+  // Pre-establishment the statement latches and rides the attach it
+  // triggers; only a DEGRADED page answers null.
+  const stated = new URL(window.location.href)
+  if (labelSet.size > 0) {
     stated.searchParams.set("__force", [...labelSet].join(","))
-    const routed = _channelNavigate({
-      url: stated.pathname + stated.search,
-      intent: "silent",
-      streaming: streamingMode,
-      signal,
-    })
-    if (routed) {
-      routed.streaming.then(
-        () => {
-          for (const e of batch) e.resolveStreaming()
-        },
-        (err) => {
-          for (const e of batch) e.rejectStreaming(err)
-        },
-      )
-      routed.finished.then(
-        () => {
-          for (const e of batch) e.resolveFinished()
-        },
-        (err) => {
-          for (const e of batch) e.rejectFinished(err)
-        },
-      )
-      return
-    }
   }
-
-  const url = new URL(window.location.href)
-  if (labelSet.size > 0) url.searchParams.set("partials", [...labelSet].join(","))
-  if (streamingMode) url.searchParams.set("streaming", "1")
-  // `?live=1` is the server hold-open signal — distinct from
-  // `?streaming=1` (client commit mode). Only the heartbeat sets it;
-  // targeted refetches stay one-shot and the connection closes.
-  if (liveMode) url.searchParams.set("live", "1")
-  // The culling-flip stamp — the explicit producer-written signal
-  // that lets the server fp-skip this fire's targets (see
-  // `PartialRequestState.cullFlip`). Transport-only; match gates
-  // never see it.
-  if (cullFlip) url.searchParams.set("__cullFlip", "1")
-
-  // Send cached fingerprints so the server can fp-skip unchanged
-  // partials. With a selector, strip cached tokens whose id prefix
-  // matches a FORCED label (those entries are explicit refetch
-  // targets — server must re-render them, not match-and-skip);
-  // cull-flip targets keep theirs, so the server can confirm a
-  // parked copy with a placeholder instead of re-shipping bytes.
-  // With no selector (streaming heartbeat, full-page refetch), send
-  // every cached entry so the fp-skip cascade prunes the page to
-  // deltas.
-  //
-  // Two manifest forms, split by transport: an ATTACH batch carries
-  // the FULL manifest in the POST body (no request line to protect —
-  // see `getAllCachedPartialTokens`), while a discrete GET keeps the
-  // capped `?cached=` URL form. The forced-label strip applies to
-  // both — an explicit target must re-render on either transport.
-  const cachedIds = attach ? getAllCachedPartialTokens() : getCachedPartialIds()
-  const targetPrefixes = [...forcedLabels].map((l) => `${l}:`)
-  const cached =
-    targetPrefixes.length > 0
-      ? cachedIds.filter((t) => !targetPrefixes.some((p) => t.startsWith(p)))
-      : cachedIds
-  if (!attach && cached.length > 0) {
-    url.searchParams.set("cached", cached.join(","))
-  }
-
-  // Caller-supplied per-request params (ephemeral view state) — appended
-  // to the refetch url only; the page url is untouched.
-  for (const [k, v] of extraParams) url.searchParams.set(k, v)
-
-  // Monotonic commit ordering. Stamp this fire with the next issue seq
-  // for its selector key, and hand the host a commit gate bound to it.
-  // The host calls the gate before each segment commit and drops the
-  // commit when a newer fire for the same selector has already landed —
-  // so a superseded fire whose response arrives late can't clobber the
-  // newer tree. Keyed on the sorted label set (matches `?partials=` and
-  // `inFlightKey`); a label-less batch (no selector) gets no gate.
-  const orderKey = inFlightKey([...labelSet])
-  let claimCommit: (() => boolean) | undefined
-  if (orderKey != null) {
-    const seq = nextRefetchSeq(orderKey)
-    claimCommit = () => claimRefetchCommit(orderKey, seq)
-  }
-
-  const milestones = handler(
-    url.toString(),
+  const routed = _channelNavigate({
+    url: stated.pathname + stated.search,
+    intent: "silent",
+    streaming: streamingMode,
     signal,
-    claimCommit,
-    attach
-      ? {
-          cached,
-          since: attach.since,
-          visible: attach.visible,
-          applied: attach.applied,
-        }
-      : undefined,
-  )
-  milestones.streaming.then(
+  })
+  if (!routed) {
+    // Degraded: no freshness transport exists. Resolve as no-ops — the
+    // page's renders are document loads now.
+    for (const e of batch) {
+      e.resolveStreaming()
+      e.resolveFinished()
+    }
+    return
+  }
+  routed.streaming.then(
     () => {
       for (const e of batch) e.resolveStreaming()
     },
@@ -346,7 +188,7 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
       for (const e of batch) e.rejectStreaming(err)
     },
   )
-  milestones.finished.then(
+  routed.finished.then(
     () => {
       for (const e of batch) e.resolveFinished()
     },
@@ -358,12 +200,10 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
 
 /**
  * Enqueue a targeted refetch. Multiple calls in the same microtask
- * coalesce into one request. Returns synchronously with
+ * coalesce into one statement. Returns synchronously with
  * `{streaming, finished}` promises — the caller can attach handlers
- * on either milestone independently. Both reject with whatever
- * `__rsc_partial_refetch` rejected with (typically a
- * `NavigationError` from `fetchRscPayload`); on supersede, the
- * shared `AbortSignal` propagates an `AbortError` to both milestones.
+ * on either milestone independently. On supersede, the shared
+ * `AbortSignal` propagates an `AbortError` to both milestones.
  */
 export function enqueueRefetch(
   entry: Omit<

@@ -64,6 +64,7 @@ import {
   TAG_LANES_OPEN,
   TAG_SEGMENT_SETTLED,
 } from "@parton/framework/lib/fp-trailer-marker.ts"
+import { bindAttachStatement } from "@parton/framework/lib/connection-session.ts"
 import { wrapStreamWithFpTrailer } from "@parton/framework/lib/fp-trailer.ts"
 import {
   _setFirstAckDeadlineMs,
@@ -272,7 +273,7 @@ function openConnection(
   fixture: DashboardFixture,
   counters: WireCounters,
 ): SoakConnection {
-  const request = new Request(`${URL_BASE}/${key}?live=1&__conn=soak-${key}`, {
+  const request = new Request(`${URL_BASE}/${key}`, {
     headers: { "x-test-scope": `soak-${key}` },
   })
   let controller!: ReadableStreamDefaultController<Uint8Array>
@@ -303,6 +304,15 @@ function openConnection(
   })()
 
   const drive = runWithRequestAsync(request, async () => {
+    // The attach statement is the live-subscription signal — bind a
+    // bare one (nothing to state) so the driver opens a session and
+    // parks, exactly as a browser's attach would.
+    bindAttachStatement({
+      url: `/${key}`,
+      cached: [],
+      since: null,
+      visible: null,
+    })
     const renderOnce = () =>
       wrapStreamWithFpTrailer(renderServerToFlight(fixture.Page()), _captureCommitHandle())
     await driveSegmentedResponse(controller, renderOnce)

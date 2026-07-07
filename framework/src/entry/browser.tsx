@@ -6,10 +6,13 @@
  *     bootBrowser()
  *
  * `bootBrowser` hydrates the SSR document from the inlined Flight
- * stream, installs the Navigation API intercept, the segmented-Flight
- * refetch/preload transports (`window.__rsc_partial_refetch` /
- * `__rsc_partial_preload`), the server-action callback, and the live
- * page heartbeat.
+ * stream, installs the Navigation API intercept, the attach transport
+ * (`window.__rsc_live_attach` — the channel's opening statement and
+ * the page's one held stream), the server-action callback, and the
+ * live page heartbeat. Everything interactive rides the channel: the
+ * attach POST opens the stream, `url` frames move it, lanes and
+ * navigation segments come down it. The only GETs a page makes are
+ * document loads.
  */
 import {
 	createFromReadableStream,
@@ -21,11 +24,11 @@ import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { rscStream } from "rsc-html-stream/client";
 import {
-	_channelAbortLiveStream,
 	_channelClaimWindowNav,
 	_channelDeliveryCommittable,
 	_channelFrameLaneCommitted,
 	_channelFrameLaneSettled,
+	_channelIsDegraded,
 	_channelNavAvailable,
 	_channelNavigate,
 	_channelNavPoint,
@@ -33,7 +36,6 @@ import {
 	_channelNavSegmentCommitted,
 	_channelNavSegmentSettled,
 	_channelNavSubsumedByAttach,
-	_channelStatedWindowUrl,
 	_channelWireEntry,
 	_laneDeliveryCommitted,
 	_laneDeliveryDropped,
@@ -46,7 +48,11 @@ import {
 	_segmentDeliveryDroppedStale,
 	type WireDelivery,
 } from "../lib/channel-client.ts";
-import type { AttachStatement, UrlFrame } from "../lib/channel-protocol.ts";
+import {
+	ATTACH_ENDPOINT,
+	type AttachStatement,
+	type UrlFrame,
+} from "../lib/channel-protocol.ts";
 import type { FpUpdatesPayload } from "../lib/fp-trailer-marker.ts";
 import {
 	type DemuxedLane,
@@ -63,11 +69,13 @@ import {
 	_commitPartonLaneProgressive,
 	_dispatchFrameRefetch,
 	_readFramesSnapshot,
-	_warmCacheFromPayload,
 	getCachedPartialIds,
 	isFrameworkSilentInfo,
 } from "../lib/partial-client.tsx";
-import { _getLiveConnectionId } from "../lib/partial-client-state.ts";
+import {
+	_getLiveConnectionId,
+	getAllCachedPartialTokens,
+} from "../lib/partial-client-state.ts";
 import { applyStandardTrailers } from "../lib/segment-trailers-client.ts";
 import {
 	GlobalErrorBoundary,
@@ -80,6 +88,16 @@ import type { RscPayload } from "./rsc.tsx";
 
 export function bootBrowser(): void {
 	void main();
+}
+
+/** The page opted out of the interactive transport entirely (specs
+ *  asserting document-shaped behavior set it): no heartbeat, no
+ *  channel, no interception — every navigation is a document load. */
+function heartbeatDisabled(): boolean {
+	return (
+		(window as unknown as { __partonHeartbeatDisabled?: boolean })
+			.__partonHeartbeatDisabled === true
+	);
 }
 
 async function main() {
@@ -102,11 +120,10 @@ async function main() {
 	// The SSR HTML response carries the fp-trailer as an HTML comment
 	// appended after `</html>` (see `wrapSsrStreamWithFpTrailer` in
 	// the framework). Parse it now so the warm fps the server
-	// computed during this cold render are registered before any
-	// subsequent navigation fires `?cached=`. Without this, the first
-	// nav after a hard refresh / SSR mounts the page with only cold
-	// fps in `_currentPageFingerprints` and the very next visit
-	// pays a full fresh re-render instead of fp-skipping.
+	// computed during this cold render are registered before the
+	// heartbeat's attach presents the manifest. Without this, the
+	// attach carries only cold fps and every parton whose cold fp
+	// drifted from warm re-renders on the first connection.
 	_applyFpTrailerFromDocument();
 
 	function BrowserRoot() {
@@ -127,10 +144,20 @@ async function main() {
 		}, [setPayload_]);
 
 		React.useEffect(() => {
-			const off = listenNavigation((url, types, signal, channelIntent) => {
+			const off = listenNavigation((url, types, signal, intent) => {
 				setPendingTransitionTypes(types ?? []);
-				return fetchRscPayload(url, signal, undefined, undefined, channelIntent)
-					.finished;
+				const target = new URL(url, window.location.origin);
+				// The statement: the client's URL moved. Pre-establishment it
+				// latches and rides the attach it triggers; only a DEGRADED
+				// page answers null — and degraded pages never intercept, so
+				// the null branch is unreachable here.
+				const routed = _channelNavigate({
+					url: target.pathname + target.search,
+					intent: intent ?? "push",
+					streaming: false,
+					signal,
+				});
+				return routed ? routed.finished : Promise.resolve();
 			});
 			// BrowserRoot is the tree root, so this effect runs after every
 			// child's — hydration handlers are attached — and the navigate
@@ -148,100 +175,40 @@ async function main() {
 				 *  heartbeat below must survive). Genuine errors still bubble to
 				 *  the outer <GlobalErrorBoundary>. */}
 				<NavigationErrorBoundary>{payload.root}</NavigationErrorBoundary>
-				{/* Opt-in live updates. The heartbeat holds a `?streaming=1`
-				 *  long-poll connection open against the current URL; the
-				 *  server's segment driver pushes refreshSelector /
-				 *  expiresAt updates as they happen. Mounted here so its
-				 *  useEffect runs AFTER React's first commit — by that
+				{/* The live connection. The heartbeat fires the attach POST
+				 *  against `/__parton/live` (via the transport installed
+				 *  below); the server's segment driver pushes lanes and
+				 *  navigation segments down the held stream. Mounted here so
+				 *  its useEffect runs AFTER React's first commit — by that
 				 *  point `_currentPageFingerprints` is populated by the
-				 *  rendered `PartialErrorBoundary`s and the first fetch's
-				 *  `?cached=` carries them. See
-				 *  `docs/internals/streaming.md`. */}
+				 *  rendered `PartialErrorBoundary`s and the attach manifest
+				 *  carries them. See `docs/internals/streaming.md`. */}
 				<LivePageHeartbeat />
 			</>
 		);
 	}
 
-	// Identity of a page URL for staleness checks — pathname + search
-	// with framework-internal refetch params stripped (`partials`,
-	// `cached`, `streaming`, `live`, `__frame*`). Those describe
-	// HOW a refetch was dispatched, not WHICH page it represents, so a
-	// targeted refetch's key equals the page it targets; only real
-	// navigation (pathname / `?search` / `?q` / …) changes it. Defaults
-	// to the live `window.location`.
-	function pageUrlKey(href: string = window.location.href): string {
-		const u = new URL(href, window.location.origin);
-		// Position params the page url carries but that must NOT key the
-		// stale-commit guard: `visible` (the read-tracked culling set, sent via
-		// reload({params})) and `page` (the scroll anchor, silently mirrored as
-		// you scroll). Both move while you stay on the same page; if they keyed
-		// the guard, an in-flight culling commit would be dropped as "stale"
-		// every time the anchor ticked. They are NOT FRAMEWORK_URL_PARAMS, so
-		// the render still sees them (visible() and the ?page= cold seed read
-		// them).
-		for (const k of [
-			"partials",
-			"cached",
-			"streaming",
-			"live",
-			"visible",
-			"page",
-			"__frame",
-			"__frameUrl",
-			"__cullFlip",
-			"__force",
-		]) {
-			u.searchParams.delete(k);
-		}
-		return u.pathname + u.search;
-	}
-
 	/**
-	 * Returns synchronously with `{streaming, finished}` promises so
-	 * navigation-handle callers can branch off the first-segment moment
-	 * separately from the full-body-drained moment. The work runs in a
-	 * detached async IIFE so the caller can attach handlers before the
-	 * fetch even starts.
+	 * Consume one attach stream: POST the statement to
+	 * `/__parton/live` and decode the held segmented response — the
+	 * `conn` handshake, payload segments (whole-tree renders,
+	 * navigation segments, reconciles), and per-parton lanes. Returns
+	 * synchronously with `{streaming, finished}` promises: `streaming`
+	 * resolves when the first segment commits (or the lanes region
+	 * opens on a catch-up boot — the current tree IS the state);
+	 * `finished` when the connection fully drains (keepalive close,
+	 * abort, error) — the heartbeat's settle signal.
 	 *
-	 * `attach` turns the fire into the heartbeat's attach POST: the
-	 * full client statement (manifest + anchor + seed) rides the JSON
-	 * body instead of URL params, and the response is the same held
-	 * segmented stream a live GET drives. Everything downstream of the
-	 * fetch — the splitter, the lanes path, the commit guards — is one
-	 * shared path.
-	 *
-	 * `channelIntent` marks a window navigation the navigate listener
-	 * routed through the channel (it CLAIMED the live stream during the
-	 * event dispatch): the fire becomes a `url` frame and its milestones
-	 * resolve at the covering segment's commit/settle on the held
-	 * stream — no fetch at all. If the channel can no longer carry it
-	 * (the connection died since the claim), the claim's kept stream is
-	 * released (`_channelAbortLiveStream` — it still renders the URL the
-	 * page just left) and the fire falls through to the discrete GET
-	 * below with its own guards.
+	 * Commit arbitration for seq'd deliveries is the AS-OF guard alone:
+	 * commit iff the delivery was rendered as-of the client's current
+	 * navigation point or later (`_channelDeliveryCommittable`). A
+	 * document navigation unloads the page — no cross-page staleness
+	 * class exists.
 	 */
-	function fetchRscPayload(
-		overrideUrl?: string,
+	function consumeLiveStream(
+		statement: AttachStatement,
 		signal?: AbortSignal,
-		claimCommit?: () => boolean,
-		attach?: AttachStatement,
-		channelIntent?: UrlFrame["intent"],
 	): { streaming: Promise<void>; finished: Promise<void> } {
-		if (channelIntent && overrideUrl && !attach) {
-			const target = new URL(overrideUrl, window.location.origin);
-			const routed = _channelNavigate({
-				url: target.pathname + target.search,
-				intent: channelIntent,
-				streaming: target.searchParams.has("streaming"),
-				signal,
-			});
-			if (routed) return routed;
-			_channelAbortLiveStream();
-		}
-		// The attach's request line restates the client's URL — it
-		// subsumes the channel's navigation point and any buffered url
-		// frames (a fresh connection opens as-of 0 on both sides).
-		if (attach) _channelNavSubsumedByAttach();
 		let resolveStreaming!: () => void;
 		let rejectStreaming!: (err: unknown) => void;
 		let resolveFinished!: () => void;
@@ -260,125 +227,48 @@ async function main() {
 		// `finished` will reject too, where the caller is listening.
 		streaming.catch(() => {});
 
-		// The page URL this fetch is being issued for. Every refetch
-		// produces ONE whole-root Flight payload built against the URL
-		// current at issue time; if the user navigates away before it
-		// commits (escape-closes the search overlay, types a newer query,
-		// clicks a link), that payload is stale and must NOT paint — it
-		// would clobber the newer page (e.g. re-open a closed dialog).
-		// Captured here, re-checked before each commit. Same-URL refetches
-		// (cart badge, price, heartbeat) keep committing — only a commit
-		// whose page URL is no longer current is dropped, so independent
-		// sections still update concurrently. Keyed off the URL this fetch
-		// is FOR (`overrideUrl` for a full-page nav, else the live page).
-		const issuedForPageUrl = pageUrlKey(overrideUrl);
-		// The client's navigation point at issue — the as-of a DISCRETE
-		// response's server url push is gated on (`applyStandardTrailers`):
-		// the client's own statement about its URL outranks a push
-		// rendered before it. Channel deliveries carry a wire as-of
-		// instead.
-		const issueNavPoint = _channelNavPoint();
-		// Two commit-guard paths, plainly SEPARATE — never one shared
-		// implementation. Seq'd deliveries (the live stream, whose URL
-		// follows the client's channel url statements) arbitrate by the
-		// AS-OF against the navigation point — the pageUrlKey idea
-		// generalized into the protocol — plus the stated-URL identity
-		// (a DISCRETE navigation that moved the page out from under a
-		// still-open stream). Un-seq'd responses (every discrete GET)
-		// keep their own guards exactly as they are: the pageUrlKey
-		// stale-commit check plus the per-selector monotonic claim their
-		// dispatcher minted.
-		const expectedStreamPageKey = (): string => {
-			const stated = _channelStatedWindowUrl();
-			return stated !== null
-				? pageUrlKey(new URL(stated, window.location.origin).href)
-				: issuedForPageUrl;
-		};
-
 		void (async () => {
 			let streamingResolved = false;
 			try {
-				// Tell the server which partials are already cached so it can skip them.
-				// If the caller already set ?cached= (e.g. a targeted refetch built by
-				// `useNavigation().reload({selector})`), respect that instead of overwriting
-				// with the full list. An attach fire carries its manifest in the
-				// POST body — never in the URL.
-				const url = new URL(overrideUrl ?? window.location.href);
-				if (!attach && !url.searchParams.has("cached")) {
-					const cachedIds = getCachedPartialIds();
-					if (cachedIds.length > 0) {
-						url.searchParams.set("cached", cachedIds.join(","));
-					}
-				}
-				// Suspense keys are bare partial ids — React reconciles each
-				// boundary in place across refetches. The two commit paths differ
-				// only in how React treats pending children on the client:
-				//
-				//   setPayload (default, wraps in startTransition): React holds
-				//     the current UI visible until the new content is fully
-				//     ready. No Suspense fallback flash, no per-chunk streaming.
-				//     Good for "just swap values" UX like a cart badge or live
-				//     price (pair with the `committed && !finished` predicate).
-				//
-				//   setPayloadRaw (opt-in via ?streaming=1): plain post-await
-				//     setState, outside any transition. React 19 shows Suspense
-				//     fallbacks for pending children and commits Flight chunks
-				//     as they arrive, giving per-row progressive streaming.
-				//     Good for search / filter results where per-row reveal
-				//     improves perceived latency.
-				const streamingMode = url.searchParams.has("streaming");
-				const renderRequest = createRscRenderRequest(
-					url.toString(),
-					undefined,
-					attach,
-				);
 				// Network → HTTP → decode. Each failure mode maps to a typed
 				// NavigationError kind so consumers can branch on it without
 				// string matching. AbortError stays untouched — it's a normal
 				// lifecycle signal, not a failure.
 				//
-				// NOTE: `signal` is deliberately NOT passed to `fetch`. Aborting
-				// the fetch errors `response.body` mid-read, which tears a
-				// partially-committed Flight tree and throws
-				// `BodyStreamBuffer was aborted` into the error boundary. Instead
-				// the signal goes to `splitSegments` below, which aborts
-				// cooperatively at a SEGMENT BOUNDARY — the in-flight segment
-				// finishes, then iteration stops and the reader is cancelled
-				// (releasing a long-lived RSC GET like the chat's segment loop).
+				// NOTE: `signal` is deliberately NOT passed to `fetch`.
+				// Aborting the fetch errors `response.body` mid-read, which
+				// tears a partially-committed Flight tree. Instead the signal
+				// goes to `splitSegments` below, which aborts cooperatively at
+				// a SEGMENT BOUNDARY — the in-flight segment finishes, then
+				// iteration stops and the reader is cancelled.
 				let response: Response;
 				try {
-					response = await fetch(renderRequest);
+					response = await fetch(ATTACH_ENDPOINT, {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify(statement),
+					});
 				} catch (err) {
 					if (err instanceof Error && err.name === "AbortError") throw err;
 					throw new NavigationError({
 						kind: "network",
-						url: renderRequest.url,
+						url: ATTACH_ENDPOINT,
 						cause: err,
 					});
 				}
 				if (!response.ok || !response.body) {
 					throw new NavigationError({
 						kind: "http",
-						url: renderRequest.url,
+						url: ATTACH_ENDPOINT,
 						status: response.status,
 					});
 				}
-				// RSC GET navs carry segmented Flight bytes: one or more Flight
-				// documents on the same response, separated by `next` markers,
-				// each followed by zero-or-more trailer entries (fp-updates,
-				// url-update). The splitter peels each segment off and yields a
-				// `{body, trailers}` pair; we hand each body to `createFromReadableStream`
-				// and call setPayload per segment.
-				//
-				// Single-segment responses (no `next` marker) loop once — same
-				// wire shape and behavior as the legacy fp-trailer flow.
 				// Decode + commit one per-parton lane. The body carries the
 				// lane's Flight payload plus its own fp trailer; decode fully
 				// (the lane closed at its `muxend`, so all bytes are here),
-				// guard against a page the user has since left, then hand the
-				// subtree to the framework's cache-commit path — which swaps
-				// it in place via a template re-render, no whole-payload
-				// setPayload involved.
+				// then hand the subtree to the framework's cache-commit path —
+				// which swaps it in place via a template re-render, no
+				// whole-payload setPayload involved.
 				const handleLane = async (lane: DemuxedLane): Promise<void> => {
 					// Whether this handler has consumed its body's queue head
 					// (committed or dropped) — the catch must consume exactly
@@ -418,16 +308,11 @@ async function main() {
 							// PRODUCER lane: commit progressively at root-ready — the
 							// body keeps streaming until the producer resolves, and
 							// the committed tree's Suspense fallback holds the
-							// producer's place. Guards run NOW (seq + as-of arrived
-							// with the announcement).
+							// producer's place. The as-of guard runs NOW (seq + as-of
+							// arrived with the announcement).
 							if (!_channelDeliveryCommittable(delivery.asOf)) {
 								consumed = true;
 								_laneDeliveryDroppedStale(lane.partonId);
-								return;
-							}
-							if (pageUrlKey() !== expectedStreamPageKey()) {
-								consumed = true;
-								_laneDeliveryDropped(lane.partonId);
 								return;
 							}
 							const nav = delivery.nav;
@@ -448,44 +333,28 @@ async function main() {
 						}
 						const fp = (await trailer) as FpUpdatesPayload | null;
 						delivery = _lanePendingDelivery(lane.partonId);
-						if (delivery === null && connEstablished) {
-							// Unannounced body on a delivery-seq'd stream: a `cancel`
-							// statement closed it mid-render (the server writes the
-							// muxend so this decode settles and the id can reopen,
-							// but no delivery — the content belongs to a superseded
-							// statement). Committing it would swap torn content —
-							// pending-forever rows — over the page. Nothing to
-							// consume: no seq was ever queued.
+						if (delivery === null) {
+							// Unannounced body: a `cancel` statement closed it
+							// mid-render (the server writes the muxend so this decode
+							// settles and the id can reopen, but no delivery — the
+							// content belongs to a superseded statement). Committing
+							// it would swap torn content — pending-forever rows —
+							// over the page. Nothing to consume: no seq was ever
+							// queued.
 							consumed = true;
 							return;
 						}
-						if (delivery !== null) {
-							// Channel-governed lane. As-of first: a lane rendered
-							// before the client's navigation point is content of a
-							// page the client left — consume it PROCESSED (the
-							// watermark advances; the server's fold gate keeps it
-							// out of the acked mirror) and the stream lives on.
-							if (!_channelDeliveryCommittable(delivery.asOf)) {
-								consumed = true;
-								_laneDeliveryDroppedStale(lane.partonId);
-								return;
-							}
-							// Then the page identity: a DISCRETE navigation moved
-							// the page while this stream still renders its old URL
-							// — a dying stream; the stall drop keeps the server
-							// from counting the drop as held.
-							if (pageUrlKey() !== expectedStreamPageKey()) {
-								consumed = true;
-								_laneDeliveryDropped(lane.partonId);
-								return;
-							}
-						} else if (pageUrlKey() !== issuedForPageUrl) {
-							// Un-seq'd lane (no session): the discrete twin guard.
+						// As-of guard: a lane rendered before the client's
+						// navigation point is content of a state the client left —
+						// consume it PROCESSED (the watermark advances; the
+						// server's fold gate keeps it out of the acked mirror) and
+						// the stream lives on.
+						if (!_channelDeliveryCommittable(delivery.asOf)) {
 							consumed = true;
-							_laneDeliveryDropped(lane.partonId);
+							_laneDeliveryDroppedStale(lane.partonId);
 							return;
 						}
-						const nav = delivery?.nav;
+						const nav = delivery.nav;
 						_commitPartonLane(node, fp, lane.partonId);
 						// COMMIT is the recording moment — the cache walk above is
 						// synchronous, so the subtree is the page's state now. The
@@ -505,8 +374,8 @@ async function main() {
 						// ANNOUNCED (its seq is on the wire), so it consumes
 						// PROCESSED — the stream lives on and a permanent gap
 						// would wedge the watermark; an un-announced normal body
-						// stall-drops as before (a nav-torn lane queued no seq at
-						// all, so that consume is a no-op).
+						// stall-drops (a nav-torn lane queued no seq at all, so
+						// that consume is a no-op).
 						if (!consumed) {
 							const head = _lanePendingDelivery(lane.partonId);
 							if (head !== null && head.live === true) {
@@ -521,17 +390,9 @@ async function main() {
 				// A live stream's payload segments carry deliveries (`seq`
 				// entries — seq + as-of — ahead of their Flight rows).
 				// FETCH-LOCAL pending slot: only this stream's own commits may
-				// consume it — a concurrent discrete fetch's commit must never
-				// record the live stream's seq.
+				// consume it.
 				let pendingSegmentDelivery: WireDelivery | null = null;
-				// This fetch carries a connection handshake — a session stream,
-				// where EVERY legitimate lane body announces its delivery (the
-				// seq entry before its muxend; a producer's muxlive). A lane
-				// body that closes unannounced on such a stream is a
-				// cancelled/torn render and must never commit.
-				let connEstablished = false;
 				const onWireEntry = (tag: string, body: Uint8Array): void => {
-					if (tag === "conn") connEstablished = true;
 					// The transport's entries — `conn` handshake, lane-form
 					// delivery seqs, the upstream-applied watermark.
 					_channelWireEntry(tag, body);
@@ -548,9 +409,8 @@ async function main() {
 				};
 				try {
 					// `onWireEntry` watches the entries for the `conn`
-					// handshake — a live fire's server-minted connection id,
-					// established with the channel transport the moment it is
-					// read (one-shot responses never carry one).
+					// handshake — the server-minted connection id, established
+					// with the channel transport the moment it is read.
 					for await (const segment of splitSegments(
 						response.body,
 						signal,
@@ -561,11 +421,15 @@ async function main() {
 							// region opens. On a catch-up boot (attach anchor honored)
 							// this is the FIRST segment — there is no whole-route
 							// payload to commit, the client's current tree IS the
-							// state — so `streaming` must resolve here or the
-							// heartbeat would never publish the connection id.
+							// state — so `streaming` must resolve here, and any
+							// records the attach subsumed (re-anchored at navigation
+							// point 0) resolve through the same coverage: the
+							// catch-up IS their covering statement.
 							if (!streamingResolved) {
 								streamingResolved = true;
 								resolveStreaming();
+								_channelNavSegmentCommitted(0);
+								_channelNavSegmentSettled(0);
 							}
 							// Per-parton live updates. Lanes for DIFFERENT partons
 							// commit concurrently (a slow lane's decode must not
@@ -604,42 +468,25 @@ async function main() {
 							throw err;
 						}
 						const delivery = takeSegmentDelivery();
-						// Two separate guard paths (see expectedStreamPageKey).
-						// Dropped commits skip trailers too — they would register
-						// fingerprints for a stale tree.
-						if (delivery !== null) {
-							// Seq'd delivery (the live stream): as-of vs the
-							// navigation point, then the stated-URL identity.
-							// Stale-by-as-of consumes PROCESSED (the stream lives
-							// on); a discrete-nav mismatch stalls (dying stream).
-							if (!_channelDeliveryCommittable(delivery.asOf)) {
-								_segmentDeliveryDroppedStale(delivery.seq);
-								continue;
-							}
-							if (pageUrlKey() !== expectedStreamPageKey()) {
-								continue;
-							}
-						} else {
-							// Discrete response: the pageUrlKey twin, plus the
-							// per-selector monotonic claim (`refetch-ordering.ts`)
-							// — a superseded refetch whose response arrived out of
-							// order must not clobber the newer tree. Full-page
-							// navs pass no claim.
-							if (pageUrlKey() !== issuedForPageUrl) {
-								continue;
-							}
-							if (claimCommit && !claimCommit()) {
-								continue;
-							}
+						// The as-of guard: a segment rendered before the client's
+						// navigation point is a state the client left. Consume it
+						// PROCESSED (the stream lives on); dropped commits skip
+						// trailers too — they would register fingerprints for a
+						// stale tree.
+						if (
+							delivery !== null &&
+							!_channelDeliveryCommittable(delivery.asOf)
+						) {
+							_segmentDeliveryDroppedStale(delivery.seq);
+							continue;
 						}
 						segment.trailers
 							.then((trailers) => {
 								// Server url pushes gate on the as-of (client-wins —
-								// see applyStandardTrailers): the wire as-of for
-								// channel deliveries, the issue-time navigation
-								// point for a discrete response.
+								// see applyStandardTrailers): the wire as-of of the
+								// delivery on the live stream.
 								applyStandardTrailers(trailers, {
-									urlAsOf: delivery !== null ? delivery.asOf : issueNavPoint,
+									urlAsOf: delivery !== null ? delivery.asOf : 0,
 								});
 								// Trailers resolve at the segment's `settled` — the
 								// covering navigation fires' `finished` milestone.
@@ -649,15 +496,14 @@ async function main() {
 							})
 							.catch(() => {});
 						// Commit mode: the live stream commits raw by default
-						// (progressive — the attach carries ?streaming=1), except
-						// when a covering navigation fire asked for the atomic
-						// swap; discrete responses keep their URL-flag behavior.
+						// (progressive), except when a covering navigation fire
+						// asked for the atomic swap.
 						const preferTransition =
 							delivery !== null && _channelNavPrefersTransition(delivery.asOf);
-						if (streamingMode && !preferTransition) {
-							setPayloadRaw(payload);
-						} else {
+						if (preferTransition) {
 							setPayload(payload);
+						} else {
+							setPayloadRaw(payload);
 						}
 						// COMMIT is the recording moment for the segment's delivery
 						// seq — React has been handed the payload; the transport
@@ -668,9 +514,6 @@ async function main() {
 							_channelNavSegmentCommitted(delivery.asOf);
 						}
 						// First segment landed and React has been told to render it.
-						// Resolve `streaming` so per-selector abort queues can fire
-						// predecessor aborts and consumers can branch off "first
-						// rows visible".
 						if (!streamingResolved) {
 							streamingResolved = true;
 							resolveStreaming();
@@ -680,14 +523,10 @@ async function main() {
 					if (err instanceof Error && err.name === "AbortError") throw err;
 					throw new NavigationError({
 						kind: "decode",
-						url: renderRequest.url,
+						url: ATTACH_ENDPOINT,
 						cause: err,
 					});
 				}
-				// A fully-superseded fire commits nothing (every segment dropped
-				// by the monotonic gate), so `streaming` never resolved in the
-				// loop. The body has drained — resolve it now (alongside
-				// `finished`) so the caller's `await streaming` can't hang.
 				if (!streamingResolved) {
 					streamingResolved = true;
 					resolveStreaming();
@@ -703,81 +542,42 @@ async function main() {
 	}
 
 	/**
-	 * Preload transport: warm a destination's partials into the client
-	 * cache WITHOUT committing. Mirrors `fetchRscPayload`'s fetch +
-	 * segmented decode, but instead of `setPayload` it walks each decoded
-	 * payload into `_currentPagePartials` / `_currentPageFingerprints`
-	 * via `_warmCacheFromPayload`. Nothing renders; the current page is
-	 * untouched. A later navigation to this URL fp-skips the warmed
-	 * partials and substitutes them from cache instantly.
-	 *
-	 * Sends `?cached=` (current client fps) so the warm render fp-skips
-	 * shared chrome and parked off-route partials — only the
-	 * destination-specific partials come back fresh and land in the cache.
+	 * The attach transport — the heartbeat's fire. Subsumes the
+	 * channel's URL timeline (pending statements FOLD INTO the
+	 * statement: the window statement becomes its `url`, frame
+	 * statements its `frames` — attach-with-intent), assembles the full
+	 * statement (uncapped manifest, anchor, seed, watermark), and
+	 * consumes the held stream.
 	 */
-	async function warmRscPayload(
-		overrideUrl: string,
+	function fireAttach(
+		halves: {
+			since: { epoch: string; ts: number } | null;
+			visible: string[] | null;
+			applied: number;
+		},
 		signal?: AbortSignal,
-	): Promise<void> {
-		const url = new URL(overrideUrl, window.location.origin);
-		// Hovering a link to the page you're already on warms nothing new.
-		if (pageUrlKey(url.href) === pageUrlKey()) return;
-		if (!url.searchParams.has("cached")) {
-			const cachedIds = getCachedPartialIds();
-			if (cachedIds.length > 0)
-				url.searchParams.set("cached", cachedIds.join(","));
-		}
-		const renderRequest = createRscRenderRequest(url.toString());
-		let response: Response;
-		try {
-			response = await fetch(renderRequest);
-		} catch (err) {
-			if (err instanceof Error && err.name === "AbortError") return;
-			throw new NavigationError({
-				kind: "network",
-				url: renderRequest.url,
-				cause: err,
-			});
-		}
-		if (!response.ok || !response.body) {
-			throw new NavigationError({
-				kind: "http",
-				url: renderRequest.url,
-				status: response.status,
-			});
-		}
-		// Same segmented-Flight decode as the nav path. Each segment's tree
-		// is walked into the cache; trailers (cold→warm fp drift) are applied
-		// so the warmed fps match what a later nav will compute. The signal
-		// aborts cooperatively at a segment boundary (via `splitSegments`),
-		// so a superseding preload tears this one down cleanly.
-		const warmIssueNavPoint = _channelNavPoint();
-		for await (const segment of splitSegments(response.body, signal)) {
-			// Preloads are one-shot renders — never live, so never lanes.
-			if (segment.kind !== "payload") continue;
-			const payload = await createFromReadableStream<RscPayload>(segment.body);
-			_warmCacheFromPayload(payload.root);
-			segment.trailers
-				.then((trailers) =>
-					applyStandardTrailers(trailers, { urlAsOf: warmIssueNavPoint }),
-				)
-				.catch(() => {});
-		}
+	): { streaming: Promise<void>; finished: Promise<void> } {
+		const intent = _channelNavSubsumedByAttach();
+		const statement: AttachStatement = {
+			// The statement's URL: the pending window statement's (with its
+			// one-shot `__force` overlay) — the client's history work is
+			// done by fire time, so it equals the location plus the overlay
+			// — or the current location.
+			url:
+				intent.url ?? window.location.pathname + window.location.search,
+			// The FULL manifest — the body has no request line to protect;
+			// the client pool bounds it structurally.
+			cached: getAllCachedPartialTokens(),
+			since: halves.since,
+			visible: halves.visible,
+			applied: halves.applied,
+			...(intent.frames.length > 0 ? { frames: intent.frames } : {}),
+		};
+		return consumeLiveStream(statement, signal);
 	}
-	// Navigation handles (useNavigation / frame) dispatch targeted
-	// refetches by calling this handler with a fully-formed URL.
-	// Exposed on `window` directly to avoid module-instance duplication
-	// between the browser entry bundle and "use client" component
-	// bundles.
-	(window as any).__rsc_partial_refetch = (
-		url: string,
-		signal?: AbortSignal,
-		claimCommit?: () => boolean,
-		attach?: AttachStatement,
-	) => fetchRscPayload(url, signal, claimCommit, attach);
-	// Preload counterpart: warm-only, no commit. See `warmRscPayload`.
-	(window as any).__rsc_partial_preload = (url: string, signal?: AbortSignal) =>
-		warmRscPayload(url, signal);
+	(
+		window as Window & { __rsc_live_attach?: typeof fireAttach }
+	).__rsc_live_attach = fireAttach;
 
 	setServerCallback(async (id, args) => {
 		const temporaryReferences = createTemporaryReferenceSet();
@@ -786,7 +586,9 @@ async function main() {
 		// channel-navigated past is a stale suggestion).
 		const actionIssueNavPoint = _channelNavPoint();
 		// Include cached partial fingerprints so the server can skip
-		// unchanged partials after a server action (same as navigation).
+		// unchanged partials in the action's response render — the one
+		// surviving `?cached=` carrier (a discrete POST with a real
+		// request line to protect, hence the capped URL form).
 		const actionUrl = new URL(window.location.href);
 		const cachedIds = getCachedPartialIds();
 		if (cachedIds.length > 0) {
@@ -808,7 +610,6 @@ async function main() {
 				id,
 				body: await encodeReply(args, { temporaryReferences }),
 			},
-			undefined,
 			consequenceConn !== null
 				? { "x-parton-conn": consequenceConn }
 				: undefined,
@@ -832,13 +633,11 @@ async function main() {
 				.filter((n) => Number.isFinite(n) && n > 0);
 			_registerActionConsequences(seqs);
 		}
-		// Same segmented-Flight decode as the GET path. Actions today
-		// produce a single segment (no `markConnectionLive` from action
-		// bodies), so the `for await` loops once — but the splitter is
-		// what lets us pick the trailers off the wire. Without it the
-		// url-trailer emitted by `getServerNavigation().navigate(...)`
-		// inside an action body never reaches the client and the URL
-		// never updates.
+		// Same segmented-Flight decode as the live path. Actions produce a
+		// single segment — but the splitter is what lets us pick the
+		// trailers off the wire. Without it the url-trailer emitted by
+		// `getServerNavigation().navigate(...)` inside an action body
+		// never reaches the client and the URL never updates.
 		let firstPayload: RscPayload | undefined;
 		for await (const segment of splitSegments(response.body)) {
 			// Action POSTs are one-shot — never lanes.
@@ -891,7 +690,16 @@ async function main() {
 
 	if (import.meta.hot) {
 		import.meta.hot.on("rsc:update", () => {
-			fetchRscPayload().finished.catch((err) => {
+			// An edit landed: state the current URL silent — the whole-tree
+			// segment (or the attach it triggers pre-establishment) carries
+			// the re-render; the HMR dispose hooks already wiped the
+			// registry, so fp-skip yields fresh bodies.
+			const routed = _channelNavigate({
+				url: window.location.pathname + window.location.search,
+				intent: "silent",
+				streaming: true,
+			});
+			routed?.finished.catch((err) => {
 				if (err instanceof Error && err.name === "AbortError") return;
 				console.error(err);
 			});
@@ -904,7 +712,7 @@ function listenNavigation(
 		url: string,
 		transitionTypes?: string[],
 		signal?: AbortSignal,
-		channelIntent?: UrlFrame["intent"],
+		intent?: UrlFrame["intent"],
 	) => Promise<void>,
 ) {
 	const nav = getNavigation();
@@ -952,7 +760,9 @@ function listenNavigation(
 		//   - frame:         caller pushed a frame-state entry; the frame
 		//     subtree refetch runs in `frameNavigateImpl` after commit.
 		// In both cases we call `event.intercept()` with no handler to
-		// declare the navigation as same-document and avoid a page load.
+		// declare the navigation as same-document and avoid a page load —
+		// silent URL work is pure client state, so this branch intercepts
+		// on DEGRADED pages too.
 		//
 		// `focusReset: "manual"` opts out of the Navigation API's default
 		// post-commit focus reset to <body>. Without it, any input driving
@@ -988,10 +798,7 @@ function listenNavigation(
 			// A FRAME nav with explicit history (push/replace) stamps a
 			// browser entry for an UNCHANGED window URL; its refetch is a
 			// frame url statement on the held stream (dispatched by the
-			// initiator right after this event) — keep the stream. Frame
-			// URLs are session state, so even a claim whose fire falls
-			// back to the discrete GET leaves the kept stream honest: its
-			// next render reads the session the discrete request wrote.
+			// initiator right after this event) — keep the stream.
 			if (event.info.mode === "frame" && _channelNavAvailable()) {
 				_channelClaimWindowNav();
 			}
@@ -999,9 +806,16 @@ function listenNavigation(
 			return;
 		}
 
+		// A DEGRADED page (or one that opted out of the transport) does
+		// not intercept: links, traverses and form posts are
+		// browser-native document navigations — SSR renders, a plain
+		// website.
+		if (_channelIsDegraded() || heartbeatDisabled()) return;
+
 		// Browser back/forward. Two axes need handling on a traverse:
 		//   1. Page URL changed (e.g. /frames-demo?product=beta → /frames-demo)
-		//      — the main page content needs a full refetch.
+		//      — a window url statement; the navigation segment re-renders
+		//      the tree.
 		//   2. Frame snapshots differ between destination and current
 		//      — each differing frame needs its server session updated
 		//      AND its subtree re-rendered. This fires when the user has
@@ -1010,13 +824,9 @@ function listenNavigation(
 		//      "auto"` on frames uses `updateCurrentEntry`, which doesn't
 		//      create entries, so drawer-shaped frames never show up here.
 		//
-		// Both axes are handled in one request: we build a refetch URL
-		// with the destination's page URL AND append `__frame/__frameUrl`
-		// pairs for every frame that changed, so the server applies the
-		// session updates, then does a streaming render for the new URL.
-		//
-		// If the URL didn't change and only frames changed, skip the full
-		// render and fire targeted per-frame refetches instead.
+		// Both axes ride one envelope: the window statement latches
+		// navigation-first server-side, the frame statements lane on the
+		// reopened region.
 		if (event.navigationType === "traverse") {
 			const destPaths = _collectFramePaths(
 				_readFramesSnapshot(event.destination.getState?.()),
@@ -1038,37 +848,35 @@ function listenNavigation(
 			const urlChanged = event.destination.url !== window.location.href;
 			if (urlChanged) {
 				// Route through `onNavigation` so the framework's transition-
-				// type detection runs (forward / back). If frame snapshots
-				// also differ, append `__frame=…&__frameUrl=…` so the server
-				// session catches up in the same request. A clean traverse
-				// (no frame diffs) rides the channel like any window nav —
-				// intent "replace": the history move already happened; frame
-				// session updates are frame-scoped work and stay discrete.
+				// type detection runs (forward / back). Frame diffs dispatch
+				// their own frame statements alongside — the same rAF flush
+				// coalesces window + frame frames into one envelope. Intent
+				// "replace": the history move already happened.
 				const types = directionFor(event);
-				const viaChannel = diffs.length === 0 && _channelNavAvailable();
-				if (viaChannel) _channelClaimWindowNav();
+				_channelClaimWindowNav();
 				event.intercept({
 					handler: () =>
 						swallowNavigationAbort(async () => {
-							const url = new URL(event.destination.url);
+							const jobs: Array<Promise<unknown>> = [
+								onNavigation(
+									event.destination.url,
+									types,
+									event.signal,
+									"replace",
+								),
+							];
 							for (const d of diffs) {
-								url.searchParams.append("__frame", d.key);
-								url.searchParams.append("__frameUrl", d.url);
+								jobs.push(_dispatchFrameRefetch(d.key.split("."), d.url).finished);
 							}
-							await onNavigation(
-								url.toString(),
-								types,
-								event.signal,
-								viaChannel ? "replace" : undefined,
-							);
+							await Promise.all(jobs);
 						}),
 				});
 				return;
 			}
 			if (diffs.length > 0) {
 				// A pure frame traverse (window URL unchanged): the per-frame
-				// refetches ride the channel when attached — keep the stream.
-				if (_channelNavAvailable()) _channelClaimWindowNav();
+				// statements ride the held stream — keep it.
+				_channelClaimWindowNav();
 				event.intercept({
 					handler: () =>
 						swallowNavigationAbort(() =>
@@ -1084,14 +892,14 @@ function listenNavigation(
 			}
 		}
 
-		// The everything-else window navigation. Attached and healthy, it
-		// rides the channel: the claim (set synchronously, during this
-		// dispatch) tells the heartbeat's deferred abort check to keep the
-		// held stream — the navigation's segment arrives ON it. The intent
+		// The everything-else window navigation: a `url` statement. The
+		// claim (set synchronously, during this dispatch) tells the
+		// heartbeat's deferred abort check to keep the held stream — the
+		// navigation's segment arrives ON it. Pre-establishment the
+		// statement latches and rides the attach it triggers. The intent
 		// mirrors the browser's own history semantic; a traverse's history
 		// move already happened, so it states "replace".
-		const viaChannel = _channelNavAvailable();
-		if (viaChannel) _channelClaimWindowNav();
+		_channelClaimWindowNav();
 		event.intercept({
 			handler: () =>
 				swallowNavigationAbort(() =>
@@ -1099,11 +907,7 @@ function listenNavigation(
 						event.destination.url,
 						directionFor(event),
 						event.signal,
-						viaChannel
-							? event.navigationType === "push"
-								? "push"
-								: "replace"
-							: undefined,
+						event.navigationType === "push" ? "push" : "replace",
 					),
 				),
 		});

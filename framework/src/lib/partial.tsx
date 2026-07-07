@@ -44,7 +44,6 @@ import {
   enterRequestRegistry,
   getActiveRegistry,
   getFoldBaseSnapshots,
-  getRouteSnapshots,
   lookupPartial,
   registerPartial,
   type PartialSnapshot,
@@ -1080,9 +1079,8 @@ export function deriveMatchKey(
  *     and ordinary fp-skips (heartbeat segments, navigations);
  *   - a CULLING CONFIRMATION (`confirm: true`) — a cullable spec's
  *     fp-skip verdict computed against a MEASURED visible set (a
- *     `?__cullFlip=1` reload target, a live connection's lane or
- *     segment — anything whose visibility read is not the
- *     pre-measurement `undefined`): the fingerprint of the state
+ *     live connection's lane or segment — anything whose visibility
+ *     read is not the pre-measurement `undefined`): the fingerprint of the state
  *     being served matched the client's advertisement, so the
  *     client's copy of THAT state is provably current.
  *
@@ -1526,7 +1524,7 @@ function createSpecComponent<V>(
         ? !!(cullConfig.seed as (p: Record<string, unknown>) => boolean)(skelProps)
         : true
       selfDeps.add(`visible:${id}?seed=${seedVal ? "1" : "0"}`)
-      const visRaw = readVisible(ourUrl.searchParams, id)
+      const visRaw = readVisible(id)
       visibleMeasured = visRaw !== undefined
       culled = !(visRaw ?? seedVal)
       pairEmit = {
@@ -1796,12 +1794,9 @@ function createSpecComponent<V>(
     // declaration that identical inputs stop being fresh at that time.
     const snapshotExpiresAt = priorSnap ? effectiveExpiresAt(priorSnap) : undefined
     const snapshotExpired = snapshotExpiresAt !== undefined && snapshotExpiresAt <= Date.now()
-    // An explicit `?partials=` target must re-render — EXCEPT on a
-    // culling flip (`?__cullFlip=1`, minted only by the visibility
-    // controller): its targets are revalidations, and an fp match
-    // means the client's parked same-state copy is current — the
-    // placeholder below is the restore-with-zero-bytes confirmation.
-    const explicitForces = isExplicit && !(state?.cullFlip ?? false)
+    // An explicit target (a `__force` label, a forced lane) must
+    // re-render, never match-and-skip — the refetch contract.
+    const explicitForces = isExplicit
     const shouldSkip =
       opts.fpSkip !== false &&
       state != null &&
@@ -2266,41 +2261,6 @@ export function parseCachedTokens(raw: string | readonly string[] | null): {
   return { fingerprints, matchKeys }
 }
 
-function parseCsvTokens(raw: string | null): string[] {
-  if (!raw) return []
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
-
-function resolveSelectorToIds(partialsParam: string | null): Set<string> | null {
-  const wanted = parseCsvTokens(partialsParam)
-  if (wanted.length === 0) return null
-
-  const snapshots = getRouteSnapshots()
-  if (!snapshots) return null
-
-  const ids = new Set<string>()
-  // Direct id match first — `?partials=hero` resolves to the snapshot
-  // registered under id "hero" without walking labels.
-  for (const name of wanted) {
-    if (snapshots.has(name)) ids.add(name)
-  }
-  // Then label match — any snapshot whose labels include a wanted
-  // token. Fan-out: one wanted label can resolve to many ids.
-  for (const [id, snap] of snapshots) {
-    if (ids.has(id)) continue
-    for (const label of snap.labels) {
-      if (wanted.includes(label)) {
-        ids.add(id)
-        break
-      }
-    }
-  }
-  return ids.size > 0 ? ids : null
-}
-
 export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNode {
   const parent: PartialCtx = {
     path: snap.parentPath,
@@ -2361,14 +2321,18 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
 
 export async function PartialRoot({ children }: PartialRootProps): Promise<ReactNode> {
   const requestUrl = new URL(getRequest().url)
-  const partialsParam = requestUrl.searchParams.get("partials")
   // The client manifest: the attach statement's uncapped token array
-  // (the heartbeat's live fire — see `channel-protocol.ts`), or the
-  // capped `?cached=` URL form every discrete request carries.
+  // (the connection's opening statement — see `channel-protocol.ts`),
+  // or the capped `?cached=` URL form an action POST carries.
   const cachedParam =
     _getAttachStatement()?.cached ?? requestUrl.searchParams.get("cached")
-  const populateCache = requestUrl.searchParams.has("__populateCache")
 
+  // Document-level frame params: a degraded page's frame navigation
+  // and the CMS editor's preview iframe carry the frame move as
+  // `__frame`/`__frameUrl` on the DOCUMENT URL — the SSR render
+  // writes them into the session here. On the channel the same store
+  // is written by the endpoint (a frame url frame) or the attach's
+  // statement bind (attach-with-intent).
   const frameNames = requestUrl.searchParams.getAll("__frame")
   const frameUrls = requestUrl.searchParams.getAll("__frameUrl")
   if (frameNames.length > 0 && frameNames.length === frameUrls.length) {
@@ -2380,46 +2344,25 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
 
   // Page URL seeded into the payload for descendant client components'
   // SSR / pre-hydration paint (see `PageUrlContext`). Two economies:
-  //   - On a client-driven `.rsc` refetch the value is never read — the
-  //     live Navigation API is the source of truth once `window.navigation`
-  //     exists, which it always does on any path that issued the refetch.
-  //     So omit it (`null`) and save the whole row.
-  //   - On an SSR document, strip framework-internal params first. They're
-  //     already consumed above (`partials`/`cached`/`__frame`/…) and must
-  //     never echo back into the payload — the `?cached=` list alone runs
-  //     to kilobytes and grows with the page.
+  //   - On a client-driven render (the attach's drive, an action POST)
+  //     the value is never read — the live Navigation API is the
+  //     source of truth once `window.navigation` exists, which it
+  //     always does on any path that issued the request. So omit it
+  //     (`null`) and save the whole row.
+  //   - On an SSR document, strip framework-internal params first
+  //     (`cached` alone runs to kilobytes on an action URL).
   const isRscRender = getRequest().headers.get(HEADER_RSC_RENDER) === "1"
   const pageUrl = isRscRender ? null : stripFrameworkParams(getRequest().url)
 
   const routeKey = computeRouteKey(getRequest().url)
+  enterRequestRegistry(routeKey, "streaming")
 
-  // Pre-enter the registry context so the lookups below
-  // (`resolveSelectorToIds`, the registry-miss probe) see this
-  // request's routeKey via `activeRouteKey(ctx)`. Without this they
-  // fall back to the pathname and never resolve any hint, since hints
-  // are keyed by the pattern-signature routeKey (see
-  // `partial-registry.ts`'s header). Mode is tentative — the streaming
-  // branch below re-enters with `"streaming"` if the probe finds no
-  // hits. The pre-entered ctx accumulates no pending writes during
-  // read-only lookups, so replacing it is safe.
-  enterRequestRegistry(routeKey, "cache")
-
-  const combinedRequestedIds = resolveSelectorToIds(partialsParam)
-  const hasGlobalFilter = partialsParam != null
-  const isPartialRefetch = hasGlobalFilter || populateCache
-
-  const explicitIds = new Set<string>()
-  if (combinedRequestedIds) for (const id of combinedRequestedIds) explicitIds.add(id)
-  if (partialsParam) for (const name of parseCsvTokens(partialsParam)) explicitIds.add(name)
-
-  // Cached-fp / matchKey maps are carried in-memory across segments of a
-  // single request — see `_setCachedOverride` in runtime/context.ts.
-  // First render parses `?cached=` and installs the carrier; subsequent
-  // segments find the carrier already populated (the driver appends
-  // newly-emitted tuples directly to those Maps between segments).
-  // Without this, every segment paid `new URL(...) + URLSearchParams +
-  // url.toString() + new Request(...)` to round-trip the cached state
-  // through the URL, which dominated CPU under load.
+  // Cached-fp / matchKey maps are carried in-memory across renders of a
+  // single connection — see `_setCachedOverride` in runtime/context.ts.
+  // The first render parses the manifest and installs the carrier;
+  // subsequent renders on the same connection (navigation segments,
+  // reconciles) find the carrier already populated (the driver appends
+  // newly-emitted tuples directly to those Maps between emissions).
   let cachedFps: Map<string, Set<string>>
   let cachedMks: Map<string, Set<string>>
   const existingOverride = _getCachedOverride()
@@ -2433,88 +2376,27 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     _setCachedOverride({ fingerprints: cachedFps, matchKeys: cachedMks })
   }
   const state: PartialRequestState = {
-    requestedIds: populateCache ? null : combinedRequestedIds,
-    isPartialRefetch: isPartialRefetch && !populateCache,
-    populateCache,
+    requestedIds: null,
+    isPartialRefetch: false,
     cachedFingerprints: cachedFps,
     cachedMatchKeys: cachedMks,
     // Live connections only: the session's acked layer (client-proven
     // holdings), consulted by the fp-skip verdict on an optimistic
     // miss. A live reference — acks fold in for the connection's whole
-    // lifetime, so segment-loop renders and the reconcile see them.
+    // lifetime, so navigation segments and the reconcile see them.
     ackedFingerprints: _getConnectionAckedFps(),
-    explicitIds,
-    cullFlip: requestUrl.searchParams.get("__cullFlip") === "1",
+    explicitIds: new Set(),
     seenIds: new Set(),
   }
-
-  const requestedNames = parseCsvTokens(partialsParam)
-  let registryMiss = state.isPartialRefetch && hasGlobalFilter && !combinedRequestedIds
-  if (state.isPartialRefetch && !registryMiss && requestedNames.length > 0) {
-    const snapshots = getRouteSnapshots()
-    for (const name of requestedNames) {
-      if (snapshots?.has(name)) continue
-      let foundAsLabel = false
-      if (snapshots) {
-        for (const snap of snapshots.values()) {
-          if (snap.labels.includes(name)) {
-            foundAsLabel = true
-            break
-          }
-        }
-      }
-      if (!foundAsLabel) {
-        registryMiss = true
-        break
-      }
-    }
-  }
-
-  if (!state.isPartialRefetch || registryMiss) {
-    enterRequestRegistry(routeKey, "streaming")
-    const streamState: PartialRequestState = {
-      ...state,
-      requestedIds: null,
-      isPartialRefetch: false,
-    }
-    enterPartialState(streamState)
-    // Seed the page URL for descendant client components so
-    // `useNavigation()` resolves it on the SSR paint (no browser
-    // Navigation API yet) — making the hook isomorphic with zero
-    // app-side wiring. Ignored after hydration, when the live browser
-    // handle takes over. Frame scope gets the equivalent from `<Frame>`.
-    return (
-      <PageUrlProvider url={pageUrl}>
-        <PartialsClient mode="streaming">{children}</PartialsClient>
-      </PageUrlProvider>
-    )
-  }
-
-  // Already in cache-mode ctx from the pre-enter above.
   enterPartialState(state)
-
-  const activeIds = [...(state.requestedIds ?? [])]
-  const wrappedChildren = activeIds
-    .map((id) => {
-      const snap = lookupPartial(id)
-      if (!snap) return null
-      return partialFromSnapshot(id, snap)
-    })
-    .filter((x): x is NonNullable<typeof x> => x != null)
-
-  // Wrap in `<PageUrlProvider>` exactly like the streaming branch above.
-  // The payload's ROOT element type must be identical across modes: when a
-  // page holds two live connections (the chat overlay's frame long-poll
-  // commits in cache mode while the heartbeat's `?streaming=1` commits in
-  // streaming mode), their segments land on the same React root as
-  // alternating `BrowserRoot` payloads. If one root were `<PageUrlProvider>`
-  // and the other a bare `<PartialsClient>`, React would unmount and
-  // remount the whole subtree on every seam — `page-shell` and everything
-  // under it torn down and recreated ~60×/s (the inspect-overlay flicker).
-  // Matching wrappers lets React reconcile the two payloads in place.
+  // Seed the page URL for descendant client components so
+  // `useNavigation()` resolves it on the SSR paint (no browser
+  // Navigation API yet) — making the hook isomorphic with zero
+  // app-side wiring. Ignored after hydration, when the live browser
+  // handle takes over. Frame scope gets the equivalent from `<Frame>`.
   return (
     <PageUrlProvider url={pageUrl}>
-      {React.createElement(PartialsClient, { mode: "cache" }, ...wrappedChildren)}
+      <PartialsClient>{children}</PartialsClient>
     </PageUrlProvider>
   )
 }

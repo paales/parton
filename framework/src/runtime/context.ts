@@ -97,14 +97,14 @@ interface RequestStore {
    *  `../lib/connection-session.ts`). One-shot requests never set it
    *  and fall back to the `?visible=` URL param. */
   connectionSession?: ConnectionSessionHandle | null
-  /** The attach request's decoded body statement — the client's full
-   *  manifest (`cached`), catch-up anchor (`since`), and viewport seed
-   *  (`visible`), stashed by the entry (or the live-drive harness)
-   *  before any render runs and constant for the request's lifetime.
-   *  What `PartialRoot` and the segment driver's catch-up/seed paths
-   *  read instead of the `?cached=`/`?visible=` URL params a discrete
-   *  GET carries (the anchor has no URL form at all). Absent on every
-   *  non-attach request. */
+  /** The attach request's decoded body statement — the client's URL
+   *  statement (`url`), full manifest (`cached`), catch-up anchor
+   *  (`since`), viewport seed (`visible`), and pre-establishment frame
+   *  intent (`frames`), stashed by the entry (or the live-drive
+   *  harness) before any render runs and constant for the request's
+   *  lifetime. Its presence IS the live-subscription signal: the
+   *  segment driver opens a connection session iff a statement is
+   *  bound. Absent on every other request (actions, SSR documents). */
   attachStatement?: AttachStatementHandle | null
 }
 
@@ -125,10 +125,15 @@ export interface ConnectionSessionHandle {
  *  for the same reason as `ConnectionSessionHandle`: the wire grammar
  *  (and its decoder) lives in `../lib/channel-protocol.ts`. */
 export interface AttachStatementHandle {
+  readonly url: string
   readonly cached: readonly string[]
   readonly since: { readonly epoch: string; readonly ts: number } | null
   readonly visible: readonly string[] | null
   readonly applied?: number
+  readonly frames?: ReadonlyArray<{
+    readonly url: string
+    readonly frame?: readonly string[]
+  }>
 }
 
 /** In-memory mirror of `?cached=…`. Same identity Maps shared across
@@ -450,6 +455,34 @@ export async function _runWithWarmRenderScope<T>(
     scope: store.scope,
     ephemeralCellStorage: store.ephemeralCellStorage,
     connectionSession: { visible, ackedFps: new Map() },
+  }
+  return requestContext.run(warmStore, fn)
+}
+
+/**
+ * Run `fn` inside a NESTED request scope whose request is `url` — the
+ * segment driver's preload-warm scope (a `warm` frame's target). Same
+ * discipline as `_runWithWarmRenderScope`: the clone carries the
+ * request identity (headers/cookies, scope, ephemeral cell storage)
+ * and NONE of the response-coupled state — no cached override (the
+ * warm render never fp-skips and never touches the client mirror), no
+ * connection session (the target route's cull gates evaluate their
+ * cold seeds — exactly a fresh navigation's first paint), no attach
+ * statement, no commit hook. The driver's continuation resumes with
+ * its own store.
+ */
+export async function _runWithWarmRequestScope<T>(
+  url: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const store = getStore()
+  const warmStore: RequestStore = {
+    request: new Request(new URL(url, store.request.url), {
+      headers: store.request.headers,
+    }),
+    cookies: [],
+    scope: store.scope,
+    ephemeralCellStorage: store.ephemeralCellStorage,
   }
   return requestContext.run(warmStore, fn)
 }

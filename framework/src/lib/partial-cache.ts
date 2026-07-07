@@ -573,27 +573,6 @@ export function treeHasPendingLazy(node: ReactNode): boolean {
 }
 
 /**
- * Warm the client partial cache from a decoded preload payload WITHOUT
- * committing it to the React root. Walks the tree exactly like the
- * streaming-mode commit's cache step (`cacheFromStreamingChildren`):
- * each partial wrapper's subtree lands in the partial cache and
- * its fingerprint in the fingerprint map, while placeholders
- * (the server's fp-skips for partials the client already holds) are
- * left untouched. The destination's partials are now cached, so a later
- * navigation to it fp-skips them and `renderTemplate` substitutes them
- * from cache on the first commit. Nothing mounts and the template is
- * untouched — the current page keeps rendering until the user actually
- * navigates.
- *
- * Called by the browser entry's preload transport
- * (`window.__rsc_partial_preload`), once per decoded segment. Pairs
- * with `useNavigation().preload(target)`.
- */
-export function _warmCacheFromPayload(node: ReactNode): void {
-	cacheFromStreamingChildren(node, getCurrentPagePartials());
-}
-
-/**
  * Commit one per-parton lane payload from a live connection: walk the
  * decoded subtree into the partial cache (the wrapper, its nested
  * partials, and their fingerprints), apply the lane's fp-trailer

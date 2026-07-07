@@ -3,6 +3,14 @@ import React, { act, useRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import {
+  _channelEstablished,
+  _channelNavPoint,
+  _channelNavSegmentCommitted,
+  _channelNavSegmentSettled,
+  _channelNavSubsumedByAttach,
+  _resetChannelClient,
+} from "../channel-client.ts"
 import { PartialIdContext, useNavigation } from "../partial-client.tsx"
 import { NavigationError } from "../../runtime/navigation-error.ts"
 import type { NavigationProgress } from "../../runtime/navigation-api.ts"
@@ -24,39 +32,23 @@ import type { NavigationProgress } from "../../runtime/navigation-api.ts"
  *
  * Tests wrap `Probe` in a `TestBoundary` to capture both the per-render
  * progress booleans (via `cap.states`) AND the thrown error (via
- * `cap.caughtByBoundary`). The host's `__rsc_partial_refetch` is
- * stubbed to return `{streaming, finished}` exactly as the real entry
- * does.
+ * `cap.caughtByBoundary`). The transport is the channel: a selector
+ * reload is a `?__force=` url statement whose milestones resolve at the
+ * covering segment's commit/settle — the tests drive those moments
+ * directly (`_channelNavSegmentCommitted` / `Settled`) and read the
+ * statement's content off the attach subsume's folded intent.
  */
 
 let container: HTMLElement
 let root: Root | null = null
-let refetchSpy: ReturnType<typeof vi.fn>
-
-/**
- * Helper for failure mocks: returns a `{streaming, finished}` pair
- * pre-rejected with `err`, with no-op rejection handlers attached so
- * `unhandledrejection` doesn't fire between mock construction and the
- * framework's downstream `.then(_, errHandler)` attachment. The
- * pre-attached `.catch` doesn't consume the rejection — subsequent
- * handlers still see it.
- */
-function rejectingMilestones(err: unknown) {
-  const streaming = Promise.reject<void>(err as never)
-  const finished = Promise.reject<void>(err as never)
-  streaming.catch(() => {})
-  finished.catch(() => {})
-  return { streaming, finished }
-}
 
 beforeEach(() => {
   container = document.createElement("div")
   document.body.appendChild(container)
-  refetchSpy = vi.fn(() => ({
-    streaming: Promise.resolve(),
-    finished: Promise.resolve(),
-  }))
-  ;(window as Window & { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch = refetchSpy
+  _resetChannelClient()
+  _channelEstablished("tuple-test")
+  // Envelope flushes (when the environment provides rAF) go nowhere.
+  vi.stubGlobal("fetch", () => Promise.resolve({ status: 204 }))
 })
 
 afterEach(() => {
@@ -65,16 +57,17 @@ afterEach(() => {
   })
   root = null
   container.remove()
-  delete (window as Window & { __rsc_partial_refetch?: unknown }).__rsc_partial_refetch
+  _resetChannelClient()
+  vi.unstubAllGlobals()
 })
 
 interface FireOpts {
   selector?: string | string[]
+  signal?: AbortSignal
 }
 
 interface Capture {
-  /** Returns the `finished` milestone of the most recent fire — most
-   *  tests just want "await the navigation to complete." */
+  /** Returns the `finished` milestone of the most recent fire. */
   fire: ((opts?: FireOpts) => Promise<unknown>) | null
   states: NavigationProgress[]
   caughtByBoundary: Error | null
@@ -127,6 +120,24 @@ function newCapture(): Capture {
   return { fire: null, states: [], caughtByBoundary: null }
 }
 
+/** The labels the most recent fire stated, read off the attach
+ *  subsume's folded intent (`?__force=` on the pending statement's
+ *  URL). Also re-anchors the pending records at 0 — `settleAll`
+ *  resolves them. */
+function statedForce(): string | null {
+  const intent = _channelNavSubsumedByAttach()
+  if (intent.url === null) return null
+  return new URL(intent.url, "http://t").searchParams.get("__force")
+}
+
+/** Resolve every pending record (post-subsume, as-of 0 covers all). */
+async function settleAll(): Promise<void> {
+  await act(async () => {
+    _channelNavSegmentCommitted(0)
+    _channelNavSegmentSettled(0)
+  })
+}
+
 const ALL_FALSE: NavigationProgress = {
   committed: false,
   streaming: false,
@@ -145,18 +156,8 @@ describe("useNavigation().reload() progress tuple", () => {
     expect(cap.states[cap.states.length - 1]).toEqual(ALL_FALSE)
   })
 
-  it("flips committed → streaming → finished as a fire progresses", async () => {
+  it("flips committed → streaming → finished as the covering segment lands", async () => {
     const cap = newCapture()
-    let resolveStreaming!: () => void
-    let resolveFinished!: () => void
-    refetchSpy.mockImplementation(() => ({
-      streaming: new Promise<void>((res) => {
-        resolveStreaming = res
-      }),
-      finished: new Promise<void>((res) => {
-        resolveFinished = res
-      }),
-    }))
     await render(cap)
     cap.states = []
 
@@ -165,16 +166,18 @@ describe("useNavigation().reload() progress tuple", () => {
       firePromise = cap.fire!({ selector: "#hero" })
     })
     // For a selector reload, committed resolves immediately (no URL
-    // change), but streaming + finished are still pending.
+    // change), but streaming + finished await the covering segment.
     expect(cap.states[cap.states.length - 1]).toMatchObject({
       committed: true,
       streaming: false,
       finished: false,
     })
+    const navPoint = _channelNavPoint()
+    expect(navPoint).toBeGreaterThan(0)
 
-    // First segment lands.
+    // The covering segment commits.
     await act(async () => {
-      resolveStreaming()
+      _channelNavSegmentCommitted(navPoint)
     })
     expect(cap.states[cap.states.length - 1]).toMatchObject({
       committed: true,
@@ -182,63 +185,30 @@ describe("useNavigation().reload() progress tuple", () => {
       finished: false,
     })
 
-    // Body drains.
+    // The covering segment settles.
     await act(async () => {
-      resolveFinished()
+      _channelNavSegmentSettled(navPoint)
       await firePromise
     })
     expect(cap.states[cap.states.length - 1]).toEqual(ALL_TRUE)
   })
 
-  it("throws a NavigationError to the boundary when the refetch rejects", async () => {
-    const cap = newCapture()
-    const failure = new NavigationError({
-      kind: "network",
-      url: "http://x/?partials=hero",
-      message: "boom",
-    })
-    refetchSpy.mockImplementation(() => rejectingMilestones(failure))
-    await render(cap)
-
-    await act(async () => {
-      // The fire's finished promise rejects — swallow so the test
-      // doesn't error.
-      await cap.fire!({ selector: "#hero" }).catch(() => {})
-    })
-
-    expect(cap.caughtByBoundary).toBe(failure)
-  })
-
-  it("classifies a plain TypeError as a network error and throws it", async () => {
-    const cap = newCapture()
-    const failure = new TypeError("Failed to fetch")
-    refetchSpy.mockImplementation(() => rejectingMilestones(failure))
-    await render(cap)
-
-    await act(async () => {
-      await cap.fire!({ selector: "#hero" }).catch(() => {})
-    })
-
-    expect(cap.caughtByBoundary).toBeInstanceOf(NavigationError)
-    expect((cap.caughtByBoundary as NavigationError).kind).toBe("network")
-  })
-
   it("flips finished → true on AbortError but stores no error", async () => {
     const cap = newCapture()
-    const abort = new Error("aborted")
-    abort.name = "AbortError"
-    refetchSpy.mockImplementation(() => rejectingMilestones(abort))
     await render(cap)
     cap.states = []
 
+    const controller = new AbortController()
     await act(async () => {
-      await cap.fire!({ selector: "#hero" }).catch(() => {})
+      const p = cap.fire!({ selector: "#hero", signal: controller.signal })
+      controller.abort()
+      await p.catch(() => {})
     })
 
     const last = cap.states[cap.states.length - 1]
     // Abort still lands the lifecycle — finished flips true.
     // committed flips true because the URL didn't change. streaming
-    // stays false because the abort came before the first segment.
+    // stays false because the abort came before the covering segment.
     expect(last.finished).toBe(true)
     expect(last.committed).toBe(true)
     expect(last.streaming).toBe(false)
@@ -253,11 +223,10 @@ describe('"@self" token resolution', () => {
     await render(cap, "hero:abc")
 
     await act(async () => {
-      await cap.fire!({ selector: "@self" })
+      void cap.fire!({ selector: "@self" })
     })
-
-    const url = new URL(refetchSpy.mock.calls[0]?.[0] as string)
-    expect(url.searchParams.get("partials")).toBe("hero:abc")
+    expect(statedForce()).toBe("hero:abc")
+    await settleAll()
   })
 
   it('substitutes "@self" inside an array selector alongside other labels', async () => {
@@ -265,14 +234,12 @@ describe('"@self" token resolution', () => {
     await render(cap, "card:xyz")
 
     await act(async () => {
-      await cap.fire!({ selector: ["@self", ".price"] })
+      void cap.fire!({ selector: ["@self", ".price"] })
     })
-
-    const labels = (
-      new URL(refetchSpy.mock.calls[0]?.[0] as string).searchParams.get("partials") ?? ""
-    ).split(",")
+    const labels = (statedForce() ?? "").split(",")
     expect(labels).toContain("card:xyz")
     expect(labels).toContain("price")
+    await settleAll()
   })
 
   it("throws a NavigationError to the boundary when @self is used outside a partial", async () => {
@@ -286,10 +253,11 @@ describe('"@self" token resolution', () => {
     // Errors thrown synchronously from the fire body (resolveSelfIn…
     // throws on missing partial id) get wrapped into a
     // NavigationError and surface through the milestone-rejection /
-    // render-throw bubbler path — same channel as a network failure.
+    // render-throw bubbler path.
     expect(caught).toBeInstanceOf(NavigationError)
     expect((caught as NavigationError).message).toContain("@self")
-    expect(refetchSpy).not.toHaveBeenCalled()
+    // Nothing was stated — no pending statement folds into an attach.
+    expect(statedForce()).toBeNull()
     expect(cap.caughtByBoundary).toBeInstanceOf(NavigationError)
   })
 
@@ -298,10 +266,9 @@ describe('"@self" token resolution', () => {
     await render(cap, "hero:abc")
 
     await act(async () => {
-      await cap.fire!({ selector: "#cart" })
+      void cap.fire!({ selector: "#cart" })
     })
-
-    const url = new URL(refetchSpy.mock.calls[0]?.[0] as string)
-    expect(url.searchParams.get("partials")).toBe("cart")
+    expect(statedForce()).toBe("cart")
+    await settleAll()
   })
 })

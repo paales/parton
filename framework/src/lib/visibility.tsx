@@ -29,30 +29,25 @@
  * each delta schedules a transport flush (rAF-coalesced, one envelope
  * in flight) — measurement-only state (`newlyMeasured`) is a PASSENGER
  * instead, riding the next driven flush — and at flush time the
- * controller contributes its statement over one of two paths:
+ * controller contributes ONE `visible` frame ([[channel-protocol]])
+ * addressed to the open connection. No response body — the server
+ * updates the connection session's visible set and renders the
+ * flipped-IN partons as lane segments on the EXISTING stream, so flips
+ * never race the connection's own renders. With NO connection
+ * (`collect(null)` — pre-establishment, or between keepalive close and
+ * the next attach) the statements simply STAY PENDING: the next
+ * attach's `visible` seed states the full set, its whole-tree first
+ * segment materializes anything in view, and the queued flips ride the
+ * fresh connection's first flush (the establishment sync drives one) —
+ * their lanes then fp-skip to confirmation placeholders where the
+ * segment already delivered the bytes. A failed delivery (connection
+ * gone) hands the frame back (`deliveryFailed`); the re-owned flips
+ * pend the same way.
  *
- *   - **Live connection open** (`collect` receives the id): a
- *     `visible` frame ([[channel-protocol]]) on the envelope,
- *     addressed to the connection. No response body — the server
- *     updates the connection session's visible set and renders the
- *     flipped-IN partons as lane segments on the EXISTING stream, so
- *     flips never race the connection's own renders. A failed
- *     delivery (connection gone) hands the frame back
- *     (`deliveryFailed`) and the batch falls back to the reload path.
- *   - **No live connection** (`collect` receives `null`): SELF-REFETCH
- *     the flipped-IN partons by id, carrying the full visible set as
- *     `?visible=` so each re-rendered parton reads its own bit,
- *     stamped `?__cullFlip=1` so the explicit targets may fp-skip (the
- *     culling revalidation). Cull-OUTs are dropped here — they have no
- *     server-relevant effect without a session, and the next live
- *     fire's `?visible=` seed carries the full truth.
- *
- * Either way a flipped-in parton's bytes settle its parked state
- * through the commit walk: fresh bytes drop the parked fiber, a
- * confirmation placeholder re-arms it as a live instance (see
- * `cull-park.ts`). fp-skip prunes the rest. Dispatch serializes across
- * both paths: one in flight, re-firing with the latest set when it
- * changes.
+ * A flipped-in parton's bytes settle its parked state through the
+ * commit walk: fresh bytes drop the parked fiber, a confirmation
+ * placeholder re-arms it as a live instance (see `cull-park.ts`).
+ * fp-skip prunes the rest.
  *
  * A cullable parton's observer lives in whichever of its two slots is
  * currently visible (a hidden Activity unmounts its effects), so a
@@ -76,24 +71,15 @@ import {
 	reportedVisibility,
 } from "./cull-park.ts"
 import { _getLiveConnectionId, cachedTokensFor } from "./partial-client-state.ts"
-import { enqueueRefetch } from "./refetch.ts"
 
 /** How far beyond the viewport a parton counts as "in view" — the runway,
  *  so a parton fills before it's literally on screen. Expressed as an
  *  IntersectionObserver `rootMargin`. */
 const RUNWAY = "600px 0px"
 
-/** Max flipped ids per culling reload. A fast scroll across a large
- *  cullable field (the website's chunk world) can flip hundreds of
- *  partons in one coalesced flush; unbatched, the `?partials=` list
- *  alone would blow the server's request-line limit. Remaining flips
- *  stay in `changed` and ride the next serialized flush. */
-const FLUSH_BATCH = 48
-
 /** Max flipped ids per `visible` frame. The ids ride the envelope's
- *  JSON body (no request-line limit), so the cap is much higher than
- *  the reload path's — it only bounds how many concurrent lane renders
- *  one statement can ask of the server. */
+ *  JSON body (no request-line limit), so the cap only bounds how many
+ *  concurrent lane renders one statement can ask of the server. */
 const POST_FLUSH_BATCH = 256
 
 /** The subset of `FragmentInstance` (React 19.3) this module uses. The
@@ -157,12 +143,6 @@ let measurementWaiters: (() => void)[] = []
  *  counted on to carry it. Once per establishment, so the cost is one
  *  envelope per connection, not one per measurement wave. */
 let fullSyncPending = false
-/** A reload-fallback dispatch is in flight. Serializes the fallback
- *  path AND blocks the frame path while it runs — one dispatch in
- *  flight across both, same as the transport's own envelope
- *  serialization; newer flips accumulate in `changed` and re-fire
- *  when it lands. */
-let fallbackInFlight = false
 
 /**
  * Prime an id's viewport state from its DISPLAY state (`CullPair`'s
@@ -253,13 +233,6 @@ export function _visibleSetIds(): string[] | undefined {
 	return [...inView]
 }
 
-/** The current visible set as a `?visible=` param value — the URL
- *  carrier the discrete (no-session) paths read; same unmeasured
- *  contract as `_visibleSetIds`. */
-export function _visibleSetParam(): string | undefined {
-	return _visibleSetIds()?.join(",")
-}
-
 // Arm the full-set sync per established connection, at the first
 // measurement — whichever side of the establishment it lands on (a
 // catch-up boot can establish the connection while hydration is still
@@ -305,23 +278,17 @@ function schedule(): void {
 /**
  * The controller as a channel producer. `collect` runs at the
  * transport's flush: with a connection open it consumes the pending
- * deltas into ONE `visible` frame; with none it delivers via the
- * reload fallback below and contributes nothing. `deliveryFailed`
- * re-owns a frame's flips when its envelope didn't land — the
- * transport has already cleared the published id, so the re-queued
- * batch (and everything after it, until the heartbeat re-establishes)
- * rides the reload fallback.
+ * deltas into ONE `visible` frame; with none it contributes nothing —
+ * the statements stay pending and ride the next establishment's first
+ * flush (the establishment sync drives one), while the attach's own
+ * `visible` seed and whole-tree first segment carry the current
+ * truth. `deliveryFailed` re-owns a frame's flips when its envelope
+ * didn't land — they pend the same way until the heartbeat
+ * re-establishes.
  */
 const visibilityProducer: ChannelProducer = {
 	collect(connection: string | null): VisibleFrame | null {
-		// One dispatch in flight across both paths: while a fallback
-		// reload runs, the frame path waits too — its completion
-		// re-schedules, and the flips ride whichever path is current then.
-		if (fallbackInFlight) return null
-		if (connection === null) {
-			void flushFallback()
-			return null
-		}
+		if (connection === null) return null
 		if (changed.size === 0 && !newlyMeasured && !fullSyncPending) return null
 		// A statement commits nothing client-side, so it cannot supersede
 		// or tear a mid-flight route swap the way a reload can — no
@@ -369,57 +336,8 @@ export function _resetVisibilityController(): void {
 	measured = false
 	measurementWaiters = []
 	fullSyncPending = false
-	fallbackInFlight = false
 	registerChannelProducer(visibilityProducer)
 	onChannelEstablished(armEstablishmentSync)
-}
-
-/**
- * Reload fallback (no live connection): culling is a POST-SETTLE
- * operation. A refetch fired while a page navigation is still
- * committing supersedes it and tears the route swap — the old route
- * stays visible and the new one never lands (the IO fires as the new
- * route's cold partons mount, i.e. mid-navigation). Defer until the
- * in-flight navigation finishes, then re-flush. `navigation.transition`
- * is the real signal (non-null only while a navigation is committing),
- * so this doesn't guess.
- */
-async function flushFallback(): Promise<void> {
-	if (fallbackInFlight || (changed.size === 0 && !newlyMeasured)) return
-	const transition = (
-		window as unknown as { navigation?: { transition?: { finished: Promise<unknown> } | null } }
-	).navigation?.transition
-	if (transition) {
-		transition.finished.then(schedule, schedule)
-		return
-	}
-	// Only flips the user can SEE ride the reload — their content needs
-	// materializing. Cull-OUTs are already complete (the pair swapped to
-	// its inline skeleton locally) and have no server-relevant effect
-	// without a connection session; consume them here — the next live
-	// fire's `?visible=` seed carries the full set. First-measurement
-	// syncs likewise: with no session to inform they're moot.
-	newlyMeasured = false
-	const inViewFlips = [...changed].filter((id) => inView.has(id))
-	const targets = inViewFlips.slice(0, FLUSH_BATCH)
-	changed = new Set(inViewFlips.slice(FLUSH_BATCH))
-	if (targets.length === 0) return
-	fallbackInFlight = true
-	try {
-		await enqueueRefetch({
-			labels: targets,
-			streaming: false,
-			live: false,
-			cullFlip: true,
-			params: { visible: [...inView].join(",") },
-		}).finished
-	} catch {
-		// AbortError on supersede / NavigationError on a racing nav — both
-		// benign here; the next flush re-fires with the current set.
-	} finally {
-		fallbackInFlight = false
-		if (changed.size > 0) schedule()
-	}
 }
 
 // ─── Boundary observer ────────────────────────────────────────────────

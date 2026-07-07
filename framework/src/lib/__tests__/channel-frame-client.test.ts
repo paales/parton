@@ -3,8 +3,8 @@
  *
  *   1. `_channelFrameNavigate` ships a FRAME-scoped url frame (the
  *      frame path on the statement) and returns milestones; with no
- *      connection or a degraded page it returns null — the caller's
- *      discrete `__frame` GET cue;
+ *      connection it latches and requests an immediate attach
+ *      (attach-with-intent);
  *   2. a superseding statement for the SAME frame ships `cancel` +
  *      `url` in ONE envelope, cancel first (in-envelope order), scoped
  *      to the frame's top-level name; a first statement ships no
@@ -13,14 +13,11 @@
  *      (`_channelFrameLaneCommitted` / `Settled`) — records for OTHER
  *      frames are untouched — and off a whole-tree segment whose as-of
  *      covers the statement;
- *   4. a connection loss (and an attach subsume) hands pending frame
- *      fires to the discrete transport: one `__frame` GET per frame
- *      key for the latest statement, `partials=` narrowed to the
- *      frame's top-level name, milestones chained;
- *   5. frame url + cancel frames are RELIABLE class but retire at the
- *      attach subsume — a replay after a discrete frame nav in the
- *      gap could regress the session URL, so uncovered fires re-fire
- *      discrete instead.
+ *   4. the attach subsume folds pending frame statements into the
+ *      intent's `frames` (one per key, newest wins), re-anchors the
+ *      records at 0 so the attach's covering render resolves them,
+ *      and retires the buffered url frames — a replay after the
+ *      attach's session write could regress the frame URL.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -32,6 +29,7 @@ import {
 	_channelNavSegmentCommitted,
 	_channelNavSegmentSettled,
 	_channelNavSubsumedByAttach,
+	_registerAttachRequester,
 	_resetChannelClient,
 	scheduleChannelFlush,
 } from "../channel-client.ts"
@@ -78,14 +76,11 @@ function probe(p: Promise<void>): { done: () => boolean; failed: () => boolean }
 	return { done: () => done, failed: () => failed }
 }
 
-let discreteFires: Array<{ url: URL }>
-
 beforeEach(() => {
 	_resetChannelClient()
 	rafQueue = []
 	fetchCalls = []
 	fetchResults = []
-	discreteFires = []
 	vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
 		rafQueue.push(cb)
 		return rafQueue.length
@@ -96,17 +91,10 @@ beforeEach(() => {
 		if (result instanceof Error) return Promise.reject(result)
 		return Promise.resolve(result as Response)
 	})
-	;(window as unknown as Record<string, unknown>).__rsc_partial_refetch = (
-		url: string,
-	) => {
-		discreteFires.push({ url: new URL(url) })
-		return { streaming: Promise.resolve(), finished: Promise.resolve() }
-	}
 })
 
 afterEach(() => {
 	_resetChannelClient()
-	delete (window as unknown as Record<string, unknown>).__rsc_partial_refetch
 	vi.unstubAllGlobals()
 })
 
@@ -131,10 +119,21 @@ describe("frame statements on the wire", () => {
 		])
 	})
 
-	it("returns null with no connection — the discrete __frame GET cue", () => {
-		expect(
-			_channelFrameNavigate({ path: ["cart"], url: "/open", intent: "silent" }),
-		).toBeNull()
+	it("with no connection the statement latches and requests an immediate attach", () => {
+		const requested: number[] = []
+		_registerAttachRequester(() => requested.push(1))
+		const routed = _channelFrameNavigate({
+			path: ["cart"],
+			url: "/open",
+			intent: "silent",
+		})
+		expect(routed).not.toBeNull()
+		expect(requested).toHaveLength(1)
+		// The subsume folds it into the attach statement's frames intent.
+		const intent = _channelNavSubsumedByAttach()
+		expect(intent.frames).toEqual([
+			{ kind: "url", url: "/open", intent: "silent", frame: ["cart"] },
+		])
 	})
 
 	it("a superseding statement for the same frame ships cancel-then-url in one envelope", async () => {
@@ -255,8 +254,8 @@ describe("milestone correlation", () => {
 	})
 })
 
-describe("falling back to the discrete transport", () => {
-	it("a connection loss re-fires the latest statement per frame as a __frame GET", async () => {
+describe("connection loss + the attach subsume", () => {
+	it("a failed envelope leaves the fires pending; the next attach's covering render resolves them", async () => {
 		_channelEstablished("c1")
 		const first = _channelFrameNavigate({
 			path: ["chat-overlay"],
@@ -275,18 +274,21 @@ describe("falling back to the discrete transport", () => {
 		fetchResults.push({ status: 404 })
 		await flushOnce()
 		expect(_getLiveConnectionId()).toBeNull()
-		expect(discreteFires).toHaveLength(1)
-		const url = discreteFires[0].url
-		expect(url.searchParams.get("__frame")).toBe("chat-overlay")
-		expect(url.searchParams.get("__frameUrl")).toBe("/notes?chat=open&msgs=a,b")
-		expect(url.searchParams.get("partials")).toBe("chat-overlay")
-		expect(url.searchParams.get("streaming")).toBe("1")
+		expect(p1.done()).toBe(false)
+		expect(p2.done()).toBe(false)
+		// The reattach subsumes: the statement was consumed into the
+		// failed envelope (redelivery was the buffer's, retired here);
+		// the records re-anchor at 0 and the attach's covering render
+		// resolves them.
+		_channelNavSubsumedByAttach()
+		_channelNavSegmentCommitted(0)
+		_channelNavSegmentSettled(0)
 		await settle()
 		expect(p1.done()).toBe(true)
 		expect(p2.done()).toBe(true)
 	})
 
-	it("the attach subsume retires buffered frame statements and re-fires uncovered ones discrete", async () => {
+	it("the attach subsume folds pending frame statements into the intent and retires the buffer", async () => {
 		_channelEstablished("c1")
 		const fire = _channelFrameNavigate({
 			path: ["cart"],
@@ -298,15 +300,19 @@ describe("falling back to the discrete transport", () => {
 		expect(sentEnvelopes()).toHaveLength(1)
 		const finished = probe(fire.finished)
 
-		_channelNavSubsumedByAttach()
+		// The statement already shipped (envelope 1, unpruned) — the
+		// subsume folds nothing NEW into the intent but retires the
+		// buffered url frame: the attach's own session write is
+		// authoritative, and a replay could regress it.
+		const intent = _channelNavSubsumedByAttach()
+		expect(intent.frames).toEqual([])
+		// The attach's covering render resolves the re-anchored record.
+		_channelNavSegmentCommitted(0)
+		_channelNavSegmentSettled(0)
 		await settle()
-		// The pending fire fell back to ONE discrete __frame GET…
-		expect(discreteFires).toHaveLength(1)
-		expect(discreteFires[0].url.searchParams.get("__frame")).toBe("cart")
 		expect(finished.done()).toBe(true)
-		// …and the buffered url frame never retransmits at the next
-		// establishment (a replay could regress a discrete frame nav made
-		// in the gap).
+		// The buffered url frame never retransmits at the next
+		// establishment.
 		_channelEstablished("c2")
 		raf()
 		await settle()

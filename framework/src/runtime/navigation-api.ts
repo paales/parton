@@ -27,7 +27,6 @@
  * Access the browser's `navigation` global via `getNavigation()`.
  */
 
-import type { AttachStatement } from "../lib/channel-protocol.ts"
 
 // ─── Framework state shapes ───────────────────────────────────────
 
@@ -189,51 +188,11 @@ export interface FrameworkReloadOptions extends NavigationReloadOptions {
   selector?: string | string[]
   /** See `FrameworkNavigateOptions.streaming`. */
   streaming?: boolean
-  /**
-   * Open this reload as a live subscription: the server holds the
-   * connection open (up to a keepalive cap) and pushes a fresh
-   * segment whenever route-relevant state changes — a
-   * `refreshSelector` bump or an `expiresAt` boundary. The framework's
-   * `<LivePageHeartbeat>` is the canonical caller (a whole-route
-   * long-poll, no `selector`).
-   *
-   * Orthogonal to `streaming`, which is a CLIENT commit-mode switch
-   * (progressive reveal vs atomic swap). A plain `reload({selector})`
-   * or `reload({selector, streaming: true})` is one-shot — it
-   * refetches its targets and the connection closes. Set `live: true`
-   * only when you want a held-open push channel; pair it with a
-   * `signal` so navigating away tears the long-poll down.
-   */
-  live?: boolean
   /** Caller-supplied abort signal. Aborting before the reload
-   *  completes cancels the in-flight fetch on the client and the
-   *  long-poll stream on the server. Components that fire a
-   *  `live: true` reload from a `useEffect` should pass a signal whose
-   *  controller aborts in the effect's cleanup — otherwise navigating
-   *  away leaves the server-side segment driver parked open until its
-   *  keepalive elapses. */
+   *  completes rejects the fire's milestones (AbortError) — the
+   *  covering statement's response is a channel delivery the
+   *  supersede ordering already arbitrates. */
   signal?: AbortSignal
-  /** Extra query params appended to the REFETCH url only — never the
-   *  page url, never persisted. They reach the re-rendered specs through
-   *  tracked `searchParam()` reads, the same place `?cached=` rides. Use this to send
-   *  ephemeral per-request view state (a scroll anchor, a visible set)
-   *  that should travel with the refetch but not pollute or outlive it.
-   *
-   *  Caveat: the host's page-url-key (the stale-commit guard in the
-   *  browser entry) must strip these param names, or a refetch carrying
-   *  them keys to a different page and its commit is dropped as stale.
-   *  They are NOT added to `FRAMEWORK_URL_PARAMS` (that would strip them
-   *  before any tracked read ever sees them). */
-  params?: Record<string, string>
-  /** The live fire's ATTACH statement — the catch-up anchor (`since`)
-   *  and viewport seed (`visible`) halves; the transport fills the
-   *  manifest (`cached`) at fire time. Setting this turns the fire
-   *  into an attach POST whose body carries the full client statement
-   *  (see `AttachStatement` in `../lib/channel-protocol.ts`) instead
-   *  of a GET re-presenting state in URL params. Only the framework's
-   *  `<LivePageHeartbeat>` sets it, always together with
-   *  `live: true`. */
-  attach?: Omit<AttachStatement, "cached">
 }
 
 // ─── Fire functions + progress tuple ──────────────────────────────

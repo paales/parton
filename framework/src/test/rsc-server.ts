@@ -17,7 +17,7 @@
  */
 
 import type { ReactNode } from "react"
-import { runWithRequestAsync } from "../runtime/context.ts"
+import { _setConnectionSession, runWithRequestAsync } from "../runtime/context.ts"
 // Import the vendored Flight server/client directly. Going through
 // `@vitejs/plugin-rsc/react/rsc` or `/rsc` pulls in plugin runtime
 // code that expects Vite's transform pipeline (`import.meta.env.DEV`,
@@ -132,7 +132,15 @@ export async function renderAndInspect<T>(node: ReactNode): Promise<{
 export async function renderWithRequest(
   url: string,
   node: ReactNode,
-  options: { headers?: Record<string, string> } & RenderOptions = {},
+  options: {
+    headers?: Record<string, string>
+    /** Present a MEASURED visible set to the render — the harness
+     *  stamps a connection-session handle on the request store, the
+     *  same slot the segment driver stamps for a held connection.
+     *  Omitted = the unmeasured state (cull gates resolve their
+     *  seeds). */
+    visible?: readonly string[]
+  } & RenderOptions = {},
 ): Promise<{ stream: FlightBytes; cookies: string[] }> {
   const request = new Request(url, { headers: options.headers })
   // `runWithRequestAsync` expects an async fn; wrap the sync render
@@ -158,6 +166,12 @@ export async function renderWithRequest(
   // The other tee side stays buffered for the caller to consume —
   // it's effectively a frozen recording at that point.
   const { result, cookies } = await runWithRequestAsync(request, async () => {
+    if (options.visible !== undefined) {
+      _setConnectionSession({
+        visible: new Set(options.visible),
+        ackedFps: new Map(),
+      })
+    }
     const stream = renderServerToFlight(node, { signal: options.signal, onError: options.onError })
     const [forCaller, forDrain] = stream.tee()
     await new Response(forDrain).arrayBuffer()

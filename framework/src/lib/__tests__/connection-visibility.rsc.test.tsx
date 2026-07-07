@@ -10,9 +10,9 @@
  * CURRENT set.
  *
  * The claims under test:
- *   1. the `?visible=` seed on the `?live=1` request drives the
- *      whole-tree first segment (no cold-seed clobber): out-of-set
- *      partons emit the pair (body skipped), in-set ones render;
+ *   1. the attach statement's `visible` seed drives the whole-tree
+ *      first segment (no cold-seed clobber): out-of-set partons emit
+ *      the pair (body skipped), in-set ones render;
  *   2. a `visible` frame wakes a lane for EXACTLY the flipped-IN
  *      parton, rendered against the stated set — untouched siblings
  *      never re-render, and a cull-OUT lanes NOTHING (the client swaps
@@ -219,11 +219,11 @@ async function postVisible(
 }
 
 describe("connection-session visibility", () => {
-	it("the ?visible= seed drives the first segment; in-flips lane, out-flips don't", async () => {
+	it("the attach seed drives the first segment; in-flips lane, out-flips don't", async () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=cull-a`,
+			`http://localhost/world`,
 			Page,
 			scope,
 			async (h) => {
@@ -290,6 +290,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-b");
 			},
+			{ attach: { cached: [], since: null, visible: ["cull-a"] } },
 		);
 		// The drive loop exited — the session is closed, so a late envelope
 		// answers 404 (the client falls back to the render-reload path).
@@ -300,7 +301,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=`,
+			`http://localhost/world`,
 			Page,
 			scope,
 			async (h) => {
@@ -348,6 +349,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-a");
 			},
+			{ attach: { cached: [], since: null, visible: [] } },
 		);
 	});
 
@@ -355,7 +357,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=`,
+			`http://localhost/world`,
 			NestedPage,
 			scope,
 			async (h) => {
@@ -411,6 +413,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-parent");
 			},
+			{ attach: { cached: [], since: null, visible: [] } },
 		);
 	});
 
@@ -418,7 +421,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=cull-a`,
+			`http://localhost/world`,
 			Page,
 			scope,
 			async (h) => {
@@ -456,6 +459,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-b");
 			},
+			{ attach: { cached: [], since: null, visible: ["cull-a"] } },
 		);
 	});
 
@@ -463,7 +467,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=cull-a`,
+			`http://localhost/world`,
 			Page,
 			scope,
 			async (h) => {
@@ -509,6 +513,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-b");
 			},
+			{ attach: { cached: [], since: null, visible: ["cull-a"] } },
 		);
 	});
 
@@ -516,7 +521,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=cull-a`,
+			`http://localhost/world`,
 			Page,
 			scope,
 			async (h) => {
@@ -558,6 +563,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-a");
 			},
+			{ attach: { cached: [], since: null, visible: ["cull-a"] } },
 		);
 	});
 
@@ -565,7 +571,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=`,
+			`http://localhost/world`,
 			NestedPage,
 			scope,
 			async (h) => {
@@ -614,6 +620,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-parent");
 			},
+			{ attach: { cached: [], since: null, visible: [] } },
 		);
 	});
 
@@ -669,7 +676,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/world?live=1&visible=cull-a,cull-b`,
+			`http://localhost/world`,
 			Page,
 			scope,
 			async (h) => {
@@ -712,6 +719,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-b");
 			},
+			{ attach: { cached: [], since: null, visible: ["cull-a", "cull-b"] } },
 		);
 	});
 
@@ -719,7 +727,7 @@ describe("connection-session visibility", () => {
 		let conn = "";
 		const scope = freshLiveScope("conn-vis");
 		await withLiveDrive(
-			`http://localhost/pulse?live=1&visible=cull-pulse`,
+			`http://localhost/pulse`,
 			() => (
 				<PartialRoot>
 					<CullPulse />
@@ -762,6 +770,7 @@ describe("connection-session visibility", () => {
 
 				await h.shutdown("cull-pulse");
 			},
+			{ attach: { cached: [], since: null, visible: ["cull-pulse"] } },
 		);
 	});
 });

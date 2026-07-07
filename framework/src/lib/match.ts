@@ -86,30 +86,21 @@ export interface CompiledMatch {
   extractParams(url: string): Record<string, string> | null
 }
 
-/** Search params the framework mints for transport — refetch targeting
- *  (`partials`), the client cache manifest (`cached`), live holds
- *  (`live`), commit mode
- *  (`streaming`), the viewport-visibility set (`visible` — read by the
- *  `cull` gate, a tracked dependency, never a match dimension), the
- *  culling-flip stamp (`__cullFlip`), and frame routing (`__frame`,
- *  `__frameUrl`). The catch-up anchor rides the attach POST's body
- *  statement — no URL param exists for it. Match never sees these:
- *  the SAME page arrives with
- *  and without them (SSR vs targeted refetch vs live heartbeat), and
- *  a wildcard search capture (`"*q=:query"`) would otherwise swallow
- *  them into the named param — splitting variant identity by
- *  transport noise, so a heartbeat render mints a phantom variant
- *  that supersedes (and hides) the real one on the client. */
+/** Search params the framework mints for transport — the client cache
+ *  manifest (`cached`, an action POST's URL form) and document-level
+ *  frame routing (`__frame`, `__frameUrl` — a degraded page's frame
+ *  navigation, the CMS preview iframe). Everything else rides the
+ *  channel: the attach statement's body and `url` frames, never a
+ *  page URL. Match never sees these: the SAME page arrives with and
+ *  without them (SSR vs action render vs a degraded frame document),
+ *  and a wildcard search capture (`"*q=:query"`) would otherwise
+ *  swallow them into the named param — splitting variant identity by
+ *  transport noise, minting a phantom variant that supersedes (and
+ *  hides) the real one on the client. */
 export const TRANSPORT_PARAMS = [
-  "partials",
   "cached",
-  "live",
-  "streaming",
-  "visible",
   "__frame",
   "__frameUrl",
-  "__cullFlip",
-  "__force",
 ] as const
 
 /** The request URL as the app sees it — transport params stripped. */

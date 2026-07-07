@@ -51,14 +51,13 @@
  *     beacon can't probe which of the two it hit.
  */
 
-import { _setAttachStatement, getScope } from "../runtime/context.ts";
+import { _setAttachStatement, getRequest, getScope } from "../runtime/context.ts";
 import { getSessionId, setSessionFrameUrl } from "../runtime/session.ts";
 import {
 	type AckFrame,
 	type AttachStatement,
 	type CancelFrame,
 	type ChannelEnvelope,
-	decodeAttachStatement,
 	decodeChannelEnvelope,
 	type TelemetryFrame,
 	type UrlFrame,
@@ -280,6 +279,13 @@ export interface ConnectionSession {
 	 *  Replaced wholesale per statement (newest-wins by envelope seq);
 	 *  applying one is side-effect-free — see [[SessionTelemetry]]. */
 	telemetry: SessionTelemetry | null;
+	/** Latest warm intent (`warm` frames — a stated preload target), or
+	 *  `null` when none is pending. Newest-wins by envelope seq; the
+	 *  driver consumes it at its park point with one byte-silent
+	 *  whole-tree render of the target. Applying one wakes the driver
+	 *  (the park point is where warms run) but renders nothing on the
+	 *  stream itself. */
+	pendingWarmUrl: { readonly url: string; readonly seq: number } | null;
 	/** Latched window URL statement awaiting the driver — see
 	 *  [[PendingNavigation]]. `null` when the request state reflects
 	 *  every url frame heard so far. */
@@ -408,6 +414,7 @@ export function _openConnectionSession(
 		firstDeliverySettledAt: null,
 		degradedReason: null,
 		telemetry: null,
+		pendingWarmUrl: null,
 		pendingNav: null,
 		pendingFrameNavs: new Map(),
 		consumedFrameNavSeqs: new Map(),
@@ -719,6 +726,25 @@ function applyTelemetryFrame(
 	};
 }
 
+/**
+ * Apply a `warm` frame: replace the session's warm slot, newest-wins
+ * by envelope seq. The caller wakes the driver (unlike telemetry — an
+ * explicit preload intent must not wait for the next natural wake),
+ * but the wake renders nothing on the stream: the park point consumes
+ * the slot with one byte-silent whole-tree render of the target.
+ */
+function applyWarmFrame(
+	session: ConnectionSession,
+	seq: number,
+	url: string,
+	requestUrl: string,
+): void {
+	if (session.pendingWarmUrl !== null && seq < session.pendingWarmUrl.seq)
+		return;
+	const target = new URL(url, requestUrl);
+	session.pendingWarmUrl = { url: target.pathname + target.search, seq };
+}
+
 /** Apply a `detach` frame: mark the session and fire the wake arms so
  *  the parked driver exits its drive loop (which closes the session)
  *  instead of holding the stream for the keepalive. Best-effort by
@@ -730,25 +756,32 @@ function detachConnectionSession(session: ConnectionSession): void {
 }
 
 /**
- * Decode an attach POST's body into its statement and stash it on the
- * request store — the one seam both the entry (`createRscHandler`) and
- * the in-process live-drive harness bind an attach through, so the
- * driver's statement reads see identical state on both paths. Runs
- * inside `runWithRequestAsync`; returns `null` on a malformed body
- * (the entry answers `400` — a protocol violation, like a malformed
- * known-kind frame).
+ * Bind a decoded attach statement into the active request scope — the
+ * one seam both the entry (`createRscHandler`'s `/__parton/live`
+ * dispatch) and the in-process live-drive harness attach through, so
+ * the driver's statement reads see identical state on both paths.
+ * Runs inside `runWithRequestAsync`, on the render request the caller
+ * built from the statement's `url`.
+ *
+ * Attach-with-intent applies here: each `frames` entry is a
+ * FRAME-scoped url statement that fired before the connection existed,
+ * and its session-frame-URL write lands inside THIS request's scope —
+ * where the client's cookie resolves, and where a freshly-minted
+ * session cookie rides the attach response's own headers (the attach
+ * is the one cookie-less entry: a discrete POST whose response can
+ * always Set-Cookie). The whole-tree first render then reads the
+ * written frame URLs; no per-frame latch is needed — the initial
+ * segment IS the covering render, and the client chains the fires'
+ * milestones onto the attach fire itself.
  */
-export async function applyAttachStatement(
-	request: Request,
-): Promise<AttachStatement | null> {
-	let decoded: AttachStatement | null;
-	try {
-		decoded = decodeAttachStatement(await request.json());
-	} catch {
-		return null;
+export function bindAttachStatement(statement: AttachStatement): void {
+	_setAttachStatement(statement);
+	const requestUrl = getRequest().url;
+	for (const frame of statement.frames ?? []) {
+		if (frame.frame === undefined) continue;
+		const target = new URL(frame.url, requestUrl);
+		setSessionFrameUrl(frame.frame, target.pathname + target.search);
 	}
-	if (decoded !== null) _setAttachStatement(decoded);
-	return decoded;
 }
 
 /**
@@ -758,9 +791,10 @@ export async function applyAttachStatement(
  * own. Requests carrying NEITHER header (non-browser clients, the
  * in-process test harness) pass — the cookie binding is the
  * credential check; this check exists to stop cross-site pages from
- * riding a victim's cookies onto the endpoint.
+ * riding a victim's cookies onto the endpoint. Shared by both
+ * framework POST endpoints: channel envelopes and the attach.
  */
-function isSameOriginPost(request: Request): boolean {
+export function isSameOriginPost(request: Request): boolean {
 	const site = request.headers.get("sec-fetch-site");
 	if (site !== null && site !== "same-origin" && site !== "none") return false;
 	const origin = request.headers.get("origin");
@@ -803,13 +837,14 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 	if (getScope() !== session.scope) return new Response(null, { status: 404 });
 	if ((getSessionId() ?? "") !== session.boundSessionId)
 		return new Response(null, { status: 404 });
-	// Same-origin validation for url frames, BEFORE anything applies: a
-	// cross-origin target is a protocol violation (`400`, nothing from
-	// the envelope applied) — the channel states this origin's URL state,
-	// never another's. Path-relative targets resolve same-origin by
-	// construction.
+	// Same-origin validation for url and warm frames, BEFORE anything
+	// applies: a cross-origin target is a protocol violation (`400`,
+	// nothing from the envelope applied) — the channel states this
+	// origin's URL state, never another's, and a warm target becomes a
+	// render's request state. Path-relative targets resolve same-origin
+	// by construction.
 	for (const frame of envelope.frames) {
-		if (frame.kind !== "url") continue;
+		if (frame.kind !== "url" && frame.kind !== "warm") continue;
 		try {
 			if (new URL(frame.url, request.url).origin !== new URL(request.url).origin)
 				return new Response(null, { status: 400 });
@@ -853,6 +888,12 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 				break;
 			case "cancel":
 				applyCancelFrame(session, envelope.seq, frame);
+				break;
+			case "warm":
+				// The wake is the park point's cue — an explicit preload
+				// intent should warm promptly, not at the next natural wake.
+				applyWarmFrame(session, envelope.seq, frame.url, request.url);
+				wakeNeeded = true;
 				break;
 			case "url":
 				// Window statements latched above, ahead of the in-order pass.

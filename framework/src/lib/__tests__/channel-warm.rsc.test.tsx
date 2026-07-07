@@ -221,7 +221,7 @@ describe("the session telemetry slot", () => {
 	it("is latest-wins and never renders — no body run, no delivery seq from telemetry alone", async () => {
 		const scope = freshLiveScope("tel-slot");
 		await withLiveDrive(
-			"http://localhost/tel?live=1",
+			"http://localhost/tel",
 			() => (
 				<PartialRoot>
 					<TelA />
@@ -279,6 +279,7 @@ describe("the session telemetry slot", () => {
 
 				await h.shutdown("tel-a");
 			},
+			{ attach: { cached: [], since: null, visible: null } },
 		);
 	});
 });
@@ -290,7 +291,7 @@ describe("predictive warming at park", () => {
 		);
 		const scope = freshLiveScope("warm-path");
 		await withLiveDrive(
-			"http://localhost/warm?live=1&visible=",
+			"http://localhost/warm",
 			() => (
 				<PartialRoot>
 					<CullWarm />
@@ -373,6 +374,7 @@ describe("predictive warming at park", () => {
 
 				await h.shutdown("cull-warm");
 			},
+			{ attach: { cached: [], since: null, visible: [] } },
 		);
 	});
 
@@ -385,7 +387,7 @@ describe("predictive warming at park", () => {
 		});
 		const scope = freshLiveScope("warm-cap");
 		await withLiveDrive(
-			"http://localhost/cap?live=1&visible=",
+			"http://localhost/cap",
 			() => (
 				<PartialRoot>
 					<CullCapA />
@@ -421,6 +423,7 @@ describe("predictive warming at park", () => {
 				).toBe(204);
 				await h.shutdown("cull-cap-a");
 			},
+			{ attach: { cached: [], since: null, visible: [] } },
 		);
 	});
 
@@ -431,7 +434,7 @@ describe("predictive warming at park", () => {
 		);
 		const scope = freshLiveScope("warm-win");
 		await withLiveDrive(
-			"http://localhost/win?live=1&visible=",
+			"http://localhost/win",
 			() => (
 				<PartialRoot>
 					<CullWin />
@@ -473,6 +476,7 @@ describe("predictive warming at park", () => {
 				).toBe(204);
 				await h.shutdown("cull-win");
 			},
+			{ attach: { cached: [], since: null, visible: [] } },
 		);
 	});
 });

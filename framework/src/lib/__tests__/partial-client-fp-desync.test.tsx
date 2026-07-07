@@ -53,9 +53,9 @@ function placeholder(id: string, mk: string): ReactNode {
 }
 
 /** Render a tree through PartialsClient and return the HTML string. */
-function commit(mode: "streaming" | "cache", body: ReactNode): string {
+function commit(body: ReactNode): string {
   return renderToStaticMarkup(
-    <PartialsClient mode={mode}>
+    <PartialsClient>
       <main>{body}</main>
     </PartialsClient>,
   )
@@ -93,19 +93,19 @@ const MK = "" // vary+cell stage: constant matchKey, one slot for all queries
 beforeEach(() => {
   // Reset the module-level client maps via the public API: a streaming
   // render with no partials prunes every prior (id, matchKey) entry.
-  commit("streaming", null)
+  commit(null)
 })
 
 describe("fp-set / slot desync on a stable (id, matchKey)", () => {
   it("a late out-of-order warm-fp trailer must not advertise a superseded query", () => {
     // 1. Full load: stage renders `po` fresh (cold fp).
-    commit("streaming", serverEmit(ID, MK, fp.poCold, "po"))
+    commit(serverEmit(ID, MK, fp.poCold, "po"))
     // Its warm-fp trailer lands in-order (cold→warm for the SAME node).
     _applyFpUpdates({ [ID]: { from: fp.poCold, to: fp.poWarm } })
 
     // 2. Refetch `pokem` — not advertised, so the server renders fresh.
     //    The slot now holds the `pokem` node.
-    commit("cache", serverEmit(ID, MK, fp.pokemCold, "pokem"))
+    commit(serverEmit(ID, MK, fp.pokemCold, "pokem"))
     _applyFpUpdates({ [ID]: { from: fp.pokemCold, to: fp.pokemWarm } })
 
     // 3. The earlier `po` fire's warm trailer arrives LATE (out of
@@ -129,11 +129,11 @@ describe("fp-set / slot desync on a stable (id, matchKey)", () => {
     // server round-trip honestly via `serverEmit`.
 
     // po (fresh) + its in-order warm trailer.
-    commit("streaming", serverEmit(ID, MK, fp.poCold, "po"))
+    commit(serverEmit(ID, MK, fp.poCold, "po"))
     _applyFpUpdates({ [ID]: { from: fp.poCold, to: fp.poWarm } })
 
     // pokem (fresh) + its warm trailer.
-    commit("cache", serverEmit(ID, MK, fp.pokemCold, "pokem"))
+    commit(serverEmit(ID, MK, fp.pokemCold, "pokem"))
     _applyFpUpdates({ [ID]: { from: fp.pokemCold, to: fp.pokemWarm } })
 
     // The earlier po fire's warm trailer lands late.
@@ -142,7 +142,7 @@ describe("fp-set / slot desync on a stable (id, matchKey)", () => {
     // Final keystroke: back to `po`. The server consults what the
     // client advertises and decides skip-vs-fresh. Whatever it decides,
     // the committed content MUST read `po`.
-    const finalHtml = commit("cache", serverEmit(ID, MK, fp.poWarm, "po"))
+    const finalHtml = commit(serverEmit(ID, MK, fp.poWarm, "po"))
     expect(
       dataQ(finalHtml),
       "final `po` keystroke committed stale content from the slot's last write",
@@ -174,7 +174,7 @@ describe("fp-set / slot desync on a stable (id, matchKey)", () => {
     // exists for: a single node whose fp drifts once descendants
     // register. The client should advertise BOTH fps so the next visit
     // fp-skips whichever the server computes.
-    commit("streaming", serverEmit(ID, MK, fp.poCold, "po"))
+    commit(serverEmit(ID, MK, fp.poCold, "po"))
     _applyFpUpdates({ [ID]: { from: fp.poCold, to: fp.poWarm } })
 
     const advertised = getCachedPartialIds()

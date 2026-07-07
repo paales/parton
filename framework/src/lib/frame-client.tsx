@@ -28,16 +28,11 @@ import {
   type NavigateTarget,
   type NavigationMilestones,
 } from "../runtime/navigation-api.ts"
-import { _channelFrameNavigate } from "./channel-client.ts"
+import { _channelFrameNavigate, _channelIsDegraded } from "./channel-client.ts"
 import {
-  abortPredecessors,
   getFrameUrl,
   hasFrameUrl,
-  inFlightKey,
-  registerInFlight,
   setFrameUrl,
-  unregisterInFlight,
-  type InFlightEntry,
 } from "./partial-client-state.ts"
 import {
   enqueueRefetch,
@@ -370,17 +365,15 @@ export function _dispatchFrameRefetch(
 ): RefetchMilestones {
   const key = joinFramePath(path)
   setFrameUrl(key, url)
-  // Channel routing. An attached, non-degraded page states the frame
-  // navigation as a FRAME-scoped url frame on the held stream: the
-  // endpoint writes the session frame URL, the driver lanes the
-  // frame's targets, and the milestones resolve off the covering
-  // lane's correlation flag — no dedicated long-poll connection. A
-  // superseding statement for the same frame ships its `cancel`
-  // co-rider in the same envelope, which is what retires the
-  // deferred-abort machinery on this path (the discrete GET below
-  // keeps it). Intent is descriptive: the frame's history work is
-  // client-local in-state (or a silent-info browser entry), done by
-  // send time.
+  // The statement: a FRAME-scoped url frame. Attached, it rides the
+  // held stream — the endpoint writes the session frame URL, the
+  // driver lanes the frame's targets, and the milestones resolve off
+  // the covering lane's correlation flag. Pre-establishment it latches
+  // and rides the attach it triggers (the statement's `frames`
+  // intent). A superseding statement for the same frame ships its
+  // `cancel` co-rider in the same envelope. Intent is descriptive:
+  // the frame's history work is client-local in-state (or a
+  // silent-info browser entry), done by send time.
   const routed = _channelFrameNavigate({
     path,
     url,
@@ -389,46 +382,16 @@ export function _dispatchFrameRefetch(
     signal,
   })
   if (routed) return routed
-  const handler = (
-    window as Window & {
-      __rsc_partial_refetch?: (
-        url: string,
-        signal?: AbortSignal,
-      ) => RefetchMilestones
-    }
-  ).__rsc_partial_refetch
-  if (!handler) {
-    return { streaming: Promise.resolve(), finished: Promise.resolve() }
-  }
-  const refetchUrl = new URL(window.location.href)
-  refetchUrl.searchParams.set("__frame", key)
-  refetchUrl.searchParams.set("__frameUrl", url)
-  // Narrow to the TOP-LEVEL frame of the path as the partials filter.
-  // For a top-level frame (path `["cart"]`), that's `partials=cart` —
-  // same as pre-nesting behavior. For a nested frame (path
-  // `["cart", "tab"]`), that's still `partials=cart` — we need the
-  // root-of-the-subtree rendered FRESH so its descendants (the
-  // nested frame included) re-run their bodies with the updated
-  // session URL. Narrowing to the nested leaf's selector would be
-  // more precise but requires a server-side registry lookup on
-  // `framePath` to bridge local name → effective id; the ancestor
-  // hint correctly widens the render until that's built.
-  //
-  // Without this hint, the parent frame's fingerprint (which hasn't
-  // changed — only the nested child's frame URL did) would match
-  // `?cached=`, the server would emit a placeholder, and the client
-  // would keep showing stale nested content.
-  //
-  // Frame refetches invoked from the urlChanged path in
-  // `../entry/browser.tsx` deliberately DO NOT set `partials=` — they
-  // want a full render so URL-dependent content (e.g. main listing
-  // switching on `?product=`) rerenders while `__frame` still
-  // updates the session.
-  refetchUrl.searchParams.set("partials", path[0])
-  if (options?.streaming) {
-    refetchUrl.searchParams.set("streaming", "1")
-  }
-  return handler(refetchUrl.toString(), signal)
+  // DEGRADED: no framework transport exists. The frame move is a
+  // document navigation carrying `__frame`/`__frameUrl` document
+  // params — the SSR render writes them into the session and renders
+  // the frame state (a plain website's version of the drawer link).
+  // The listener stands down (degraded), so this is a full load.
+  const target = new URL(window.location.href)
+  target.searchParams.append("__frame", key)
+  target.searchParams.append("__frameUrl", url)
+  getNavigation()?.navigate(target.href, { history: "replace" })
+  return { streaming: Promise.resolve(), finished: Promise.resolve() }
 }
 
 // ─── NavigateTarget resolution ────────────────────────────────────
@@ -722,6 +685,35 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
     const silent = options?.silent === true
     const m = makeMilestoneDeferreds()
 
+    // A selector nav on a DEGRADED page has no refetch transport — it
+    // is a plain navigation, and a plain navigation on a degraded page
+    // is a document load (the listener stands down). Silent navs stay
+    // client-local URL work either way.
+    if (filtered && !silent && _channelIsDegraded()) {
+      const result = nav.navigate(url, {
+        history: options?.history,
+        state: options?.state,
+      })
+      void (async () => {
+        try {
+          await awaitCommitted(result)
+          m.committed.resolve(nav.currentEntry!)
+          await awaitFinished(result)
+          m.streaming.resolve()
+          m.finished.resolve(nav.currentEntry!)
+        } catch (err) {
+          m.committed.reject(err)
+          m.streaming.reject(err)
+          m.finished.reject(err)
+        }
+      })()
+      return {
+        committed: m.committed.promise,
+        streaming: m.streaming.promise,
+        finished: m.finished.promise,
+      }
+    }
+
     if (filtered || silent) {
       // URL-only update — the page-level listener sees the branded
       // info and declines to intercept, so no refetch fires from its
@@ -742,22 +734,16 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
             m.finished.resolve(nav.currentEntry!)
             return
           }
-          // Targeted refetches are NEVER aborted on supersede. A
-          // refetch is one Flight document feeding the whole root;
-          // aborting it mid-decode rejects the entire document (not
-          // just the superseded section) and crashes the page through
-          // the nearest error boundary. Superseded fires drain and
-          // commit — they're small once fp-skipped — but the monotonic
-          // commit guard (`refetch-ordering.ts`) drops a late older
-          // fire's commit so it can't clobber a newer one. `navigate`
-          // has no caller signal (unlike `reload`), so nothing cancels
-          // a window-nav fire.
+          // The batched statement: the page URL (already moved — the
+          // silent nav above committed) with the labels as its
+          // `?__force=` overlay. Supersede ordering is the channel's:
+          // a newer statement's covering segment resolves older fires
+          // too, and stream order plus the as-of guard arbitrate
+          // commits. `navigate` has no caller signal (unlike
+          // `reload`), so nothing cancels a window-nav fire.
           const refetch = enqueueRefetch({
             labels: parsed.labels,
             streaming: options?.streaming ?? false,
-            // Navigation is one-shot — a held-open subscription belongs
-            // to the heartbeat's `reload({live: true})`, not a nav.
-            live: false,
           })
           await refetch.streaming
           m.streaming.resolve()
@@ -812,45 +798,30 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
     const parsed = parseOptionsSelector(options)
     const m = makeMilestoneDeferreds()
 
-    // Three ways to reach the in-place refetch path (no browser reload):
+    // Two ways to reach the in-place refetch path (no browser reload):
     //
     //   1. Selector filter (`reload({selector: "#cart"})`) — targeted
-    //      partial refetch. Existing behaviour.
-    //   2. Live subscription (`reload({live: true})`) without a
-    //      selector — the framework heartbeat. Full-page top-down
-    //      re-render with fp-skip pruning unchanged partials; the
-    //      `?live=1` URL flag holds the connection open for live
-    //      updates.
-    //   3. Streaming opt-in (`reload({streaming: true})`) — the client
+    //      partial refetch: a `?__force=` statement on the channel.
+    //   2. Streaming opt-in (`reload({streaming: true})`) — the client
     //      commits the response progressively. A render-mode switch, not
     //      a browser reload, so it stays in-place too.
     //
-    // Only a bare `reload()` (no selector, no streaming, no live) falls
-    // through to `nav.reload()` — that's the user-facing "reload this
-    // URL" command and IS supposed to do a real browser reload.
+    // Only a bare `reload()` (no selector, no streaming) falls through
+    // to `nav.reload()` — that's the user-facing "reload this URL"
+    // command and IS supposed to do a real browser reload.
     const wantsInPlace =
-      parsed.labels.length > 0 || options?.streaming === true || options?.live === true
+      parsed.labels.length > 0 || options?.streaming === true
     if (wantsInPlace) {
       m.committed.resolve(nav.currentEntry!)
       void (async () => {
         try {
-          // Targeted refetches are NEVER aborted on supersede — see the
-          // note in `windowNavigate`. Only the caller's own
-          // `options.signal` cancels a fire; the heartbeat passes one so
-          // its long-poll connection tears down on nav-away.
+          // Supersede ordering is the channel's — a newer statement's
+          // covering segment resolves older fires too. Only the
+          // caller's own `options.signal` cancels a fire.
           const refetch = enqueueRefetch({
             labels: parsed.labels,
             streaming: options?.streaming ?? false,
-            // `live: true` (the heartbeat) holds the connection open as
-            // a subscription; a bare `reload({selector, streaming})` is
-            // one-shot and closes once its segment drains.
-            live: options?.live ?? false,
             signal: options?.signal,
-            params: options?.params,
-            // The heartbeat's attach halves (anchor + seed) — the
-            // dispatcher fills the manifest and ships the fire as an
-            // attach POST. See `FrameworkReloadOptions.attach`.
-            attach: options?.attach,
           })
           await refetch.streaming
           m.streaming.resolve()
@@ -961,20 +932,6 @@ export function buildFrameHandle(
 
     const m = makeMilestoneDeferreds()
 
-    // Frame nav participates in the same per-selector supersede queue
-    // as `windowNavigate({selector})` — keyed by the top-level frame
-    // name (which is also the `partials=` value the server sees), so
-    // a `?chat=closed` frame nav fires while a prior `?chat=open`
-    // segment-loop fetch is still streaming, the older fetch aborts
-    // when the newer one's first segment lands. Without this, the
-    // chat overlay's open response keeps streaming tick updates and
-    // races the close response's commit.
-    const inFlightK = inFlightKey([path[0]])
-    const controller = inFlightK ? new AbortController() : undefined
-    const inFlightEntry: InFlightEntry | null =
-      inFlightK && controller ? { controller } : null
-    if (inFlightK && inFlightEntry) registerInFlight(inFlightK, inFlightEntry)
-
     // The frames-tree read-modify-write runs under the write
     // serialiser (see `runFrameTreeWrite`): the entry state is read,
     // patched and committed as one exclusive cycle, so concurrent
@@ -1021,19 +978,16 @@ export function buildFrameHandle(
         // immediately because there's no browser commit to wait on.
         nav.updateCurrentEntry({ state: nextState })
         m.committed.resolve(nav.currentEntry!)
-        const refetch = _dispatchFrameRefetch(path, url, options, controller?.signal)
+        const refetch = _dispatchFrameRefetch(path, url, options)
         void (async () => {
           try {
             await refetch.streaming
-            if (inFlightK && inFlightEntry) abortPredecessors(inFlightK, inFlightEntry)
             m.streaming.resolve()
             await refetch.finished
             m.finished.resolve(nav.currentEntry!)
           } catch (err) {
             m.streaming.reject(err)
             m.finished.reject(err)
-          } finally {
-            if (inFlightK && inFlightEntry) unregisterInFlight(inFlightK, inFlightEntry)
           }
         })()
         // State applied synchronously — release the serialiser.
@@ -1052,9 +1006,8 @@ export function buildFrameHandle(
         try {
           await awaitCommitted(result)
           m.committed.resolve(nav.currentEntry!)
-          const refetch = _dispatchFrameRefetch(path, url, options, controller?.signal)
+          const refetch = _dispatchFrameRefetch(path, url, options)
           await refetch.streaming
-          if (inFlightK && inFlightEntry) abortPredecessors(inFlightK, inFlightEntry)
           m.streaming.resolve()
           await refetch.finished
           m.finished.resolve(nav.currentEntry!)
@@ -1062,8 +1015,6 @@ export function buildFrameHandle(
           m.committed.reject(err)
           m.streaming.reject(err)
           m.finished.reject(err)
-        } finally {
-          if (inFlightK && inFlightEntry) unregisterInFlight(inFlightK, inFlightEntry)
         }
       })()
       // Hold the serialiser until the browser entry (with the baked

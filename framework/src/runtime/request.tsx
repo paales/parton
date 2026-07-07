@@ -1,49 +1,34 @@
-import {
-  ATTACH_HEADER,
-  type AttachStatement,
-} from "../lib/channel-protocol.ts"
-
 const URL_POSTFIX = "_.rsc"
 const HEADER_ACTION_ID = "x-rsc-action"
 
-/** Marks a request as a client-driven RSC refetch (a `_.rsc` GET/POST),
- *  as opposed to an initial SSR document load. Stamped by
- *  `parseRenderRequest`; read by `PartialRoot` to decide whether the
- *  page URL needs serializing into the payload (the client ignores it on
- *  a refetch — the live Navigation API is the source of truth there).
+/** Marks a request as a client-driven RSC render (an action `_.rsc`
+ *  POST, or the attach's render request built by the entry from the
+ *  statement's URL), as opposed to an initial SSR document load.
+ *  Stamped by `parseRenderRequest` / the attach endpoint; read by
+ *  `PartialRoot` to decide whether the page URL needs serializing into
+ *  the payload (the client ignores it on a refetch — the live
+ *  Navigation API is the source of truth there).
  *  Carried as a header rather than ALS state so it survives the
  *  `new Request(...)` reconstruction below into the render context.
  *  `x-parton-*` headers are stripped from the vary-facing header surface
  *  (`headersToRecord` in partial.tsx) so they never reach app code. */
 export const HEADER_RSC_RENDER = "x-parton-render"
 
-/** Framework-internal query params appended to RSC fetch URLs. They drive
- *  `PartialRoot`'s refetch routing (`partials`/`cached`), the client commit
- *  mode (`streaming`), the segment driver's hold-open subscription
- *  (`live`), and post-action
- *  cache repopulation (`__populateCache`) — all consumed off the raw
- *  `getRequest()` before any spec renders. They're
- *  stripped from the page URL serialized into the payload for descendant
- *  client components (`PageUrlProvider`): meaningless to app code, and — for
- *  `cached` — kilobytes that would otherwise echo back in every payload.
+/** Framework-internal query params on render-request URLs. `cached`
+ *  rides only action POST URLs (the response render's fp-skip manifest
+ *  — capped, request-line-bound); `__nojs` is the document-level
+ *  no-hydration debug flag. Both are consumed off the raw
+ *  `getRequest()` before any spec renders, and stripped from the page
+ *  URL serialized into the payload for descendant client components
+ *  (`PageUrlProvider`): meaningless to app code, and — for `cached` —
+ *  kilobytes that would otherwise echo back in every payload.
  *
- *  `__frame` / `__frameUrl` are deliberately NOT here: a spec may read them
- *  legitimately (the CMS editor checks `__frame=preview`). Neither is
- *  `visible` — the cull gate reads it off the request URL as the
- *  no-connection fallback carrier. The catch-up anchor rides the
- *  attach POST's body statement, never a URL. A real SSR
- *  document load carries none of these params anyway, so the serialized
- *  page URL is already clean there — this is belt-and-braces. */
-export const FRAMEWORK_URL_PARAMS = [
-  "partials",
-  "cached",
-  "streaming",
-  "live",
-  "__populateCache",
-  "__nojs",
-  "__cullFlip",
-  "__force",
-] as const
+ *  `__frame` / `__frameUrl` are deliberately NOT here: a spec may read
+ *  them legitimately (the CMS editor checks `__frame=preview`), and a
+ *  degraded page's frame navigation is a document GET carrying them.
+ *  Everything the interactive transport needs rides the channel — the
+ *  attach statement's body and `url` frames — never a page URL. */
+export const FRAMEWORK_URL_PARAMS = ["cached", "__nojs"] as const
 
 /** Return `urlString` with every framework-internal query param removed.
  *  Pure string→string; real app params (`?q=`, `?pages=`) pass through
@@ -64,12 +49,6 @@ export function stripFrameworkParams(urlString: string): string {
 export type RenderRequest = {
   isRsc: boolean
   isAction: boolean
-  /** The heartbeat's attach — an `_.rsc` POST whose body is the client
-   *  statement (`AttachStatement`: manifest + catch-up anchor +
-   *  viewport seed) and whose response is the held segmented stream.
-   *  Dispatched on the explicit `ATTACH_HEADER` marker, never inferred
-   *  from the body's shape; mutually exclusive with an action. */
-  isAttach: boolean
   actionId?: string
   request: Request
   url: URL
@@ -78,7 +57,6 @@ export type RenderRequest = {
 export function createRscRenderRequest(
   urlString: string,
   action?: { id: string; body: BodyInit },
-  attach?: AttachStatement,
   extraHeaders?: Record<string, string>,
 ): Request {
   const url = new URL(urlString)
@@ -87,56 +65,46 @@ export function createRscRenderRequest(
   if (action) {
     headers.set(HEADER_ACTION_ID, action.id)
   }
-  if (attach) {
-    headers.set(ATTACH_HEADER, "1")
-    headers.set("content-type", "application/json")
-  }
   if (extraHeaders) {
     for (const [name, value] of Object.entries(extraHeaders)) {
       headers.set(name, value)
     }
   }
   return new Request(url.toString(), {
-    method: action || attach ? "POST" : "GET",
+    method: action ? "POST" : "GET",
     headers,
-    body: attach ? JSON.stringify(attach) : action?.body,
+    body: action?.body,
   })
 }
 
 export function parseRenderRequest(request: Request): RenderRequest {
   const url = new URL(request.url)
   const isPost = request.method === "POST"
-  if (url.pathname.endsWith(URL_POSTFIX)) {
+  // The `_.rsc` postfix marks exactly one request kind: an action POST
+  // (the attach rides its own endpoint, `POST /__parton/live`; every
+  // other GET is a document). A postfixed non-POST is not a render
+  // request — it falls through as a document URL nothing routes.
+  if (isPost && url.pathname.endsWith(URL_POSTFIX)) {
     url.pathname = url.pathname.slice(0, -URL_POSTFIX.length)
     const actionId = request.headers.get(HEADER_ACTION_ID) || undefined
-    const isAttach = isPost && request.headers.get(ATTACH_HEADER) === "1"
-    // Dispatch is by explicit marker, one per request kind: the attach
-    // header opens the segmented drive, the action id runs an action.
-    // Both on one POST is an ill-formed request, not a tiebreak.
-    if (isAttach && actionId) {
-      throw new Error("RSC POST carries both an attach marker and an action id")
-    }
-    if (isPost && !actionId && !isAttach) {
+    if (!actionId) {
       throw new Error("Missing action id header for RSC action request")
     }
     // Rebuild on the de-postfixed URL and stamp the RSC-render marker so
-    // `PartialRoot` can tell a client refetch from an SSR document. Body
-    // is preserved (and `duplex` set) for action and attach POSTs.
+    // `PartialRoot` can tell a client render from an SSR document. Body
+    // is preserved (and `duplex` set) for the action POST.
     const headers = new Headers(request.headers)
     headers.set(HEADER_RSC_RENDER, "1")
     const init: RequestInit & { duplex?: "half" } = { method: request.method, headers }
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      init.body = request.body
-      init.duplex = "half"
-    }
+    init.body = request.body
+    init.duplex = "half"
     return {
       isRsc: true,
-      isAction: isPost && !isAttach,
-      isAttach,
+      isAction: true,
       actionId,
       request: new Request(url, init),
       url,
     }
   }
-  return { isRsc: false, isAction: isPost, isAttach: false, request, url }
+  return { isRsc: false, isAction: isPost, request, url }
 }

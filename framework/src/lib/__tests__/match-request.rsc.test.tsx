@@ -217,22 +217,22 @@ describe("transport params are invisible to match", () => {
   it("a wildcard search capture is identical with and without transport params", () => {
     const m = compileMatch({ search: "*q=:query" })
     const plain = m.evaluate(new Request("http://t/pokemon/1?search=url&q=a"))
-    const heartbeat = m.evaluate(
+    const action = m.evaluate(
       new Request(
-        "http://t/pokemon/1?search=url&q=a&streaming=1&live=1&cached=page-stage-3:x:y&partials=z&__frame=preview",
+        "http://t/pokemon/1?search=url&q=a&cached=page-stage-3:x:y&__frame=preview&__frameUrl=/p",
       ),
     )
     expect(plain.matched).toBe(true)
     expect(plain.params).toEqual({ query: "a" })
-    // The heartbeat/refetch shape of the SAME page must produce the
-    // SAME variant identity — otherwise a live render mints a phantom
+    // The action-render shape of the SAME page must produce the SAME
+    // variant identity — otherwise an action response mints a phantom
     // variant that supersedes (and hides) the real one on the client.
-    expect(heartbeat.params).toEqual(plain.params)
-    expect(m.extractParams("http://t/pokemon/1?q=a&live=1&cached=zzz")).toEqual({ query: "a" })
+    expect(action.params).toEqual(plain.params)
+    expect(m.extractParams("http://t/pokemon/1?q=a&cached=zzz")).toEqual({ query: "a" })
   })
 
   it("searchParams gates see the app URL, not transport params", () => {
-    const m = compileMatch({ searchParams: { live: (v: string | null) => v === null } })
-    expect(m.evaluate(new Request("http://t/x?live=1")).matched).toBe(true)
+    const m = compileMatch({ searchParams: { cached: (v: string | null) => v === null } })
+    expect(m.evaluate(new Request("http://t/x?cached=a:b:c")).matched).toBe(true)
   })
 })
