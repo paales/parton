@@ -324,6 +324,16 @@ export function _channelIsDegraded(): boolean {
 	return degraded;
 }
 
+/** Flip the sticky page degrade and stamp the presence-only
+ *  `data-parton-degraded` marker — the explicit signal specs and
+ *  tooling wait on (the page is browser-native from here). */
+function markPageDegraded(): void {
+	degraded = true;
+	if (typeof document !== "undefined") {
+		document.documentElement.setAttribute("data-parton-degraded", "");
+	}
+}
+
 /** The upstream-applied watermark last heard from the server — the
  *  attach statement's `applied` field (see [[channel-protocol]]). */
 export function _channelAppliedWatermark(): number {
@@ -1296,7 +1306,7 @@ export function _channelConnectionClosed(opts?: { aborted?: boolean }): void {
 		pendingFrameNavRecords.some((r) => !r.settled);
 	if (!pendingInteraction) return;
 	if (!established && opts?.aborted !== true && !degraded) {
-		degraded = true;
+		markPageDegraded();
 		documentNavForPendingRecords();
 		return;
 	}
@@ -1408,7 +1418,7 @@ async function flush(): Promise<void> {
 			// heartbeat stops attaching and the navigate listener stands
 			// down — the page is browser-native from here.
 			if (carriesAck && !ackDeliveredOnConnection) {
-				degraded = true;
+				markPageDegraded();
 				if (
 					pendingNavRecords.some((r) => !r.settled) ||
 					pendingFrameNavRecords.some((r) => !r.settled)
@@ -1511,6 +1521,9 @@ export function _resetChannelClient(): void {
 	appliedWatermark = 0;
 	retransmitPending = false;
 	degraded = false;
+	if (typeof document !== "undefined") {
+		document.documentElement.removeAttribute("data-parton-degraded");
+	}
 	navPoint = 0;
 	pendingNavFrame = null;
 	pendingNavRecords = [];

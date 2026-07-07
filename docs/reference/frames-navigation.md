@@ -278,8 +278,8 @@ navigate(url, { selector: "#cart" }).finished.catch((err) => {
 })
 ```
 
-`AbortError` (a newer navigation supersedes one in flight, or the
-per-selector queue aborted this fire) is a normal lifecycle
+`AbortError` (a newer navigation supersedes one in flight, or a
+caller's `signal` aborted this fire) is a normal lifecycle
 signal, not a failure — `finished` flips true, `error` stays
 unsurfaced, nothing bubbles. Inline `.catch` handlers should treat
 `err.name === "AbortError"` as a no-op.
