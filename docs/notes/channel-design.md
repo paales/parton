@@ -40,8 +40,9 @@ property of the wire.
    equally be presented on a discrete request — no frame kind may exist
    whose meaning depends on the channel being open.
 2. Attach IS the discrete path: opening the channel presents the full
-   client manifest (today's `?cached=`, moved to the request body) plus
-   the client's catch-up anchor (the shipped `?since=<epoch>:<ts>` — a
+   client manifest (the attach body's `cached`; `?cached=` remains the
+   discrete-GET form) plus
+   the client's catch-up anchor (the statement's `since` — a
    reconnect whose anchor holds skips the initial segment and opens
    straight into lanes; an anchor failing its epoch/snapshot checks
    falls back to a manifest-rendered segment, over-fetch never stale).
@@ -265,7 +266,14 @@ Each package is a worktree branch, lands green (`yarn test` +
 - **W2 — attach manifest.** Manifest in the attach body; mirror seeded
   at attach; `?cached=` kept for discrete mode. Absorbs the `?since`
   anchor: manifest and anchor travel together as one attach statement —
-  one catch-up mechanism, not two.
+  one catch-up mechanism, not two. LANDED — the attach POST
+  (`x-parton-attach` on the page's `_.rsc` URL, body
+  `{cached, since, visible}`; dispatch by marker, never body shape),
+  statement-first reads in the segment driver + PartialRoot, the
+  uncapped-body / capped-URL manifest split, the anchor made
+  attach-only (`?since=` retired from every param list), and the
+  attach as the explicit session-identity rebind point:
+  [docs/internals/channel.md](../internals/channel.md) §The attach.
 - **W3 — bench soak.** The connection-cost scenario, independent of
   W1/W2, numbers before the channel becomes primary.
 - **W4 — acks + evidence-based mirror + backpressure.** Delivery seqs
@@ -293,10 +301,13 @@ Each package is a worktree branch, lands green (`yarn test` +
   POSTs thread no scope (they run before the request ALS); isolation
   is the globally-unique connection id, and scope resolves only on the
   held downstream GET. The channel endpoint keeps exactly that shape.
-- `?since` vs acks: the anchor proves "nothing relevant happened since
-  ts"; acks prove "the client committed what was sent." W4 must define
+- The attach anchor vs acks: the anchor proves "nothing relevant
+  happened since ts"; acks prove "the client committed what was
+  sent." W4 must define
   their composition (anchor bounds the resync window, acks bound the
-  mirror) so they don't become two competing resync mechanisms.
+  mirror) so they don't become two competing resync mechanisms —
+  both now live on the attach statement's timeline (the ack watermark
+  seeds from the attach statement).
 - Multi-instance bus: separate note, blocking for multi-process
   production, not for this sequence.
 - RemoteFrame under channel-primary: a nav segment containing a
