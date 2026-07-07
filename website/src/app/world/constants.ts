@@ -26,6 +26,35 @@ export const QUAD_LEAF_PX = CHUNK_PX * 2 // 1024
 /** Plane coordinate of the world center — chunk 0,0's top-left. */
 export const CENTER_PX = WORLD_PX / 2
 
+/** Chunk cull-flip runway (IntersectionObserver rootMargin): a tight
+ *  band, so you can watch chunks pop in as you scroll — the demo IS
+ *  the loading. */
+export const CHUNK_FLIP_MARGIN_PX = 100
+
+/**
+ * Materialization runway for a quad tile of `size` — STAGGERED per
+ * level, because a tile's flip-in is what mounts its children's
+ * cull-pairs (their skeletons and observers). Equal margins at parent
+ * and child would put every freshly mounted observer already past its
+ * own flip line: mount → measure → flip → lane → mount the next
+ * level, one single-id statement per frame down the whole spine. With
+ * the stagger, a column crosses each flip line with its observers
+ * long mounted, and the IntersectionObserver batches the crossing
+ * into ONE delivery → one statement carrying all its ids.
+ *
+ * The arithmetic: the leaf materializes its 2×2 chunks at 2×CHUNK_PX
+ * (1024px), a 924px gap over the chunks' tight 100px pop-in line —
+ * ~1.3s at the WASD cruise speed (720px/s), >700ms at the validator's
+ * 1280px/s warm scroll, generous cover for the leaf lane's round trip
+ * + skeleton mount + first measurement. Each level above adds one
+ * CHUNK_PX: a tile of size S flips at margin(S) and mounts children
+ * whose own line is margin(S/2) = margin(S) − 512, so every hop of
+ * the spine gets one chunk-column of scroll (~0.4s at warm speed) to
+ * complete its lane round trip before the next flip is due. Root
+ * (16384) lands at 3072px. */
+export const quadMaterializeMargin = (size: number): number =>
+  2 * CHUNK_PX + CHUNK_PX * Math.log2(size / QUAD_LEAF_PX)
+
 /** The cold-seed viewport estimate: a 1920×1080 box centered on the
  *  plane's center. Every quad level and the chunks seed off the same
  *  test — a tile renders content before any client measurement iff

@@ -280,7 +280,16 @@ export const BrowsePage = parton(
   tracking context, so an anchor-driven seed's `searchParam()` read
   records as a dep and the gate re-resolves when the anchor moves.
 - **`rootMargin`** (optional) — how far beyond the viewport still
-  counts as in view. Default `"600px 0px"`.
+  counts as in view. Default `"600px 0px"`. For NESTED culling — a
+  cullable parton whose flip-in is what mounts other cullable
+  partons (the website world's quadtree) — STAGGER the margins: the
+  parent's runway must exceed its children's by at least a lane
+  round trip of scroll distance, so a crossing flips observers that
+  are already mounted and the IntersectionObserver batches the whole
+  crossing into one visibility statement. Equal margins serialize
+  instead — mount → measure → flip → lane → mount, one single-id
+  statement per frame (`website/src/app/world/constants.ts` has the
+  worked arithmetic).
 
 The fingerprint folds the RESOLVED state — `measurement ?? seed` —
 via the dep key `visible:<id>?seed=<0|1>`. Unmeasured and measured
