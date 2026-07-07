@@ -1,416 +1,263 @@
 {
-  "generatedAt": "2026-07-02T22:29:10.599Z",
-  "gitSha": "3a20560",
+  "generatedAt": "2026-07-07T12:14:26.965Z",
+  "gitSha": "51df675",
   "nodeVersion": "v24.11.1",
   "runtime": "dev",
-  "warmup": 50,
-  "measure": 500,
-  "results": [
+  "warmup": 5,
+  "measure": 20,
+  "results": [],
+  "soak": [
     {
-      "name": "scaling/N=10",
+      "name": "soak/N=100+M=0",
       "params": {
-        "partons": 10,
-        "liveCells": 1,
-        "depth": 2,
-        "sharedPulseCell": false
+        "connections": 100,
+        "active": 0
       },
-      "coldMs": 7.140124999999955,
-      "coldBytes": 49584,
+      "openMs": 73.98837499999996,
       "gate": {
-        "coldRenders": 12,
-        "coldBytes": 49584,
-        "warmRenders": 3,
-        "warmBytes": 47915,
+        "coldRenders": 300,
+        "idleBumps": 20,
+        "idleRenders": 0,
+        "tickRenders": 0,
+        "expectedTickRenders": 0,
+        "tickRenderViolations": 0,
+        "closedEarly": 0,
         "faithful": true
       },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 454.0420000000722,
-        "p95us": 1147.7089999999635,
-        "p99us": 2092.708000000016,
-        "meanUs": 675.5791800000006,
-        "minUs": 370.6659999999147,
-        "maxUs": 3264.6250000000236
+      "heap": {
+        "baselineHeapBytes": 21559552,
+        "heldHeapBytes": 26070856,
+        "heapPerConnection": 45113.04,
+        "baselineRssBytes": 102973440,
+        "heldRssBytes": 132153344,
+        "rssPerConnection": 291799.04,
+        "afterTicksHeapBytes": 26086648,
+        "heapDriftPerConnection": 157.92,
+        "wakesPerConnection": 20,
+        "heapDriftPerConnectionPerWake": 7.895999999999999
       },
-      "warmBytesMean": 32329.562,
-      "ticksPerSec": 1480.2113943179822
+      "idleWake": {
+        "bumps": 20,
+        "cpuUsPerBump": 442.5,
+        "cpuNsPerConnectionPerBump": 4425
+      },
+      "ticks": null
     },
     {
-      "name": "scaling/N=50",
+      "name": "soak/N=100+M=10",
       "params": {
-        "partons": 50,
-        "liveCells": 1,
-        "depth": 2,
-        "sharedPulseCell": false
+        "connections": 100,
+        "active": 10
       },
-      "coldMs": 1.9815830000000005,
-      "coldBytes": 76131,
+      "openMs": 75.593208,
       "gate": {
-        "coldRenders": 52,
-        "coldBytes": 76131,
-        "warmRenders": 3,
-        "warmBytes": 66526,
+        "coldRenders": 300,
+        "idleBumps": 20,
+        "idleRenders": 0,
+        "tickRenders": 10,
+        "expectedTickRenders": 10,
+        "tickRenderViolations": 0,
+        "closedEarly": 0,
         "faithful": true
       },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 1323.7919999999122,
-        "p95us": 4137.625000000071,
-        "p99us": 10319.333000000142,
-        "meanUs": 1948.2329899999995,
-        "minUs": 1219.5839999999407,
-        "maxUs": 13198.333999999932
+      "heap": {
+        "baselineHeapBytes": 23034904,
+        "heldHeapBytes": 26904136,
+        "heapPerConnection": 38692.32,
+        "baselineRssBytes": 134168576,
+        "heldRssBytes": 153780224,
+        "rssPerConnection": 196116.48,
+        "afterTicksHeapBytes": 26792448,
+        "heapDriftPerConnection": -1116.88,
+        "wakesPerConnection": 46,
+        "heapDriftPerConnectionPerWake": -24.28
       },
-      "warmBytesMean": 78387.386,
-      "ticksPerSec": 513.2856312016359
+      "idleWake": {
+        "bumps": 20,
+        "cpuUsPerBump": 386.1,
+        "cpuNsPerConnectionPerBump": 3861
+      },
+      "ticks": {
+        "measured": 20,
+        "lanesPerTick": 10,
+        "wall": {
+          "p50us": 2296.583000000055,
+          "p95us": 2592.875000000049,
+          "p99us": 2592.875000000049,
+          "meanUs": 2331.40630000002
+        },
+        "cpuMeanUs": 3708.85,
+        "cpuPerLaneUs": 370.885,
+        "bytesMeanPerTick": 54433.9
+      }
     },
     {
-      "name": "scaling/N=100",
+      "name": "soak/N=1000+M=0",
       "params": {
-        "partons": 100,
-        "liveCells": 1,
-        "depth": 2,
-        "sharedPulseCell": false
+        "connections": 1000,
+        "active": 0
       },
-      "coldMs": 3.048000000000002,
-      "coldBytes": 146467,
+      "openMs": 324.25808400000005,
       "gate": {
-        "coldRenders": 102,
-        "coldBytes": 146467,
-        "warmRenders": 3,
-        "warmBytes": 126881,
+        "coldRenders": 3000,
+        "idleBumps": 20,
+        "idleRenders": 0,
+        "tickRenders": 0,
+        "expectedTickRenders": 0,
+        "tickRenderViolations": 0,
+        "closedEarly": 0,
         "faithful": true
       },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 2977.792000000136,
-        "p95us": 12491.125000000011,
-        "p99us": 19119.208999999955,
-        "meanUs": 4272.67450399999,
-        "minUs": 2341.625000000022,
-        "maxUs": 21144.958999999744
+      "heap": {
+        "baselineHeapBytes": 29164128,
+        "heldHeapBytes": 58789424,
+        "heapPerConnection": 29625.296,
+        "baselineRssBytes": 170147840,
+        "heldRssBytes": 299384832,
+        "rssPerConnection": 129236.992,
+        "afterTicksHeapBytes": 58673992,
+        "heapDriftPerConnection": -115.432,
+        "wakesPerConnection": 20,
+        "heapDriftPerConnectionPerWake": -5.7716
       },
-      "warmBytesMean": 153909.284,
-      "ticksPerSec": 234.04544368259755
+      "idleWake": {
+        "bumps": 20,
+        "cpuUsPerBump": 2502.55,
+        "cpuNsPerConnectionPerBump": 2502.55
+      },
+      "ticks": null
     },
     {
-      "name": "scaling/N=500",
+      "name": "soak/N=1000+M=100",
       "params": {
-        "partons": 500,
-        "liveCells": 1,
-        "depth": 2,
-        "sharedPulseCell": false
+        "connections": 1000,
+        "active": 100
       },
-      "coldMs": 63.72925000000032,
-      "coldBytes": 1860031,
+      "openMs": 305.41891599999985,
       "gate": {
-        "coldRenders": 502,
-        "coldBytes": 1860031,
-        "warmRenders": 3,
-        "warmBytes": 1760122,
+        "coldRenders": 3000,
+        "idleBumps": 20,
+        "idleRenders": 0,
+        "tickRenders": 100,
+        "expectedTickRenders": 100,
+        "tickRenderViolations": 0,
+        "closedEarly": 0,
         "faithful": true
       },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 15943.333000000166,
-        "p95us": 43036.582999999155,
-        "p99us": 48992.62500000077,
-        "meanUs": 20579.61810200001,
-        "minUs": 13480.333999999857,
-        "maxUs": 64215.08400000039
+      "heap": {
+        "baselineHeapBytes": 31105904,
+        "heldHeapBytes": 62432736,
+        "heapPerConnection": 31326.832,
+        "baselineRssBytes": 346013696,
+        "heldRssBytes": 346898432,
+        "rssPerConnection": 884.736,
+        "afterTicksHeapBytes": 64010912,
+        "heapDriftPerConnection": 1578.176,
+        "wakesPerConnection": 46,
+        "heapDriftPerConnectionPerWake": 34.308173913043476
       },
-      "warmBytesMean": 939681.964,
-      "ticksPerSec": 48.59176662286148
+      "idleWake": {
+        "bumps": 20,
+        "cpuUsPerBump": 2595.15,
+        "cpuNsPerConnectionPerBump": 2595.15
+      },
+      "ticks": {
+        "measured": 20,
+        "lanesPerTick": 100,
+        "wall": {
+          "p50us": 12559.91599999993,
+          "p95us": 13974.541000000045,
+          "p99us": 13974.541000000045,
+          "meanUs": 12436.88119999998
+        },
+        "cpuMeanUs": 16735.7,
+        "cpuPerLaneUs": 167.357,
+        "bytesMeanPerTick": 329501.05
+      }
     },
     {
-      "name": "scaling/N=1000",
+      "name": "soak/N=5000+M=0",
       "params": {
-        "partons": 1000,
-        "liveCells": 1,
-        "depth": 2,
-        "sharedPulseCell": false
+        "connections": 5000,
+        "active": 0
       },
-      "coldMs": 42.07487500000025,
-      "coldBytes": 1446129,
+      "openMs": 1455.127125,
       "gate": {
-        "coldRenders": 1002,
-        "coldBytes": 1446129,
-        "warmRenders": 3,
-        "warmBytes": 1242372,
+        "coldRenders": 15000,
+        "idleBumps": 20,
+        "idleRenders": 0,
+        "tickRenders": 0,
+        "expectedTickRenders": 0,
+        "tickRenderViolations": 0,
+        "closedEarly": 0,
         "faithful": true
       },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 33674.37499999505,
-        "p95us": 80134.66699999844,
-        "p99us": 87633.74999999724,
-        "meanUs": 38290.04343800006,
-        "minUs": 25284.332999999606,
-        "maxUs": 158493.6250000028
+      "heap": {
+        "baselineHeapBytes": 54107760,
+        "heldHeapBytes": 196196456,
+        "heapPerConnection": 28417.7392,
+        "baselineRssBytes": 352862208,
+        "heldRssBytes": 572145664,
+        "rssPerConnection": 43856.6912,
+        "afterTicksHeapBytes": 196130504,
+        "heapDriftPerConnection": -13.1904,
+        "wakesPerConnection": 20,
+        "heapDriftPerConnectionPerWake": -0.65952
       },
-      "warmBytesMean": 1479893.31,
-      "ticksPerSec": 26.116449870818723
+      "idleWake": {
+        "bumps": 20,
+        "cpuUsPerBump": 19924.2,
+        "cpuNsPerConnectionPerBump": 3984.84
+      },
+      "ticks": null
     },
     {
-      "name": "dashboard/M=1",
+      "name": "soak/N=5000+M=500",
       "params": {
-        "partons": 200,
-        "liveCells": 1,
-        "depth": 2,
-        "sharedPulseCell": false
+        "connections": 5000,
+        "active": 500
       },
-      "coldMs": 6.902667000002111,
-      "coldBytes": 288812,
+      "openMs": 1467.0463339999997,
       "gate": {
-        "coldRenders": 202,
-        "coldBytes": 288812,
-        "warmRenders": 3,
-        "warmBytes": 249391,
+        "coldRenders": 15000,
+        "idleBumps": 20,
+        "idleRenders": 0,
+        "tickRenders": 500,
+        "expectedTickRenders": 500,
+        "tickRenderViolations": 0,
+        "closedEarly": 0,
         "faithful": true
       },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 4961.290999999619,
-        "p95us": 13931.375000000116,
-        "p99us": 19845.87499999907,
-        "meanUs": 6731.243659999928,
-        "minUs": 4630.832999995619,
-        "maxUs": 20392.332999996142
+      "heap": {
+        "baselineHeapBytes": 54511088,
+        "heldHeapBytes": 179385728,
+        "heapPerConnection": 24974.928,
+        "baselineRssBytes": 804978688,
+        "heldRssBytes": 807092224,
+        "rssPerConnection": 422.7072,
+        "afterTicksHeapBytes": 186599320,
+        "heapDriftPerConnection": 1442.7184,
+        "wakesPerConnection": 46,
+        "heapDriftPerConnectionPerWake": 31.36344347826087
       },
-      "warmBytesMean": 294971.188,
-      "ticksPerSec": 148.56095701043316
-    },
-    {
-      "name": "dashboard/M=10",
-      "params": {
-        "partons": 200,
-        "liveCells": 10,
-        "depth": 2,
-        "sharedPulseCell": false
+      "idleWake": {
+        "bumps": 20,
+        "cpuUsPerBump": 19201.5,
+        "cpuNsPerConnectionPerBump": 3840.3
       },
-      "coldMs": 12.090000000003783,
-      "coldBytes": 289243,
-      "gate": {
-        "coldRenders": 202,
-        "coldBytes": 289243,
-        "warmRenders": 12,
-        "warmBytes": 251615,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 5161.62500000064,
-        "p95us": 14420.665999998164,
-        "p99us": 20114.8749999993,
-        "meanUs": 7007.725750000189,
-        "minUs": 4754.0829999998095,
-        "maxUs": 21692.20800000039
-      },
-      "warmBytesMean": 299334.408,
-      "ticksPerSec": 142.6996483131454
-    },
-    {
-      "name": "dashboard/M=50",
-      "params": {
-        "partons": 200,
-        "liveCells": 50,
-        "depth": 2,
-        "sharedPulseCell": false
-      },
-      "coldMs": 6.121583000000101,
-      "coldBytes": 291370,
-      "gate": {
-        "coldRenders": 202,
-        "coldBytes": 291370,
-        "warmRenders": 52,
-        "warmBytes": 261533,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 5486.417000000074,
-        "p95us": 15050.332999999227,
-        "p99us": 20654.332999998587,
-        "meanUs": 7339.623761999883,
-        "minUs": 5159.333000003244,
-        "maxUs": 22014.500000004773
-      },
-      "warmBytesMean": 302741.78,
-      "ticksPerSec": 136.24676583252034
-    },
-    {
-      "name": "dashboard/M=200",
-      "params": {
-        "partons": 200,
-        "liveCells": 200,
-        "depth": 2,
-        "sharedPulseCell": false
-      },
-      "coldMs": 6.762458000004699,
-      "coldBytes": 299054,
-      "gate": {
-        "coldRenders": 202,
-        "coldBytes": 299054,
-        "warmRenders": 202,
-        "warmBytes": 299012,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 7027.7920000007725,
-        "p95us": 18765.24999999674,
-        "p99us": 24711.750000002212,
-        "meanUs": 9365.452122000124,
-        "minUs": 6618.45799999719,
-        "maxUs": 28479.707999998936
-      },
-      "warmBytesMean": 331617.328,
-      "ticksPerSec": 106.77541105046362
-    },
-    {
-      "name": "depth/D=1",
-      "params": {
-        "partons": 100,
-        "liveCells": 1,
-        "depth": 1,
-        "sharedPulseCell": false
-      },
-      "coldMs": 10.4597089999952,
-      "coldBytes": 144159,
-      "gate": {
-        "coldRenders": 101,
-        "coldBytes": 144159,
-        "warmRenders": 2,
-        "warmBytes": 125486,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 2387.0410000017728,
-        "p95us": 6762.875000000349,
-        "p99us": 7061.082999993232,
-        "meanUs": 2996.606173999998,
-        "minUs": 2198.1250000026193,
-        "maxUs": 11719.624999997905
-      },
-      "warmBytesMean": 142311.278,
-      "ticksPerSec": 333.71085218888044
-    },
-    {
-      "name": "depth/D=4",
-      "params": {
-        "partons": 100,
-        "liveCells": 1,
-        "depth": 4,
-        "sharedPulseCell": false
-      },
-      "coldMs": 16.528792000004614,
-      "coldBytes": 391022,
-      "gate": {
-        "coldRenders": 104,
-        "coldBytes": 391022,
-        "warmRenders": 5,
-        "warmBytes": 369734,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 2748.082999998587,
-        "p95us": 7290.04200000054,
-        "p99us": 7645.8330000023125,
-        "meanUs": 3266.08983400016,
-        "minUs": 2563.2079999995767,
-        "maxUs": 13275.58300000237
-      },
-      "warmBytesMean": 185574.358,
-      "ticksPerSec": 306.1765140658256
-    },
-    {
-      "name": "depth/D=16",
-      "params": {
-        "partons": 100,
-        "liveCells": 1,
-        "depth": 16,
-        "sharedPulseCell": false
-      },
-      "coldMs": 3.5546250000043074,
-      "coldBytes": 190945,
-      "gate": {
-        "coldRenders": 116,
-        "coldBytes": 190945,
-        "warmRenders": 17,
-        "warmBytes": 158035,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 3303.749999999127,
-        "p95us": 9364.165999999386,
-        "p99us": 13295.58299999917,
-        "meanUs": 4327.047640000004,
-        "minUs": 3016.583000004175,
-        "maxUs": 20756.333999997878
-      },
-      "warmBytesMean": 180793.618,
-      "ticksPerSec": 231.1044580965138
-    },
-    {
-      "name": "pulse/P=512",
-      "params": {
-        "partons": 512,
-        "liveCells": 512,
-        "depth": 2,
-        "sharedPulseCell": true
-      },
-      "coldMs": 30.9320000000007,
-      "coldBytes": 769889,
-      "gate": {
-        "coldRenders": 514,
-        "coldBytes": 769889,
-        "warmRenders": 3,
-        "warmBytes": 649062,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 51950.124999988475,
-        "p95us": 79789.12499999569,
-        "p99us": 93804.29200000071,
-        "meanUs": 58629.19683200015,
-        "minUs": 41538.1250000064,
-        "maxUs": 97606.33300000336
-      },
-      "warmBytesMean": 1010612.38,
-      "ticksPerSec": 17.056348270733846
-    },
-    {
-      "name": "pulse/P=512+20k",
-      "params": {
-        "partons": 512,
-        "liveCells": 512,
-        "depth": 2,
-        "sharedPulseCell": true
-      },
-      "coldMs": 22.787374999999884,
-      "coldBytes": 769596,
-      "gate": {
-        "coldRenders": 514,
-        "coldBytes": 769596,
-        "warmRenders": 3,
-        "warmBytes": 649005,
-        "faithful": true
-      },
-      "measuredTicks": 500,
-      "warm": {
-        "p50us": 57016.62500000384,
-        "p95us": 105559.41599998914,
-        "p99us": 161199.91700000537,
-        "meanUs": 65265.93557400027,
-        "minUs": 41247.08400000236,
-        "maxUs": 331044.9579999986
-      },
-      "warmBytesMean": 1048001.706,
-      "ticksPerSec": 15.321928525274462
+      "ticks": {
+        "measured": 20,
+        "lanesPerTick": 500,
+        "wall": {
+          "p50us": 89392.74999999907,
+          "p95us": 123747.70800000078,
+          "p99us": 123747.70800000078,
+          "meanUs": 96103.18330000003
+        },
+        "cpuMeanUs": 126725.75,
+        "cpuPerLaneUs": 253.4515,
+        "bytesMeanPerTick": 1987233.4
+      }
     }
   ]
 }

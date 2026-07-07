@@ -22,4 +22,60 @@ Re: Server context:
 
 - [ ] Should and can we make a new server context API available to the user? The tracing of the parent/child relation is the threading that allows us to do create server context, but does this also mean we can get `const MyContext = createServerContext(null) > <MyContext value={xyz}/> + use(MyContext)?`
 
-- [ ] Does this allow us to know when all children of a parent are completely finished rendering? So we currently have the trailer setup, but we have this because some async child can render and we need to rollup the fp from those as well. Also we need to specify what the schema, cms stuff or cells are used for the invalidation flow to work properly. We break those boundaries at some locations right now and that will bite us. So if we know the call sites, we can construct cells inside the renderer (maybe?), just call cells's value etc. and all influence the the fp correctly. We can even do this through async boundaries etc. We can completely get rid of the constructor architecture and move to a <Parton render={}/> component completely? We had that in an older version but had to abandon because of the lack of a proper server context architecture.
+---
+
+For the demo website I'd like to make a grid with chunks that are 512x512 in size. Each chunk consists of 32x32 tiles, making each tile 16x16px in size.
+This whole page is a infinite scroller to the left/right/top/bottom. For this to work we need our infinite scroller working perfectly.
+To achieve a large infinite scroller we can create larger bigChunks of 8x8 chunks so that we do not output all chunks all the time. Lets add 8x8 bigChunks on the page.
+Make sure with the correct scroll position we start at the center.
+Each tile has a coordinate in the top left 0,0, 1,1, etc.
+Each tile should get a light on the top right that flashes different colors depending on the frequency (green>blue>white), like a network light in the top left.
+The background of the tiles is a checkboard patter OR a line grid split up into prominent and less prominent lines
+Navigation should be possible with WASD but also draggable on mobile.
+In this demo I want to showcase all possible features that are in the framework and how they are supposed to work.
+I perhaps want to start out with a single chunk and progressively expand the world, exlaining every new information piece.
+I want to tell this in a story form, like you are embarking on a new adventure through the world of frameworks.
+This is clearly drawing inspiration from Factorio in the UI department and I want to target fellow developers deeply with this.
+
+```
+
++------------------------------------+------------------------------------+
+| 0,0                              ⊙ | 0,1                              ⊙ |
+| Parton: An RSC native framework    | This was a navigation              |
+|                                    |                                    |
+| A parton is an enhanced component  | A new parton was rendered.         |
+| One part on the client             | The first parton was untouched     |
+| One part on the server             | Not only by the client             |
+|                                    |                                    |
+| Partons can talk over the network  | But also by the server             |
+|                                    |                                    |
+| On each navigation the parton      | Partons can also                   |
+| communicates it's own existence    |                                    |
+| [`navigate('?page=2`)]             | [`navigate('?page=2&variant=2')]   |
+|                                    |                                    |
++------------------------------------+------------------------------------+
+```
+
+When navigating to variant=2 we change the content of 0,0 and not 0,1:
+
++---
+| Each navigation is a full rerender
+| by the server, but only the parts
+| that need rerendering are.
+|
+| if(searchParam('variant') === 2){}
+| return <>Each navigation...
+| else
+| return <>Parton: An RSC
+|
+|
+
+---
+
+Keepalive+Activity
+Cache
+Loading+Fallback
+Streaming vs Transition
+
+Cells
+Actions + Atomic cells
