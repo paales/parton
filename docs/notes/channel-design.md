@@ -84,14 +84,19 @@ attach credentials (Origin/Sec-Fetch-Site checks + cookie
 double-check — beacons carry cookies anyway), and `url` frames are
 validated same-origin server-side, not just client-side.
 
-Reliability is explicit, not assumed: the client buffers envelopes
-until acknowledged and retransmits on reattach; the envelope seq makes
-application idempotent (the shipped lastSeq gate, generalized). The
-downstream carries a cumulative "upstream seq applied" marker — the
-mirror image of the client's `ack` frame — which is what prunes the
-buffer and what makes `url` frames safe to send at all: a beacon's
-`204` is acceptance, not delivery. Until that marker ships (W4), only
-loss-tolerant frame kinds (visible, telemetry) ride the channel.
+Reliability is explicit, not assumed: the client buffers reliable
+envelopes until acknowledged and retransmits on reattach (SHIPPED in
+W4 — the `reliable` producer flag, original page-lifetime seqs,
+retransmit-first at establishment); application idempotence is per
+frame kind, seq-ordered statement semantics (the shipped lastSeq gate
+generalized per kind — never a whole-envelope replay gate, which
+would break out-of-order statement queueing). The downstream carries
+a cumulative "upstream seq applied" marker — the mirror image of the
+client's `ack` frame — which is what prunes the buffer and what makes
+`url` frames safe to send at all: a beacon's `204` is acceptance, not
+delivery. The shipped kinds (visible, detach, ack) are all
+loss-tolerant and skip the buffer; the machinery awaits W5's url /
+cancel kinds.
 
 Frame kinds, v1:
 
@@ -212,9 +217,14 @@ nothing but filtering), so channel-primary wants relevance-indexed
 wakes (wake only connections whose route can match the bump) instead
 of wake-all-and-filter; and **per-wake parked-heap accretion**: originally ~1KB/wake from
 re-armed promise reactions; the channel-hardening pass (wake arms
-released per park) halved it to ~500B/wake. The residual accretion is
-unattributed — W4 owns chasing it to zero before connections hold
-indefinitely; until then the keepalive cycle bounds it. The dominant per-connection cost is OUR mirror (visible set +
+released per park) halved it to ~500B/wake. The residual is
+attributed — the lane-drained arm's `.then` reaction on the per-park
+promise (a wake arm expressed as a promise reaction violates
+arm-release: reactions free only at settle) — and its fix lands as
+its own change on top of W4; until then the keepalive cycle bounds
+it. W4's own delivery bookkeeping stays O(1) per wake (per-delivery
+token records die at ack or connection close, bounded by the unacked
+window). The dominant per-connection cost is OUR mirror (visible set +
 cached tokens — world-page clients plausibly 100KB+), so the mirror is
 what gets capped and measured: the bench gains a `soak` category
 (N idle connections + M active lanes → RSS/CPU per connection) before
@@ -279,7 +289,24 @@ Each package is a worktree branch, lands green (`yarn test` +
 - **W4 — acks + evidence-based mirror + backpressure.** Delivery seqs
   downstream, `ack` frames upstream, mirror advances on ack, lane
   coalescing for lagging clients. Kills the torn-connection/zombie
-  class with a real signal.
+  class with a real signal. LANDED — per-connection delivery seqs on
+  every payload segment and lane (`seq` entries, recorded at COMMIT,
+  acked as a contiguous cumulative watermark), the `ack` frame + the
+  downstream `applied` marker (page-lifetime envelope seqs; the
+  attach statement's `applied` field seeds the session's gate), the
+  layered mirror (optimistic emit-time skip-set over the
+  client-proven ACKED layer; flip-statement tokens supersede both —
+  the eviction evidence), the two-signal lane-opening gate
+  (desiredSize pull-gate + the unacked delivery window, dirty-set
+  coalescing on window-free), the never-acked degrade (server:
+  deadline anchored at first delivered-settle, session notes the
+  reason, driver stops holding; client: sticky page degrade on a
+  failed first ack → the heartbeat's periodic discrete reloads), the
+  scheduled whole-tree reconcile on long-lived lanes connections, and
+  the reliable-class buffer + retransmit-on-reattach machinery
+  awaiting W5's frames:
+  [docs/internals/channel.md](../internals/channel.md) §Delivery is
+  evidenced.
 - **W5 — navigation + refetch over the channel.** `url` frames,
   navigation segments in stream order, discrete path refactored to the
   short-lived channel, subsumed client guards retired. The largest and
@@ -292,22 +319,29 @@ Each package is a worktree branch, lands green (`yarn test` +
 
 ## Open questions
 
-- Backpressure threshold and coalescing policy in W4 (skip
-  intermediate lane renders vs. render-and-drop) — decide against soak
-  numbers from W3.
+- ~~Backpressure threshold and coalescing policy~~ — RESOLVED in W4:
+  SKIP intermediate lane renders (never render-and-drop) — cells
+  carry state, not events, so one render of the latest value at
+  window-free supersedes every skipped intermediate. Threshold
+  `UNACKED_DELIVERY_WINDOW = 64`, sized against the W3 soak numbers
+  (rationale at the constant in `segmented-response.ts`).
 - Whether the frame long-poll supersede
   survives W5 or folds into the same stream-order argument.
 - e2e scope isolation: resolved by the shipped pattern — upstream
   POSTs thread no scope (they run before the request ALS); isolation
   is the globally-unique connection id, and scope resolves only on the
   held downstream GET. The channel endpoint keeps exactly that shape.
-- The attach anchor vs acks: the anchor proves "nothing relevant
-  happened since ts"; acks prove "the client committed what was
-  sent." W4 must define
-  their composition (anchor bounds the resync window, acks bound the
-  mirror) so they don't become two competing resync mechanisms —
-  both now live on the attach statement's timeline (the ack watermark
-  seeds from the attach statement).
+- ~~The attach anchor vs acks~~ — RESOLVED in W4, as shipped fact:
+  the three timeline statements never compete because they bound
+  different things. The anchor (`since`) bounds the DOWNSTREAM resync
+  window — what the initial segment must cover (honored: lanes-first;
+  refused: full render). Delivery acks bound the MIRROR — which fps
+  are client-proven holdings; the acked layer resets with the
+  connection and reattach seeds the mirror from the attach manifest
+  alone (the manifest is the durable evidence, so acks never become a
+  second resync path). The `applied` watermark anchors the UPSTREAM
+  envelope timeline — what the marker may assume already announced —
+  and all three ride one attach statement.
 - Multi-instance bus: separate note, blocking for multi-process
   production, not for this sequence.
 - RemoteFrame under channel-primary: a nav segment containing a
