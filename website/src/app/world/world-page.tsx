@@ -2,6 +2,8 @@ import { parton, type RenderArgs } from "@parton/framework"
 import { QUAD_ROOT_PX } from "./constants.ts"
 import { QuadTile } from "./quad.tsx"
 import { WorldScroller } from "./scroller.tsx"
+// Registers the world's warm projector (predictive chunk warming).
+import "./warm.ts"
 
 /**
  * The world page — a real scroller over a quadtree of quad tiles.

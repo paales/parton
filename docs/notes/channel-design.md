@@ -311,10 +311,29 @@ Each package is a worktree branch, lands green (`yarn test` +
   short-lived channel, subsumed client guards retired. The largest and
   last-risk package; starts only after W1+W4 are on master.
 - **W6 — telemetry + world consumer.** Lossy frames, scroll-vector
-  warming in the website world.
-- **Docs sweep** rides each package; the prior-art LiveView section is
-  rewritten once W4 lands (state-authority + degradation + wire-model
-  contrasts replace the per-request-HTTP contrast).
+  warming in the website world. LANDED (ahead of W5 — the two don't
+  touch) — the `telemetry` frame kind + strict decoder, the lossy
+  producer (`reportTelemetry` in `telemetry.ts`: newest-wins, rides
+  envelopes other statements justify, drop on fail, never buffered),
+  the session's latest-wins telemetry slot (NO wake, NO invalidation
+  — context, not a dependency), and the segment driver's predictive
+  warm pass at park (app-registered projector via
+  `registerWarmProjector`; byte-silent nested warm scope; one
+  projection per statement; `MAX_WARM_PER_PARK` bound;
+  window-skipping; never keepalive activity) with the world's chunk
+  warming as the in-tree consumer (scroller telemetry → swept-box
+  projection → chunk byte-cache):
+  [docs/internals/channel.md](../internals/channel.md) §Telemetry,
+  [docs/internals/streaming.md](../internals/streaming.md)
+  §Predictive warming at park. Measured effect: a warmed flip-in
+  lane replays in ~3ms where the same parton's cold lane pays its
+  full body (~127ms at a 120ms body) —
+  `channel-warm.rsc.test.tsx`.
+- **Docs sweep** rides each package. The prior-art LiveView rewrite
+  landed with W6: state authority + degradation + wire/cache model
+  replaced the per-request-HTTP contrast
+  ([docs/reference/prior-art.md](../reference/prior-art.md) §Adjacent
+  server + collaborative systems).
 
 ## Open questions
 
@@ -361,7 +380,12 @@ Each package is a worktree branch, lands green (`yarn test` +
 - Wake priority: where queued `url` frames sit relative to pending
   flips and bump wakes. Position to defend: nav-first; old-route flip
   lanes then defer against the new routeKey (harmless, but say it).
-- Telemetry v1 cost honesty: every beacon carries the full Cookie
-  header (that's the feature) — at scroll cadence, consent-laden
-  commerce cookies dominate the envelope. State the real v1 byte cost;
-  the datagram transport is the fix, not HPACK hand-waving.
+- ~~Telemetry v1 cost honesty~~ — RESOLVED in W6, stated as shipped
+  fact in [docs/internals/channel.md](../internals/channel.md)
+  §Telemetry: a telemetry-only envelope body is ~200 B against
+  ~430 B of fixed headers plus the full Cookie header — ~0.8 KB per
+  beacon on a lean page, **~3.5–4.5 KB (>90 % cookie) under a
+  consent-laden commerce cookie jar**. Contained in v1 by never
+  letting telemetry justify an envelope alone (it rides flushes
+  other statements schedule); the datagram transport class is the
+  designated fix.

@@ -106,7 +106,7 @@ describe("channel envelope decode", () => {
 			connection: "c1",
 			seq: 3,
 			frames: [
-				{ kind: "telemetry", scroll: [4, 5] },
+				{ kind: "future-kind", payload: [4, 5] },
 				{ kind: "visible", changed: ["a"], visible: ["a"], cached: ["a:_:f"] },
 				{ kind: "detach" },
 			],
@@ -273,7 +273,7 @@ describe("channel endpoint", () => {
 		try {
 			const res = await post(
 				envelope("chan-unknown", 1, [
-					{ kind: "telemetry", viewport: [800, 600] },
+					{ kind: "future-kind", payload: [800, 600] },
 					{ kind: "visible", changed: ["a"], visible: ["a"] },
 				]),
 			);

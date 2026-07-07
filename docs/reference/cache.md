@@ -175,6 +175,41 @@ boundary is a wake hint for the segment driver's `?live=1` long-poll
 loop. The `cache` prop is independent — caching is byte storage,
 `expires()` is a freshness boundary.
 
+## Predictive warming
+
+On a live connection, the byte cache can be filled BEFORE a cullable
+parton scrolls into view. Two small surfaces, one mechanism:
+
+```tsx
+// "use client" — state the scroll context (deep path per the barrel caveat)
+import { reportTelemetry } from "@parton/framework/lib/telemetry.ts"
+reportTelemetry({ viewport: { w, h }, scroll: { x, y, vx, vy } })
+
+// server module — map a statement onto the parked partons it will reach
+import { registerWarmProjector } from "@parton/framework"
+registerWarmProjector((telemetry, candidates) => projectAhead(telemetry, candidates))
+```
+
+`reportTelemetry` is the channel's lossy class: newest-wins, rides
+envelopes other statements justify (it never generates traffic of
+its own), droppable. The projector owns the geometry — how a scroll
+vector maps onto parton coordinates (`candidates` carry each parked
+parton's `type` + placement props) — and returns ids in priority
+order; the segment driver renders them into the byte cache at its
+park point, bounded, backpressure-aware, and without emitting a
+byte. The next real viewport flip then replays warm bytes. The
+worked example is the website world
+(`website/src/app/world/{scroller.tsx,warm.ts,chunk.tsx}`);
+mechanics in [`../internals/streaming.md`](../internals/streaming.md)
+§Predictive warming at park.
+
+Only the subtree pays off: the parton's own body function is
+invoked on every render, hit or miss (its returned tree is what a
+miss stores), so put the costly work — slow fetches, heavy
+composition — in child components inside the cached subtree. Tracked
+reads and cell resolves stay in the parton body, where they record
+(a plain child component's reads are not attributed).
+
 ## Related
 
 - [`partial.md`](./partial.md) for the constructor surface

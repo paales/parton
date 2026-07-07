@@ -516,6 +516,52 @@ directly. Verified end to end by
 in-process drive) and the product-browse e2e specs (the fallback
 path).
 
+## Predictive warming at park
+
+The lane driver's one speculative move: when it is about to park and
+the session holds a telemetry statement it has not yet projected
+(`ConnectionSession.telemetry` — the channel's lossy frame,
+[`channel.md`](./channel.md) §Telemetry), it hands the statement plus
+the route's PARKED cullable partons (`isParkedOnConnection`) to the
+app-registered projector (`registerWarmProjector`,
+`lib/warm-projection.ts`) and renders the returned ids into the
+server byte-cache — so the next real flip-in's lane replays warm
+bytes instead of running a cold subtree
+(`framework/src/lib/segmented-response.ts::warmProjectedPartons`).
+The geometry — horizon, velocity judgment, coordinate math — is the
+app's; the framework owns only the mechanism and its hard edges:
+
+- **Byte-silent.** Each warm render runs inside a nested warm scope
+  (`_runWithWarmRenderScope`) that presents the target id as visible
+  WITHOUT touching the connection's real session, carries no cached
+  override and a fresh empty partial state (never fp-skips, never
+  touches the mirror), mints no delivery seq, and drains into the
+  void. The only durable effects are the byte-cache entry and the
+  parton's re-registered content snapshot.
+- **One projection per statement.** The statement's envelope seq is
+  the dedup key — re-parking on the same statement projects nothing;
+  the seq latch (`pendingWarmStatement`) also catches a statement
+  that landed while the driver was busy, the same shape as
+  `pendingFlips`. No await sits between the wait-entry latch checks
+  and the wake arms (an envelope can only land at an await point), so
+  no statement slips between a checked latch and an armed listener.
+- **Bounded and preemptible.** At most `MAX_WARM_PER_PARK` renders
+  per statement (rationale at the constant), and a flip landing
+  mid-pass ends it — real statements outrank speculation.
+- **Window-respecting, never activity.** A pass is skipped entirely
+  while the unacked delivery window is exceeded (a window-skip
+  records nothing, so the freeing ack's wake projects the same
+  statement), and warming never extends the keepalive — it is not
+  client-evidenced activity.
+
+First consumer: the website world's chunk warming
+(`website/src/app/world/warm.ts` — the projector;
+`scroller.tsx` — the telemetry producer; `chunk.tsx` — the `cache`
+option the warm fills). Covered by
+`framework/src/lib/__tests__/channel-warm.rsc.test.tsx` (the
+warm-vs-cold flip latency, byte silence, the cap, the window) and
+the world validator's warm-path scenario.
+
 ## The heartbeat rides the browser bootstrap
 
 `bootBrowser()` (`framework/src/entry/browser.tsx`) mounts

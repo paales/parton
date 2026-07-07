@@ -8,18 +8,24 @@
  * the grammar, and its decoders.
  *
  * An envelope is one coalesced, fire-and-forget POST: the client
- * states facts about itself — viewport flips and delivery acks today;
- * URL moves and telemetry are reserved kinds (see
+ * states facts about itself — viewport flips, delivery acks, and
+ * viewport telemetry today; URL moves are a reserved kind (see
  * `docs/notes/channel-design.md`) — addressed to the OPEN live
  * connection by its explicit id. The server answers `204` with no body — every rendered consequence of a
  * frame travels down the live stream as lane segments, never on this
- * response. Frame kinds split into two classes:
+ * response. Frame kinds split into three classes:
  *
  *   - **loss-tolerant** (`visible`, `detach`, `ack`) — statements the
  *     protocol re-establishes on its own (the next attach's seed, the
  *     keepalive backstop, the cumulative ack watermark), so a lost
  *     envelope costs nothing durable. These never enter the transport's
  *     retransmit buffer.
+ *   - **lossy** (`telemetry`) — newest-wins, droppable. Only the
+ *     latest statement has value (an old scroll vector describes a
+ *     viewport that no longer exists), so the transport keeps at most
+ *     one pending frame, a failed delivery is simply dropped, and no
+ *     discrete fallback exists. The class is in the grammar NOW so a
+ *     datagram transport can map onto it later without a redesign.
  *   - **reliable** (the url / cancel kinds later packages add) —
  *     buffered by the client transport (per its producer's `reliable`
  *     declaration, see [[channel-client]]) until the downstream
@@ -170,12 +176,40 @@ export interface AckFrame {
 	delivered: number;
 }
 
+/**
+ * Viewport telemetry — the client's scroll context, stated so the
+ * server can anticipate (predictive cache warming is the first
+ * consumer — see [[segmented-response]]'s warm pass). The LOSSY frame
+ * class: newest-wins per flush, droppable, no fallback. Content v1:
+ *
+ *   - `viewport` — the scroll container's client box, CSS px.
+ *   - `scroll` — position (`x`,`y`, the container's scrollLeft/Top)
+ *     and velocity (`vx`,`vy`, px/s; signed).
+ *   - `at` — the client's performance-clock timestamp (ms) of the
+ *     measurement, a timing mark for correlating successive frames.
+ *
+ * Applying one updates the connection session's telemetry slot and
+ * NOTHING else — no invalidation, no wake, never a render
+ * ([[connection-session]]): the channel carries freshness statements,
+ * and telemetry is context, not a dependency.
+ */
+export interface TelemetryFrame {
+	kind: "telemetry";
+	viewport: { w: number; h: number };
+	scroll: { x: number; y: number; vx: number; vy: number };
+	at: number;
+}
+
 /** The frame kinds shipped today. The grammar is open: an envelope may
- *  carry kinds this build doesn't know (url / cancel / telemetry land
- *  in later packages — `docs/notes/channel-design.md` § Wire shape),
- *  and the decoder SKIPS those rather than erroring, the same
- *  extensibility rule the downstream marker grammar follows. */
-export type ChannelFrame = VisibleFrame | DetachFrame | AckFrame;
+ *  carry kinds this build doesn't know (url / cancel land in later
+ *  packages — `docs/notes/channel-design.md` § Wire shape), and the
+ *  decoder SKIPS those rather than erroring, the same extensibility
+ *  rule the downstream marker grammar follows. */
+export type ChannelFrame =
+	| VisibleFrame
+	| DetachFrame
+	| AckFrame
+	| TelemetryFrame;
 
 export interface ChannelEnvelope {
 	/** The live connection this envelope addresses. An explicit token,
@@ -208,7 +242,8 @@ export interface ChannelEnvelope {
 export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 	if (value === null || typeof value !== "object") return null;
 	const v = value as Record<string, unknown>;
-	if (typeof v.connection !== "string" || v.connection.length === 0) return null;
+	if (typeof v.connection !== "string" || v.connection.length === 0)
+		return null;
 	if (typeof v.seq !== "number" || !Number.isFinite(v.seq)) return null;
 	if (!Array.isArray(v.frames)) return null;
 	const frames: ChannelFrame[] = [];
@@ -241,6 +276,21 @@ export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 			frames.push({ kind: "ack", delivered: f.delivered });
 			continue;
 		}
+		if (f.kind === "telemetry") {
+			// Strict-known: a malformed telemetry frame is a protocol
+			// violation like any known kind's — lossy class means droppable
+			// in transit, never sloppily decoded.
+			const viewport = decodeFiniteRecord(f.viewport, ["w", "h"]);
+			const scroll = decodeFiniteRecord(f.scroll, ["x", "y", "vx", "vy"]);
+			if (viewport === null || scroll === null) return null;
+			if (typeof f.at !== "number" || !Number.isFinite(f.at)) return null;
+			frames.push({
+				kind: "telemetry",
+				viewport: viewport as TelemetryFrame["viewport"],
+				scroll: scroll as TelemetryFrame["scroll"],
+				at: f.at,
+			});
+		}
 		// Unknown kind — skipped, never an error.
 	}
 	return { connection: v.connection, seq: v.seq, frames };
@@ -248,4 +298,23 @@ export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 
 function isStringArray(value: unknown): value is string[] {
 	return Array.isArray(value) && value.every((x) => typeof x === "string");
+}
+
+/** Decode an object whose named keys must all be finite numbers.
+ *  Returns the picked record, or `null` when any key is missing or
+ *  non-finite. Unknown extra keys are ignored — the statement grows by
+ *  adding fields. */
+function decodeFiniteRecord(
+	value: unknown,
+	keys: readonly string[],
+): Record<string, number> | null {
+	if (value === null || typeof value !== "object") return null;
+	const v = value as Record<string, unknown>;
+	const out: Record<string, number> = {};
+	for (const key of keys) {
+		const n = v[key];
+		if (typeof n !== "number" || !Number.isFinite(n)) return null;
+		out[key] = n;
+	}
+	return out;
 }

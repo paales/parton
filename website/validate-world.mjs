@@ -10,6 +10,14 @@
  *                      live-stream byte budget
  *   2. directions    — scroll east/south/west/north; per-stop
  *                      stream-in latency + pulses advancing at the stop
+ *   2b. warm path    — sustained-velocity scroll; the scroller's
+ *                      telemetry must reach the server and project
+ *                      chunk warming (the `[world] warm` projector
+ *                      line), and the leading-edge chunk must stream
+ *                      in at the stop (the warm-vs-cold latency number
+ *                      itself is pinned by the rsc tier's
+ *                      channel-warm suite — this asserts the pipeline
+ *                      engages end-to-end in a prod build)
  *   3. refresh       — reload at origin AND at a far position; pulses
  *                      must advance after every refresh (the
  *                      parked-after-refresh regression: a boundary
@@ -199,6 +207,29 @@ try {
   await scrollAndTime(0, -3200, "north")
   const dir = await pulsesAdvance(6000)
   check(dir.sampled > 0 && dir.moved >= 1, "pulses live at post-directions position", `${dir.moved}/${dir.sampled} advanced in 6s`)
+
+  // ── 2b. Warm path — sustained velocity must project chunk warming ──
+  // A smooth 1280px/s diagonal scroll (64px per 50ms step) keeps real
+  // velocity in the telemetry statements riding the flip envelopes;
+  // the server-side projector logs one `[world] warm` line per
+  // projected statement. Zero lines means the telemetry→session→
+  // projection pipeline never engaged.
+  const warmLineCount = () =>
+    serverLog.join("").split("\n").filter((l) => l.includes("[world] warm")).length
+  const warmLinesBefore = warmLineCount()
+  for (let i = 0; i < 40; i++) {
+    await page.$eval(scroller, (el) => el.scrollBy(64, 64))
+    await page.waitForTimeout(50)
+  }
+  const warmCenter = await centerChunkId()
+  let warmMs = null
+  try {
+    warmMs = await until(async () => (await page.$(`[data-testid="${warmCenter}"][data-loaded]`)) !== null, 10000, "")
+  } catch {}
+  check(warmMs !== null, `warm path: center ${warmCenter} loaded at stop`, warmMs !== null ? `${warmMs}ms` : "never loaded")
+  if (warmMs !== null) timing("stream-in warm-path stop", warmMs)
+  const warmProjected = warmLineCount() - warmLinesBefore
+  check(warmProjected > 0, "velocity scroll projects chunk warming", `${warmProjected} projection(s) logged`)
 
   // ── 3a. Refresh at position — scroll restoration must not park the world ──
   await page.reload()

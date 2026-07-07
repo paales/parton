@@ -37,6 +37,7 @@ import {
 	_getAttachStatement,
 	_getCachedOverride,
 	_isConnectionLive,
+	_runWithWarmRenderScope,
 	_setCachedOverride,
 	_setConnectionSession,
 	getRequest,
@@ -52,8 +53,8 @@ import {
 	_closeConnectionSession,
 	_openConnectionSession,
 	_recordDelivery,
-	capOverrideSet,
 	type ConnectionSession,
+	capOverrideSet,
 	type PendingFlip,
 	takeConnectionFlips,
 } from "./connection-session.ts";
@@ -69,7 +70,11 @@ import {
 	TAG_SEGMENT_SETTLED,
 	TAG_UPSTREAM_APPLIED,
 } from "./fp-trailer-marker.ts";
-import { computeRouteKey, parseCachedTokens, partialFromSnapshot } from "./partial.tsx";
+import {
+	computeRouteKey,
+	parseCachedTokens,
+	partialFromSnapshot,
+} from "./partial.tsx";
 import type { PartialSnapshot } from "./partial-registry.ts";
 import {
 	_readSnapshotsForRoute,
@@ -77,12 +82,16 @@ import {
 	enterRequestRegistry,
 	lookupPartial,
 } from "./partial-registry.ts";
-import { enterPartialState, type PartialRequestState } from "./partial-request-state.ts";
+import {
+	enterPartialState,
+	type PartialRequestState,
+} from "./partial-request-state.ts";
 import { muxEndFrame, muxFrame } from "./parton-mux.ts";
 import {
 	_routeHasMatchingBump,
 	_routeMatchingBumpIds,
 } from "./segment-relevance.ts";
+import { _getWarmProjector, type WarmCandidate } from "./warm-projection.ts";
 
 /** How long the driver holds the response open after each segment.
  *  Bumped to 20s — long enough that most realtime updates land
@@ -194,6 +203,31 @@ let RECONCILE_INTERVAL_MS = DEFAULT_RECONCILE_INTERVAL_MS;
  *  restore the default. */
 export function _setReconcileIntervalMs(ms?: number): void {
 	RECONCILE_INTERVAL_MS = ms ?? DEFAULT_RECONCILE_INTERVAL_MS;
+}
+
+/**
+ * Max parton renders one warm pass may run — the bound on speculative
+ * work per telemetry statement (a pass runs at most once per
+ * statement, at the park after it arrives). Each warm render costs
+ * about one lane render's CPU while shipping ZERO bytes, so the cap
+ * keeps a pass at roughly one wake's worth of lane work: speculation
+ * may never crowd out the renders clients are actually waiting on. A
+ * scroll that genuinely needs more warming states fresh telemetry as
+ * it moves, and each new statement is a new pass.
+ *
+ * 8 covers the deepest honest projection in tree: the website world's
+ * viewport sweeps at most ~2 chunk rows/columns per horizon at WASD
+ * speed (~6 chunks), and projections beyond the cap are the ones most
+ * likely to be superseded before they're reached.
+ */
+const DEFAULT_MAX_WARM_PER_PARK = 8;
+
+let MAX_WARM_PER_PARK = DEFAULT_MAX_WARM_PER_PARK;
+
+/** Test-visible warm-cap override. Call with no argument to restore
+ *  the default. */
+export function _setMaxWarmPerPark(count?: number): void {
+	MAX_WARM_PER_PARK = count ?? DEFAULT_MAX_WARM_PER_PARK;
 }
 
 /**
@@ -1016,8 +1050,121 @@ async function driveLaneStream(
 	const windowDirty = new Set<string>();
 	const deliveryWindowExceeded = (): boolean =>
 		session !== null &&
-		session.deliverySeq - session.ackedDeliverySeq >=
-			UNACKED_DELIVERY_WINDOW;
+		session.deliverySeq - session.ackedDeliverySeq >= UNACKED_DELIVERY_WINDOW;
+
+	// ── Predictive warming at park ──
+	// One projection per telemetry statement: the statement is the
+	// signal, so its envelope seq is the dedup key — re-parking on the
+	// same statement re-projects nothing (same statement, same
+	// projection), and a fresh statement is a fresh pass.
+	let warmedTelemetrySeq = -1;
+
+	// Render the parked partons the viewport is projected to reach into
+	// the server byte-cache, so their flip-in lanes replay warm bytes
+	// instead of running cold bodies. Speculation with hard edges:
+	//
+	//   - runs only at the park point (the driver has nothing real to
+	//     do) and NEVER extends the keepalive — warming is not
+	//     client-evidenced activity;
+	//   - skipped entirely while the unacked delivery window is
+	//     exceeded: a client that isn't committing what the kernel
+	//     already swallowed gets no speculative CPU spent on it;
+	//   - bounded at MAX_WARM_PER_PARK renders (rationale at the
+	//     constant) and preempted by any real statement landing
+	//     mid-pass — flips outrank speculation;
+	//   - byte-silent by construction: each render runs inside a nested
+	//     warm scope (`_runWithWarmRenderScope`) that presents the
+	//     target id as visible WITHOUT touching the connection's real
+	//     session, carries no cached override (the client mirror stays
+	//     untouched), and drains into the void — no controller, no
+	//     delivery seq, no promote. The only durable effects are the
+	//     byte-cache entry and the parton's re-registered content
+	//     snapshot (truthful either way; the next covering render
+	//     re-registers the culled state).
+	//
+	// The projection itself — geometry, horizon, velocity judgment — is
+	// the app's (`registerWarmProjector`): only the app knows how a
+	// scroll vector maps onto its partons' coordinates.
+	// True while the session holds a telemetry statement the pass has
+	// not consumed AND the gates that would let a pass run are open —
+	// the warm pass's LATCH: a telemetry envelope's wake can fire while
+	// the driver is busy (no armed listener to hear it), so the
+	// wait-entry check below consumes the statement off the session
+	// exactly like pendingFlips consumes a busy-window flip.
+	const pendingWarmStatement = (): boolean =>
+		session !== null &&
+		session.telemetry !== null &&
+		session.telemetry.seq !== warmedTelemetrySeq &&
+		!deliveryWindowExceeded() &&
+		_getWarmProjector() !== null;
+
+	const warmProjectedPartons = async (): Promise<void> => {
+		if (session === null) return;
+		const telemetry = session.telemetry;
+		if (telemetry === null || telemetry.seq === warmedTelemetrySeq) return;
+		// A window-skip deliberately records nothing: the freeing ack's
+		// wake re-reaches this pass and the SAME statement projects then.
+		if (deliveryWindowExceeded()) return;
+		const projector = _getWarmProjector();
+		if (projector === null) return;
+		// The statement is consumed from here — projected, or judged not
+		// projectable — so the latch above goes false in every path and
+		// the wait-entry loop can never spin on one statement.
+		warmedTelemetrySeq = telemetry.seq;
+		const snapshots = _readSnapshotsForRoute(scope, routeKey);
+		if (snapshots.size === 0) return;
+		const candidates: WarmCandidate[] = [];
+		for (const [id, snap] of snapshots) {
+			if (!isParkedOnConnection(id, snapshots, session)) continue;
+			candidates.push({ id, type: snap.type, props: snap.props });
+		}
+		if (candidates.length === 0) return;
+		const ids = projector(telemetry, candidates).slice(0, MAX_WARM_PER_PARK);
+		for (const id of ids) {
+			// Real statements outrank speculation: a flip landing mid-pass
+			// ends it (the remaining projections were racing that flip
+			// anyway), and a closing/detaching connection warms nothing.
+			if (closed || session.detached || session.pendingFlips.size > 0) return;
+			const snap = snapshots.get(id);
+			if (!snap) continue;
+			if (!isParkedOnConnection(id, snapshots, session)) continue;
+			const warmVisible = new Set(session.visible ?? []);
+			warmVisible.add(id);
+			try {
+				await _runWithWarmRenderScope(warmVisible, async () => {
+					// Fresh empty partial state: a warm render must never
+					// fp-skip (a skipped body stores nothing) and must never
+					// consult or mutate the connection's mirror layers.
+					enterPartialState({
+						requestedIds: null,
+						isPartialRefetch: true,
+						populateCache: false,
+						cachedFingerprints: new Map(),
+						cachedMatchKeys: new Map(),
+						ackedFingerprints: null,
+						explicitIds: new Set(),
+						cullFlip: false,
+						seenIds: new Set(),
+					});
+					const reader = renderToReadableStream(
+						partialFromSnapshot(id, snap),
+					).getReader();
+					try {
+						while (true) {
+							const { done } = await reader.read();
+							if (done) break;
+						}
+					} finally {
+						reader.releaseLock();
+					}
+				});
+			} catch {
+				// Speculative by definition: a failed warm render costs
+				// nothing — the flip-in lane renders cold, exactly as if the
+				// pass never ran.
+			}
+		}
+	};
 
 	// Whole-tree reconcile anchor — the last full segment this
 	// connection saw (its initial segment, an honored catch-up anchor's
@@ -1111,30 +1258,48 @@ async function driveLaneStream(
 		// entry check). Deferred flips deliberately do NOT short-circuit
 		// the wait: they only re-resolve on a real wake, so an unknown id
 		// can't busy-loop the driver.
-		const wake: SegmentWake =
+		const latchedWake = (): SegmentWake | null =>
 			session !== null && session.pendingFlips.size > 0
 				? "visibility"
 				: laneDrainedPending
 					? "lane-drained"
 					: windowDirty.size > 0 && !deliveryWindowExceeded()
 						? "window"
-						: await waitForSegmentWake(since, {
-								// Window-deferred ids must not arm the expiry timer
-								// either — their due deadlines would otherwise wake
-								// immediately, defer again, and hot-spin the loop
-								// until the window frees.
-								excludeExpiryIds:
-									windowDirty.size === 0
-										? openLaneIds
-										: new Set([...openLaneIds, ...windowDirty]),
-								laneDrained: {
-									pending: () => laneDrainedPending,
-									wakes: laneDrainedWakes,
-								},
-								session,
-								deadline: idleDeadline,
-								degradeAt,
-							});
+						: null;
+		let wake: SegmentWake | null = latchedWake();
+		while (wake === null && pendingWarmStatement()) {
+			// About to park with an unconsumed telemetry statement — the
+			// predictive warm point: no latched work, so speculative
+			// renders crowd out nothing. Statements that land while
+			// warming latch on the session; the loop re-checks both
+			// latches, so a flip preempts further passes and a fresh
+			// telemetry statement gets its own pass before the park.
+			await warmProjectedPartons();
+			wake = latchedWake();
+		}
+		if (wake === null) {
+			// No await between the loop's final latch evaluations and the
+			// wait's synchronous arm registration — an envelope can only
+			// land at an await point, so no statement can slip between a
+			// checked latch and an armed listener.
+			wake = await waitForSegmentWake(since, {
+				// Window-deferred ids must not arm the expiry timer
+				// either — their due deadlines would otherwise wake
+				// immediately, defer again, and hot-spin the loop
+				// until the window frees.
+				excludeExpiryIds:
+					windowDirty.size === 0
+						? openLaneIds
+						: new Set([...openLaneIds, ...windowDirty]),
+				laneDrained: {
+					pending: () => laneDrainedPending,
+					wakes: laneDrainedWakes,
+				},
+				session,
+				deadline: idleDeadline,
+				degradeAt,
+			});
+		}
 		if (wake === false) break;
 		if (wake === "degrade") {
 			// The first delivery settled a full deadline ago and no ack —
@@ -1225,7 +1390,11 @@ async function driveLaneStream(
 			// only `changed` testifies). Replaced, never mutated in place,
 			// so a render holding the old reference keeps a consistent
 			// view; the next report still replaces the set wholesale.
-			if (session !== null && session.visible !== null && !session.visible.has(id)) {
+			if (
+				session !== null &&
+				session.visible !== null &&
+				!session.visible.has(id)
+			) {
 				session.visible = new Set(session.visible).add(id);
 			}
 			if (!snapshots.has(id)) {
@@ -1620,7 +1789,10 @@ function isLiveSubscription(): boolean {
 function applyReportedCached(
 	id: string,
 	tokens: readonly string[],
-	override: { fingerprints: Map<string, Set<string>>; matchKeys: Map<string, Set<string>> },
+	override: {
+		fingerprints: Map<string, Set<string>>;
+		matchKeys: Map<string, Set<string>>;
+	},
 	ackedFps?: Map<string, Set<string>>,
 ): void {
 	const fps = new Set<string>();

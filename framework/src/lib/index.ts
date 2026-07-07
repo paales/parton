@@ -140,3 +140,15 @@ export { NavigationError, type NavigationErrorKind } from "../runtime/navigation
 
 export { PartialErrorBoundary } from "./partial-error-boundary.tsx"
 export { RemoteFrame, remote, type RemoteFrameProps } from "./remote-frame.tsx"
+
+// Predictive warming — the server-side projector registration the
+// segment driver's warm pass consults (segmented-response.ts). The
+// client-side statement (`reportTelemetry`) lives in `./telemetry.ts`
+// and is imported by deep path from `"use client"` modules per the
+// barrel caveat.
+export {
+  registerWarmProjector,
+  type WarmCandidate,
+  type WarmProjector,
+} from "./warm-projection.ts"
+export type { SessionTelemetry } from "./connection-session.ts"

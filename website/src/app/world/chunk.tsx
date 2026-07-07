@@ -40,6 +40,14 @@ export const WorldChunk = parton(
   },
   {
     selector: "#world-chunk",
+    // The byte-cache predictive warming fills (see ./warm.ts): the
+    // scroller's telemetry projects which parked chunks the viewport
+    // will reach, the warm pass renders them in here, and the real
+    // flip-in lane replays the stored bytes instead of re-encoding
+    // the subtree. Staleness is impossible — the cache key folds the
+    // pulse cell's invalidation ts, so a bump moves the key and
+    // misses; maxAge only bounds how long an untouched entry lingers.
+    cache: { maxAge: 30 },
     cull: {
       rootMargin: "100px",
       seed: ({ cx, cy }: { cx: number; cy: number }) =>

@@ -4,9 +4,9 @@ The client-states-facts half of the live connection. Two request
 shapes carry the statements: the ATTACH — the heartbeat's live fire
 as a POST whose body is the full client statement, answered by the
 held segmented stream — and the coalesced envelopes of frames a page
-POSTs to the session that stream opened. Visibility flips and
-delivery ACKS are the shipped frame kinds; the grammar is built to
-grow (url / cancel / telemetry are designed but unshipped — the
+POSTs to the session that stream opened. Visibility flips, delivery
+ACKS, and viewport TELEMETRY are the shipped frame kinds; the grammar
+is built to grow (url / cancel are designed but unshipped — the
 roadmap and the full design rationale live in
 [`../notes/channel-design.md`](../notes/channel-design.md)). The
 downstream half — segments, lanes, markers — is
@@ -119,17 +119,64 @@ Frame kinds shipped:
 | `visible` | `{changed, visible, cached?}` — the visibility statement: flipped ids, the wholesale snapshot, the client's actual holdings for the changed ids | Applied to the connection session; flipped-IN partons lane on the EXISTING stream (never on this response) |
 | `ack` | `{delivered}` — the highest CONTIGUOUSLY committed delivery seq (cumulative) | Advances the session's ack watermark, folds the covered deliveries' fps into the ACKED mirror layer, frees the unacked delivery window (the parked driver wakes), and — any ack frame at all — proves the duplex (`firstAckReceived`, the never-acked degrade's off-switch) |
 | `detach` | nothing | Explicit close: the parked driver wakes, the drive loop exits, the session closes. Best-effort by nature (sent on `pagehide` via keepalive fetch); the keepalive timeout remains the backstop |
+| `telemetry` | `{viewport: {w,h}, scroll: {x,y,vx,vy}, at}` — the client's scroll context: container box, position, velocity (px/s), performance-clock timestamp | Replaces the session's `telemetry` slot, latest-wins by envelope seq. NOTHING else: no invalidation, no wake, never a render — the channel carries freshness statements, and telemetry is CONTEXT, not a dependency. Consumers read the slot when awake for their own reasons (the warm pass — see §Telemetry) |
 
 Responses carry no body: `204` applied; `400` malformed; `403`
 cross-site; `404` connection gone — see §Security. Frame kinds split
-into two classes: **loss-tolerant** (`visible`, `detach`, `ack` — the
-protocol re-establishes their statements on its own: the next
-attach's seed, the keepalive backstop, the cumulative watermark) and
-**reliable** (the url / cancel kinds later packages add), which ride
-the transport's retransmit buffer — see §Delivery is evidenced.
+into three classes: **loss-tolerant** (`visible`, `detach`, `ack` —
+the protocol re-establishes their statements on its own: the next
+attach's seed, the keepalive backstop, the cumulative watermark),
+**lossy** (`telemetry` — newest-wins, droppable, no fallback: only
+the latest statement has value), and **reliable** (the url / cancel
+kinds later packages add), which ride the transport's retransmit
+buffer — see §Delivery is evidenced.
 
 Shared grammar + decoder: `framework/src/lib/channel-protocol.ts`
 (import-safe on both sides).
+
+## Telemetry — the lossy class
+
+`telemetry` is the one shipped LOSSY kind, and its whole pipeline is
+built around "context, not dependency":
+
+- **Producing.** The app states its scroll context through
+  `reportTelemetry(data)` (`framework/src/lib/telemetry.ts`, deep
+  path from `"use client"` modules — the website world's scroller is
+  the first producer). The module keeps at most ONE pending frame
+  (newest-wins; a new report overwrites the old) and schedules NO
+  flush and NO timer: the frame rides the next envelope another
+  statement justifies — during any scroll that could reach parked
+  content, visibility flips and acks fire constantly, so telemetry
+  flows exactly when it is useful and adds zero traffic of its own.
+  A failed envelope drops the frame (`deliveryFailed` re-queues
+  nothing); `collect(null)` — no connection — drops it too, because
+  re-presenting stale context later would state a falsehood. Never
+  `reliable`: telemetry never enters the retransmit buffer.
+- **Applying.** The session's `telemetry` slot
+  (`ConnectionSession.telemetry`) is replaced wholesale, latest-wins
+  by envelope seq, stamped with `receivedAt` (the server clock a
+  projection extrapolates on). Applying one fires no wake and
+  records no invalidation; the envelope's own applied-watermark
+  advance follows the standard envelope rule (a wake that renders
+  nothing).
+- **Consuming.** The segment driver's predictive warm pass — see
+  [`streaming.md`](./streaming.md) §Predictive warming at park. The
+  server-side projector registration (`registerWarmProjector`) is
+  the app-facing half.
+
+**Byte-cost honesty (v1).** A beacon carries the browser's full
+`Cookie` header — that IS the feature (cookie-varying state stays
+browser-authoritative) — and at scroll cadence the cookies dominate
+the statement. Measured against the shipped grammar: a
+telemetry-only envelope body is ~200 B (the frame itself ~130 B),
+the fixed request headers ~430 B, so a lean-cookie page pays
+~0.8 KB per telemetry-carrying beacon — while a consent-laden
+commerce cookie jar (2–4 KB of consent strings + analytics ids) puts
+the same beacon at **~3.5–4.5 KB, >90 % of it cookie**. That ratio
+is why telemetry never justifies an envelope alone, and why the
+designated fix is the datagram class of a WebTransport-style
+transport (the lossy class exists in the grammar now precisely so
+datagrams can carry it later) — not header-compression hand-waving.
 
 ## Delivery is evidenced
 
@@ -366,7 +413,9 @@ producer's statement and the envelope on the wire:
   everything after them, until the heartbeat re-establishes) ride the
   fallback. A producer declaring `reliable: true` opts its frames
   into the retransmit buffer instead — `deliveryFailed` is never
-  called for them (§Delivery is evidenced). The visibility controller
+  called for them (§Delivery is evidenced). A LOSSY producer
+  (`telemetry.ts`) uses the same contract with drop semantics at
+  every choice point (§Telemetry). The visibility controller
   (`visibility.tsx`) is the first external producer; the transport's
   own ack producer rides the same contract.
 - **Coalescing + serialization.** Flushes coalesce per animation
@@ -405,15 +454,20 @@ producer's statement and the envelope on the wire:
   `live-catchup.rsc.test.tsx` (the attach statement: anchor catch-up,
   attach-only anchor, body-manifest/URL-manifest verdict equivalence,
   the uncapped body manifest), `attach-rebind.rsc.test.tsx` (the
-  mid-connection-login → reattach → beacons-work-again flow).
+  mid-connection-login → reattach → beacons-work-again flow),
+  `channel-warm.rsc.test.tsx` (the session telemetry slot:
+  latest-wins, no wake, no render; the warm pass: byte silence, the
+  warm-vs-cold flip latency, the per-park cap, the window skip).
 - node tier: `channel-client.test.ts` (coalescing, page-lifetime seq,
   serialization, the fallback signal, pagehide detach),
   `channel-client-acks.test.ts` (contiguous commit watermark, ack
   coalescing + piggyback, dropped-lane attribution, the reliable
   buffer's prune/retransmit assembly, the first-ack degrade mark),
-  `attach-dispatch.test.ts` (statement decoder grammar incl.
-  `applied`; attach/action marker dispatch), `refetch-attach.test.ts`
-  (the manifest cap split by transport).
+  `channel-telemetry.test.ts` (the lossy producer: newest-wins, no
+  self-scheduled traffic, drop on fail, never buffered; the strict
+  decoder), `attach-dispatch.test.ts` (statement decoder grammar
+  incl. `applied`; attach/action marker dispatch),
+  `refetch-attach.test.ts` (the manifest cap split by transport).
 - The live-drive harness (`framework/src/test/live-drive.tsx`) reads
   the minted id off its own wire (`DriveHandle.connectionId`), logs
   every wire entry (`DriveHandle.entries` — how tests observe `seq` /

@@ -59,6 +59,7 @@ import {
 	type ChannelEnvelope,
 	decodeAttachStatement,
 	decodeChannelEnvelope,
+	type TelemetryFrame,
 	type VisibleFrame,
 } from "./channel-protocol.ts";
 
@@ -92,6 +93,32 @@ export interface PendingFlip {
 	 *  frame drops its tokens (they would be stale by the time the
 	 *  deferred lane runs). */
 	readonly cached?: readonly string[];
+}
+
+/**
+ * The connection's latest viewport telemetry — a `telemetry` frame's
+ * content plus the two facts the server adds: when it arrived
+ * (`receivedAt`, this process's clock — the only clock a projection
+ * can extrapolate on) and which envelope stated it (`seq`, the
+ * newest-wins gate). Latest-wins, no history: the slot is CONTEXT the
+ * server may consult (the segment driver's predictive warm pass is
+ * the first consumer), never a dependency — updating it fires no
+ * invalidation and no wake, and must never cause a render.
+ */
+export interface SessionTelemetry {
+	readonly viewport: { readonly w: number; readonly h: number };
+	readonly scroll: {
+		readonly x: number;
+		readonly y: number;
+		readonly vx: number;
+		readonly vy: number;
+	};
+	/** The client's performance-clock ms at measurement. */
+	readonly at: number;
+	/** Server clock (ms epoch) when the statement was applied. */
+	readonly receivedAt: number;
+	/** Envelope seq of the statement — the newest-wins gate. */
+	readonly seq: number;
 }
 
 export interface ConnectionSession {
@@ -160,7 +187,10 @@ export interface ConnectionSession {
 	 *  the client's cumulative ack covers the seq; dies with the
 	 *  connection otherwise. Bounded by the unacked delivery window —
 	 *  the same signal that stops new lanes stops new records. */
-	readonly pendingDeliveries: Map<number, ReadonlyArray<readonly [string, string]>>;
+	readonly pendingDeliveries: Map<
+		number,
+		ReadonlyArray<readonly [string, string]>
+	>;
 	/** The mirror's ACKED layer: fps whose delivering emission the
 	 *  client COMMITTED — client-proven holdings, consulted by the
 	 *  fp-skip verdict on an optimistic-layer miss. Per-id sets capped
@@ -194,6 +224,10 @@ export interface ConnectionSession {
 	 *  reason (`"never-acked"` today) when the first-ack deadline
 	 *  elapses with `firstAckReceived` still false. */
 	degradedReason: string | null;
+	/** Latest viewport telemetry, or `null` before any statement.
+	 *  Replaced wholesale per statement (newest-wins by envelope seq);
+	 *  applying one is side-effect-free — see [[SessionTelemetry]]. */
+	telemetry: SessionTelemetry | null;
 }
 
 /** Per-id bound on every mirror layer's fp / matchKey sets — the
@@ -220,8 +254,12 @@ export function capOverrideSet(set: Set<string>): void {
 // discrete fallback) until the heartbeat's next reopen and the
 // driver's sessions leak in the abandoned instance. globalThis keying
 // is inert in production: one evaluation per process.
-const sessions = ((globalThis as Record<string, unknown>).__partonConnectionSessions ??=
-	new Map<string, ConnectionSession>()) as Map<string, ConnectionSession>;
+const sessions = ((
+	globalThis as Record<string, unknown>
+).__partonConnectionSessions ??= new Map<string, ConnectionSession>()) as Map<
+	string,
+	ConnectionSession
+>;
 
 /** Open (register) a session for a live connection. Called by the
  *  segment driver before its first segment renders, so an envelope can
@@ -257,6 +295,7 @@ export function _openConnectionSession(
 		announcedAppliedSeq: binding?.applied ?? 0,
 		firstDeliverySettledAt: null,
 		degradedReason: null,
+		telemetry: null,
 	};
 	sessions.set(id, session);
 	return session;
@@ -399,6 +438,31 @@ export function takeConnectionFlips(
 	return flips;
 }
 
+/**
+ * Apply a `telemetry` frame: replace the session's telemetry slot,
+ * newest-wins by envelope seq (a stale envelope landing late cannot
+ * regress a fresher statement; `>=` so a later frame in the SAME
+ * envelope stands). Deliberately fires NO wake and records NO
+ * invalidation — the design invariant: the channel carries freshness
+ * statements, and telemetry is CONTEXT, not a dependency. Telemetry
+ * alone must never cause a render; consumers (the segment driver's
+ * warm pass) read the slot when they are awake for their own reasons.
+ */
+function applyTelemetryFrame(
+	session: ConnectionSession,
+	seq: number,
+	frame: TelemetryFrame,
+): void {
+	if (session.telemetry !== null && seq < session.telemetry.seq) return;
+	session.telemetry = {
+		viewport: frame.viewport,
+		scroll: frame.scroll,
+		at: frame.at,
+		receivedAt: Date.now(),
+		seq,
+	};
+}
+
 /** Apply a `detach` frame: mark the session and fire the wake arms so
  *  the parked driver exits its drive loop (which closes the session)
  *  instead of holding the stream for the keepalive. Best-effort by
@@ -495,6 +559,12 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 				// An advancing ack frees the unacked delivery window — the
 				// parked driver must re-evaluate its coalesced dirty set.
 				if (applyAckFrame(session, frame)) wakeNeeded = true;
+				break;
+			case "telemetry":
+				// No wake contribution: telemetry alone must never cause a
+				// render (see applyTelemetryFrame). The envelope-level applied
+				// watermark below advances as for any envelope.
+				applyTelemetryFrame(session, envelope.seq, frame);
 				break;
 		}
 	}
