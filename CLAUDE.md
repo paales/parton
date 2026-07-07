@@ -32,7 +32,7 @@ pipeline:
    runs; the wire carries its client-rendered `skeleton` + props, the
    fp folds the RESOLVED visibility (`measurement ?? seed(props)`).
    Framework transport params (`TRANSPORT_PARAMS`: partials, cached,
-   live, streaming, since, visible, __frame, __frameUrl,
+   live, streaming, visible, __frame, __frameUrl,
    __cullFlip) are stripped before evaluation — match never sees them.
 2. **The body reads; the read IS the dependency.** Tracked hooks —
    `searchParam()`, `cookie()`, `header()`, `pathname()`, `match()`,
@@ -173,7 +173,7 @@ yarn test:e2e           # Playwright, e2e-testing/e2e/ (auto-starts dev servers)
 yarn lint               # ESLint: React Compiler + rules-of-hooks (advisory; Biome formats)
 yarn bench:server       # warm-tick CPU benchmark — see bench/README.md
 node website/validate-world.mjs  # standing world gate (prod build): boot wire
-                        # budgets incl. the ?since catch-up, 4-direction
+                        # budgets incl. the attach catch-up, 4-direction
                         # stream-in timing, refresh/stress/parked checks.
                         # Run after any streaming/culling framework change:
                         # `yarn build:website` first.

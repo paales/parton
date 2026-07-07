@@ -1,13 +1,74 @@
-# The channel — upstream envelopes
+# The channel — the attach + upstream envelopes
 
-The upstream half of the live connection: the client STATES facts
-about itself to the server session its held stream opened, as
-coalesced envelopes of frames. Visibility flips are the first frame
-kind; the grammar is built to grow (url / ack / telemetry are designed
-but unshipped — the roadmap and the full design rationale live in
+The client-states-facts half of the live connection. Two request
+shapes carry the statements: the ATTACH — the heartbeat's live fire
+as a POST whose body is the full client statement, answered by the
+held segmented stream — and the coalesced envelopes of frames a page
+POSTs to the session that stream opened. Visibility flips are the
+first frame kind; the grammar is built to grow (url / ack / telemetry
+are designed but unshipped — the roadmap and the full design
+rationale live in
 [`../notes/channel-design.md`](../notes/channel-design.md)). The
 downstream half — segments, lanes, markers — is
 [`streaming.md`](./streaming.md).
+
+## The attach — the connection's opening statement
+
+Opening the channel IS a discrete request: the heartbeat's live fire
+is a POST to the page's own `_.rsc` URL, marked by an explicit
+request header and carrying the client statement as its JSON body
+(`AttachStatement` in `framework/src/lib/channel-protocol.ts`):
+
+```
+POST /<page>_.rsc?live=1&streaming=1
+x-parton-attach: 1
+
+{ "cached": [...], "since": {"epoch","ts"} | null, "visible": [...] | null }
+```
+
+- `cached` — the manifest: the client's `id:matchKey:fp` tokens,
+  stating WHAT it holds. UNCAPPED — the body has no request line to
+  protect, so the 96-entry `CACHED_MANIFEST_CAP` and the parked-id
+  priority walk apply only to the `?cached=` URL form, which survives
+  unchanged for every discrete request (targeted refetches,
+  navigations, preloads, action POSTs). The body manifest is
+  structurally bounded by the client pool itself — at most
+  `CLIENT_POOL_CAP` ids, each variant capped at `FP_CAP_PER_VARIANT`
+  fps (`getAllCachedPartialTokens` in `partial-client-state.ts`).
+  `PartialRoot` and the catch-up override install read the statement
+  where a discrete request's read the URL param; verdicts are
+  transport-identical.
+- `since` — the catch-up anchor, stating WHEN the client last heard:
+  the document's registry anchor, take-once. The honor checks are
+  unchanged (a live subscription, the epoch names the CURRENT
+  registry timeline, the route still has snapshots): honored, the
+  driver skips the whole-route initial segment and opens straight
+  into lanes; refused, it falls through to the full render —
+  over-fetch, never stale. The anchor rides ONLY the attach body; no
+  `?since=` URL form exists.
+- `visible` — the viewport seed, stating what the client SEES.
+  `null` is the unmeasured state (no statement); `[]` is a
+  measurement. The `?visible=` URL param survives as the no-session
+  fallback carrier (`readVisible`'s discrete cull-in reloads).
+
+Dispatch is by explicit marker, never body shape: `parseRenderRequest`
+keys an `_.rsc` POST on `x-parton-attach` (the attach — the full
+segmented drive + fp-trailer path, exactly a live GET's) vs
+`x-rsc-action` (an action — one commit-only segment). An action POST
+whose body happens to be statement-shaped stays an action and never
+opens a drive; an attach never decodes as an action; a POST claiming
+both markers is ill-formed. A malformed statement answers `400`. The
+statement lands on the request store (`applyAttachStatement` — the
+seam the entry and the in-process live-drive harness share) before
+any render runs, and unknown statement fields are IGNORED — the
+statement grows by adding fields (the ack watermark seeds here in the
+ack package).
+
+The attach is also the CREDENTIAL REBIND point: every attach binds
+its OWN request's scope + session identity into the connection
+session (`openLiveConnectionSession`), so a session cookie minted
+mid-connection — which 404s envelopes for the rest of that
+connection — starts working the moment the next attach presents it.
 
 ## Wire shape
 
@@ -84,8 +145,9 @@ Three checks gate every envelope, in order:
    session identity (`getSessionId() ?? ""`); every envelope must
    present the same one — beacons carry cookies anyway. Anonymous
    pages bind the empty identity and keep working. A session cookie
-   minted mid-connection fails the check until the heartbeat's next
-   fire rebinds; the transport's 404 fallback covers the gap.
+   minted mid-connection fails the check until the next attach
+   rebinds (§The attach); the transport's 404 fallback covers the
+   gap.
 
 Binding mismatches answer `404` — byte-identical to "connection
 gone" — so a hostile beacon can't distinguish wrong-creds from gone.
@@ -100,8 +162,8 @@ connection as a `conn` entry in the `\xFF` marker grammar
 
 - full path — ahead of the first segment's Flight rows (entries
   interleave; the body keeps flowing);
-- `?since=` catch-up path — immediately after the `lanes` marker, as
-  the region's first framed entry.
+- catch-up path (an honored attach anchor) — immediately after the
+  `lanes` marker, as the region's first framed entry.
 
 Receiving the entry IS establishment: the driver only mints ids for
 sessions it has opened, so the client can address the session the
@@ -148,9 +210,17 @@ producer's statement and the envelope on the wire:
   origin/scope/cookie checks, unknown-kind skip, in-envelope frame
   ordering, the mint handshake, detach ending a held drive),
   `connection-visibility.rsc.test.tsx` (visibility statement
-  semantics through the envelope, against a real drive).
+  semantics through the envelope, against a real drive),
+  `live-catchup.rsc.test.tsx` (the attach statement: anchor catch-up,
+  attach-only anchor, body-manifest/URL-manifest verdict equivalence,
+  the uncapped body manifest), `attach-rebind.rsc.test.tsx` (the
+  mid-connection-login → reattach → beacons-work-again flow).
 - node tier: `channel-client.test.ts` (coalescing, seq, serialization,
-  the fallback signal, pagehide detach).
+  the fallback signal, pagehide detach), `attach-dispatch.test.ts`
+  (statement decoder grammar; attach/action marker dispatch),
+  `refetch-attach.test.ts` (the manifest cap split by transport).
 - The live-drive harness (`framework/src/test/live-drive.tsx`) reads
   the minted id off its own wire (`DriveHandle.connectionId`) — the
-  emission-point proof rides every drive-based test.
+  emission-point proof rides every drive-based test — and drives
+  attaches through the entry's own statement seam
+  (`LiveDriveInit.attach`).

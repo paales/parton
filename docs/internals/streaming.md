@@ -48,10 +48,12 @@ any selector-routing logic that could replace it.
 2. **The browser bootstrap mounts `<LivePageHeartbeat />`** near
    the React root (`bootBrowser()` in `framework/src/entry/browser.tsx`). After hydration it holds a `?live=1`
    long-poll open against the current URL (it fires
-   `reload({streaming: true, live: true})` — `live` is what holds the
-   connection open; `streaming` only sets the client commit mode).
-   Each fire seeds the request with the client's current `?visible=`
-   set; the SERVER mints the fire's **connection id** at session open
+   `reload({streaming: true, live: true, attach})` — `live` is what
+   holds the connection open; `streaming` only sets the client commit
+   mode). Each fire is an ATTACH: a POST whose body carries the full
+   client statement — the uncapped manifest, the catch-up anchor, and
+   the current viewport seed ([`channel.md`](./channel.md) §The
+   attach); the SERVER mints the fire's **connection id** at session open
    and ships it down as the stream's `conn` entry (see
    §Visibility rides the connection and
    [`channel.md`](./channel.md)).
@@ -291,11 +293,13 @@ The pieces:
   stream ships down as its `conn` entry (the establishment
   handshake; see [`channel.md`](./channel.md)) — and closed when the
   drive loop exits. The session holds the connection's current
-  **visible set**, seeded from the request's `?visible=` param
-  (`null` when absent — the pre-measurement state) and stamped onto
+  **visible set**, seeded from the attach statement's `visible`
+  (`null` when unmeasured; a statement-less in-process live GET seeds
+  from `?visible=`) and stamped onto
   the request ALS store for the connection's lifetime, plus the
   attach's scope + session identity (what every channel envelope
-  must re-present). The store is `globalThis`-backed so it survives
+  must re-present — rebound fresh by every attach). The store is
+  `globalThis`-backed so it survives
   dev-server module re-evaluation: the held driver keeps the store
   it opened its session in while the channel endpoint resolves the
   module fresh per edit — both must address the same map, or every
@@ -419,12 +423,13 @@ clears it when the connection settles or an envelope's delivery
 fails. Three seams keep the set in sync across the connection's
 lifecycle:
 
-- **The seed.** Each heartbeat fire carries the controller's current
-  set as `?visible=` (absent while unmeasured), so a REOPENED
+- **The seed.** Each attach states the controller's current set as
+  the statement's `visible` (`null` while unmeasured), so a REOPENED
   connection's whole-tree first segment renders against the measured
   viewport instead of the cold anchor seed — without it, every
   reopen would clobber flip-committed content back to the anchor
-  state.
+  state. (`?visible=` remains the URL carrier for the discrete
+  no-session reload fallback.)
 - **The first-measurement sync.** The controller's establishment
   listener arms a full-set statement (`changed: []`) at the first
   viewport measurement — whichever side of the connection's
@@ -505,10 +510,13 @@ Behaviour:
   so a page with observers WILL measure; waiting means the fire's
   `?visible=` seed is the measured set, not the cold seed; a page
   with no cullables has nothing to wait for). Then
-  `nav.reload({streaming: true, live: true})` opens the long-poll
-  connection — `live` holds it open, `streaming` commits each pushed
-  segment progressively. Each fire seeds the request with the
-  client's current visible set; the FIRST fire after a document load
+  `nav.reload({streaming: true, live: true, attach})` opens the
+  long-poll connection — `live` holds it open, `streaming` commits
+  each pushed segment progressively, and the fire ships as the ATTACH
+  POST: the body statement carries the client's FULL manifest (the
+  refetch dispatcher fills it, uncapped — the discrete `?cached=` URL
+  form keeps its 96-entry cap) plus the current visible seed; the
+  FIRST fire after a document load
   also presents the document's catch-up anchor (below). The SERVER
   mints the fire's connection id at session open and ships it down
   as the stream's `conn` entry; the channel transport establishes on
@@ -517,12 +525,14 @@ Behaviour:
   controller's full set syncs at the first measurement, whichever
   side of the establishment it lands on — see §Visibility rides the
   connection and [`channel.md`](./channel.md).
-- **Live catch-up (`?since=`).** The SSR document's trailing
+- **Live catch-up (the attach anchor).** The SSR document's trailing
   comments include `<!--live-anchor:{"epoch","ts"}-->` — the
   invalidation registry's timeline point the document represents
   (`epoch` names the registry lifetime; `ts` is its logical
   counter). The client stores it take-once; the heartbeat's first
-  fire sends `?since=<epoch>:<ts>`, and the segment driver — when
+  fire presents it as the attach statement's `since` (the anchor
+  rides ONLY the attach body — no URL form), and the segment driver
+  — when
   the epoch matches the current registry lifetime and the route
   still has snapshots — SKIPS the initial whole-route segment
   entirely: the response opens directly with the `lanes` marker,
@@ -530,10 +540,11 @@ Behaviour:
   exactly what bumped or expired after the document rendered. The
   world's live boot is ~18 bytes instead of a route replay. The
   driver installs the connection's cached override from the
-  request's `?cached=` manifest (normally PartialRoot's job during
+  statement's manifest (normally PartialRoot's job during
   the skipped segment) so flip confirms stay truthful. Anchor
   invalid (restart, registry clear, HMR-wiped snapshots) or absent
-  (reopens, post-navigation fires) → the full initial render, over-
+  (reopens attach with `since: null`, as do post-navigation fires) →
+  the full initial render, over-
   fetch never stale. Client-side, a lanes-first stream resolves the
   reload's `streaming` milestone at the lanes marker (there is no
   payload to commit — the current tree IS the state).
