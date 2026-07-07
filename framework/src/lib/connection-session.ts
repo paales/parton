@@ -51,7 +51,12 @@
  *     beacon can't probe which of the two it hit.
  */
 
-import { _setAttachStatement, getRequest, getScope } from "../runtime/context.ts";
+import {
+	type CachedOverride,
+	_setAttachStatement,
+	getRequest,
+	getScope,
+} from "../runtime/context.ts";
 import { getSessionId, setSessionFrameUrl } from "../runtime/session.ts";
 import {
 	type AckFrame,
@@ -231,10 +236,13 @@ export interface ConnectionSession {
 	firstAckReceived: boolean;
 	/** Unacked emissions' holdings: delivery seq → the
 	 *  `(id, matchKey, fp)` triples that emission carried, plus the
-	 *  navigation point it was rendered as-of (the fold gate below).
-	 *  Folded into `ackedFps` (and dropped) when the client's
-	 *  cumulative ack covers the seq; dies with the connection
-	 *  otherwise. Bounded by the unacked delivery window — the same
+	 *  navigation point it was rendered as-of (an annotation of the
+	 *  delivery's render state). When the client's cumulative ack covers
+	 *  the seq the record settles: FOLDED into `ackedFps` (client-proven
+	 *  holding) unless the ack names the seq in its `dropped` set, in
+	 *  which case its optimistic promotions are EVICTED instead (the
+	 *  client received but did not hold it). Dies with the connection if
+	 *  never acked. Bounded by the unacked delivery window — the same
 	 *  signal that stops new lanes stops new records. An empty
 	 *  matchKey marks a JOIN-ONLY token (a trailer heal — the same
 	 *  content, warmed): it never evicts a slot. */
@@ -245,6 +253,14 @@ export interface ConnectionSession {
 			readonly asOf: number;
 		}
 	>;
+	/** The connection's optimistic mirror layer — the SAME
+	 *  `CachedOverride` object the driver's renders read and promote into
+	 *  (`_getCachedOverride()` in the driver's request scope), linked here
+	 *  so the channel endpoint — a separate request scope — can evict a
+	 *  client-reported dropped delivery's promotions from it. `null` until
+	 *  the driver's first segment installs the override. Per-connection:
+	 *  a reattach mints a fresh session and a fresh override. */
+	cachedOverride: CachedOverride | null;
 	/** The mirror's ACKED layer: fps whose delivering emission the
 	 *  client COMMITTED — client-proven holdings, consulted by the
 	 *  fp-skip verdict on an optimistic-layer miss. Per-id sets capped
@@ -339,14 +355,12 @@ export interface ConnectionSession {
 	 *  contiguous ack watermark can pass them (a silent gap would wedge
 	 *  the unacked window and hold every consequence gate forever). */
 	readonly voidSeqs: Set<number>;
-	/** Highest url-frame seq LATCHED on this session (advanced at
-	 *  envelope apply, ahead of the driver's consume). The ack fold
-	 *  gate: a pending delivery whose `asOf` predates this was — or by
-	 *  protocol will be — dropped by the client (its as-of guard uses
-	 *  the same two numbers), so its ack frees the window WITHOUT
-	 *  folding its fps into the acked layer. Genuinely-held pre-nav
-	 *  commits whose ack arrives after the latch are discarded too —
-	 *  conservative: an over-fetch, never a phantom holding. */
+	/** Highest url-frame seq LATCHED on this session — advanced at
+	 *  envelope apply, ahead of the driver's consume (`consumedNavSeq`
+	 *  trails it). A record of the client's stated navigation point: an
+	 *  observable of what the client has stated but the driver may not
+	 *  yet have rendered. Which acked deliveries the client HELD is the
+	 *  ack's own `dropped` statement, not an inference from this seq. */
 	statedNavSeq: number;
 	/** Seq of the last url frame the driver APPLIED to the connection's
 	 *  request state — the AS-OF every emission carries (`0` = the
@@ -411,6 +425,7 @@ export function _openConnectionSession(
 		ackedDeliverySeq: 0,
 		firstAckReceived: false,
 		pendingDeliveries: new Map(),
+		cachedOverride: null,
 		ackedFps: new Map(),
 		ackedSlots: new Map(),
 		// The attach statement's upstream watermark seeds both sides of
@@ -443,13 +458,15 @@ export function _openConnectionSession(
  * Record an emission's holdings against its delivery seq — the `(id,
  * fp)` pairs a payload segment or lane carried, captured by the driver
  * at the same walk that promotes them into the optimistic layer, plus
- * the navigation point the emission was rendered as-of. When the
- * client's cumulative ack covers the seq, the pairs fold into the
- * ACKED layer and the record dies — gated on the as-of (see
- * `statedNavSeq`): a delivery the client's navigation point dropped
- * must never become acked evidence. A record whose seq the client
- * already acked (the ack raced the driver's post-drain bookkeeping)
- * folds immediately instead of pending forever, through the same gate.
+ * the navigation point the emission was rendered as-of (an annotation
+ * of the delivery's render state). When the client's cumulative ack
+ * covers the seq, the pairs fold into the ACKED layer and the record
+ * dies — unless the ack names the seq DROPPED, which evicts instead
+ * (`applyAckFrame`). A record whose seq the client already acked (the
+ * ack raced the driver's post-drain bookkeeping) folds immediately: the
+ * late-record-after-ack edge. A dropped seq recorded after its own ack
+ * is a negligible edge the drop-report path doesn't cover here — the
+ * over-claim is bounded by the next slot promotion's eviction.
  */
 export function _recordDelivery(
 	session: ConnectionSession,
@@ -458,7 +475,7 @@ export function _recordDelivery(
 	asOf = 0,
 ): void {
 	if (seq <= session.ackedDeliverySeq) {
-		if (asOf >= session.statedNavSeq) foldAckedTokens(session, tokens);
+		foldAckedTokens(session, tokens);
 		return;
 	}
 	session.pendingDeliveries.set(seq, { tokens, asOf });
@@ -504,31 +521,55 @@ function foldAckedTokens(
 /**
  * Apply an `ack` frame: the client states its highest contiguously
  * COMMITTED delivery seq. Any ack frame — advancing or not — is the
- * duplex proof (`firstAckReceived`). An advancing ack folds the covered
- * pending deliveries into the ACKED layer and frees the unacked window;
- * the caller fires the wake arms so a driver parked behind the window
+ * duplex proof (`firstAckReceived`). An advancing ack settles the
+ * covered pending deliveries and frees the unacked window; the caller
+ * fires the wake arms so a driver parked behind the window
  * re-evaluates. Cumulative: a stale or duplicate ack is a no-op — the
  * watermark only moves forward.
+ *
+ * Each newly-acked delivery FOLDS into the acked layer (a client-proven
+ * holding) — UNLESS the ack names its seq in `dropped`: the client
+ * received but did not hold that delivery (it had navigated past its
+ * as-of), so its optimistic promotions are EVICTED and it never becomes
+ * acked evidence. The drop is the client's explicit statement, not a
+ * server inference: only the client knows which arrivals its live
+ * navigation point superseded.
  */
 function applyAckFrame(session: ConnectionSession, frame: AckFrame): boolean {
 	session.firstAckReceived = true;
 	if (frame.delivered <= session.ackedDeliverySeq) return false;
 	session.ackedDeliverySeq = frame.delivered;
+	const dropped = frame.dropped;
 	for (const [seq, record] of session.pendingDeliveries) {
 		if (seq <= frame.delivered) {
-			// The as-of fold gate: an acked delivery rendered before the
-			// latest latched navigation is one the client PROCESSED (the ack
-			// keeps the watermark contiguous and frees the window) but does
-			// not HOLD — its commit was dropped at the client's navigation
-			// point, by the same asOf-vs-navSeq comparison. Discard without
-			// folding; the record's freeing role is complete.
-			if (record.asOf >= session.statedNavSeq) {
+			if (dropped !== undefined && dropped.includes(seq)) {
+				evictOverrideTokens(session, record.tokens);
+			} else {
 				foldAckedTokens(session, record.tokens);
 			}
 			session.pendingDeliveries.delete(seq);
 		}
 	}
 	return true;
+}
+
+/** Remove a dropped delivery's optimistic promotions from the mirror —
+ *  the client received the delivery but held none of it, so its fps and
+ *  slot entries must not survive as phantom holdings the fp-skip verdict
+ *  could match. Operates on the SAME override object the driver's
+ *  renders read (linked onto the session at install), reachable from the
+ *  channel endpoint's separate request scope. No-op before the driver
+ *  installs one. */
+function evictOverrideTokens(
+	session: ConnectionSession,
+	tokens: ReadonlyArray<readonly [string, string, string]>,
+): void {
+	const override = session.cachedOverride;
+	if (!override) return;
+	for (const [id, mk, fp] of tokens) {
+		override.fingerprints.get(id)?.delete(fp);
+		if (mk !== "") override.slots.get(id)?.get(mk)?.delete(fp);
+	}
 }
 
 /** Unregister a session — the drive loop exited; the stream is closed
@@ -615,13 +656,10 @@ export function takeConnectionFlips(
  * later frame in the SAME envelope stands); a frame at or below the
  * consumed navigation seq is a stale restatement (a retransmit whose
  * navigation the request state already reflects) and applies as a
- * no-op — the per-kind idempotence contract. The latch also advances
- * `statedNavSeq` (the ack fold gate) IMMEDIATELY: an ack in the same
- * envelope was computed by a client whose navigation point was already
- * set when the url statement was created, so the gate must see the
- * statement first (`handleChannelPost` latches url frames ahead of the
- * in-order pass for the same reason). Always wakes the driver — the
- * navigation is the highest-priority latch at wait entry.
+ * no-op — the per-kind idempotence contract. Records the client's
+ * stated navigation point in `statedNavSeq` (the driver's consume
+ * trails it). Always wakes the driver — the navigation is the
+ * highest-priority latch at wait entry.
  */
 function applyUrlFrame(
 	session: ConnectionSession,
@@ -883,21 +921,13 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 			return new Response(null, { status: 400 });
 		}
 	}
-	// Latch WINDOW url frames AHEAD of the in-order pass: an ack riding
-	// the same envelope was computed by a client whose navigation point
-	// was already set when the url statement was created (statement time
-	// precedes the coalesced flush), so the fold gate must see the url
-	// statement first regardless of producer order within the envelope.
-	// FRAME url frames stay in the in-order pass — they never move the
-	// fold gate (`statedNavSeq` is window-scoped), and a superseding
-	// frame navigation's `cancel` precedes its url within the envelope,
-	// which the in-order pass honors for free.
+	// One in-order pass: frame order within the envelope is the applied
+	// order. A superseding frame navigation's `cancel` precedes its url
+	// (the producer emits them cancel-then-url), which this pass honors
+	// for free; the ack's drop set makes it order-independent of the url
+	// frames — the client names which acked deliveries it held, so no
+	// pass has to run ahead to seed a gate.
 	let wakeNeeded = false;
-	for (const frame of envelope.frames) {
-		if (frame.kind !== "url" || frame.frame !== undefined) continue;
-		applyUrlFrame(session, envelope.seq, frame, request.url);
-		wakeNeeded = true;
-	}
 	for (const frame of envelope.frames) {
 		switch (frame.kind) {
 			case "visible":
@@ -927,8 +957,9 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 				wakeNeeded = true;
 				break;
 			case "url":
-				// Window statements latched above, ahead of the in-order pass.
-				if (frame.frame !== undefined) {
+				if (frame.frame === undefined) {
+					applyUrlFrame(session, envelope.seq, frame, request.url);
+				} else {
 					applyFrameUrlFrame(
 						session,
 						envelope.seq,
@@ -936,8 +967,8 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 						frame.frame,
 						request.url,
 					);
-					wakeNeeded = true;
 				}
+				wakeNeeded = true;
 				break;
 		}
 	}

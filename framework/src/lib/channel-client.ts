@@ -291,6 +291,15 @@ const ACK_FLUSH_THRESHOLD = UNACKED_DELIVERY_WINDOW / 2;
  *  failure means the connection never acked once — the degrade
  *  signal. */
 let ackDeliveredOnConnection = false;
+/** As-of-dropped delivery seqs awaiting report to the server: the
+ *  client received these deliveries but did NOT hold them — the content
+ *  rendered as-of a navigation point it had already left, so its as-of
+ *  guard (`_channelDeliveryCommittable`) dropped it at arrival. The seq
+ *  still advances the contiguous watermark (a permanent gap would wedge
+ *  the window), but the server must not treat it as a holding: the ack
+ *  producer reports the seqs within the acked range so the server evicts
+ *  their optimistic mirror promotions. Reset per connection. */
+const asOfDroppedSeqs = new Set<number>();
 
 // ─── Reliable-class buffer + upstream watermark ──────────────────────
 
@@ -1165,9 +1174,11 @@ export function _laneDeliveryDropped(partonId: string): void {
  *  predates the client's navigation point on a stream that lives on.
  *  Consume the queue head and count the delivery PROCESSED: the
  *  watermark advances (a permanent gap would wedge the window and
- *  force a reconnect on every raced navigation), and the server's fold
- *  gate — the same asOf-vs-navSeq comparison — keeps the processed
- *  drop out of the acked mirror. */
+ *  force a reconnect on every raced navigation). The as-of drop itself
+ *  is reported to the server separately (`_reportAsOfDrop`) so it evicts
+ *  the delivery's optimistic mirror promotions; a torn/dying-stream drop
+ *  is NOT reported (it self-heals on reattach) — hence the two calls at
+ *  the drop site rather than a fold here. */
 export function _laneDeliveryDroppedStale(partonId: string): void {
 	const delivery = consumeLaneDelivery(partonId);
 	if (delivery !== null) commitDelivery(delivery.seq);
@@ -1182,10 +1193,25 @@ function consumeLaneDelivery(partonId: string): WireDelivery | null {
 
 /** A payload segment was dropped by the as-of guard (or arrived torn
  *  under a supersede) on a continuing stream — consume its delivery as
- *  PROCESSED so the watermark stays contiguous; the server's fold gate
- *  keeps it out of the acked mirror. */
+ *  PROCESSED so the watermark stays contiguous. A genuine as-of drop is
+ *  reported separately (`_reportAsOfDrop`) so the server evicts its
+ *  mirror promotions; a torn-supersede drop is not (the server aborted
+ *  that render — it promoted nothing to evict). */
 export function _segmentDeliveryDroppedStale(seq: number): void {
 	commitDelivery(seq);
+}
+
+/** Report a delivery the AS-OF guard dropped on a CONTINUING stream —
+ *  the client received it but had navigated past its as-of, so it holds
+ *  none of its content. The next ack carries the seq (once the watermark
+ *  covers it) so the server evicts the delivery's optimistic mirror
+ *  promotions and never folds them into the acked layer. Only for
+ *  genuine as-of drops — never a torn/dying-stream drop (those self-heal
+ *  on the reattach's whole-tree render). Schedules a flush so the report
+ *  rides promptly rather than waiting for the next passenger. */
+export function _reportAsOfDrop(seq: number): void {
+	asOfDroppedSeqs.add(seq);
+	scheduleChannelFlush();
 }
 
 // ─── Warm intent (preload) ───────────────────────────────────────────
@@ -1235,9 +1261,26 @@ const warmProducer: ChannelProducer = {
 const ackProducer: ChannelProducer = {
 	collect(connection: string | null): ChannelFrame | null {
 		if (connection === null) return null;
-		if (deliveredWatermark <= lastAckCollected) return null;
+		// Report as-of drops within the acked range — deliveries the client
+		// received but did not hold. Only those the cumulative watermark
+		// covers: a drop past the contiguous frontier isn't acked yet, so
+		// the server has no settled record to evict against; it rides the
+		// ack that finally covers it. The server evicts each seq's
+		// optimistic promotions instead of folding them.
+		const dropped: number[] = [];
+		for (const seq of asOfDroppedSeqs) {
+			if (seq <= deliveredWatermark) dropped.push(seq);
+		}
+		if (deliveredWatermark <= lastAckCollected && dropped.length === 0) {
+			return null;
+		}
 		lastAckCollected = deliveredWatermark;
-		return { kind: "ack", delivered: deliveredWatermark };
+		for (const seq of dropped) asOfDroppedSeqs.delete(seq);
+		return {
+			kind: "ack",
+			delivered: deliveredWatermark,
+			...(dropped.length > 0 ? { dropped } : {}),
+		};
 	},
 	deliveryFailed(): void {
 		// Per-connection ack state resets at the next establishment; the
@@ -1263,6 +1306,7 @@ export function _channelEstablished(connection: string): void {
 	deliveredOutOfOrder.clear();
 	deliveredWatermark = 0;
 	lastAckCollected = 0;
+	asOfDroppedSeqs.clear();
 	ackDeliveredOnConnection = false;
 	establishedSinceClose = true;
 	// Consequence gates anchor on the PREVIOUS connection's delivery
@@ -1530,6 +1574,7 @@ export function _resetChannelClient(): void {
 	deliveredOutOfOrder.clear();
 	deliveredWatermark = 0;
 	lastAckCollected = 0;
+	asOfDroppedSeqs.clear();
 	ackDeliveredOnConnection = false;
 	retransmitBuffer = [];
 	appliedWatermark = 0;

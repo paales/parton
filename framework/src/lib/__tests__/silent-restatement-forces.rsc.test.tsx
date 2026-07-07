@@ -112,6 +112,14 @@ describe("silent restatement vs in-flight force", () => {
 			releaseFa();
 
 			// Walk segments: navigation segments + reopened lanes regions.
+			// The mirror survives the consume, so statement 1's whole-tree
+			// segment fp-skips the held partons — fa's forced refetch stalls
+			// as a LANE (not a fresh whole-tree render), and statement 2's
+			// consume TEARS that stalled lane: the region ends with fa's body
+			// open, so its decode rejects (the browser entry's `handleLane`
+			// swallows exactly this). Tolerate the torn lane here and count
+			// only cleanly-decoded lanes — fa re-forces and lanes fresh on
+			// the reopened region.
 			const seen = new Set<string>();
 			const until = Date.now() + 8000;
 			outer: while (Date.now() < until) {
@@ -122,7 +130,13 @@ describe("silent restatement vs in-flight force", () => {
 					continue;
 				}
 				for await (const lane of step.value.lanes) {
-					await decodeLane(lane);
+					try {
+						await decodeLane(lane);
+					} catch {
+						// A torn forced lane (superseded mid-render) — its
+						// re-force lands on a later region.
+						continue;
+					}
 					seen.add(lane.partonId);
 					if (seen.has("force-a") && seen.has("force-b")) break outer;
 				}

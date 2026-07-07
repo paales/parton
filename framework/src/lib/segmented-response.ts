@@ -381,6 +381,7 @@ export async function driveSegmentedResponse(
 		const catchUpTs = liveCatchupTs();
 		if (catchUpTs !== null && session !== null) {
 			installCatchupCachedOverride();
+			linkOverrideToSession(session);
 			controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
 			enqueueConnectionId(controller, session.id);
 			await driveLaneStream(
@@ -476,6 +477,9 @@ export async function driveSegmentedResponse(
 		promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) =>
 			tokens.push([id, mk, fp]),
 		);
+		// PartialRoot installed the override during this render; link it to
+		// the session so the channel endpoint can evict client-reported drops.
+		linkOverrideToSession(session);
 		if (deliverySeq !== null) {
 			_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
 		}
@@ -581,6 +585,18 @@ function installCatchupCachedOverride(): void {
 		matchKeys: parsed.matchKeys,
 		slots: parsed.slots,
 	});
+}
+
+/** Link the connection's optimistic override — the object the driver's
+ *  renders promote into (`_getCachedOverride()` in this request scope) —
+ *  onto the session, so the channel endpoint (a SEPARATE request scope)
+ *  can evict a client-reported dropped delivery's promotions from the
+ *  very same object. Called once the driver has installed the override
+ *  (the cold render's first promote, or the catch-up install). The
+ *  override identity is stable for the connection's lifetime, so the
+ *  link is a one-shot reference, not a per-segment refresh. */
+function linkOverrideToSession(session: ConnectionSession): void {
+	session.cachedOverride = _getCachedOverride();
 }
 
 /**
@@ -1680,11 +1696,12 @@ async function driveLaneStream(
 	// segment — the newest statement's. Applies each statement to the
 	// connection's request state through the same seam a server-side
 	// `getServerNavigation().navigate` uses (`setRequest` on the ALS
-	// store), refreshes the route reads, prunes the unacked pre-nav
-	// deliveries (their client commits are as-of-dropped by protocol —
-	// the optimistic promotions they carried must not confirm phantom
-	// holdings), and reopens the lanes region after the final segment.
-	// Returns false when the connection closed under it.
+	// store), refreshes the route reads, and reopens the lanes region
+	// after the final segment. The mirror SURVIVES the consume: the
+	// client keeps its pre-navigation partons (parked), so the covering
+	// segment fp-skips them — a phantom is evicted only when the client
+	// explicitly reports the delivery dropped (`ack.dropped`). Returns
+	// false when the connection closed under it.
 	const handleNavigation = async (): Promise<boolean> => {
 		if (session === null) return true;
 		// Explicit forces whose lanes this consume tears were never
@@ -1733,7 +1750,6 @@ async function driveLaneStream(
 			routeKey = computeRouteKey(request.url);
 			session.routeKey = routeKey;
 			session.consumedNavSeq = nav.seq;
-			pruneDeliveriesBeforeNav(session, nav.seq);
 			const outcome = await emitNavSegment();
 			if (outcome === "closed") return false;
 			if (outcome === "superseded") continue;
@@ -2442,36 +2458,6 @@ function computeNextExpiresAtDelay(
 	}
 	if (!Number.isFinite(min)) return null;
 	return min - Date.now();
-}
-
-/**
- * Drop the unacked delivery records rendered before `navSeq`, undoing
- * their optimistic promotions. Their client commits are as-of-dropped
- * by protocol (the client's navigation point is exactly `navSeq`), so
- * neither layer of the mirror may keep treating those fps as holdings:
- * the acked layer never sees them (the record dies here; the fold gate
- * covers the latch→consume window), and the optimistic entries they
- * promoted are removed — an evicted entry costs an over-fetch, a kept
- * phantom would blank a parton. Genuinely-committed-but-unacked
- * pre-nav deliveries are pruned too: conservative, never stale.
- * MatchKeys stay — without a matching fp they confirm nothing; they
- * only shape hidden-variant emission.
- */
-function pruneDeliveriesBeforeNav(
-	session: ConnectionSession,
-	navSeq: number,
-): void {
-	const override = _getCachedOverride();
-	for (const [seq, record] of session.pendingDeliveries) {
-		if (record.asOf >= navSeq) continue;
-		if (override) {
-			for (const [id, mk, fp] of record.tokens) {
-				override.fingerprints.get(id)?.delete(fp);
-				if (mk !== "") override.slots.get(id)?.get(mk)?.delete(fp);
-			}
-		}
-		session.pendingDeliveries.delete(seq);
-	}
 }
 
 /**

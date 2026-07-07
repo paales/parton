@@ -43,6 +43,7 @@ import {
 	_lanePendingDelivery,
 	_onLaneProducerAnnounce,
 	_registerActionConsequences,
+	_reportAsOfDrop,
 	_segmentDelivery,
 	_segmentDeliveryCommitted,
 	_segmentDeliveryDroppedStale,
@@ -322,6 +323,9 @@ async function main() {
 							// arrived with the announcement).
 							if (!_channelDeliveryCommittable(delivery.asOf)) {
 								consumed = true;
+								// Received but not held — report the drop so the server
+								// evicts its optimistic mirror promotions.
+								_reportAsOfDrop(delivery.seq);
 								_laneDeliveryDroppedStale(lane.partonId);
 								return;
 							}
@@ -356,11 +360,12 @@ async function main() {
 						}
 						// As-of guard: a lane rendered before the client's
 						// navigation point is content of a state the client left —
-						// consume it PROCESSED (the watermark advances; the
-						// server's fold gate keeps it out of the acked mirror) and
-						// the stream lives on.
+						// consume it PROCESSED (the watermark advances) and report
+						// the drop so the server evicts its mirror promotions; the
+						// stream lives on.
 						if (!_channelDeliveryCommittable(delivery.asOf)) {
 							consumed = true;
+							_reportAsOfDrop(delivery.seq);
 							_laneDeliveryDroppedStale(lane.partonId);
 							return;
 						}
@@ -494,13 +499,15 @@ async function main() {
 						const delivery = takeSegmentDelivery();
 						// The as-of guard: a segment rendered before the client's
 						// navigation point is a state the client left. Consume it
-						// PROCESSED (the stream lives on); dropped commits skip
+						// PROCESSED (the stream lives on) and report the drop so the
+						// server evicts its mirror promotions; dropped commits skip
 						// trailers too — they would register fingerprints for a
 						// stale tree.
 						if (
 							delivery !== null &&
 							!_channelDeliveryCommittable(delivery.asOf)
 						) {
+							_reportAsOfDrop(delivery.seq);
 							_segmentDeliveryDroppedStale(delivery.seq);
 							continue;
 						}

@@ -225,10 +225,23 @@ export interface DetachFrame {
  * what advances the mirror's ACKED layer (the fps the acked emissions
  * carried become client-proven holdings) and what frees the unacked
  * delivery window the driver gates lane opening on.
+ *
+ * `dropped` names delivery seqs WITHIN the newly-acked range the client
+ * received but did NOT hold: the content rendered as-of a navigation
+ * point the client had already left, so its as-of guard
+ * (`_channelDeliveryCommittable`) dropped it at arrival. The seq still
+ * advances the client's contiguous watermark (a permanent gap would
+ * wedge the window), so it rides the cumulative `delivered` — but the
+ * server must not treat it as a holding: it EVICTS the delivery's
+ * optimistic mirror promotions and never folds them into the acked
+ * layer. Absent (or empty) = the client held every acked delivery. An
+ * explicit drop statement, not a server-side inference: only the client
+ * knows which arrivals its live navigation point superseded.
  */
 export interface AckFrame {
 	kind: "ack";
 	delivered: number;
+	dropped?: number[];
 }
 
 /**
@@ -407,7 +420,23 @@ export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 				f.delivered < 0
 			)
 				return null;
-			frames.push({ kind: "ack", delivered: f.delivered });
+			// `dropped` is optional; when present it must be an array of
+			// non-negative finite numbers — a malformed one is a protocol
+			// violation like any known-kind field's (the envelope 400s).
+			let dropped: number[] | undefined;
+			if (f.dropped !== undefined && f.dropped !== null) {
+				if (!Array.isArray(f.dropped)) return null;
+				for (const d of f.dropped) {
+					if (typeof d !== "number" || !Number.isFinite(d) || d < 0)
+						return null;
+				}
+				dropped = f.dropped as number[];
+			}
+			frames.push({
+				kind: "ack",
+				delivered: f.delivered,
+				...(dropped !== undefined && dropped.length > 0 ? { dropped } : {}),
+			});
 			continue;
 		}
 		if (f.kind === "telemetry") {

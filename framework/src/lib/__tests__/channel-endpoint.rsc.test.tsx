@@ -147,6 +147,49 @@ describe("channel envelope decode", () => {
 			}),
 		).toBeNull();
 	});
+
+	it("decodes an ack's optional `dropped` set and rejects a malformed one", () => {
+		// Absent `dropped` decodes to a bare ack.
+		expect(
+			decodeChannelEnvelope({
+				connection: "c",
+				seq: 1,
+				frames: [{ kind: "ack", delivered: 4 }],
+			})?.frames,
+		).toEqual([{ kind: "ack", delivered: 4 }]);
+		// A present, well-formed `dropped` rides through.
+		expect(
+			decodeChannelEnvelope({
+				connection: "c",
+				seq: 1,
+				frames: [{ kind: "ack", delivered: 4, dropped: [1, 3] }],
+			})?.frames,
+		).toEqual([{ kind: "ack", delivered: 4, dropped: [1, 3] }]);
+		// An empty `dropped` normalizes away (nothing to state).
+		expect(
+			decodeChannelEnvelope({
+				connection: "c",
+				seq: 1,
+				frames: [{ kind: "ack", delivered: 4, dropped: [] }],
+			})?.frames,
+		).toEqual([{ kind: "ack", delivered: 4 }]);
+		// A malformed `dropped` (non-array, or a non-number member) is a
+		// protocol violation like any known-kind field's.
+		expect(
+			decodeChannelEnvelope({
+				connection: "c",
+				seq: 1,
+				frames: [{ kind: "ack", delivered: 4, dropped: "1,3" }],
+			}),
+		).toBeNull();
+		expect(
+			decodeChannelEnvelope({
+				connection: "c",
+				seq: 1,
+				frames: [{ kind: "ack", delivered: 4, dropped: [1, -2] }],
+			}),
+		).toBeNull();
+	});
 });
 
 describe("channel endpoint", () => {
