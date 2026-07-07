@@ -61,7 +61,7 @@ wrapper (`createSpecComponent` in `partial.tsx`):
    predicates over `searchParams` / `cookies` / `headers`. Gates
    see the request AS SENT (raw `Cookie` header, no same-request
    `setCookie` overlay) with the `TRANSPORT_PARAMS` (`partials`,
-   `cached`, `live`, `streaming`, `since`, `visible`, `__conn`,
+   `cached`, `live`, `streaming`, `since`, `visible`,
    `__frame`, `__frameUrl`, `__cullFlip`) stripped, so transport
    noise never splits variant identity. A
    miss emits the parked keepalive (one hidden `<Activity>` per
@@ -201,11 +201,11 @@ Wire layer (trailers, segments, lanes — see
 | Module | Owns |
 |---|---|
 | `fp-trailer.ts` | The stream wrappers: `wrapStreamWithFpTrailer` (settle-time + flush fp emission), `wrapStreamWithCommitOnly` (action POSTs, `url` entry), `wrapSsrStreamWithFpTrailer` (the `<!--fp-trailer:…-->` HTML comment). |
-| `fp-trailer-marker.ts` | The `\xFF[parton:tag:length]\n` marker grammar + tag taxonomy (`fp`, `url`, `next`, `settled`, `lanes`, `mux`, `muxend`). |
-| `fp-trailer-split.ts` | The client splitter: `splitSegments` (no-holdback, milestone-gated cooperative abort), `splitAtFpTrailer`. |
+| `fp-trailer-marker.ts` | The `\xFF[parton:tag:length]\n` marker grammar + tag taxonomy (`fp`, `url`, `conn`, `next`, `settled`, `lanes`, `mux`, `muxend`). |
+| `fp-trailer-split.ts` | The client splitter: `splitSegments` (no-holdback, milestone-gated cooperative abort, the progressive `onEntry` surface the `conn` handshake rides), `splitAtFpTrailer`. |
 | `segment-trailers-client.ts` | Applying a segment's standard trailers client-side — `fp` via `_applyFpUpdates`, `url` via `_windowNav().navigate(…, { silent: true })`. |
 | `segmented-response.ts` / `segment-relevance.ts` / `parton-mux.ts` | The server segment driver + lane pump, the bump-relevance predicate, and the per-parton lane mux/demux framing. |
-| `connection-session.ts` / `visibility-protocol.ts` | Per-live-connection session state keyed by the client-minted `?__conn=` id — the visible set the cull gate reads on a live connection, the visibility-report registry (`reportConnectionVisibility`, the `POST /__parton/visible` handler), and the shared wire shape (`VisibilityReport`). See [streaming.md](./streaming.md) §Visibility rides the connection. |
+| `connection-session.ts` / `channel-protocol.ts` | Per-live-connection session state keyed by the SERVER-minted connection id — the visible set the cull gate reads on a live connection, statement application (`reportConnectionVisibility`), and the channel endpoint body (`handleChannelPost` — `POST /__parton/channel`, with its origin + attach-binding checks); the shared envelope grammar (`ChannelEnvelope`, frame kinds, `decodeChannelEnvelope`). See [channel.md](./channel.md) and [streaming.md](./streaming.md) §Visibility rides the connection. |
 
 Client merge layer:
 
@@ -220,8 +220,9 @@ Client merge layer:
 | `frame-client.tsx` | The frames tree on the nav entry (read/write + the write serialiser), `FrameNameProvider`, frame refetch dispatch, and the window/frame imperative handle builders. |
 | `use-navigation.tsx` | The `useNavigation()` hook layer (`[fire, progress]` tuples, `@self` resolution, preload), `useActivate`, `useScrollRestore`, `PageUrlContext`, `PartialIdContext`. |
 | `cell-client.tsx` | `useCell` + the client-side write batcher (see [`cell-internals.md`](./cell-internals.md)). |
-| `live-page-heartbeat.tsx` | The `?live=1` long-poll (mounted by `bootBrowser`) + the `data-parton-live` marker (its value is the minted `?__conn=` connection id), the measured `?visible=` seed (the first fire waits for the first viewport measurement when cullable observers are mounted), the `?since=` catch-up anchor (take-once from the document), and the connection-id publication the visibility controller keys its transport on (see [`streaming.md`](./streaming.md)). |
-| `visibility.tsx` / `page-interactive.ts` | The viewport observer for cullable partons + the flip controller (display-state priming, delta-only dispatch, first-measurement sync, report POSTs onto the open live connection; `?visible=` render-reload fallback for flip-INs only); the `data-parton-interactive` root marker. |
+| `channel-client.ts` | The channel's client transport ([`channel.md`](./channel.md)): envelope assembly + per-connection seq, rAF-coalesced serialized flushes over registered producers, the delivery-failure hand-back, connection lifecycle (`_channelWireEntry` establishment from the stream's `conn` handshake, the presence-only `data-parton-live` marker), and the `pagehide` detach frame. |
+| `live-page-heartbeat.tsx` | The `?live=1` long-poll (mounted by `bootBrowser`), the measured `?visible=` seed (the first fire waits for the first viewport measurement when cullable observers are mounted), and the `?since=` catch-up anchor (take-once from the document). Connection ids are server-minted; establishment rides the stream's `conn` entry, not this component (see [`streaming.md`](./streaming.md)). |
+| `visibility.tsx` / `page-interactive.ts` | The viewport observer for cullable partons + the flip controller — the channel's first producer (display-state priming, delta-only dispatch, first-measurement sync, `visible` frames onto the open live connection; `?visible=` render-reload fallback for flip-INs only); the `data-parton-interactive` root marker. |
 
 `framework/src/runtime/` holds the request plumbing: `context.ts`
 (request ALS, scope derivation, the cached-fp override carrier, the
@@ -382,16 +383,18 @@ Wire params:
 | `partials` | Selector labels (cosmetic `#`/`.` stripped). Resolves against snapshot `labels` AND `id` for fan-out targeting. |
 | `cached` | `id:matchKey:fp,…` — fingerprints the client has |
 | `live` / `streaming` | Server hold-open subscription / client commit mode — see [`streaming.md`](./streaming.md) |
-| `__conn` | The live connection's session id (heartbeat-minted; keys the connection-session state visibility reports address) |
 | `__frame=...&__frameUrl=...` | session-write a frame URL before render |
-| `visible` | The viewport-report id set the `cull` gate reads — on a live request it seeds the connection session's set |
+| `visible` | The viewport-visibility id set the `cull` gate reads — on a live request it seeds the connection session's set |
 | `since` | The live catch-up anchor (`<epoch>:<ts>`) — the heartbeat's first fire presents the document's registry anchor so the connection opens straight into lanes (see [`streaming.md`](./streaming.md) §Live catch-up) |
 | `__cullFlip` | The visibility controller's revalidation stamp on the reload fallback — its explicit `?partials=` targets may fp-skip (see *Cull-to-park*) |
 | `__populateCache` | Post-action full render that repopulates the client cache without treating `?partials=` as a filter |
 
 `partials`, `cached`, `live`, `streaming`, `since`, `visible`,
-`__conn`, `__cullFlip`, `__frame` and `__frameUrl` are the
-`TRANSPORT_PARAMS` (`lib/match.ts`) — `match` never sees them.
+`__cullFlip`, `__frame` and `__frameUrl` are the
+`TRANSPORT_PARAMS` (`lib/match.ts`) — `match` never sees them. (The
+live connection's id travels the OTHER way — server-minted, shipped
+as the stream's `conn` entry, presented back on channel envelopes;
+it is never a URL param.)
 `visible` is still a real request dimension — the cull gate reads it
 (session-first, URL fallback) and it folds into fps — it is only
 invisible to match gates, where it would otherwise split variant
@@ -464,9 +467,10 @@ replacement. The moving parts, end to end:
   live report for the id — the DISPLAY state — so first measurements
   that agree with what's actually shown dispatch nothing.
 - **The revalidation.** With a live connection open, flips ride the
-  connection as session state (a visibility-report POST; flipped-IN
-  partons come back as lane segments, cull-OUTs lane nothing — see
-  [`streaming.md`](./streaming.md)); otherwise the controller's flush
+  connection as session state (a `visible` frame on a channel
+  envelope; flipped-IN partons come back as lane segments, cull-OUTs
+  lane nothing — see [`streaming.md`](./streaming.md) and
+  [`channel.md`](./channel.md)); otherwise the controller's flush
   fires the reload fallback (`enqueueRefetch({cullFlip: true})`) for
   the flipped-IN partons only, which keeps its targets' `?cached=`
   tokens (a normal explicit target's are stripped) and stamps

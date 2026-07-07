@@ -156,17 +156,17 @@ export function session(): { readonly id: string } {
 }
 
 /** Resolve a parton's visibility from the connection's current visible
- *  set. Two carriers, one precedence order: a live connection's session
- *  set first (seeded from the `?live=1` request's `?visible=` param and
- *  updated by visibility-report POSTs — see
+ *  set — the read behind the spec-level `cull` option. Two carriers,
+ *  one precedence order: a live connection's session set first (seeded
+ *  from the `?live=1` request's `?visible=` param and updated by
+ *  channel envelopes' `visible` frames — see
  *  `../runtime/context.ts::_getConnectionVisibleSet`), then the
  *  request's own `?visible=<id>,…` param (one-shot culling reloads, the
  *  no-connection fallback). Absent from both → `undefined` (cold /
- *  pre-measurement). Shared by the `visible()` hook, `evalDepKeys`'
- *  store-and-reread, AND the spec wrapper's culled-state derivation
- *  (partial.tsx) so no consumer of the visibility signal can drift:
- *  every one reads the connection's CURRENT set at its own evaluation
- *  time. */
+ *  pre-measurement). Shared by `evalDepKeys`' store-and-reread AND the
+ *  spec wrapper's culled-state derivation (partial.tsx) so no consumer
+ *  of the visibility signal can drift: every one reads the
+ *  connection's CURRENT set at its own evaluation time. */
 export function readVisible(search: URLSearchParams, id: string): boolean | undefined {
   const connectionSet = _getConnectionVisibleSet()
   if (connectionSet !== null) return connectionSet.has(id)

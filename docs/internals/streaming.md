@@ -50,10 +50,11 @@ any selector-routing logic that could replace it.
    long-poll open against the current URL (it fires
    `reload({streaming: true, live: true})` — `live` is what holds the
    connection open; `streaming` only sets the client commit mode).
-   Each fire mints a fresh **connection id** (`?__conn=`) and seeds
-   the request with the client's current `?visible=` set — the
-   server opens a connection session keyed on the id (see
-   §Visibility rides the connection).
+   Each fire seeds the request with the client's current `?visible=`
+   set; the SERVER mints the fire's **connection id** at session open
+   and ships it down as the stream's `conn` entry (see
+   §Visibility rides the connection and
+   [`channel.md`](./channel.md)).
 3. **Server-side segment driver runs.** For each rendered segment,
    it races the wake arms:
    - `_onNextBump` — a `refreshSelector` lands (CRUD writes,
@@ -79,8 +80,9 @@ any selector-routing logic that could replace it.
      signal are latch + per-park registrations for the same reason.
    - Expiry arm — the earliest `expires()` boundary among the
      route's snapshots (read through `effectiveExpiresAt`) elapses.
-   - Visibility arm (lane driver only) — a visibility report lands on
-     the connection session, naming flipped parton ids.
+   - Visibility arm (lane driver only) — a channel envelope's
+     `visible` frame lands on the connection session, naming flipped
+     parton ids ([`channel.md`](./channel.md)).
    - Idle timeout (~20s) — the connection closes cleanly. The
      heartbeat's next interval tick (~5s default) reopens. In the
      lane loop the deadline is anchored at the last USEFUL activity
@@ -94,8 +96,8 @@ any selector-routing logic that could replace it.
 4. **On a relevant bump, an expiry boundary, or a visibility flip,
    the driver renders per-parton lanes.** The wake resolves WHICH
    snapshot ids it touched (`_routeMatchingBumpIds` for bumps;
-   the due-expiry set for time wakes; the report's `changed` ids for
-   visibility flips), and each touched parton
+   the due-expiry set for time wakes; the statement's `changed` ids
+   for visibility flips), and each touched parton
    renders in isolation through the snapshot-reconstruction path a
    `?partials=` refetch uses (`partialFromSnapshot` →
    `renderToReadableStream`). Each render's bytes frame as an
@@ -284,47 +286,50 @@ bytes, commit contention.
 The pieces:
 
 - **Connection sessions** (`lib/connection-session.ts`). A `?live=1`
-  request carrying a `?__conn=<id>` token — the id is minted fresh
-  per heartbeat fire, an explicit token, never inferred — gets a
-  server-side session opened by the segment driver before its first
-  segment renders and closed when the drive loop exits. The session
-  holds the connection's current **visible set**, seeded from the
-  request's `?visible=` param (`null` when absent — the
-  pre-measurement state) and stamped onto the request ALS store for
-  the connection's lifetime. The store is `globalThis`-backed so it
-  survives dev-server module re-evaluation: the held driver keeps the
-  store it opened its session in while the beacon endpoint resolves
-  the module fresh per edit — both must address the same map, or
-  every report 404s until the heartbeat's next reopen.
-- **The report POST** (`lib/visibility-protocol.ts`,
-  `POST /__parton/visible`, handled by `createRscHandler` before app
-  routing). The client's visibility controller sends flips as a
-  fire-and-forget JSON report `{connection, seq, changed, visible,
-  cached}`; the server applies it to the session and answers `204`
-  with no body — the flipped partons' bytes come down the live
-  stream as lane segments, never on this response. Each `changed` id
-  queues as a pending flip carrying the report's OWN statement about
-  it — the id's presence in THAT report's `visible` snapshot (present
-  = in-flip, absent = out-flip). The statement, not the latest set,
-  is what the flip resolves against: a snapshot's id-absence without
-  a `changed` entry is not testimony (the controller drops mid-swap
-  nodes from `inView` without flipping them — `reportGone` — so a
-  burst's later snapshot legitimately dips below an earlier in-flip),
-  and the client reports each flip exactly once, so resolving an
-  in-flip against a later dip would drop it forever. `seq` is a
-  client-monotonic counter: the session applies `visible` only from
-  reports newer than the last applied (two in-flight POSTs can't
-  commit an older set over a newer one) while `changed` ids still
-  queue regardless — a superseded report's flips still get their
-  resolution, and per id the statement with the highest seq stands
-  (only an explicit later out-flip cancels a pending in-flip).
-  `cached` rides ON the statement: the client's CURRENT
-  `id:matchKey:fp` tokens for the changed ids — its actual holdings
-  at flip time, which the driver swaps into the connection's cached
-  override before each direct flip's lane renders. `404` means "no
-  such connection" — the explicit signal
-  for the controller to clear its published id and deliver that
-  batch (and everything until the heartbeat re-establishes) via the
+  request gets a server-side session opened by the segment driver
+  before its first segment renders — under a SERVER-MINTED id the
+  stream ships down as its `conn` entry (the establishment
+  handshake; see [`channel.md`](./channel.md)) — and closed when the
+  drive loop exits. The session holds the connection's current
+  **visible set**, seeded from the request's `?visible=` param
+  (`null` when absent — the pre-measurement state) and stamped onto
+  the request ALS store for the connection's lifetime, plus the
+  attach's scope + session identity (what every channel envelope
+  must re-present). The store is `globalThis`-backed so it survives
+  dev-server module re-evaluation: the held driver keeps the store
+  it opened its session in while the channel endpoint resolves the
+  module fresh per edit — both must address the same map, or every
+  envelope 404s until the heartbeat's next reopen.
+- **The `visible` frame** (`lib/channel-protocol.ts`, on
+  `POST /__parton/channel` envelopes — endpoint mechanics, security
+  checks, and the other frame kinds live in
+  [`channel.md`](./channel.md)). The client's visibility controller
+  states flips as `{changed, visible, cached}`; the server applies
+  the statement to the session and answers `204` with no body — the
+  flipped partons' bytes come down the live stream as lane segments,
+  never on this response. Each `changed` id queues as a pending flip
+  carrying the frame's OWN statement about it — the id's presence in
+  THAT frame's `visible` snapshot (present = in-flip, absent =
+  out-flip). The statement, not the latest set, is what the flip
+  resolves against: a snapshot's id-absence without a `changed`
+  entry is not testimony (the controller drops mid-swap nodes from
+  `inView` without flipping them — `reportGone` — so a burst's later
+  snapshot legitimately dips below an earlier in-flip), and the
+  client states each flip exactly once, so resolving an in-flip
+  against a later dip would drop it forever. The envelope `seq` is a
+  per-connection-monotonic counter: the session applies `visible`
+  only from statements at or past the last applied (two in-flight
+  envelopes can't commit an older set over a newer one) while
+  `changed` ids still queue regardless — a superseded statement's
+  flips still get their resolution, and per id the statement with
+  the highest seq stands (only an explicit later out-flip cancels a
+  pending in-flip). `cached` rides ON the statement: the client's
+  CURRENT `id:matchKey:fp` tokens for the changed ids — its actual
+  holdings at flip time, which the driver swaps into the
+  connection's cached override before each direct flip's lane
+  renders. `404` means "no such connection" — the explicit signal
+  for the transport to clear its published id and for that batch
+  (and everything until the heartbeat re-establishes) to ride the
   render-reload fallback.
 - **The visibility wake.** The lane driver races the session's flip
   promise alongside the bump/expiry/keepalive arms. On a flip wake
@@ -333,20 +338,20 @@ The pieces:
   cull-OUT is complete on the client the moment it happens (the pair
   swaps to its inline skeleton; no server bytes exist for a culled
   state), so an out-flip's entire server effect is the session-set
-  update the report already applied. Before an in-flip's lane
+  update the statement already applied. Before an in-flip's lane
   renders, the session set LEARNS its id when the latest snapshot
   dipped below it (a wholesale replacement, never an in-place
   mutation): the lane's cull gate reads the session set, the lane
   ships the in-state, and the client's pair re-primes its controller
   from that emission — so the connection's knowledge for the id is
-  "in view". The next report still replaces the set wholesale.
+  "in view". The next statement still replaces the set wholesale.
   Flip-in lane
   renders carry a request state backed by the connection's cached
   override, so a flip may FP-SKIP: a skip is the zero-byte
   confirmation that the client's parked copy is current (see
   [render-pipeline.md](./render-pipeline.md#cull-to-park)). The
   verdict is computed against
-  the client's ACTUAL holdings — a direct flip's report `cached`
+  the client's ACTUAL holdings — a direct flip's stated `cached`
   tokens replace the override's entries for the id first (the
   additive override alone drifts from the client: prunes, evictions,
   slot overwrites — and confirming a phantom copy would blank the
@@ -359,12 +364,12 @@ The pieces:
   (8), oldest-first — the server-side mirror of the client's
   `FP_CAP_PER_VARIANT`: a parton drifting every lane would otherwise
   grow its sets for the connection's whole lifetime, and an evicted
-  entry only costs an over-fetch, never staleness. Lanes start in report order — the
+  entry only costs an over-fetch, never staleness. Lanes start in statement order — the
   controller sends in-view flips before cull-outs, so the visible
   world's renders lead. A flip whose id has NO route snapshot yet
-  (the report raced the render that first materializes its parton —
-  a chunk reported in-view while its container's flip-in lane is
-  still streaming) is DEFERRED, never dropped: the client reports
+  (the statement raced the render that first materializes its parton
+  — a chunk reported in-view while its container's flip-in lane is
+  still streaming) is DEFERRED, never dropped: the client states
   each flip exactly once, so a drop would leave the parton stale
   until the next whole-tree reconciliation. Deferred ids re-resolve
   on every subsequent wake (the materializing lane's drain is itself
@@ -378,7 +383,7 @@ The pieces:
   (`readVisible` in `server-hooks.ts`): the connection session's set
   first, the request's `?visible=` URL param as the no-session
   fallback. The session's set IS part of the connection's request
-  state — updated only by the reports, and every update arrives with
+  state — updated only by statements, and every update arrives with
   an explicit wake naming the ids it flipped, so a set change can
   never leave a rendered parton stale (the tracking invariant holds:
   the read is a function of connection state the framework
@@ -395,21 +400,24 @@ their cull-outs, and a raw-prop prime would poison the baseline so
 the observer's genuine flip against the showing skeleton reads as a
 no-delta duplicate and never dispatches) — so a first measurement
 that agrees with what's actually shown dispatches nothing, and
-priming is inert once an id has a real report. Real deltas coalesce
-per animation frame, ordered
-viewport-first on both transports (in-view flips outrank stale
-cull-outs — across batches, since the cap slices in-view first, and
-within one dispatch), and each flush checks `_getLiveConnectionId()`
-(`partial-client-state.ts`) — non-null routes the batch (cap 256;
-ids ride the JSON body, so no request-line limit) to the POST,
-`null` falls back to the one-shot
-`reload({selector, params: {visible}})` path for the flipped-IN ids
-only (cap 48, the `?partials=` request-line bound; cull-outs are
-local — the inline skeleton — and have no server effect without a
-session). The heartbeat owns the id: it publishes it when a fire's
-first segment commits (the server provably has the session open by
-then) and clears it when the connection settles. Three seams keep
-the set in sync across the connection's lifecycle:
+priming is inert once an id has a real report. The controller is the
+channel's first PRODUCER (`lib/channel-client.ts` — see
+[`channel.md`](./channel.md)): real deltas schedule a transport
+flush (rAF-coalesced, one dispatch in flight), ordered
+viewport-first on both paths (in-view flips outrank stale cull-outs
+— across batches, since the cap slices in-view first, and within one
+dispatch). At flush time, `collect` receiving the open connection's
+id contributes ONE `visible` frame (cap 256; ids ride the envelope's
+JSON body, so no request-line limit); receiving `null` runs the
+one-shot `reload({selector, params: {visible}})` fallback for the
+flipped-IN ids only (cap 48, the `?partials=` request-line bound;
+cull-outs are local — the inline skeleton — and have no server
+effect without a session). The connection id is SERVER-minted and
+established by the stream's `conn` entry as it is read (the wire
+hook in `entry/browser.tsx` → `_channelEstablished`); the transport
+clears it when the connection settles or an envelope's delivery
+fails. Three seams keep the set in sync across the connection's
+lifecycle:
 
 - **The seed.** Each heartbeat fire carries the controller's current
   set as `?visible=` (absent while unmeasured), so a REOPENED
@@ -417,14 +425,14 @@ the set in sync across the connection's lifecycle:
   viewport instead of the cold anchor seed — without it, every
   reopen would clobber flip-committed content back to the anchor
   state.
-- **The first-measurement sync.** The heartbeat arms a full-set
-  report (`changed: []`) at the first viewport measurement —
-  whichever side of the connection's publish it lands on — so a
-  connection established before hydration finished measuring still
-  learns the set.
+- **The first-measurement sync.** The controller's establishment
+  listener arms a full-set statement (`changed: []`) at the first
+  viewport measurement — whichever side of the connection's
+  establishment it lands on — so a connection established before
+  hydration finished measuring still learns the set.
 - **The newly-measured sync.** A first measurement for an id the
   session has never heard of (late-adopting subtrees measure after
-  the seed and any earlier sync) schedules a full-set report even
+  the seed and any earlier sync) schedules a full-set statement even
   when it AGREES with the primed display state — without it the
   session would park every late-measuring parton forever.
 - **Only measured nodes testify.** Three rules keep the observer's
@@ -499,15 +507,16 @@ Behaviour:
   with no cullables has nothing to wait for). Then
   `nav.reload({streaming: true, live: true})` opens the long-poll
   connection — `live` holds it open, `streaming` commits each pushed
-  segment progressively. Each fire mints a fresh connection id
-  (`?__conn=`) and seeds the request with the client's current
-  visible set; the FIRST fire after a document load also presents
-  the document's catch-up anchor (below). When the first segment
-  commits, the id is published to the visibility controller (and
-  stamped as the `data-parton-live` attribute value) so flips can
-  address the open connection — and the controller's full visible
-  set syncs at the first measurement, whichever side of the publish
-  it lands on — see §Visibility rides the connection.
+  segment progressively. Each fire seeds the request with the
+  client's current visible set; the FIRST fire after a document load
+  also presents the document's catch-up anchor (below). The SERVER
+  mints the fire's connection id at session open and ships it down
+  as the stream's `conn` entry; the channel transport establishes on
+  receipt (setting the presence-only `data-parton-live` marker) so
+  producers can address the open connection — and the visibility
+  controller's full set syncs at the first measurement, whichever
+  side of the establishment it lands on — see §Visibility rides the
+  connection and [`channel.md`](./channel.md).
 - **Live catch-up (`?since=`).** The SSR document's trailing
   comments include `<!--live-anchor:{"epoch","ts"}-->` — the
   invalidation registry's timeline point the document represents
@@ -587,11 +596,11 @@ Each segment's bytes look like:
 
 The tags split into two grammatical roles. **Milestones** (`settled`,
 `next`, `lanes`, `mux`, `muxend`) are phase transitions: they end the
-segment's body block. **Entries** (`fp`, `url`, any future data tag)
-carry data and may appear ANYWHERE — interleaved between Flight rows,
-not just after the body. The server exploits that for settle-time
-trailer emission: every parton's subtree settlement is observable
-(the `SettleScope` refcount in the Flight patch — see
+segment's body block. **Entries** (`fp`, `url`, `conn`, any future
+data tag) carry data and may appear ANYWHERE — interleaved between
+Flight rows, not just after the body. The server exploits that for
+settle-time trailer emission: every parton's subtree settlement is
+observable (the `SettleScope` refcount in the Flight patch — see
 [server-context.md](./server-context.md)), and
 `wrapStreamWithFpTrailer` registers a per-response sink that emits a
 parton's warm-fp entry the moment ITS subtree settles, so a fast
@@ -601,12 +610,20 @@ a safety net (aborted subtrees, post-settle invalidation drift) — so
 the last `fp` entry on the wire is always complete and consumers keep
 last-wins semantics. Lane renders skip the sink (`incremental: false`
 — a lane is one parton, its flush already fires at that parton's
-completion).
+completion). The `conn` entry is the live connection's SERVER-MINTED
+id — the channel's establishment handshake ([`channel.md`](./channel.md)):
+emitted once per connection, ahead of the first segment's Flight rows
+(or right after the `lanes` marker on a catch-up boot), so the
+transport can address the session before the first render drains.
 
 The client's `splitSegments` consumes body bytes until a `\xFF`
 (UTF-8 invalid → never inside Flight payload), reads the marker with
 `tryReadMarker`, records entry tags into the segment's trailer map and
 keeps the body flowing, and transitions phases on milestone tags.
+Entries ALSO surface progressively through the iterator's `onEntry`
+hook the moment they are read — how the `conn` handshake reaches the
+channel transport without waiting for the segment's trailer map to
+resolve at settle.
 
 The `settled` marker is the driver's explicit "this iteration is
 done" signal, written once a segment's render has fully drained (body

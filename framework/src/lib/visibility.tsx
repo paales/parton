@@ -84,10 +84,10 @@ const RUNWAY = "600px 0px"
  *  stay in `changed` and ride the next serialized flush. */
 const FLUSH_BATCH = 48
 
-/** Max flipped ids per report POST. The ids ride the JSON body (no
- *  request-line limit), so the cap is much higher than the reload
- *  path's — it only bounds how many concurrent lane renders one report
- *  can ask of the server. */
+/** Max flipped ids per `visible` frame. The ids ride the envelope's
+ *  JSON body (no request-line limit), so the cap is much higher than
+ *  the reload path's — it only bounds how many concurrent lane renders
+ *  one statement can ask of the server. */
 const POST_FLUSH_BATCH = 256
 
 /** The subset of `FragmentInstance` (React 19.3) this module uses. The

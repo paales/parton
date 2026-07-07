@@ -175,8 +175,8 @@ Rules that make the gate sound:
 - **Transport params are invisible.** The framework mints search
   params for its own transport — refetch targeting (`partials`), the
   client cache manifest (`cached`), live holds (`live`) and their
-  connection id (`__conn`) and catch-up anchor (`since`), commit mode
-  (`streaming`), the viewport-visibility report set (`visible` — read
+  catch-up anchor (`since`), commit mode
+  (`streaming`), the viewport-visibility set (`visible` — read
   by the `cull` gate, a tracked dependency, never a match dimension),
   frame routing (`__frame`, `__frameUrl`) — so the SAME
   page arrives with and without them (SSR, targeted refetch, live

@@ -519,11 +519,12 @@ interface LaneRuntime {
  * re-renders the returning state fresh (its fp folds every bump that
  * landed while parked, so it can't false-skip).
  *
- * Visibility flips are the fourth wake: a report POST updates the
- * connection session's visible set and queues each flipped id with the
- * report's OWN statement about it, and the driver lanes exactly the
- * ids whose standing statement is an in-flip — with `visible()` (and
- * the fp fold's store-and-reread) reading the session's CURRENT set. A
+ * Visibility flips are the fourth wake: a channel envelope's `visible`
+ * frame updates the connection session's set and queues each flipped
+ * id with the frame's OWN statement about it, and the driver lanes
+ * exactly the ids whose standing statement is an in-flip — with the
+ * cull gate (and the fp fold's store-and-reread) reading the session's
+ * CURRENT set. A
  * flipped id's fps are dropped from the cached override first: a
  * visibility fp CYCLES between the same two values (in ↔ out), so a
  * stale override entry would fp-skip a re-entry to a placeholder whose
@@ -967,7 +968,7 @@ interface SegmentWakeOptions {
  *   - the keepalive cap, measured from the last segment so a run of
  *     irrelevant bumps can't hold the connection open indefinitely.
  *   - optionally, a lane draining (per-parton driver only).
- *   - optionally, a visibility report landing on the connection
+ *   - optionally, a channel statement landing on the connection
  *     session (per-parton driver only).
  *
  * Returns the arm that fired, or `false` to close the stream (the

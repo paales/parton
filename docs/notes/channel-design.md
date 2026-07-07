@@ -1,9 +1,11 @@
 # The channel — one protocol for everything after first paint
 
 Captured 2026-07-06. Status: design pinned in conversation, landing in
-staged work packages (see § Landing sequence). Supersedes nothing yet;
-generalizes the visibility-report pattern ([[connection-session]],
-[[visibility-protocol]]) into the framework's primary transport.
+staged work packages (see § Landing sequence — W1 is on its branch;
+the shipped surface is documented as current state in
+[docs/internals/channel.md](../internals/channel.md)). Generalizes the
+visibility-report pattern ([[connection-session]],
+[[channel-protocol]]) into the framework's primary transport.
 
 ## The bet
 
@@ -254,7 +256,12 @@ Each package is a worktree branch, lands green (`yarn test` +
 - **W1 — envelope + endpoint.** The upstream grammar, `/__parton/channel`,
   client-side frame coalescing/seq, visibility migrated onto it as the
   first frame kind (`/__parton/visible` folds in). Pure generalization
-  of shipped behavior; no semantic change.
+  of shipped behavior; no semantic change. LANDED — endpoint +
+  hardening (origin, scope/cookie attach binding), the server-minted
+  id handshake (the `conn` marker), `detach`, and the ChannelClient
+  transport: [docs/internals/channel.md](../internals/channel.md).
+  `__conn` URL threading retired here, ahead of the § What retires
+  schedule.
 - **W2 — attach manifest.** Manifest in the attach body; mirror seeded
   at attach; `?cached=` kept for discrete mode. Absorbs the `?since`
   anchor: manifest and anchor travel together as one attach statement —

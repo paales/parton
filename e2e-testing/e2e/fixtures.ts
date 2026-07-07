@@ -140,13 +140,14 @@ export async function waitForPageInteractive(
 }
 
 /**
- * Wait for the framework's live-update subscription to be open and
- * committing: `<html data-parton-live>` is set by `LivePageHeartbeat`
- * when the current live stream's first segment has committed, and
- * removed when the connection settles (keepalive elapsed, abort).
- * Specs that assert on server-PUSHED updates (live ticks, deferred
- * cell writes) wait on this before acting — a push can only arrive
- * once the subscription is actually established.
+ * Wait for the framework's live-update subscription to be open:
+ * `<html data-parton-live>` is set by the channel transport when the
+ * live stream's server-minted `conn` handshake arrives (the session
+ * is provably open server-side), and removed when the connection
+ * settles (keepalive elapsed, abort). Specs that assert on
+ * server-PUSHED updates (live ticks, deferred cell writes) wait on
+ * this before acting — a push can only arrive once the subscription
+ * is actually established.
  */
 export async function waitForLiveConnection(
   page: Page,
