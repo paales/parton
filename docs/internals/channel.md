@@ -4,13 +4,15 @@ The client-states-facts half of the live connection. Two request
 shapes carry the statements: the ATTACH — the heartbeat's live fire
 as a POST whose body is the full client statement, answered by the
 held segmented stream — and the coalesced envelopes of frames a page
-POSTs to the session that stream opened. Visibility flips are the
-first frame kind; the grammar is built to grow (url / ack / telemetry
-are designed but unshipped — the roadmap and the full design
-rationale live in
+POSTs to the session that stream opened. Visibility flips and
+delivery ACKS are the shipped frame kinds; the grammar is built to
+grow (url / cancel / telemetry are designed but unshipped — the
+roadmap and the full design rationale live in
 [`../notes/channel-design.md`](../notes/channel-design.md)). The
 downstream half — segments, lanes, markers — is
-[`streaming.md`](./streaming.md).
+[`streaming.md`](./streaming.md); the delivery-seq / ack / applied
+machinery that makes the channel EVIDENCED is §Delivery is evidenced
+below.
 
 ## The attach — the connection's opening statement
 
@@ -23,7 +25,7 @@ request header and carrying the client statement as its JSON body
 POST /<page>_.rsc?live=1&streaming=1
 x-parton-attach: 1
 
-{ "cached": [...], "since": {"epoch","ts"} | null, "visible": [...] | null }
+{ "cached": [...], "since": {"epoch","ts"} | null, "visible": [...] | null, "applied": N }
 ```
 
 - `cached` — the manifest: the client's `id:matchKey:fp` tokens,
@@ -50,6 +52,16 @@ x-parton-attach: 1
   `null` is the unmeasured state (no statement); `[]` is a
   measurement. The `?visible=` URL param survives as the no-session
   fallback carrier (`readVisible`'s discrete cull-in reloads).
+- `applied` — the upstream watermark, stating what the client last
+  HEARD the server apply: the highest upstream envelope seq from a
+  downstream `applied` marker (absent normalizes to 0 — an old
+  client states no watermark). The envelope seq is PAGE-LIFETIME
+  monotonic, so the new session seeds its applied gate here and the
+  marker never announces below what the client already heard. The
+  three timeline fields never compete: `since` bounds the DOWNSTREAM
+  resync window (what the initial segment must cover), `applied`
+  anchors the UPSTREAM envelope timeline, and delivery acks bound
+  the mirror.
 
 Dispatch is by explicit marker, never body shape: `parseRenderRequest`
 keys an `_.rsc` POST on `x-parton-attach` (the attach — the full
@@ -61,8 +73,7 @@ both markers is ill-formed. A malformed statement answers `400`. The
 statement lands on the request store (`applyAttachStatement` — the
 seam the entry and the in-process live-drive harness share) before
 any render runs, and unknown statement fields are IGNORED — the
-statement grows by adding fields (the ack watermark seeds here in the
-ack package).
+statement grows by adding fields.
 
 The attach is also the CREDENTIAL REBIND point: every attach binds
 its OWN request's scope + session identity into the connection
@@ -82,14 +93,20 @@ POST /__parton/channel
 - `connection` — the SERVER-MINTED id of the live connection this
   envelope addresses (see §The id handshake). Never inferred, never a
   URL param.
-- `seq` — per-connection monotonic, minted by the client transport,
-  restarting at each establishment. The session applies a `visible`
-  frame's snapshot only from envelopes at or past the last applied
-  seq (`>=`, so a later frame in the SAME envelope stands), so a
-  stale envelope can't regress newer state; per-id flip statements
-  order by seq independently (a stale envelope's flips still queue —
-  statement semantics in [`streaming.md`](./streaming.md) §Visibility
-  rides the connection).
+- `seq` — PAGE-LIFETIME monotonic, minted by the client transport and
+  never restarted at establishment: retransmitted reliable envelopes
+  keep their original seqs across reattaches, and the downstream
+  `applied` marker names one unambiguous timeline. Each envelope's
+  apply advances the session's `appliedSeq` (max — arrival order IS
+  seq order, since the transport serializes envelopes). Idempotence
+  is PER FRAME KIND, never a whole-envelope replay gate: the session
+  applies a `visible` frame's snapshot only from envelopes at or past
+  the last applied seq (`>=`, so a later frame in the SAME envelope
+  stands), so a stale envelope can't regress newer state; per-id flip
+  statements order by seq independently (a stale envelope's flips
+  still queue — statement semantics in
+  [`streaming.md`](./streaming.md) §Visibility rides the connection);
+  an `ack` is cumulative (the watermark only moves forward).
 - `frames` — ordered within the envelope. A discriminated union on
   `kind`; UNKNOWN kinds are SKIPPED, never errors (the same
   extensibility rule the downstream marker grammar follows), while a
@@ -100,17 +117,175 @@ Frame kinds shipped:
 | Kind | Carries | Server effect |
 |---|---|---|
 | `visible` | `{changed, visible, cached?}` — the visibility statement: flipped ids, the wholesale snapshot, the client's actual holdings for the changed ids | Applied to the connection session; flipped-IN partons lane on the EXISTING stream (never on this response) |
+| `ack` | `{delivered}` — the highest CONTIGUOUSLY committed delivery seq (cumulative) | Advances the session's ack watermark, folds the covered deliveries' fps into the ACKED mirror layer, frees the unacked delivery window (the parked driver wakes), and — any ack frame at all — proves the duplex (`firstAckReceived`, the never-acked degrade's off-switch) |
 | `detach` | nothing | Explicit close: the parked driver wakes, the drive loop exits, the session closes. Best-effort by nature (sent on `pagehide` via keepalive fetch); the keepalive timeout remains the backstop |
 
 Responses carry no body: `204` applied; `400` malformed; `403`
-cross-site; `404` connection gone — see §Security. The envelope is
-**loss-tolerant by design**: no retransmit buffer, no delivery acks.
-Only frame kinds whose statements are re-established by the next
-heartbeat fire's seed may ride the channel today; the reliable class
-(`url`, `ack`) waits on the ack machinery (design note § Wire shape).
+cross-site; `404` connection gone — see §Security. Frame kinds split
+into two classes: **loss-tolerant** (`visible`, `detach`, `ack` — the
+protocol re-establishes their statements on its own: the next
+attach's seed, the keepalive backstop, the cumulative watermark) and
+**reliable** (the url / cancel kinds later packages add), which ride
+the transport's retransmit buffer — see §Delivery is evidenced.
 
 Shared grammar + decoder: `framework/src/lib/channel-protocol.ts`
 (import-safe on both sides).
+
+## Delivery is evidenced
+
+Downstream delivery stops being assumed the moment a session opens:
+
+- **Delivery seqs.** Every emission a live connection makes — the
+  initial payload segment, every lane, the periodic reconcile
+  segment — carries a per-connection monotonic delivery seq as a
+  `seq` entry in the `\xFF` marker grammar
+  ([`fp-trailer-marker.ts`](../../framework/src/lib/fp-trailer-marker.ts)).
+  A segment's entry precedes its Flight rows (body: the decimal seq);
+  a lane's is a framed entry written immediately before its `muxend`
+  (body: `<parton-id>\n<seq>`, the mux frames' id-first shape) — so
+  the client always holds the seq before the payload can commit.
+  One-shot responses never carry seqs.
+- **Commit-time recording.** The client records a seq when the
+  payload COMMITS — the browser entry's lane-chain commit
+  (`_laneDeliveryCommitted`) and payload-segment commit
+  (`_segmentDeliveryCommitted`) — never at decode. A decoded-but-
+  dropped payload (the stale-page guard, a torn decode) consumes its
+  seq WITHOUT recording (`_laneDeliveryDropped`): the watermark
+  stalls there and the server never counts the drop as held. Lane
+  seqs queue per parton (`_channelWireEntry`); segment seqs are
+  FETCH-LOCAL in the browser entry, so a concurrent discrete fetch's
+  commit can never consume the live stream's seq.
+- **The `ack` frame.** The transport acks the highest CONTIGUOUSLY
+  committed seq (lanes commit concurrently, so out-of-order commits
+  wait for their gap to fill) via an internal producer on the
+  standard producer contract — piggybacked on any pending envelope,
+  else the same rAF-coalesced flush every statement rides. No timers.
+- **The `applied` marker.** The mirror image of the ack: after an
+  envelope applies, the driver's next wake ships the session's
+  highest applied upstream seq as an `applied` entry (once per
+  advance). It prunes the transport's reliable-envelope buffer — a
+  beacon's `204` is acceptance, not proof a future transport
+  surfaces, so the stream marker is the one pruning signal — and
+  seeds the next attach statement's `applied` watermark.
+- **The reliable class.** Producers declaring `reliable: true` get
+  their frames buffered per envelope (keyed by the envelope's
+  page-lifetime seq) until the `applied` marker covers them, and
+  retransmitted — original seqs, in order, ahead of new flushes — at
+  the next establishment (attach is the natural retransmit point).
+  `deliveryFailed` is never called for them; the buffer owns
+  redelivery. Every shipped kind is loss-tolerant, so the buffer
+  holds nothing today — the machinery exists for the url / cancel
+  kinds. Application idempotence across a reattach is the frame
+  kind's own seq-ordered statement contract (at-least-once with a
+  bounded duplicate window when the marker itself was lost — the
+  session's state is disposable, so exactly-once across a dead
+  session is not on offer).
+
+## The layered mirror
+
+The connection's cached mirror — what fp-skip verdicts consult on a
+live connection — is two layers, not one:
+
+- **OPTIMISTIC skip-set** (the request's cached-override maps,
+  unchanged cadence): promoted at EMIT time by both promote families
+  (`promoteSnapshotsToCachedOverride` at segment end and lane drain,
+  `promoteFpUpdatesToCachedOverride` for trailer heals). This is the
+  hot layer: a same-parton re-lane within one RTT — long before any
+  ack could arrive — still fp-skips off it.
+- **ACKED watermark** (`ConnectionSession.ackedFps`): when the
+  client's cumulative ack covers a delivery seq, the `(id, fp)` pairs
+  that emission carried (captured in the same walk that promoted
+  them — `pendingDeliveries`, bounded by the unacked window) fold
+  into the acked layer: client-PROVEN holdings. Verdicts consult
+  optimistic-first and fall back here on a miss
+  (`PartialRequestState.ackedFingerprints`, wired by `PartialRoot`
+  and the lane driver alike), so an fp the optimistic per-id cap
+  evicted still skips if the client proved it. Both layers cap per id
+  at `OVERRIDE_SET_CAP`.
+
+Two rules keep the layers truthful:
+
+- **Reattach seeds from the attach manifest ∪ nothing else.** The
+  acked layer resets with the connection (a fresh session starts
+  empty) — the manifest IS the durable evidence; a dead session's
+  acks prove nothing about what the client holds NOW.
+- **Flip-statement cached tokens remain the eviction evidence.** Acks
+  report what the client GAINED, never what it evicted, so a
+  `visible` frame's stated holdings REPLACE the id's entry in BOTH
+  layers (`applyReportedCached`) — an acked-then-evicted fp must
+  never confirm a phantom copy. Burst-race semantics are untouched.
+
+## Backpressure — the two-signal gate
+
+Lane OPENING gates on two signals:
+
+- **Bytes** — the response stream's `desiredSize` pull-gate (shipped
+  with the driver hardening): enqueues park while the consumer's
+  queue is full, propagating the stall into the Flight stream.
+- **The unacked delivery window** (`UNACKED_DELIVERY_WINDOW`, 64 —
+  rationale at the constant): `deliverySeq - ackedDeliverySeq` past
+  the window means the client stopped committing what the kernel
+  already swallowed — the one state the byte gate can't see (a
+  frozen proxy buffer, a torn downstream). The driver stops opening
+  lanes; touched ids coalesce into a dirty set and render their
+  LATEST state when an ack frees the window. Coalescing intermediate
+  states is correct — cells carry state, not events, so one render
+  of the latest value supersedes every skipped intermediate; nothing
+  is dropped. Window-gated wakes are not useful activity: the
+  keepalive keeps counting down, so a client that never frees the
+  window can't hold the connection.
+
+## The never-acked degrade
+
+A connection whose client commits deliveries but can never say so
+must not be held behind a window that can never free — the review
+finding this kills: a blocked `/__parton/*` POST path (ad-blocker,
+corporate proxy) would otherwise freeze liveness. Both sides degrade
+on their own real signal:
+
+- **Server** — the first delivery-seq'd emission's settle starts the
+  client's ack obligation (`firstDeliverySettledAt`); if no ack frame
+  EVER arrives within `FIRST_ACK_DEADLINE_MS` (5s — a deadline
+  because a fully blocked upstream emits NO signal, and an ack-less
+  envelope is ambiguous: the ack piggybacks on the rAF-coalesced
+  flush, so any single envelope can legitimately predate the commit
+  it would have acked; the anchor at delivered-settle measures
+  exactly the obligation window, never connection age), the session
+  notes `degradedReason: "never-acked"` and the drive loop exits —
+  the driver stops holding, closing after settle. Any ack frame at
+  all (`firstAckReceived`) disarms the deadline for good: an acking
+  client is never degraded.
+- **Client** — an envelope carrying the connection's FIRST ack that
+  fails to deliver proves the duplex broken from the client's side.
+  `ChannelClient` marks the PAGE degraded (sticky —
+  `_channelIsDegraded`); the heartbeat stops firing lanes-first live
+  attaches and each interval tick becomes a one-shot DISCRETE reload
+  (GET-shaped, capped `?cached=`, the measured viewport as
+  `?visible=` — the degraded-mode pin). Liveness becomes periodic
+  polling at the heartbeat's cadence: degraded, never frozen. A
+  later ack's failure after a delivered first ack is a transient —
+  normal fallback, no degrade.
+
+## The whole-tree reconcile
+
+An indefinitely-lived lanes connection (steady relevant wakes keep
+extending the keepalive) would silently lose the correctness backstop
+the reopen cycle provides idle connections — a relevance
+false-negative (a dependency the label/constraint surface doesn't
+capture) would never heal. The driver makes it explicit: past
+`RECONCILE_INTERVAL_MS` (30s, anchored at the last full segment —
+connection open, an honored catch-up anchor, or the previous
+reconcile), the next wake at quiesce (no open lanes; the `next`
+delimiter would tear them) with room in the delivery window emits a
+whole-tree payload segment ON the stream — `next`, the segment (its
+own delivery seq, fp-skip pruning it to placeholders when nothing was
+missed), `settled`, then `next` + `lanes` to reopen the region — and
+advances the wake cursor past everything the segment covered.
+Evaluated at wakes, no standing timer: an idle connection never
+reaches the cadence (the keepalive closes it first, and its reopen's
+first segment is whole-tree anyway). The reconcile is
+server-scheduled, not client-evidenced activity, so it does not
+extend the keepalive.
 
 ## The endpoint runs in a request scope
 
@@ -189,20 +364,29 @@ producer's statement and the envelope on the wire:
   frame back when its envelope didn't land — the transport has
   already cleared the published id, so the re-owned statements (and
   everything after them, until the heartbeat re-establishes) ride the
-  fallback. The visibility controller (`visibility.tsx`) is the first
-  producer; its reload-fallback semantics are unchanged behind this
-  seam.
+  fallback. A producer declaring `reliable: true` opts its frames
+  into the retransmit buffer instead — `deliveryFailed` is never
+  called for them (§Delivery is evidenced). The visibility controller
+  (`visibility.tsx`) is the first external producer; the transport's
+  own ack producer rides the same contract.
 - **Coalescing + serialization.** Flushes coalesce per animation
   frame and serialize — one envelope in flight; a flush requested
-  mid-flight re-fires when it lands.
-- **Lifecycle.** Establishment (from the wire handshake) restarts the
-  per-connection seq, sets `data-parton-live`, and notifies
+  mid-flight re-fires when it lands. Retransmits go first at a fresh
+  establishment, through the same serialization.
+- **Lifecycle.** Establishment (from the wire handshake) resets the
+  per-connection DELIVERY tracking (seq queues, the commit watermark,
+  the first-ack flag), sets `data-parton-live`, and notifies
   establishment listeners (the visibility controller arms its
-  full-set first-measurement sync there). The heartbeat calls
+  full-set first-measurement sync there). The ENVELOPE seq is
+  page-lifetime and never resets. The heartbeat calls
   `_channelConnectionClosed()` when its fire settles.
 - **Detach.** `pagehide` sends a final `detach` frame via keepalive
   fetch and clears the id (a bfcache restore re-establishes via the
   next heartbeat fire).
+- **Degrade.** `_channelIsDegraded()` is the page-lifetime flag the
+  heartbeat consults (§The never-acked degrade);
+  `_channelAppliedWatermark()` is the heard upstream watermark the
+  next attach statement presents.
 
 ## Testing
 
@@ -211,16 +395,30 @@ producer's statement and the envelope on the wire:
   ordering, the mint handshake, detach ending a held drive),
   `connection-visibility.rsc.test.tsx` (visibility statement
   semantics through the envelope, against a real drive),
+  `channel-acks.rsc.test.tsx` (delivery-seq emission ordering across
+  segments + lanes, the ack watermark + acked-layer fold, the
+  `applied` marker + duplicate-envelope convergence, the attach
+  `applied` seed, window-exceeded coalescing, the never-acked
+  degrade + the acking client that never degrades, the reconcile
+  cadence, mirror layering: flip statements superseding the acked
+  layer and the acked-fallback verdict),
   `live-catchup.rsc.test.tsx` (the attach statement: anchor catch-up,
   attach-only anchor, body-manifest/URL-manifest verdict equivalence,
   the uncapped body manifest), `attach-rebind.rsc.test.tsx` (the
   mid-connection-login → reattach → beacons-work-again flow).
-- node tier: `channel-client.test.ts` (coalescing, seq, serialization,
-  the fallback signal, pagehide detach), `attach-dispatch.test.ts`
-  (statement decoder grammar; attach/action marker dispatch),
-  `refetch-attach.test.ts` (the manifest cap split by transport).
+- node tier: `channel-client.test.ts` (coalescing, page-lifetime seq,
+  serialization, the fallback signal, pagehide detach),
+  `channel-client-acks.test.ts` (contiguous commit watermark, ack
+  coalescing + piggyback, dropped-lane attribution, the reliable
+  buffer's prune/retransmit assembly, the first-ack degrade mark),
+  `attach-dispatch.test.ts` (statement decoder grammar incl.
+  `applied`; attach/action marker dispatch), `refetch-attach.test.ts`
+  (the manifest cap split by transport).
 - The live-drive harness (`framework/src/test/live-drive.tsx`) reads
-  the minted id off its own wire (`DriveHandle.connectionId`) — the
-  emission-point proof rides every drive-based test — and drives
-  attaches through the entry's own statement seam
-  (`LiveDriveInit.attach`).
+  the minted id off its own wire (`DriveHandle.connectionId`), logs
+  every wire entry (`DriveHandle.entries` — how tests observe `seq` /
+  `applied`), and drives attaches through the entry's own statement
+  seam (`LiveDriveInit.attach`). Its reader never acks: tests
+  exercising held connections past `FIRST_ACK_DEADLINE_MS` either ack
+  explicitly or widen the deadline (`_setFirstAckDeadlineMs`), as the
+  soak bench does.

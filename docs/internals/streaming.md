@@ -51,12 +51,18 @@ any selector-routing logic that could replace it.
    `reload({streaming: true, live: true, attach})` — `live` is what
    holds the connection open; `streaming` only sets the client commit
    mode). Each fire is an ATTACH: a POST whose body carries the full
-   client statement — the uncapped manifest, the catch-up anchor, and
-   the current viewport seed ([`channel.md`](./channel.md) §The
+   client statement — the uncapped manifest, the catch-up anchor, the
+   current viewport seed, and the upstream-applied watermark
+   ([`channel.md`](./channel.md) §The
    attach); the SERVER mints the fire's **connection id** at session open
    and ships it down as the stream's `conn` entry (see
    §Visibility rides the connection and
-   [`channel.md`](./channel.md)).
+   [`channel.md`](./channel.md)). On a DEGRADED channel
+   (`_channelIsDegraded()` — the page's first delivery ack could
+   never be delivered upstream) the heartbeat stops attaching: each
+   interval tick fires a one-shot discrete reload instead — periodic
+   polling at the heartbeat's own cadence
+   ([`channel.md`](./channel.md) §The never-acked degrade).
 3. **Server-side segment driver runs.** For each rendered segment,
    it races the wake arms:
    - `_onNextBump` — a `refreshSelector` lands (CRUD writes,
@@ -84,7 +90,14 @@ any selector-routing logic that could replace it.
      route's snapshots (read through `effectiveExpiresAt`) elapses.
    - Visibility arm (lane driver only) — a channel envelope's
      `visible` frame lands on the connection session, naming flipped
-     parton ids ([`channel.md`](./channel.md)).
+     parton ids ([`channel.md`](./channel.md)). The same listener-set
+     arm carries every session-state wake: a delivery `ack` freeing
+     the unacked window, an applied-watermark advance to announce.
+   - Never-acked degrade arm (lane driver only) — a timer anchored at
+     the connection's first delivered-settle while its first ack is
+     outstanding; on firing, the session notes
+     `degradedReason: "never-acked"` and the driver stops holding
+     ([`channel.md`](./channel.md) §The never-acked degrade).
    - Idle timeout (~20s) — the connection closes cleanly. The
      heartbeat's next interval tick (~5s default) reopens. In the
      lane loop the deadline is anchored at the last USEFUL activity
@@ -155,6 +168,14 @@ any selector-routing logic that could replace it.
    loop's exit likewise releases them, tearing only lanes whose
    consumer stopped pulling (client-safe: a torn lane rejects only
    its own un-committed decode).
+
+   **Lane OPENING gates on the unacked delivery window too** — the
+   second backpressure signal, catching what `desiredSize` can't see
+   (bytes the kernel swallowed that the client never committed).
+   Window exceeded → touched ids coalesce into a dirty set and render
+   their latest state when a delivery ack frees it — correct for
+   cells (state, not events), nothing dropped. See
+   [`channel.md`](./channel.md) §Backpressure.
 5. **The client demuxes and commits per lane.** The splitter
    (`splitSegments`) classifies the region off the server's `lanes`
    marker and yields each lane's body — itself shaped like a
@@ -166,14 +187,22 @@ any selector-routing logic that could replace it.
    then a notify that schedules a `startTransition` re-render of
    `PartialsClient` — `renderTemplate` / `substituteNested` swap the
    fresh subtree in place. No whole-payload `setPayload` is involved,
-   so a lane commit can never remount the page shell.
+   so a lane commit can never remount the page shell. The commit is
+   also the moment the delivery seq the emission carried is RECORDED
+   — the channel transport acks the contiguous commit watermark
+   upstream ([`channel.md`](./channel.md) §Delivery is evidenced).
 
 Relevance false-negatives (a dependency the label/constraint surface
-doesn't capture) degrade to a MISSED update on the lane path, where the old
-whole-tree path degraded to a wasted re-render. The backstop is the
-keepalive cycle: the connection closes after ~20s idle, the
-heartbeat reopens it, and a reopened connection's first segment is
-always whole-tree — a periodic full reconciliation.
+doesn't capture) degrade to a MISSED update on the lane path, where
+the old whole-tree path degraded to a wasted re-render. Two backstops
+cover the two connection lifetimes: an IDLE connection closes after
+~20s (keepalive), the heartbeat reopens it, and the reopened
+connection's first segment is always whole-tree; a connection that
+steady relevant wakes keep alive indefinitely emits a scheduled
+whole-tree reconcile segment ON its own stream instead —
+`RECONCILE_INTERVAL_MS`, anchored at the last full segment, evaluated
+at wakes ([`channel.md`](./channel.md) §The whole-tree reconcile).
+Either way, a full fp-skip pass reconciles anything the lanes missed.
 
 ## Writes stay non-streaming
 
@@ -321,7 +350,8 @@ The pieces:
   snapshot legitimately dips below an earlier in-flip), and the
   client states each flip exactly once, so resolving an in-flip
   against a later dip would drop it forever. The envelope `seq` is a
-  per-connection-monotonic counter: the session applies `visible`
+  page-lifetime-monotonic counter ([`channel.md`](./channel.md)
+  §Wire shape): the session applies `visible`
   only from statements at or past the last applied (two in-flight
   envelopes can't commit an older set over a newer one) while
   `changed` ids still queue regardless — a superseded statement's
@@ -607,9 +637,9 @@ Each segment's bytes look like:
 
 The tags split into two grammatical roles. **Milestones** (`settled`,
 `next`, `lanes`, `mux`, `muxend`) are phase transitions: they end the
-segment's body block. **Entries** (`fp`, `url`, `conn`, any future
-data tag) carry data and may appear ANYWHERE — interleaved between
-Flight rows, not just after the body. The server exploits that for
+segment's body block. **Entries** (`fp`, `url`, `conn`, `seq`,
+`applied`, any future data tag) carry data and may appear ANYWHERE —
+interleaved between Flight rows, not just after the body. The server exploits that for
 settle-time trailer emission: every parton's subtree settlement is
 observable (the `SettleScope` refcount in the Flight patch — see
 [server-context.md](./server-context.md)), and
@@ -625,7 +655,14 @@ completion). The `conn` entry is the live connection's SERVER-MINTED
 id — the channel's establishment handshake ([`channel.md`](./channel.md)):
 emitted once per connection, ahead of the first segment's Flight rows
 (or right after the `lanes` marker on a catch-up boot), so the
-transport can address the session before the first render drains.
+transport can address the session before the first render drains. On
+a live connection two more entry tags flow: `seq` — the per-connection
+monotonic DELIVERY seq every payload segment (decimal body, ahead of
+its Flight rows) and every lane (`<parton-id>\n<seq>`, immediately
+before its `muxend`) carries, the currency of the client's commit
+acks — and `applied`, the cumulative upstream-envelope-applied
+watermark that prunes the client transport's retransmit buffer
+([`channel.md`](./channel.md) §Delivery is evidenced).
 
 The client's `splitSegments` consumes body bytes until a `\xFF`
 (UTF-8 invalid → never inside Flight payload), reads the marker with
@@ -672,7 +709,11 @@ tree, so the deferred-abort gate applies only to payload segments.
 Every exit from a lanes region tears its still-open lanes the same
 way — source close, invalid frame, and a `next` delimiter arriving
 mid-payload all error the open bodies, so a lane's decode always
-settles (rejects) rather than hanging on a stream nothing closes.
+settles (rejects) rather than hanging on a stream nothing closes. A
+lanes region CAN end cleanly with a `next` delimiter at quiesce: the
+driver's scheduled whole-tree reconcile flows one payload segment on
+the same connection, then reopens the region with `next` + `lanes`
+([`channel.md`](./channel.md) §The whole-tree reconcile).
 
 ## The stream must pass through untransformed
 
