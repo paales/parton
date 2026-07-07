@@ -392,6 +392,36 @@ export function _getAttachStatement(): AttachStatementHandle | null {
   return requestContext.getStore()?.attachStatement ?? null
 }
 
+/**
+ * Run `fn` inside a NESTED request scope that presents `visible` as
+ * the connection's visible set — the segment driver's warm-render
+ * scope. A warm render must evaluate a parked parton's cull gate as
+ * in-view so its body runs into the byte cache, but the connection's
+ * REAL session is the flip machinery's truth and must not be touched;
+ * the nested ALS store confines the overlay to the warm render's own
+ * async execution, so concurrently-pumping lanes never see it. The
+ * clone carries the request identity (request, scope, ephemeral cell
+ * storage) and NONE of the response-coupled state — no cached
+ * override (warm renders must not touch the client mirror), no
+ * settle-trailer sink, no attach statement, no commit hook — and its
+ * synthetic session handle exposes an empty acked layer for the same
+ * reason. The driver's continuation resumes with its own store.
+ */
+export async function _runWithWarmRenderScope<T>(
+  visible: ReadonlySet<string>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const store = getStore()
+  const warmStore: RequestStore = {
+    request: store.request,
+    cookies: [],
+    scope: store.scope,
+    ephemeralCellStorage: store.ephemeralCellStorage,
+    connectionSession: { visible, ackedFps: new Map() },
+  }
+  return requestContext.run(warmStore, fn)
+}
+
 /** The connection's current visible set, or `null` when this request
  *  has no live connection session (one-shot renders, SSR) or the
  *  session has no report/seed yet. Consumers fall back to the

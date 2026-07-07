@@ -42,10 +42,11 @@
  *     envelope's seq) until the downstream `applied` marker covers
  *     them, and retransmitted — original seqs, in order, ahead of new
  *     flushes — when the next connection establishes. The envelope seq
- *     is PAGE-LIFETIME monotonic for exactly this reason. The shipped
- *     kinds are all loss-tolerant (visible/detach statements re-seed;
- *     acks are connection-scoped and cumulative) so the buffer holds
- *     nothing today — the machinery exists for the url/cancel kinds.
+ *     is PAGE-LIFETIME monotonic for exactly this reason. No shipped
+ *     kind is reliable-class (visible/detach statements re-seed; acks
+ *     are connection-scoped and cumulative; telemetry is LOSSY —
+ *     dropped, never redelivered) so the buffer holds nothing today —
+ *     the machinery exists for the url/cancel kinds.
  *   - **Degrade.** A connection that commits deliveries but cannot get
  *     its FIRST ack through (the envelope carrying it fails — blocked
  *     `/__parton/*` POSTs, ad-blockers) proves the duplex broken. The

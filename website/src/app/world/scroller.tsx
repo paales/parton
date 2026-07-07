@@ -1,6 +1,9 @@
 "use client"
 
 import { useEffect, useRef, type ReactNode } from "react"
+// Deep path: `"use client"` modules import framework client symbols
+// directly, never through the server barrel.
+import { reportTelemetry } from "@parton/framework/lib/telemetry.ts"
 import { CENTER_PX } from "./constants.ts"
 
 /**
@@ -12,6 +15,13 @@ import { CENTER_PX } from "./constants.ts"
  * on chunk 0,0 — is CSS (`scroll-initial-target` on the center
  * anchor); the effect only backfills it where the property isn't
  * supported.
+ *
+ * The scroller is also the world's telemetry producer: every scroll
+ * event states viewport box, position, and velocity through
+ * `reportTelemetry` (the channel's lossy class — newest-wins, rides
+ * envelopes other statements justify, adds no traffic of its own).
+ * Server-side, the warm projector (./warm.ts) turns the statements
+ * into predictive chunk warming.
  */
 export function WorldScroller({ children }: { children: ReactNode }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
@@ -26,6 +36,32 @@ export function WorldScroller({ children }: { children: ReactNode }) {
         CENTER_PX - scroller.clientHeight / 2,
       )
     }
+
+    // ── Telemetry — position + velocity from consecutive scroll events ──
+    // Velocity is the finite difference between successive scroll
+    // events (native scrolling fires them per frame). The report is a
+    // module-variable write; the transport coalesces and sends only
+    // when an envelope fires anyway.
+    let lastScrollT = 0
+    let lastScrollX = 0
+    let lastScrollY = 0
+    const onScroll = () => {
+      const now = performance.now()
+      const x = scroller.scrollLeft
+      const y = scroller.scrollTop
+      if (lastScrollT !== 0 && now > lastScrollT) {
+        const dt = (now - lastScrollT) / 1000
+        reportTelemetry({
+          viewport: { w: scroller.clientWidth, h: scroller.clientHeight },
+          scroll: { x, y, vx: (x - lastScrollX) / dt, vy: (y - lastScrollY) / dt },
+          at: now,
+        })
+      }
+      lastScrollT = now
+      lastScrollX = x
+      lastScrollY = y
+    }
+    scroller.addEventListener("scroll", onScroll, { passive: true })
 
     // ── WASD — velocity integrated into scroll position ──
     const held = new Set<string>()
@@ -84,6 +120,7 @@ export function WorldScroller({ children }: { children: ReactNode }) {
 
     return () => {
       cancelAnimationFrame(raf)
+      scroller.removeEventListener("scroll", onScroll)
       window.removeEventListener("keydown", onKeyDown)
       window.removeEventListener("keyup", onKeyUp)
       scroller.removeEventListener("pointerdown", onPointerDown)
