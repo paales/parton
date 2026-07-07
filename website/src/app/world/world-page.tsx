@@ -29,7 +29,7 @@ export const WorldPage = parton(
               height: QUAD_ROOT_PX,
             }}
           >
-            <QuadTile x={qx * QUAD_ROOT_PX} y={qy * QUAD_ROOT_PX} size={QUAD_ROOT_PX} />
+            <QuadTile x={qx * QUAD_ROOT_PX} y={qy * QUAD_ROOT_PX} />
           </div>,
         )
       }

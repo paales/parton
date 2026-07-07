@@ -2,7 +2,7 @@ import type { RenderArgs } from "@parton/framework"
 import { parton } from "@parton/framework"
 import { ActivityLight } from "./activity-light.tsx"
 import { ChunkShell } from "./chunk-shell.tsx"
-import { CHUNK_PX, chunkOrigin, seedIntersects } from "./constants.ts"
+import { CHUNK_FLIP_MARGIN_PX, CHUNK_PX, chunkOrigin, seedIntersects } from "./constants.ts"
 import { chunkPulse, ensurePulseTicker } from "./pulse.ts"
 
 /**
@@ -49,7 +49,7 @@ export const WorldChunk = parton(
     // misses; maxAge only bounds how long an untouched entry lingers.
     cache: { maxAge: 30 },
     cull: {
-      rootMargin: "100px",
+      rootMargin: `${CHUNK_FLIP_MARGIN_PX}px`,
       seed: ({ cx, cy }: { cx: number; cy: number }) =>
         seedIntersects(chunkOrigin(cx), chunkOrigin(cy), CHUNK_PX),
       skeleton: ChunkShell,

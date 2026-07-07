@@ -117,13 +117,24 @@ try {
       liveFires.push({ method: r.method(), post: r.postData() ?? "" })
     }
   })
-  // Upstream envelope beacons, timestamped — every one carries the full
-  // Cookie header, so their CADENCE is a cost the quiet-window check
-  // budgets below.
+  // Upstream envelope beacons, timestamped with their bodies — every
+  // one carries the full Cookie header, so their CADENCE is a cost the
+  // quiet-window and scroll-burst checks budget below; the bodies feed
+  // the multi-id batching check.
   const channelPosts = []
   page.on("request", (r) => {
-    if (r.method() === "POST" && r.url().includes("/__parton/channel")) channelPosts.push(Date.now())
+    if (r.method() === "POST" && r.url().includes("/__parton/channel"))
+      channelPosts.push({ t: Date.now(), post: r.postData() ?? "" })
   })
+  /** Per-envelope `visible` frames' changed-id counts since index `i0`. */
+  const changedCounts = (i0) =>
+    channelPosts.slice(i0).flatMap((p) => {
+      try {
+        return JSON.parse(p.post).frames.filter((f) => f.kind === "visible").map((f) => f.changed.length)
+      } catch {
+        return []
+      }
+    })
   cdp.on("Network.dataReceived", (e) => {
     if (liveRequestIds.has(e.requestId)) liveChunks.push({ t: Date.now(), n: e.dataLength })
   })
@@ -205,6 +216,7 @@ try {
   timing("soak live bytes", soakBytes)
 
   // ── 2. Directions — one viewport-ish step each way, content must chase ──
+  const dirPostsStart = channelPosts.length
   await scrollAndTime(2560, 0, "east")
   await page.waitForTimeout(500)
   await scrollAndTime(0, 1600, "south")
@@ -212,6 +224,29 @@ try {
   await scrollAndTime(-5120, 0, "west")
   await page.waitForTimeout(500)
   await scrollAndTime(0, -3200, "north")
+  // Scroll-burst beacon budget. Each stop is one jump into fresh
+  // territory: its flips arrive in MATERIALIZATION WAVES (each quad
+  // level's lanes mount the next level's observers), and each wave is
+  // one rAF-coalesced statement with a multi-id `changed` — the quad
+  // spine bounds the waves at ~4 per stop (2048 → 1024 → chunks, plus
+  // a trailing partial wave as slower lanes commit). Budget: 4 stops
+  // × 4 wave statements + 4 threshold acks (≈40 lane commits per stop
+  // / 32, driven at most once each) + 4 headroom for pulse-lane acks
+  // during the between-stop waits = 24. Passengers ride those
+  // envelopes for free — measurement-only syncs and telemetry never
+  // POST alone; a one-envelope-per-frame cadence lands in the
+  // hundreds across four stream-ins and fails loudly.
+  const dirPosts = channelPosts.length - dirPostsStart
+  check(dirPosts <= 24, "scroll-burst beacons at wave cadence", `${dirPosts} channel POSTs across 4 stops (budget 24)`)
+  // The stagger's point: flips of already-mounted observers batch, so
+  // statements carry MULTI-ID changed arrays instead of one id each.
+  const dirChanged = changedCounts(dirPostsStart)
+  const dirMaxBatch = Math.max(0, ...dirChanged)
+  check(
+    dirMaxBatch >= 2,
+    "visibility statements batch multiple flips",
+    `changed sizes: [${dirChanged.join(",")}]`,
+  )
   const dir = await pulsesAdvance(6000)
   check(dir.sampled > 0 && dir.moved >= 1, "pulses live at post-directions position", `${dir.moved}/${dir.sampled} advanced in 6s`)
 
@@ -224,6 +259,7 @@ try {
   const warmLineCount = () =>
     serverLog.join("").split("\n").filter((l) => l.includes("[world] warm")).length
   const warmLinesBefore = warmLineCount()
+  const warmPostsStart = channelPosts.length
   for (let i = 0; i < 40; i++) {
     await page.$eval(scroller, (el) => el.scrollBy(64, 64))
     await page.waitForTimeout(50)
@@ -237,6 +273,50 @@ try {
   if (warmMs !== null) timing("stream-in warm-path stop", warmMs)
   const warmProjected = warmLineCount() - warmLinesBefore
   check(warmProjected > 0, "velocity scroll projects chunk warming", `${warmProjected} projection(s) logged`)
+  // Sustained-scroll beacon ceiling. At this velocity (1280px/s
+  // diagonal) the count is dominated by SERIALIZED LANE COMMITS, not
+  // scroll geometry: each committing lane re-measures its subtree in
+  // its own frame, so bursts of single-id delta statements ride at
+  // commit cadence between the batched column crossings. That term
+  // belongs to the framework's lane-commit transition batching; this
+  // ceiling pins the client-side cadences — column crossings batch
+  // (multi-id statements, ~10 for 2560px on each axis) and
+  // measurement-only reports never POST alone — so a regression to
+  // one-envelope-per-frame (~120+ over the ~2s scroll + stop settle)
+  // fails loudly while commit-bound bursts (~40 measured) pass.
+  // Ceiling 64 = measured ~40 + 50% headroom.
+  const warmPosts = channelPosts.length - warmPostsStart
+  check(warmPosts <= 64, "sustained-scroll beacons below frame cadence", `${warmPosts} channel POSTs over the 1280px/s scroll (ceiling 64)`)
+
+  // ── 2c. Slow scroll — a few px per frame, the cadence a human
+  //        mouse-wheel produces ──
+  // The margin stagger's contract at human speed: every skeleton is
+  // mounted a full stagger gap before its column crosses the flip
+  // line, so the IntersectionObserver batches each crossing into ONE
+  // multi-id statement, and measurement-only reports ride flushes as
+  // passengers instead of POSTing alone.
+  await page.waitForTimeout(1000) // let the warm stop's trailing wave settle
+  const slowPostsStart = channelPosts.length
+  for (let i = 0; i < 128; i++) {
+    await page.$eval(scroller, (el) => el.scrollBy(8, 0))
+    await page.waitForTimeout(16)
+  }
+  await page.waitForTimeout(1000) // count the crossing's own trailing statements
+  // Budget: 1024px east = 2 leading chunk-column crossings + 2
+  // trailing out-crossings + ~2 quad-level boundary statements
+  // (leaf/2048 lines, leading + trailing) ≈ 6 flip statements, + 2
+  // threshold-ack / pulse-lane allowance over the ~4s window = 8;
+  // ×1.5 headroom → 12. A statement-per-frame cascade (single-id
+  // flips ~16ms apart plus measurement-only trailers) lands well
+  // past this.
+  const slowPosts = channelPosts.length - slowPostsStart
+  check(slowPosts <= 12, "slow scroll beacons at crossing cadence", `${slowPosts} channel POSTs over a 1024px two-column crawl (budget 12)`)
+  const slowChanged = changedCounts(slowPostsStart)
+  check(
+    Math.max(0, ...slowChanged) >= 2,
+    "slow-scroll crossings batch multiple flips",
+    `changed sizes: [${slowChanged.join(",")}]`,
+  )
 
   // ── 3a. Refresh at position — scroll restoration must not park the world ──
   await page.reload()
@@ -310,7 +390,7 @@ try {
   // unacked counter straddling the window edge, +2 headroom for a hot
   // pulse neighborhood = 4. An ack-only POST per commit batch (the
   // per-advance defect) lands in the tens and fails this.
-  const quietPosts = channelPosts.filter((t) => t >= quietStart).length
+  const quietPosts = channelPosts.filter((p) => p.t >= quietStart).length
   check(quietPosts <= 4, "upstream beacons at threshold cadence in quiet window", `${quietPosts} channel POSTs over 6s (budget 4)`)
   const redFlashes = await page.evaluate(() => window.__redFlashes)
   check(redFlashes === 0, "no red mount-flashes at rest", `${redFlashes} in 6s`)
