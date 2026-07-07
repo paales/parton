@@ -585,6 +585,10 @@ export function _channelNavigate(init: {
 		rejectFinished,
 	};
 	pendingNavRecords.push(record);
+	// Remember the commit-mode wish for this navigation point — the forced
+	// lanes it spawns commit after the covering segment retires the
+	// record, so the wish must outlive it.
+	navStreamingByPoint.set(record.navSeq, record.streaming);
 	if (init.signal) {
 		const onAbort = (): void => {
 			if (record.settled) return;
@@ -608,6 +612,29 @@ export function _channelNavPrefersTransition(asOf: number): boolean {
 	return pendingNavRecords.some(
 		(r) => !r.settled && r.navSeq <= asOf && !r.streaming,
 	);
+}
+
+/** The commit-mode wish per navigation point, kept for the connection's
+ *  lifetime (not just while the record is pending): a selector nav's
+ *  forced lanes commit AFTER the covering whole-tree segment settles —
+ *  which retires the record — so the lane handler needs the wish to
+ *  outlive the record. Reset per connection. */
+const navStreamingByPoint = new Map<number, boolean>();
+
+/** True when the newest navigation at or below `asOf` asked for
+ *  STREAMING (progressive) commit — the signal a forced lane consults
+ *  to flash its body's Suspense fallbacks (matching the segment path)
+ *  instead of swapping atomically. Persists past the record's settle. */
+export function _channelNavPrefersStreaming(asOf: number): boolean {
+	let bestSeq = -1;
+	let streaming = false;
+	for (const [seq, wish] of navStreamingByPoint) {
+		if (seq <= asOf && seq > bestSeq) {
+			bestSeq = seq;
+			streaming = wish;
+		}
+	}
+	return bestSeq >= 0 && streaming;
 }
 
 /** A payload segment rendered as-of `asOf` COMMITTED on the live
@@ -1307,6 +1334,7 @@ export function _channelEstablished(connection: string): void {
 	deliveredWatermark = 0;
 	lastAckCollected = 0;
 	asOfDroppedSeqs.clear();
+	navStreamingByPoint.clear();
 	ackDeliveredOnConnection = false;
 	establishedSinceClose = true;
 	// Consequence gates anchor on the PREVIOUS connection's delivery
@@ -1575,6 +1603,7 @@ export function _resetChannelClient(): void {
 	deliveredWatermark = 0;
 	lastAckCollected = 0;
 	asOfDroppedSeqs.clear();
+	navStreamingByPoint.clear();
 	ackDeliveredOnConnection = false;
 	retransmitBuffer = [];
 	appliedWatermark = 0;

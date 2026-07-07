@@ -1136,6 +1136,25 @@ async function driveLaneStream(
 				// live) so the client commits progressively; a normal lane
 				// announces at drain, just before its `muxend`.
 				let announcedSeq: number | null = null;
+				// A window-force lane (a selector nav's `__force` target, not a
+				// frame lane — those carry a `navSeq`) announces its delivery seq
+				// EARLY: a plain seq entry before the body, so the client holds it
+				// at root-ready and can commit progressively when the covering nav
+				// asked for streaming (matching the whole-tree segment). It stays a
+				// NORMAL (non-`muxlive`) delivery — the client buffers it by
+				// default; only the streaming-preferred branch commits root-ready.
+				// Frame lanes and producers keep their own `muxlive` announcement:
+				// setting the seq here would suppress it (`maybeAnnounceProducer`
+				// gates on `announcedSeq`).
+				if (runtime.forced && navSeq === undefined && session !== null) {
+					announcedSeq = assignedSeq ?? ++session.deliverySeq;
+					if (
+						!enqueue(
+							laneDeliverySeqEntry(id, announcedSeq, session.consumedNavSeq, navSeq),
+						)
+					)
+						return;
+				}
 				let wroteBytes = false;
 				const maybeAnnounceProducer = (): boolean => {
 					if (announcedSeq !== null || session === null) return true;

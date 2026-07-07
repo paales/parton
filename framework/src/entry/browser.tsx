@@ -32,6 +32,7 @@ import {
 	_channelNavAvailable,
 	_channelNavigate,
 	_channelNavPoint,
+	_channelNavPrefersStreaming,
 	_channelNavPrefersTransition,
 	_channelNavSegmentCommitted,
 	_channelNavSegmentSettled,
@@ -297,6 +298,34 @@ async function main() {
 						// would gate the initial content on an unbounded await. Race
 						// the trailer against the producer announcement.
 						let delivery = _lanePendingDelivery(lane.partonId);
+						// A streaming-preferred forced lane (a selector nav whose
+						// caller opted into progressive commit) commits like a
+						// PRODUCER lane: root-ready, so the body's Suspense fallbacks
+						// flash while it streams — matching the whole-tree segment's
+						// streaming commit, which a fp-skipping ancestor would
+						// otherwise deny the forced subtree. It is never a producer
+						// (no mid-body `muxlive`), so it need not wait to disambiguate.
+						if (
+							delivery !== null &&
+							delivery.live !== true &&
+							_channelNavPrefersStreaming(delivery.asOf)
+						) {
+							if (!_channelDeliveryCommittable(delivery.asOf)) {
+								consumed = true;
+								_reportAsOfDrop(delivery.seq);
+								_laneDeliveryDroppedStale(lane.partonId);
+								return;
+							}
+							const nav = delivery.nav;
+							_commitPartonLaneProgressive(lane.partonId, node);
+							consumed = true;
+							_laneDeliveryCommitted(lane.partonId);
+							if (nav !== undefined) _channelFrameLaneCommitted(nav);
+							const fp = (await trailer) as FpUpdatesPayload | null;
+							if (fp) _applyFpUpdates(fp);
+							if (nav !== undefined) _channelFrameLaneSettled(nav);
+							return;
+						}
 						if (delivery === null || delivery.live !== true) {
 							await new Promise<void>((resolve) => {
 								const dispose = _onLaneProducerAnnounce(lane.partonId, () =>
