@@ -109,6 +109,7 @@ export const TRANSPORT_PARAMS = [
   "__frame",
   "__frameUrl",
   "__cullFlip",
+  "__force",
 ] as const
 
 /** The request URL as the app sees it — transport params stripped. */

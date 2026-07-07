@@ -137,6 +137,19 @@ await streaming
 // …kick off something the user can do as soon as they see results.
 ```
 
+**Transport.** Window navigations and selector refetches ride the
+live channel when a connection is attached and healthy: the fire
+becomes a `url` frame on the held stream and the response arrives as
+a segment in stream order — the milestones keep identical semantics
+(`streaming` at the covering segment's commit, `finished` at its
+settle). Pre-attach, on a degraded page, and for everything
+frame-scoped, the fire is a discrete `_.rsc` GET exactly as before —
+the first interaction never waits on the channel. This is a
+transport detail; nothing about the API surface changes. Mechanics:
+[`../internals/channel.md`](../internals/channel.md) §Navigation
+rides the channel. Frame navigation (this page's frame handles) is
+UNCHANGED: framed refetches keep their dedicated connections.
+
 ### Deferred-abort supersede for selector refetches
 
 A selector-filtered `navigate({selector})` or `reload({selector})`

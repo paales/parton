@@ -1,4 +1,4 @@
-import { test, expect, waitForPageInteractive } from "./fixtures"
+import { test, expect, recordPartialDispatches, waitForPageInteractive } from "./fixtures"
 
 /**
  * Regression guard for the manual flow that double-loaded in
@@ -18,30 +18,17 @@ import { test, expect, waitForPageInteractive } from "./fixtures"
  * stage response paint the results grid twice.
  *
  * We assert on two surfaces:
- *  - network: exactly one `partials=search-results` dispatch.
+ *  - network: exactly one `search-results` dispatch, on whichever
+ *    transport carried it (the discrete `?partials=` GET pre-attach,
+ *    the channel statement's `?__force=` url frame once the live
+ *    connection is established — and the interactive open here gives
+ *    establishment plenty of time, so the channel is the common
+ *    case).
  *  - DOM: the stage-1 results grid mounts exactly once after the
  *    keystroke (no second "load" repaint).
  */
 test("opening the overlay then typing loads the results exactly once", async ({ page }) => {
-  const rscCalls: Array<{
-    url: string
-    partials: string | null
-    time: number
-  }> = []
-  const t0 = Date.now()
-  page.on("request", (req) => {
-    const url = req.url()
-    if (!url.includes("_.rsc")) return
-    const u = new URL(url)
-    // Ignore the live-update heartbeat — it holds a long-lived
-    // `?streaming=1` connection that is not a "load".
-    if (u.searchParams.get("streaming") === "1") return
-    rscCalls.push({
-      url,
-      partials: u.searchParams.get("partials"),
-      time: Date.now() - t0,
-    })
-  })
+  const dispatches = recordPartialDispatches(page)
 
   // 1. Land on the overview with search closed.
   await page.goto("/")
@@ -78,8 +65,8 @@ test("opening the overlay then typing loads the results exactly once", async ({ 
     obs.observe(document.body, { childList: true, subtree: true })
   })
 
-  // 4. Reset both counters, then arm the DOM tracker and type one char.
-  rscCalls.length = 0
+  // 4. Reset the counter, then arm the DOM tracker and type one char.
+  dispatches.length = 0
   await page.evaluate(() => {
     ;(window as unknown as { __load: { armed: boolean } }).__load.armed = true
   })
@@ -93,11 +80,11 @@ test("opening the overlay then typing loads the results exactly once", async ({ 
   const mounts = await page.evaluate(
     () => (window as unknown as { __load: { mounts: number } }).__load.mounts,
   )
-  const stageCalls = rscCalls.filter((c) => c.partials === "search-results")
-  const otherCalls = rscCalls.filter((c) => c.partials !== "search-results")
+  const stageCalls = dispatches.filter((c) => c.partials === "search-results")
+  const otherCalls = dispatches.filter((c) => c.partials !== "search-results")
 
-  console.log(`\n=== after keystroke: ${rscCalls.length} RSC call(s), ${mounts} grid mount(s) ===`)
-  for (const c of rscCalls) console.log(`  [${c.time}ms] partials=${c.partials}`)
+  console.log(`\n=== after keystroke: ${dispatches.length} dispatch(es), ${mounts} grid mount(s) ===`)
+  for (const c of dispatches) console.log(`  [${c.transport}] partials=${c.partials}`)
 
   expect(
     stageCalls.length,
@@ -105,7 +92,7 @@ test("opening the overlay then typing loads the results exactly once", async ({ 
   ).toBe(1)
   expect(
     otherCalls,
-    `expected no unrelated RSC calls; got: ${JSON.stringify(otherCalls)}`,
+    `expected no unrelated dispatches; got: ${JSON.stringify(otherCalls)}`,
   ).toHaveLength(0)
   expect(
     mounts,

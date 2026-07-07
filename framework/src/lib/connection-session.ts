@@ -60,6 +60,7 @@ import {
 	decodeAttachStatement,
 	decodeChannelEnvelope,
 	type TelemetryFrame,
+	type UrlFrame,
 	type VisibleFrame,
 } from "./channel-protocol.ts";
 
@@ -105,6 +106,26 @@ export interface PendingFlip {
  * the first consumer), never a dependency — updating it fires no
  * invalidation and no wake, and must never cause a render.
  */
+/**
+ * A latched `url` frame — the client's window URL statement, queued
+ * until the segment driver consumes it at wait entry (navigation-first,
+ * ahead of pending flips). Newest seq wins: a fresher statement about
+ * the URL replaces an unconsumed older one — the older navigation was
+ * superseded before the driver ever saw it, and rendering it would
+ * only produce a segment the client's as-of guard drops. The driver's
+ * mid-render supersede (a newer frame latching WHILE a navigation
+ * segment renders) is the same replacement observed from inside the
+ * render — the internal seam the explicit cancel frame kind will share.
+ */
+export interface PendingNavigation {
+	/** Target as path + search, same-origin-validated at the endpoint. */
+	readonly url: string;
+	readonly intent: UrlFrame["intent"];
+	/** Envelope seq of the statement — the client's navigation point,
+	 *  and the AS-OF value every post-consume emission carries. */
+	readonly seq: number;
+}
+
 export interface SessionTelemetry {
 	readonly viewport: { readonly w: number; readonly h: number };
 	readonly scroll: {
@@ -183,13 +204,17 @@ export interface ConnectionSession {
 	 *  held behind a window that can never free. */
 	firstAckReceived: boolean;
 	/** Unacked emissions' holdings: delivery seq → the `(id, fp)` pairs
-	 *  that emission carried. Folded into `ackedFps` (and dropped) when
-	 *  the client's cumulative ack covers the seq; dies with the
+	 *  that emission carried, plus the navigation point it was rendered
+	 *  as-of (the fold gate below). Folded into `ackedFps` (and dropped)
+	 *  when the client's cumulative ack covers the seq; dies with the
 	 *  connection otherwise. Bounded by the unacked delivery window —
 	 *  the same signal that stops new lanes stops new records. */
 	readonly pendingDeliveries: Map<
 		number,
-		ReadonlyArray<readonly [string, string]>
+		{
+			readonly tokens: ReadonlyArray<readonly [string, string]>;
+			readonly asOf: number;
+		}
 	>;
 	/** The mirror's ACKED layer: fps whose delivering emission the
 	 *  client COMMITTED — client-proven holdings, consulted by the
@@ -228,6 +253,25 @@ export interface ConnectionSession {
 	 *  Replaced wholesale per statement (newest-wins by envelope seq);
 	 *  applying one is side-effect-free — see [[SessionTelemetry]]. */
 	telemetry: SessionTelemetry | null;
+	/** Latched window URL statement awaiting the driver — see
+	 *  [[PendingNavigation]]. `null` when the request state reflects
+	 *  every url frame heard so far. */
+	pendingNav: PendingNavigation | null;
+	/** Highest url-frame seq LATCHED on this session (advanced at
+	 *  envelope apply, ahead of the driver's consume). The ack fold
+	 *  gate: a pending delivery whose `asOf` predates this was — or by
+	 *  protocol will be — dropped by the client (its as-of guard uses
+	 *  the same two numbers), so its ack frees the window WITHOUT
+	 *  folding its fps into the acked layer. Genuinely-held pre-nav
+	 *  commits whose ack arrives after the latch are discarded too —
+	 *  conservative: an over-fetch, never a phantom holding. */
+	statedNavSeq: number;
+	/** Seq of the last url frame the driver APPLIED to the connection's
+	 *  request state — the AS-OF every emission carries (`0` = the
+	 *  attach's own request state, before any navigation). Advanced only
+	 *  at consume time, never at latch: an emission between latch and
+	 *  consume still rendered the pre-navigation state and must say so. */
+	consumedNavSeq: number;
 }
 
 /** Per-id bound on every mirror layer's fp / matchKey sets — the
@@ -296,6 +340,9 @@ export function _openConnectionSession(
 		firstDeliverySettledAt: null,
 		degradedReason: null,
 		telemetry: null,
+		pendingNav: null,
+		statedNavSeq: 0,
+		consumedNavSeq: 0,
 	};
 	sessions.set(id, session);
 	return session;
@@ -304,22 +351,26 @@ export function _openConnectionSession(
 /**
  * Record an emission's holdings against its delivery seq — the `(id,
  * fp)` pairs a payload segment or lane carried, captured by the driver
- * at the same walk that promotes them into the optimistic layer. When
- * the client's cumulative ack covers the seq, the pairs fold into the
- * ACKED layer and the record dies. A record whose seq the client
+ * at the same walk that promotes them into the optimistic layer, plus
+ * the navigation point the emission was rendered as-of. When the
+ * client's cumulative ack covers the seq, the pairs fold into the
+ * ACKED layer and the record dies — gated on the as-of (see
+ * `statedNavSeq`): a delivery the client's navigation point dropped
+ * must never become acked evidence. A record whose seq the client
  * already acked (the ack raced the driver's post-drain bookkeeping)
- * folds immediately instead of pending forever.
+ * folds immediately instead of pending forever, through the same gate.
  */
 export function _recordDelivery(
 	session: ConnectionSession,
 	seq: number,
 	tokens: ReadonlyArray<readonly [string, string]>,
+	asOf = 0,
 ): void {
 	if (seq <= session.ackedDeliverySeq) {
-		foldAckedTokens(session, tokens);
+		if (asOf >= session.statedNavSeq) foldAckedTokens(session, tokens);
 		return;
 	}
-	session.pendingDeliveries.set(seq, tokens);
+	session.pendingDeliveries.set(seq, { tokens, asOf });
 }
 
 function foldAckedTokens(
@@ -350,9 +401,17 @@ function applyAckFrame(session: ConnectionSession, frame: AckFrame): boolean {
 	session.firstAckReceived = true;
 	if (frame.delivered <= session.ackedDeliverySeq) return false;
 	session.ackedDeliverySeq = frame.delivered;
-	for (const [seq, tokens] of session.pendingDeliveries) {
+	for (const [seq, record] of session.pendingDeliveries) {
 		if (seq <= frame.delivered) {
-			foldAckedTokens(session, tokens);
+			// The as-of fold gate: an acked delivery rendered before the
+			// latest latched navigation is one the client PROCESSED (the ack
+			// keeps the watermark contiguous and frees the window) but does
+			// not HOLD — its commit was dropped at the client's navigation
+			// point, by the same asOf-vs-navSeq comparison. Discard without
+			// folding; the record's freeing role is complete.
+			if (record.asOf >= session.statedNavSeq) {
+				foldAckedTokens(session, record.tokens);
+			}
 			session.pendingDeliveries.delete(seq);
 		}
 	}
@@ -436,6 +495,52 @@ export function takeConnectionFlips(
 	const flips = new Map(session.pendingFlips);
 	session.pendingFlips.clear();
 	return flips;
+}
+
+/**
+ * Latch a `url` frame on its session. Newest statement wins (`>=` so a
+ * later frame in the SAME envelope stands); a frame at or below the
+ * consumed navigation seq is a stale restatement (a retransmit whose
+ * navigation the request state already reflects) and applies as a
+ * no-op — the per-kind idempotence contract. The latch also advances
+ * `statedNavSeq` (the ack fold gate) IMMEDIATELY: an ack in the same
+ * envelope was computed by a client whose navigation point was already
+ * set when the url statement was created, so the gate must see the
+ * statement first (`handleChannelPost` latches url frames ahead of the
+ * in-order pass for the same reason). Always wakes the driver — the
+ * navigation is the highest-priority latch at wait entry.
+ */
+function applyUrlFrame(
+	session: ConnectionSession,
+	seq: number,
+	frame: UrlFrame,
+	requestUrl: string,
+): void {
+	if (seq > session.statedNavSeq) session.statedNavSeq = seq;
+	if (seq <= session.consumedNavSeq) return;
+	if (session.pendingNav !== null && seq < session.pendingNav.seq) return;
+	// Reduce to path + search on the session's own timeline — the origin
+	// was validated against the envelope's request; the driver re-resolves
+	// against ITS request at consume time.
+	const target = new URL(frame.url, requestUrl);
+	session.pendingNav = {
+		url: target.pathname + target.search,
+		intent: frame.intent,
+		seq,
+	};
+}
+
+/** Consume the session's latched navigation — the driver's wait-entry
+ *  take (navigation-first, ahead of `takeConnectionFlips`). A newer
+ *  frame latching right after the take re-queues into `pendingNav`,
+ *  which both the mid-render supersede watch and the next wait entry
+ *  observe — no statement vanishes. */
+export function takeConnectionNavigation(
+	session: ConnectionSession,
+): PendingNavigation | null {
+	const nav = session.pendingNav;
+	session.pendingNav = null;
+	return nav;
 }
 
 /**
@@ -524,9 +629,10 @@ function isSameOriginPost(request: Request): boolean {
  * it): `getScope()` / `getSessionId()` read this envelope's own
  * request. `204` (no body) on success: every rendered consequence
  * travels down the live stream as lanes, never on this response.
- * `403` on cross-site provenance. `400` on a malformed envelope or a
+ * `403` on cross-site provenance. `400` on a malformed envelope, a
  * malformed known-kind frame (unknown kinds are skipped by the
- * decoder, not errors). `404` when the connection isn't open OR the
+ * decoder, not errors), or a `url` frame naming a cross-origin target
+ * — a violation, and nothing from the envelope applies. `404` when the connection isn't open OR the
  * envelope's scope / session identity doesn't match the attach's —
  * one indistinguishable "connection gone" answer, the client
  * transport's signal to fall back to the discrete path.
@@ -546,7 +652,31 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 	if (getScope() !== session.scope) return new Response(null, { status: 404 });
 	if ((getSessionId() ?? "") !== session.boundSessionId)
 		return new Response(null, { status: 404 });
+	// Same-origin validation for url frames, BEFORE anything applies: a
+	// cross-origin target is a protocol violation (`400`, nothing from
+	// the envelope applied) — the channel states this origin's URL state,
+	// never another's. Path-relative targets resolve same-origin by
+	// construction.
+	for (const frame of envelope.frames) {
+		if (frame.kind !== "url") continue;
+		try {
+			if (new URL(frame.url, request.url).origin !== new URL(request.url).origin)
+				return new Response(null, { status: 400 });
+		} catch {
+			return new Response(null, { status: 400 });
+		}
+	}
+	// Latch url frames AHEAD of the in-order pass: an ack riding the
+	// same envelope was computed by a client whose navigation point was
+	// already set when the url statement was created (statement time
+	// precedes the coalesced flush), so the fold gate must see the url
+	// statement first regardless of producer order within the envelope.
 	let wakeNeeded = false;
+	for (const frame of envelope.frames) {
+		if (frame.kind !== "url") continue;
+		applyUrlFrame(session, envelope.seq, frame, request.url);
+		wakeNeeded = true;
+	}
 	for (const frame of envelope.frames) {
 		switch (frame.kind) {
 			case "visible":
@@ -565,6 +695,9 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 				// render (see applyTelemetryFrame). The envelope-level applied
 				// watermark below advances as for any envelope.
 				applyTelemetryFrame(session, envelope.seq, frame);
+				break;
+			case "url":
+				// Latched above, ahead of the in-order pass.
 				break;
 		}
 	}

@@ -21,13 +21,28 @@ import React from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { rscStream } from "rsc-html-stream/client";
 import {
+	_channelAbortLiveStream,
+	_channelClaimWindowNav,
+	_channelDeliveryCommittable,
+	_channelNavAvailable,
+	_channelNavigate,
+	_channelNavPoint,
+	_channelNavPrefersTransition,
+	_channelNavSegmentCommitted,
+	_channelNavSegmentSettled,
+	_channelNavSubsumedByAttach,
+	_channelStatedWindowUrl,
 	_channelWireEntry,
 	_laneDeliveryCommitted,
 	_laneDeliveryDropped,
+	_laneDeliveryDroppedStale,
+	_lanePendingDelivery,
+	_segmentDelivery,
 	_segmentDeliveryCommitted,
-	_segmentDeliverySeq,
+	_segmentDeliveryDroppedStale,
+	type WireDelivery,
 } from "../lib/channel-client.ts";
-import type { AttachStatement } from "../lib/channel-protocol.ts";
+import type { AttachStatement, UrlFrame } from "../lib/channel-protocol.ts";
 import type { FpUpdatesPayload } from "../lib/fp-trailer-marker.ts";
 import {
 	type DemuxedLane,
@@ -105,9 +120,10 @@ async function main() {
 		}, [setPayload_]);
 
 		React.useEffect(() => {
-			const off = listenNavigation((url, types, signal) => {
+			const off = listenNavigation((url, types, signal, channelIntent) => {
 				setPendingTransitionTypes(types ?? []);
-				return fetchRscPayload(url, signal).finished;
+				return fetchRscPayload(url, signal, undefined, undefined, channelIntent)
+					.finished;
 			});
 			// BrowserRoot is the tree root, so this effect runs after every
 			// child's — hydration handlers are attached — and the navigate
@@ -166,6 +182,7 @@ async function main() {
 			"__frame",
 			"__frameUrl",
 			"__cullFlip",
+			"__force",
 		]) {
 			u.searchParams.delete(k);
 		}
@@ -185,13 +202,39 @@ async function main() {
 	 * segmented stream a live GET drives. Everything downstream of the
 	 * fetch — the splitter, the lanes path, the commit guards — is one
 	 * shared path.
+	 *
+	 * `channelIntent` marks a window navigation the navigate listener
+	 * routed through the channel (it CLAIMED the live stream during the
+	 * event dispatch): the fire becomes a `url` frame and its milestones
+	 * resolve at the covering segment's commit/settle on the held
+	 * stream — no fetch at all. If the channel can no longer carry it
+	 * (the connection died since the claim), the claim's kept stream is
+	 * released (`_channelAbortLiveStream` — it still renders the URL the
+	 * page just left) and the fire falls through to the discrete GET
+	 * below with its own guards.
 	 */
 	function fetchRscPayload(
 		overrideUrl?: string,
 		signal?: AbortSignal,
 		claimCommit?: () => boolean,
 		attach?: AttachStatement,
+		channelIntent?: UrlFrame["intent"],
 	): { streaming: Promise<void>; finished: Promise<void> } {
+		if (channelIntent && overrideUrl && !attach) {
+			const target = new URL(overrideUrl, window.location.origin);
+			const routed = _channelNavigate({
+				url: target.pathname + target.search,
+				intent: channelIntent,
+				streaming: target.searchParams.has("streaming"),
+				signal,
+			});
+			if (routed) return routed;
+			_channelAbortLiveStream();
+		}
+		// The attach's request line restates the client's URL — it
+		// subsumes the channel's navigation point and any buffered url
+		// frames (a fresh connection opens as-of 0 on both sides).
+		if (attach) _channelNavSubsumedByAttach();
 		let resolveStreaming!: () => void;
 		let rejectStreaming!: (err: unknown) => void;
 		let resolveFinished!: () => void;
@@ -222,6 +265,26 @@ async function main() {
 		// sections still update concurrently. Keyed off the URL this fetch
 		// is FOR (`overrideUrl` for a full-page nav, else the live page).
 		const issuedForPageUrl = pageUrlKey(overrideUrl);
+		// The client's navigation point at issue — the as-of a DISCRETE
+		// response's server url push is gated on (`applyStandardTrailers`):
+		// the client's own statement about its URL outranks a push
+		// rendered before it. Channel deliveries carry a wire as-of
+		// instead.
+		const issueNavPoint = _channelNavPoint();
+		// One guard seam, reached two ways. Seq'd deliveries (the live
+		// stream, whose URL follows the client's channel url statements)
+		// arbitrate by the AS-OF against the navigation point — the
+		// pageUrlKey guard generalized into the protocol — plus the
+		// stated-URL identity (a DISCRETE navigation that moved the page
+		// out from under a still-open stream). Un-seq'd responses (every
+		// discrete GET) keep the pageUrlKey twin, plus the per-selector
+		// monotonic claim their dispatcher minted.
+		const expectedStreamPageKey = (): string => {
+			const stated = _channelStatedWindowUrl();
+			return stated !== null
+				? pageUrlKey(new URL(stated, window.location.origin).href)
+				: issuedForPageUrl;
+		};
 
 		void (async () => {
 			let streamingResolved = false;
@@ -312,12 +375,27 @@ async function main() {
 						const { mainStream, trailer } = splitAtFpTrailer(lane.body);
 						const node =
 							await createFromReadableStream<React.ReactNode>(mainStream);
-						if (pageUrlKey() !== issuedForPageUrl) {
-							// Decoded but never committed: consume the lane's queued
-							// delivery seq WITHOUT recording it — the ack watermark
-							// stalls there, so the server never counts the dropped
-							// payload as held. (The page moved, so this stream is
-							// about to be torn anyway.)
+						const delivery = _lanePendingDelivery(lane.partonId);
+						if (delivery !== null) {
+							// Channel-governed lane. As-of first: a lane rendered
+							// before the client's navigation point is content of a
+							// page the client left — consume it PROCESSED (the
+							// watermark advances; the server's fold gate keeps it
+							// out of the acked mirror) and the stream lives on.
+							if (!_channelDeliveryCommittable(delivery.asOf)) {
+								_laneDeliveryDroppedStale(lane.partonId);
+								return;
+							}
+							// Then the page identity: a DISCRETE navigation moved
+							// the page while this stream still renders its old URL
+							// — a dying stream; the stall drop keeps the server
+							// from counting the drop as held.
+							if (pageUrlKey() !== expectedStreamPageKey()) {
+								_laneDeliveryDropped(lane.partonId);
+								return;
+							}
+						} else if (pageUrlKey() !== issuedForPageUrl) {
+							// Un-seq'd lane (no session): the discrete twin guard.
 							_laneDeliveryDropped(lane.partonId);
 							return;
 						}
@@ -328,25 +406,36 @@ async function main() {
 						// transport advances its contiguous watermark and acks.
 						_laneDeliveryCommitted(lane.partonId);
 					} catch (err) {
-						// Torn decode (connection died mid-lane) — keep the
+						// Torn decode (connection died mid-lane, or a navigation
+						// tear ended the region over this body) — keep the
 						// per-parton seq queue aligned for any lane that still
 						// lands, without recording a commit that never happened.
+						// A nav-torn lane queued no seq at all (the tear precedes
+						// the seq entry), so the consume is a no-op there.
 						_laneDeliveryDropped(lane.partonId);
 						throw err;
 					}
 				};
-				// A live stream's payload segments carry delivery seqs (`seq`
-				// entries ahead of their Flight rows). FETCH-LOCAL pending
-				// slot: only this stream's own commits may consume it — a
-				// concurrent discrete fetch's commit must never record the
-				// live stream's seq.
-				let pendingSegmentSeq: number | null = null;
+				// A live stream's payload segments carry deliveries (`seq`
+				// entries — seq + as-of — ahead of their Flight rows).
+				// FETCH-LOCAL pending slot: only this stream's own commits may
+				// consume it — a concurrent discrete fetch's commit must never
+				// record the live stream's seq.
+				let pendingSegmentDelivery: WireDelivery | null = null;
 				const onWireEntry = (tag: string, body: Uint8Array): void => {
 					// The transport's entries — `conn` handshake, lane-form
 					// delivery seqs, the upstream-applied watermark.
 					_channelWireEntry(tag, body);
-					const seq = _segmentDeliverySeq(tag, body);
-					if (seq !== null) pendingSegmentSeq = seq;
+					const delivery = _segmentDelivery(tag, body);
+					if (delivery !== null) pendingSegmentDelivery = delivery;
+				};
+				// Consume the fetch-local slot. A function boundary — the slot
+				// is written from the wire-entry closure above, which
+				// straight-line flow analysis can't see.
+				const takeSegmentDelivery = (): WireDelivery | null => {
+					const delivery = pendingSegmentDelivery;
+					pendingSegmentDelivery = null;
+					return delivery;
 				};
 				try {
 					// `onWireEntry` watches the entries for the `conn`
@@ -386,45 +475,88 @@ async function main() {
 							}
 							continue;
 						}
-						const payload = await createFromReadableStream<RscPayload>(
-							segment.body,
-						);
-						// Drop a stale whole-root commit: if the page URL moved on
-						// since this fetch was issued, painting its payload would
-						// clobber the newer page (re-open a closed overlay, restore
-						// a superseded query). Skip the commit AND its trailers
-						// (which would otherwise register fingerprints for the
-						// stale tree). Keep draining so the stream closes cleanly.
-						// A dropped commit consumes its pending delivery seq
-						// WITHOUT recording it — the ack watermark stalls, and the
-						// server never counts the dropped payload as held.
-						if (pageUrlKey() !== issuedForPageUrl) {
-							pendingSegmentSeq = null;
-							continue;
+						let payload: RscPayload;
+						try {
+							payload = await createFromReadableStream<RscPayload>(
+								segment.body,
+							);
+						} catch (err) {
+							// A truncated payload on the live stream: the server's
+							// mid-render navigation supersede aborted this segment
+							// (a newer url frame made it moot). Its as-of predates
+							// the navigation point by construction — consume the
+							// delivery PROCESSED and keep reading; the covering
+							// segment follows. Any other decode failure propagates.
+							const torn = takeSegmentDelivery();
+							if (torn !== null && !_channelDeliveryCommittable(torn.asOf)) {
+								_segmentDeliveryDroppedStale(torn.seq);
+								continue;
+							}
+							throw err;
 						}
-						// Monotonic commit ordering: drop this segment if a newer
-						// fire for the same selector has already committed (a
-						// superseded refetch whose response arrived out of order —
-						// the stale-`q` search bug). Keep draining so the stream
-						// closes cleanly; just skip the commit and its trailers. The
-						// gate is provided by the framework's refetch dispatcher
-						// (`refetch-ordering.ts`); full-page navs pass none.
-						if (claimCommit && !claimCommit()) {
-							pendingSegmentSeq = null;
-							continue;
+						const delivery = takeSegmentDelivery();
+						// One guard seam, two arbitrations (see
+						// expectedStreamPageKey). Dropped commits skip trailers
+						// too — they would register fingerprints for a stale tree.
+						if (delivery !== null) {
+							// Seq'd delivery (the live stream): as-of vs the
+							// navigation point, then the stated-URL identity.
+							// Stale-by-as-of consumes PROCESSED (the stream lives
+							// on); a discrete-nav mismatch stalls (dying stream).
+							if (!_channelDeliveryCommittable(delivery.asOf)) {
+								_segmentDeliveryDroppedStale(delivery.seq);
+								continue;
+							}
+							if (pageUrlKey() !== expectedStreamPageKey()) {
+								continue;
+							}
+						} else {
+							// Discrete response: the pageUrlKey twin, plus the
+							// per-selector monotonic claim (`refetch-ordering.ts`)
+							// — a superseded refetch whose response arrived out of
+							// order must not clobber the newer tree. Full-page
+							// navs pass no claim.
+							if (pageUrlKey() !== issuedForPageUrl) {
+								continue;
+							}
+							if (claimCommit && !claimCommit()) {
+								continue;
+							}
 						}
-						segment.trailers.then(applyStandardTrailers).catch(() => {});
-						if (streamingMode) {
+						segment.trailers
+							.then((trailers) => {
+								// Server url pushes gate on the as-of (client-wins —
+								// see applyStandardTrailers): the wire as-of for
+								// channel deliveries, the issue-time navigation
+								// point for a discrete response.
+								applyStandardTrailers(trailers, {
+									urlAsOf: delivery !== null ? delivery.asOf : issueNavPoint,
+								});
+								// Trailers resolve at the segment's `settled` — the
+								// covering navigation fires' `finished` milestone.
+								if (delivery !== null) {
+									_channelNavSegmentSettled(delivery.asOf);
+								}
+							})
+							.catch(() => {});
+						// Commit mode: the live stream commits raw by default
+						// (progressive — the attach carries ?streaming=1), except
+						// when a covering navigation fire asked for the atomic
+						// swap; discrete responses keep their URL-flag behavior.
+						const preferTransition =
+							delivery !== null && _channelNavPrefersTransition(delivery.asOf);
+						if (streamingMode && !preferTransition) {
 							setPayloadRaw(payload);
 						} else {
 							setPayload(payload);
 						}
 						// COMMIT is the recording moment for the segment's delivery
 						// seq — React has been handed the payload; the transport
-						// advances its watermark and acks.
-						if (pendingSegmentSeq !== null) {
-							_segmentDeliveryCommitted(pendingSegmentSeq);
-							pendingSegmentSeq = null;
+						// advances its watermark and acks, and covering navigation
+						// fires resolve their `streaming` milestone.
+						if (delivery !== null) {
+							_segmentDeliveryCommitted(delivery.seq);
+							_channelNavSegmentCommitted(delivery.asOf);
 						}
 						// First segment landed and React has been told to render it.
 						// Resolve `streaming` so per-selector abort queues can fire
@@ -510,12 +642,17 @@ async function main() {
 		// so the warmed fps match what a later nav will compute. The signal
 		// aborts cooperatively at a segment boundary (via `splitSegments`),
 		// so a superseding preload tears this one down cleanly.
+		const warmIssueNavPoint = _channelNavPoint();
 		for await (const segment of splitSegments(response.body, signal)) {
 			// Preloads are one-shot renders — never live, so never lanes.
 			if (segment.kind !== "payload") continue;
 			const payload = await createFromReadableStream<RscPayload>(segment.body);
 			_warmCacheFromPayload(payload.root);
-			segment.trailers.then(applyStandardTrailers).catch(() => {});
+			segment.trailers
+				.then((trailers) =>
+					applyStandardTrailers(trailers, { urlAsOf: warmIssueNavPoint }),
+				)
+				.catch(() => {});
 		}
 	}
 	// Navigation handles (useNavigation / frame) dispatch targeted
@@ -535,6 +672,10 @@ async function main() {
 
 	setServerCallback(async (id, args) => {
 		const temporaryReferences = createTemporaryReferenceSet();
+		// The navigation point at action fire — the as-of this response's
+		// server url push is gated on (client-wins: a push the client has
+		// channel-navigated past is a stale suggestion).
+		const actionIssueNavPoint = _channelNavPoint();
 		// Include cached partial fingerprints so the server can skip
 		// unchanged partials after a server action (same as navigation).
 		const actionUrl = new URL(window.location.href);
@@ -569,7 +710,11 @@ async function main() {
 				temporaryReferences,
 			});
 			if (!firstPayload) firstPayload = payload;
-			segment.trailers.then(applyStandardTrailers).catch(() => {});
+			segment.trailers
+				.then((trailers) =>
+					applyStandardTrailers(trailers, { urlAsOf: actionIssueNavPoint }),
+				)
+				.catch(() => {});
 			// A deferred-only action returns `root: null` (no re-render): the
 			// already-open streaming connection carries the update instead.
 			// Committing a null root would blank the page, so skip the commit
@@ -622,6 +767,7 @@ function listenNavigation(
 		url: string,
 		transitionTypes?: string[],
 		signal?: AbortSignal,
+		channelIntent?: UrlFrame["intent"],
 	) => Promise<void>,
 ) {
 	const nav = getNavigation();
@@ -683,6 +829,25 @@ function listenNavigation(
 		// `"after-transition"` would scroll a push/replace to the top, yanking
 		// the viewport out from under whatever the user is doing.
 		if (isFrameworkSilentInfo(event.info)) {
+			// A window-silent URL sync on an attached page still states its
+			// URL on the channel (fire-and-forget, intent "silent"): the
+			// held connection's request state must follow silent moves too
+			// — match gates read the page URL — and the claim keeps the
+			// heartbeat from tearing the stream the statement rides. A
+			// selector nav's own refetch statement (dispatched by the
+			// initiator right after this event) replaces the pending frame
+			// pre-flush, so exactly one url frame ships either way.
+			if (event.info.mode === "window" && _channelNavAvailable()) {
+				const dest = new URL(event.destination.url);
+				if (!dest.searchParams.has("__frame")) {
+					_channelClaimWindowNav();
+					_channelNavigate({
+						url: dest.pathname + dest.search,
+						intent: "silent",
+						record: false,
+					});
+				}
+			}
 			event.intercept({ focusReset: "manual", scroll: "manual" });
 			return;
 		}
@@ -728,8 +893,13 @@ function listenNavigation(
 				// Route through `onNavigation` so the framework's transition-
 				// type detection runs (forward / back). If frame snapshots
 				// also differ, append `__frame=…&__frameUrl=…` so the server
-				// session catches up in the same request.
+				// session catches up in the same request. A clean traverse
+				// (no frame diffs) rides the channel like any window nav —
+				// intent "replace": the history move already happened; frame
+				// session updates are frame-scoped work and stay discrete.
 				const types = directionFor(event);
+				const viaChannel = diffs.length === 0 && _channelNavAvailable();
+				if (viaChannel) _channelClaimWindowNav();
 				event.intercept({
 					handler: () =>
 						swallowNavigationAbort(async () => {
@@ -738,7 +908,12 @@ function listenNavigation(
 								url.searchParams.append("__frame", d.key);
 								url.searchParams.append("__frameUrl", d.url);
 							}
-							await onNavigation(url.toString(), types, event.signal);
+							await onNavigation(
+								url.toString(),
+								types,
+								event.signal,
+								viaChannel ? "replace" : undefined,
+							);
 						}),
 				});
 				return;
@@ -759,6 +934,14 @@ function listenNavigation(
 			}
 		}
 
+		// The everything-else window navigation. Attached and healthy, it
+		// rides the channel: the claim (set synchronously, during this
+		// dispatch) tells the heartbeat's deferred abort check to keep the
+		// held stream — the navigation's segment arrives ON it. The intent
+		// mirrors the browser's own history semantic; a traverse's history
+		// move already happened, so it states "replace".
+		const viaChannel = _channelNavAvailable();
+		if (viaChannel) _channelClaimWindowNav();
 		event.intercept({
 			handler: () =>
 				swallowNavigationAbort(() =>
@@ -766,6 +949,11 @@ function listenNavigation(
 						event.destination.url,
 						directionFor(event),
 						event.signal,
+						viaChannel
+							? event.navigationType === "push"
+								? "push"
+								: "replace"
+							: undefined,
 					),
 				),
 		});
