@@ -143,7 +143,7 @@ Frame kinds shipped:
 | Kind | Carries | Server effect |
 |---|---|---|
 | `visible` | `{changed, visible, cached?}` — the visibility statement: flipped ids, the wholesale snapshot, the client's actual holdings for the changed ids | Applied to the connection session; flipped-IN partons lane on the EXISTING stream (never on this response) |
-| `ack` | `{delivered}` — the highest CONTIGUOUSLY committed delivery seq (cumulative) | Advances the session's ack watermark, folds the covered deliveries' fps into the ACKED mirror layer, frees the unacked delivery window (the parked driver wakes), and — any ack frame at all — proves the duplex (`firstAckReceived`, the never-acked degrade's off-switch) |
+| `ack` | `{delivered, dropped?}` — the highest CONTIGUOUSLY committed delivery seq (cumulative), plus the seqs within the newly-acked range the client received but did NOT hold (its as-of guard dropped them) | Advances the session's ack watermark, folds each covered delivery's fps into the ACKED mirror layer — UNLESS its seq is `dropped`, which EVICTS the delivery's optimistic promotions instead — frees the unacked delivery window (the parked driver wakes), and — any ack frame at all — proves the duplex (`firstAckReceived`, the never-acked degrade's off-switch) |
 | `detach` | nothing | Explicit close: the parked driver wakes, the drive loop exits, the session closes. Best-effort by nature (sent on `pagehide` via keepalive fetch); the keepalive timeout remains the backstop |
 | `telemetry` | `{viewport: {w,h}, scroll: {x,y,vx,vy}, at}` — the client's scroll context: container box, position, velocity (px/s), performance-clock timestamp | Replaces the session's `telemetry` slot, latest-wins by envelope seq. NOTHING else: no invalidation, no wake, never a render — the channel carries freshness statements, and telemetry is CONTEXT, not a dependency. Consumers read the slot when awake for their own reasons (the warm pass — see §Telemetry) |
 | `url` | `{url, intent, frame?}` — a URL statement for a scope the client owns: absent `frame`, the WINDOW URL (a `?__force=` overlay names a refetch's forced targets); present, the named FRAME's URL (the frame path's segments). `intent` is the history semantic (`push`/`replace`/`silent` — descriptive: the client's history work is done by send time) | Same-origin-validated (`400` the envelope on a cross-origin target — a violation, nothing applies). WINDOW scope: LATCHED on the session (newest seq wins; a seq at or below the consumed navigation is a stale restatement, a no-op — retransmit idempotence); the driver consumes it navigation-FIRST at wait entry and answers with a whole-tree payload segment, then forced-target lanes — §Navigation rides the channel. FRAME scope: the session frame URL is written AT THE ENDPOINT (the same store `?__frame=` writes through — and the one channel response that can mint the session cookie; an anonymous binding rebinds in place); the render latches per frame key and the driver lanes the frame's targets on the open region — §Frames ride the channel |
@@ -238,8 +238,9 @@ Downstream delivery stops being assumed the moment a session opens:
   navigation point) consumes its seq as PROCESSED
   (`_laneDeliveryDroppedStale` / `_segmentDeliveryDroppedStale` —
   the watermark advances, so a raced navigation can never wedge the
-  window into a forced reconnect); the server's fold gate (below)
-  keeps the processed drop out of the acked mirror. Lane seqs queue
+  window into a forced reconnect) AND is reported to the server
+  (`_reportAsOfDrop` → the next ack's `dropped` set), which evicts its
+  mirror promotions (§The layered mirror). Lane seqs queue
   per parton (`_channelWireEntry`); segment seqs are FETCH-LOCAL in
   the browser entry, consumed only within their own stream's loop.
 - **The `ack` frame.** The transport acks the highest CONTIGUOUSLY
@@ -316,7 +317,21 @@ live connection — is two layers, not one:
   evicted still skips if the client proved it. Both layers cap per id
   at `OVERRIDE_SET_CAP`.
 
-Two rules keep the layers truthful:
+Three rules keep the layers truthful:
+
+- **Held vs dropped is CLIENT-reported, never server-inferred.** Every
+  newly-acked delivery folds into the acked layer UNLESS the ack names
+  its seq in `dropped` (`AckFrame.dropped`) — a delivery the client
+  RECEIVED but did not HOLD, because its as-of guard
+  (`_channelDeliveryCommittable`) found it rendered as-of a navigation
+  point the client had already left. A dropped seq is EVICTED from the
+  optimistic layer (`applyAckFrame`, against the same override the
+  driver's renders read, linked onto the session) and never folds. Only
+  the client knows which arrivals its live navigation superseded, so it
+  says so; the server does not guess from `asOf < navSeq` (that gate
+  could not tell "committed then navigated — HELD, parked" from
+  "navigated then received-and-dropped"). Torn/dying-stream drops are
+  NOT reported — they self-heal on the reattach's whole-tree render.
 
 - **Reattach seeds from the attach manifest ∪ nothing else.** The
   acked layer resets with the connection (a fresh session starts
@@ -461,20 +476,26 @@ The pieces:
   page, so no cross-page staleness class exists beyond the as-of:
   stream order plus the as-of correlation are the whole commit
   arbitration.
-- **The mirror stays honest across navigations.** At consume, the
-  driver prunes every unacked delivery record rendered before the
-  new navigation point and removes their optimistic promotions
-  (`pruneDeliveriesBeforeNav`) — the client as-of-drops those
-  deliveries, so their fps must not confirm phantom holdings.
-  Genuinely-committed-but-unacked pre-nav deliveries are pruned too:
-  conservative, an over-fetch, never stale (the prompt first-commit
-  ack keeps the common case covered — an acked delivery's fps sit in
-  the ACKED layer and survive). The ack fold gate is the same
-  comparison at apply time: a covered record whose as-of predates
-  the latest LATCHED navigation frees the window without folding
-  (`statedNavSeq` advances at envelope apply, ahead of the driver's
-  consume, and url frames latch before the same envelope's in-order
-  pass so a co-riding ack sees them).
+- **The mirror SURVIVES navigation.** A navigation consume does NOT
+  prune the mirror: the client keeps its pre-navigation partons
+  (parked, hidden Activity), so the covering segment fp-skips them and
+  a return nav ships placeholders with no intervening ack — the mirror
+  retention IS what makes fp-skip fire across navigation. A phantom is
+  removed only when the client explicitly reports the delivery
+  DROPPED (`ack.dropped`, above): the server can't infer a drop from
+  `asOf < navSeq` (that gate can't distinguish held-then-navigated from
+  navigated-then-dropped), so it doesn't try. Consume moves the request
+  state and reopens lanes; it never touches the mirror.
+- **A selector nav's forced targets don't fold into their ancestors.**
+  A `navigate(url, {selector: [...]})` re-lanes only its named targets;
+  everything else fp-skips. On the whole-tree segment that means an
+  ANCESTOR of a forced target must be able to skip even though a
+  descendant it carries changed — so the descendant fold EXCLUDES the
+  forced targets (and their subtrees) for that segment render
+  (`_setFoldExclusionIds`, `excludedByForce`): the force is the
+  child-invalid path, the fold is parent-valid safety. Scoped to
+  targets STRICTLY BELOW the ancestor (a force at/above an id leaves
+  its own subtree folded) and cleared after the nav.
 - **Milestones ride the covering segment.** A channel-routed fire's
   `streaming` resolves when a payload segment whose as-of covers its
   navigation point COMMITS; `finished` when that segment SETTLES
@@ -484,7 +505,13 @@ The pieces:
   no covering fire the live stream's default raw commit stands. A
   forced target's fresh bytes can trail `finished` by one lane — the
   lane path is the framework's own freshness delivery, moments
-  later.
+  later. A window-force lane whose caller asked for STREAMING commits
+  progressively (root-ready, fallbacks flashing) like a producer lane
+  rather than buffering to an atomic swap: the lane announces its seq
+  EARLY so the client holds it at root-ready, and
+  `_channelNavPrefersStreaming` (kept per navigation point for the
+  connection's lifetime, since a forced lane commits after the covering
+  segment retires the nav record) drives the progressive commit.
 - **The attach subsumes the URL timeline.** The statement's `url` IS
   the client's URL statement: an attach fire retires the navigation
   point (both sides reopen as-of 0), folds the pending window
@@ -836,7 +863,9 @@ producer's statement and the envelope on the wire:
   its `seq` entry, `__force` targets laning explicit after the
   reopen, same-origin validation + strict decode, navigation-first
   wake priority, the mid-render supersede — exactly one settled
-  navigation segment — the nav-consume prune + the ack fold gate,
+  navigation segment — the mirror surviving navigation (held partons
+  fold on the covering ack; a `dropped` delivery is evicted), the
+  descendant fold excluding a nav's forced targets,
   stale-restatement idempotence).
 - node tier: `channel-client.test.ts` (coalescing, page-lifetime seq,
   serialization, the fallback signal, pagehide detach),
@@ -847,7 +876,8 @@ producer's statement and the envelope on the wire:
   `channel-client-acks.test.ts` (contiguous commit watermark, the
   passenger policy + its two driving flushes — first ack, threshold
   crossing — dropped-lane attribution incl. the processed as-of
-  drop, the reliable buffer's prune/retransmit assembly, the
+  drop and its `dropped` report on the next ack (once the watermark
+  covers it), the reliable buffer's prune/retransmit assembly, the
   first-ack degrade mark),
   `channel-navigation-client.test.ts` (the navigation point's
   statement-time reservation, newest-wins statements + covering
