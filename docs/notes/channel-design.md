@@ -313,6 +313,23 @@ Each package is a worktree branch, lands green (`yarn test` +
   navigation segments in stream order, discrete path refactored to the
   short-lived channel, subsumed client guards retired. The largest and
   last-risk package; starts only after W1+W4 are on master.
+  **W5a LANDED** — WINDOW scope: the `url` frame kind (reliable
+  class, same-origin-validated, latched + consumed navigation-first),
+  whole-tree navigation segments in stream order with `?__force=`
+  targets laning explicit after the reopen, the as-of correlation on
+  every `seq` entry (the pageUrlKey guard generalized into the
+  protocol; processed drops keep the ack watermark contiguous, the
+  fold gate + nav-consume prune keep the mirror honest), the
+  heartbeat's navigation claim (a channel-carried navigation KEEPS
+  the held stream), the attach as the URL-timeline subsume point, the
+  internal mid-render supersede seam (a newer url frame aborts the
+  in-flight navigation render — the seam W5b's explicit `cancel`
+  frame will address directly), and issue-seq + pageUrlKey retired on
+  the channel path with their twins intact on the discrete GET path:
+  [docs/internals/channel.md](../internals/channel.md) §Navigation
+  rides the channel. **W5b remains** — frame-scoped navigation +
+  producer lanes + the `cancel` frame kind + action consequence seqs;
+  frame long-polls keep their dedicated connections until then.
 - **W6 — telemetry + world consumer.** Lossy frames, scroll-vector
   warming in the website world. LANDED (ahead of W5 — the two don't
   touch) — the `telemetry` frame kind + strict decoder, the lossy
@@ -365,24 +382,40 @@ Each package is a worktree branch, lands green (`yarn test` +
   and all three ride one attach statement.
 - Multi-instance bus: separate note, blocking for multi-process
   production, not for this sequence.
-- RemoteFrame under channel-primary: a nav segment containing a
-  `<RemoteFrame>` settles only after the remote's trailer
-  (deferCommitUntil) — third-party origin latency lands on the shared
-  stream's supersede gate; remote invalidation never wakes the host
-  driver (zero freshness once the reopen backstop retires); remote fps
-  shift wholesale on a remote deploy, outside the host's epoch checks.
-  Needs its own section before W5.
+- ~~RemoteFrame under channel-primary~~ — RESOLVED in W5a, by
+  decision: remote freshness rides the RECONCILE CADENCE — no remote
+  lanes (a third-party origin's latency belongs on the scheduled
+  pass, not per-wake lane traffic). The nav-segment settle waiting on
+  the remote trailer sits inside the supersede window (a torn wait
+  costs nothing — the covering statement re-fetches), and a remote
+  deploy's wholesale fp shift is BOUNDED staleness — at most one
+  reconcile interval, self-correcting at the next full pass.
+  Documented, not engineered around:
+  [docs/reference/remote-frame.md](../reference/remote-frame.md)
+  §Freshness on a live connection,
+  [docs/internals/channel.md](../internals/channel.md) §The
+  whole-tree reconcile.
 - HMR: registry-epoch change must PUSH a detach/reattach to open
   channels (`_registryEpoch` exists; nothing pushes it) — the 20s
   self-heal cycle retires with the heartbeat dance. The
   connection-session map also needs an HMR guard (module re-eval
   orphans live sessions today).
-- Two URL writers: server-initiated `url` trailers (action POSTs) vs
-  client `url` frames are unordered writers of the same state — server
-  pushes need delivery seqs and a precedence rule.
-- Wake priority: where queued `url` frames sit relative to pending
-  flips and bump wakes. Position to defend: nav-first; old-route flip
-  lanes then defer against the new routeKey (harmless, but say it).
+- ~~Two URL writers~~ — RESOLVED in W5a:
+  client-wins-at-higher-envelope-seq. A server url push is a
+  SUGGESTION the client applies only when it hasn't navigated past
+  the state the push was rendered as-of (`push.asOf ≥ navPoint`) —
+  the wire as-of for live-stream deliveries, the issue-time
+  navigation point for a discrete response (action POST, preload).
+  The client's statement about its own URL is authoritative; an
+  accepted push re-states as a silent url frame, converging the held
+  connection. [docs/internals/channel.md](../internals/channel.md)
+  §Navigation rides the channel.
+- ~~Wake priority~~ — RESOLVED in W5a: nav-first, as defended. The
+  wait-entry latch ranks a pending `url` frame above pending flips
+  and every other latch; old-route flips then resolve against the
+  new routeKey and defer (no snapshot on the new route) — harmless,
+  and stated at the latch
+  (`latchedWake` in `segmented-response.ts`).
 - ~~Telemetry v1 cost honesty~~ — RESOLVED in W6, stated as shipped
   fact in [docs/internals/channel.md](../internals/channel.md)
   §Telemetry: a telemetry-only envelope body is ~200 B against

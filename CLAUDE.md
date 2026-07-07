@@ -32,8 +32,8 @@ pipeline:
    runs; the wire carries its client-rendered `skeleton` + props, the
    fp folds the RESOLVED visibility (`measurement ?? seed(props)`).
    Framework transport params (`TRANSPORT_PARAMS`: partials, cached,
-   live, streaming, visible, __frame, __frameUrl,
-   __cullFlip) are stripped before evaluation — match never sees them.
+   live, streaming, visible, __frame, __frameUrl, __cullFlip,
+   __force) are stripped before evaluation — match never sees them.
 2. **The body reads; the read IS the dependency.** Tracked hooks —
    `searchParam()`, `cookie()`, `header()`, `pathname()`, `match()`,
    `session()`, `tag()` — record what the body actually

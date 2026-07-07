@@ -42,6 +42,7 @@ export const FRAMEWORK_URL_PARAMS = [
   "__populateCache",
   "__nojs",
   "__cullFlip",
+  "__force",
 ] as const
 
 /** Return `urlString` with every framework-internal query param removed.

@@ -13,11 +13,14 @@
  *      FIRST committed delivery (the prompt duplex proof), and the
  *      unacked count crossing ACK_FLUSH_THRESHOLD — half the server's
  *      backpressure window, so steady state keeps 2× headroom;
- *   3. a DROPPED lane (stale-page guard, torn decode) consumes its
- *      queued seq without recording it, so the watermark stalls at
- *      the drop and later commits stay correctly attributed;
- *   4. segment-form `seq` entries are fetch-local: `_segmentDeliverySeq`
- *      parses them, `_channelWireEntry` ignores them;
+ *   3. a DROPPED lane (stale-page guard on a dying stream, torn
+ *      decode) consumes its queued seq without recording it, so the
+ *      watermark stalls at the drop and later commits stay correctly
+ *      attributed; an AS-OF drop (`_laneDeliveryDroppedStale` — a
+ *      continuing stream whose delivery predates the navigation
+ *      point) consumes PROCESSED, advancing the watermark;
+ *   4. segment-form `seq` entries are fetch-local: `_segmentDelivery`
+ *      parses them (seq + as-of), `_channelWireEntry` ignores them;
  *   5. frames from `reliable: true` producers buffer per envelope and
  *      retransmit at the next establishment with their ORIGINAL seqs,
  *      in order, before new flushes; the downstream `applied` marker
@@ -35,9 +38,10 @@ import {
 	_channelWireEntry,
 	_laneDeliveryCommitted,
 	_laneDeliveryDropped,
+	_laneDeliveryDroppedStale,
 	_resetChannelClient,
+	_segmentDelivery,
 	_segmentDeliveryCommitted,
-	_segmentDeliverySeq,
 	type ChannelProducer,
 	registerChannelProducer,
 	scheduleChannelFlush,
@@ -75,9 +79,10 @@ function sentEnvelopes(): ChannelEnvelope[] {
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s)
 
-/** Feed a lane-form `seq` entry the way the wire hook receives it. */
-function laneSeqEntry(partonId: string, seq: number): void {
-	_channelWireEntry("seq", enc(`${partonId}\n${seq}`))
+/** Feed a lane-form `seq` entry the way the wire hook receives it —
+ *  `<parton-id>\n<seq> <asof>`. */
+function laneSeqEntry(partonId: string, seq: number, asOf = 0): void {
+	_channelWireEntry("seq", enc(`${partonId}\n${seq} ${asOf}`))
 }
 
 /** Flush the transport once: schedule → rAF → drain microtasks. */
@@ -284,13 +289,27 @@ describe("delivery tracking + the ack producer", () => {
 		expect(fetchCalls).toHaveLength(0)
 	})
 
+	it("an as-of drop consumes PROCESSED — the watermark advances past it", async () => {
+		_channelEstablished("c1")
+		laneSeqEntry("p", 1, 0)
+		laneSeqEntry("p", 2, 3)
+		// A pre-navigation lane dropped by the as-of guard on a stream
+		// that lives on: processed, not held — the frontier moves so the
+		// window frees; the server's fold gate keeps it out of the mirror.
+		_laneDeliveryDroppedStale("p")
+		_laneDeliveryCommitted("p")
+		await flushOnce()
+		expect(sentEnvelopes()[0].frames).toEqual([{ kind: "ack", delivered: 2 }])
+	})
+
 	it("segment-form seq entries are fetch-local; commits advance the same watermark", async () => {
 		_channelEstablished("c1")
 		// The wire hook ignores the segment form (no parton-id prefix)…
-		_channelWireEntry("seq", enc("1"))
-		expect(_segmentDeliverySeq("seq", enc("1"))).toBe(1)
-		expect(_segmentDeliverySeq("seq", enc("p\n2"))).toBeNull()
-		expect(_segmentDeliverySeq("fp", enc("1"))).toBeNull()
+		_channelWireEntry("seq", enc("1 0"))
+		expect(_segmentDelivery("seq", enc("1 0"))).toEqual({ seq: 1, asOf: 0 })
+		expect(_segmentDelivery("seq", enc("3 7"))).toEqual({ seq: 3, asOf: 7 })
+		expect(_segmentDelivery("seq", enc("p\n2 0"))).toBeNull()
+		expect(_segmentDelivery("fp", enc("1 0"))).toBeNull()
 		// …and the browser entry records it at commit via the dedicated
 		// hook.
 		_segmentDeliveryCommitted(1)

@@ -153,14 +153,22 @@ export const TAG_LANES_OPEN = "lanes";
  *  driver only mints ids for sessions it has opened. Never appears on
  *  one-shot responses. */
 export const TAG_CONNECTION_ID = "conn";
-/** Per-connection monotonic DELIVERY seq — the ack currency. Every
- *  emission a live connection makes carries one: a payload segment's
- *  entry precedes its Flight rows (body: decimal seq), a lane's is a
- *  framed entry written right before the lane's `muxend` (body:
- *  `<parton-id>\n<seq>`, the mux frames' id-first shape). The client
- *  records the seq at COMMIT time — the lane-chain commit / payload
- *  setPayload, never at decode — and acks the highest contiguously
- *  committed value upstream (`ack` frames). Never appears on one-shot
+/** Per-connection monotonic DELIVERY seq — the ack currency — plus the
+ *  navigation point the emission was rendered AS-OF. Every emission a
+ *  live connection makes carries one: a payload segment's entry
+ *  precedes its Flight rows (body: `<seq> <asof>`, both decimal), a
+ *  lane's is a framed entry written right before the lane's `muxend`
+ *  (body: `<parton-id>\n<seq> <asof>`, the mux frames' id-first
+ *  shape). `asof` is the envelope seq of the last `url` frame the
+ *  connection's request state reflects (`0` = the attach's own
+ *  request, pre-navigation) — the correlation that lets the client
+ *  drop deliveries predating its own navigation point (the pageUrlKey
+ *  guard generalized into the protocol; see [[channel-client]]). The
+ *  client records the seq at COMMIT time — the lane-chain commit /
+ *  payload setPayload, never at decode — and acks the highest
+ *  contiguously PROCESSED value upstream (`ack` frames; an
+ *  as-of-dropped delivery counts as processed, and the server's fold
+ *  gate keeps it out of the acked mirror). Never appears on one-shot
  *  responses: a delivery seq without a session to ack to is
  *  meaningless. */
 export const TAG_DELIVERY_SEQ = "seq";

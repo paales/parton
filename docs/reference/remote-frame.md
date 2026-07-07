@@ -271,6 +271,35 @@ How it composes:
    the binding re-fetches.
 5. The page URL is unaffected; other frames are unaffected.
 
+## Freshness on a live connection
+
+A remote's changes never wake the host's segment driver: the remote
+is another process, so its invalidations land in ITS registry, not
+the host's. On a held live connection the remote's freshness rides
+the **whole-tree reconcile cadence** — the periodic full segment the
+driver emits on long-lived connections re-fetches every
+`<RemoteFrame>` in the tree, and idle connections get the same pass
+from the keepalive-reopen's first segment. There are no remote lanes,
+by decision: a third-party origin's latency belongs on the scheduled
+pass, not on per-wake lane traffic.
+
+Two bounded consequences, documented rather than engineered around:
+
+- **Navigation supersede covers the remote wait.** A navigation
+  segment whose tree contains a `<RemoteFrame>` settles only after
+  the remote's trailer arrives (`deferCommitUntil`), so the remote
+  origin's latency lands on that segment's settle — and inside the
+  window where a newer `url` frame can abort the in-flight
+  navigation render server-side. A torn wait costs nothing: the
+  superseding statement's segment re-fetches the remote.
+- **Bounded staleness after a remote deploy.** A redeploy shifts the
+  remote's fingerprints wholesale, outside the host's epoch checks —
+  an attached client keeps showing the old remote content until the
+  next reconcile's full pass re-fetches and re-registers it. The
+  staleness window is at most one reconcile interval and
+  self-corrects; see [`../internals/channel.md`](../internals/channel.md)
+  §The whole-tree reconcile.
+
 ## Security note: credentials omit
 
 The fetch is always `credentials: "omit"`. The host's cookies do

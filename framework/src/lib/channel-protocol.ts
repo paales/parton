@@ -8,9 +8,8 @@
  * the grammar, and its decoders.
  *
  * An envelope is one coalesced, fire-and-forget POST: the client
- * states facts about itself — viewport flips, delivery acks, and
- * viewport telemetry today; URL moves are a reserved kind (see
- * `docs/notes/channel-design.md`) — addressed to the OPEN live
+ * states facts about itself — viewport flips, delivery acks, viewport
+ * telemetry, and window URL moves — addressed to the OPEN live
  * connection by its explicit id. The server answers `204` with no body — every rendered consequence of a
  * frame travels down the live stream as lane segments, never on this
  * response. Frame kinds split into three classes:
@@ -26,13 +25,15 @@
  *     one pending frame, a failed delivery is simply dropped, and no
  *     discrete fallback exists. The class is in the grammar NOW so a
  *     datagram transport can map onto it later without a redesign.
- *   - **reliable** (the url / cancel kinds later packages add) —
+ *   - **reliable** (`url`; the cancel kind a later package adds) —
  *     buffered by the client transport (per its producer's `reliable`
  *     declaration, see [[channel-client]]) until the downstream
  *     `applied` marker covers their envelope seq, and retransmitted at
- *     the next attach with their ORIGINAL seqs. Application idempotence
- *     is per kind, by seq-ordered statement semantics (the shipped
- *     `visible` per-id seq gate is the model) — never a whole-envelope
+ *     the next establishment with their ORIGINAL seqs. Application
+ *     idempotence is per kind, by seq-ordered statement semantics (the
+ *     shipped `visible` per-id seq gate is the model; a `url` frame at
+ *     or below the session's consumed navigation seq is a stale
+ *     restatement and applies as a no-op) — never a whole-envelope
  *     replay gate, which would break out-of-order statement queueing.
  */
 
@@ -210,16 +211,54 @@ export interface TelemetryFrame {
 	at: number;
 }
 
+/**
+ * Window URL statement — the client's page URL moved (a navigation, a
+ * targeted refetch restating the URL it targets, or a silent URL-only
+ * sync). WINDOW scope only; frame-scoped URL moves stay on their
+ * dedicated long-polls until the cancel/frame package lands. The
+ * RELIABLE class: the frame rides the transport's retransmit buffer
+ * until the downstream `applied` marker covers its envelope seq.
+ *
+ *   - `url` — the target as path + search (an absolute same-origin URL
+ *     is accepted and reduced). The server VALIDATES same-origin
+ *     against the envelope's own request and answers `400` on a
+ *     cross-origin target — a protocol violation, not extensibility.
+ *     One-shot transport params (`partials`) may ride the query for a
+ *     targeted refetch; the session strips them from the PERSISTED
+ *     request state after the response segment renders.
+ *   - `intent` — the client's history semantic for the move
+ *     (`push`/`replace`; `silent` = URL-only sync or a same-URL
+ *     targeted refetch). The client's history work is already done by
+ *     the time the frame is sent (the statement describes, never
+ *     requests), so the server's render behavior is intent-independent
+ *     today; the field exists so the statement stays complete.
+ *
+ * The frame LATCHES on the connection session (newest seq wins) and is
+ * consumed by the segment driver at wait entry — navigation-first,
+ * ahead of pending flips — which applies the URL to the connection's
+ * request state and answers with a full payload segment in stream
+ * order. Every emission carries the consumed url-frame seq it was
+ * rendered AS-OF, which is what lets the client drop deliveries that
+ * predate its own navigation point (see [[fp-trailer-marker]]'s `seq`
+ * entry).
+ */
+export interface UrlFrame {
+	kind: "url";
+	url: string;
+	intent: "push" | "replace" | "silent";
+}
+
 /** The frame kinds shipped today. The grammar is open: an envelope may
- *  carry kinds this build doesn't know (url / cancel land in later
- *  packages — `docs/notes/channel-design.md` § Wire shape), and the
+ *  carry kinds this build doesn't know (cancel lands in a later
+ *  package — `docs/notes/channel-design.md` § Wire shape), and the
  *  decoder SKIPS those rather than erroring, the same extensibility
  *  rule the downstream marker grammar follows. */
 export type ChannelFrame =
 	| VisibleFrame
 	| DetachFrame
 	| AckFrame
-	| TelemetryFrame;
+	| TelemetryFrame
+	| UrlFrame;
 
 export interface ChannelEnvelope {
 	/** The live connection this envelope addresses. An explicit token,
@@ -300,6 +339,21 @@ export function decodeChannelEnvelope(value: unknown): ChannelEnvelope | null {
 				scroll: scroll as TelemetryFrame["scroll"],
 				at: f.at,
 			});
+			continue;
+		}
+		if (f.kind === "url") {
+			// Strict-known: a malformed url frame is a protocol violation.
+			// Same-origin validation needs the request and lives with the
+			// endpoint (`handleChannelPost`) — the decoder checks shape only.
+			if (typeof f.url !== "string" || f.url.length === 0) return null;
+			if (
+				f.intent !== "push" &&
+				f.intent !== "replace" &&
+				f.intent !== "silent"
+			)
+				return null;
+			frames.push({ kind: "url", url: f.url, intent: f.intent });
+			continue;
 		}
 		// Unknown kind — skipped, never an error.
 	}

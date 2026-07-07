@@ -282,8 +282,9 @@ describe("delivery seqs on the wire", () => {
 					throw new Error("expected payload segment 0");
 				await drainPayloadSegment(first.value);
 				// Segment 0's seq entry precedes its Flight rows — by drain
-				// time it has necessarily been read.
-				expect(seqEntries()).toEqual(["1"]);
+				// time it has necessarily been read. Body is `<seq> <asof>`;
+				// as-of 0 = the attach's own request state (no navigation).
+				expect(seqEntries()).toEqual(["1 0"]);
 
 				const second = await h.segments.next();
 				if (second.done || second.value.kind !== "lanes")
@@ -296,13 +297,13 @@ describe("delivery seqs on the wire", () => {
 				await decodeLane(laneA);
 				// The lane's seq entry precedes its muxend — decode completes
 				// only after the lane body closed, so the entry is here.
-				expect(seqEntries()).toEqual(["1", "ack-a\n2"]);
+				expect(seqEntries()).toEqual(["1 0", "ack-a\n2 0"]);
 
 				refreshSelector("ack-b");
 				const laneB = await nextLane(laneIter);
 				expect(laneB.partonId).toBe("ack-b");
 				await decodeLane(laneB);
-				expect(seqEntries()).toEqual(["1", "ack-a\n2", "ack-b\n3"]);
+				expect(seqEntries()).toEqual(["1 0", "ack-a\n2 0", "ack-b\n3 0"]);
 
 				await h.shutdown("ack-a");
 			},
@@ -759,7 +760,7 @@ describe("the whole-tree reconcile", () => {
 				// The reconcile is a delivery like any other emission.
 				expect(
 					h.entries.filter((e) => e.tag === "seq").map((e) => e.body),
-				).toEqual(["1", "2"]);
+				).toEqual(["1 0", "2 0"]);
 
 				// The lanes region reopens; later wakes lane as usual.
 				const fourth = await h.segments.next();

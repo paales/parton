@@ -22,6 +22,14 @@
  *     full-route GET — redundant since the rendered content already
  *     arrived in the action response.
  *
+ *     A server push is a SUGGESTION, gated on the client's own URL
+ *     timeline — client-wins-at-higher-envelope-seq: it applies only
+ *     when the client hasn't navigated past the state the push was
+ *     rendered as-of (`opts.urlAsOf` — the delivery's wire as-of on
+ *     the live stream, the issue-time navigation point for a discrete
+ *     response; see `_serverUrlPushApplies` in `channel-client.ts`).
+ *     The client's statement about its own URL is authoritative.
+ *
  *     There is no `window.history.*State` fallback. The framework
  *     requires the Navigation API; environments without `navigation`
  *     aren't supported. (Modern browser baseline; Safari 16.4+.)
@@ -31,6 +39,7 @@
  * not break the rendered payload that already committed.
  */
 
+import { _serverUrlPushApplies } from "./channel-client.ts"
 import { _applyFpUpdates, _windowNav } from "./partial-client.tsx"
 import type { FpUpdatesPayload } from "./fp-trailer-marker.ts"
 
@@ -39,7 +48,10 @@ interface UrlUpdate {
   history?: "push" | "replace"
 }
 
-export function applyStandardTrailers(trailers: Map<string, Uint8Array>): void {
+export function applyStandardTrailers(
+  trailers: Map<string, Uint8Array>,
+  opts?: { urlAsOf?: number },
+): void {
   const decoder = new TextDecoder()
 
   const fpBytes = trailers.get("fp")
@@ -51,7 +63,7 @@ export function applyStandardTrailers(trailers: Map<string, Uint8Array>): void {
   }
 
   const urlBytes = trailers.get("url")
-  if (urlBytes) {
+  if (urlBytes && _serverUrlPushApplies(opts?.urlAsOf)) {
     try {
       const update = JSON.parse(decoder.decode(urlBytes)) as UrlUpdate
       if (update.window) {

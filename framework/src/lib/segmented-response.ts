@@ -42,6 +42,7 @@ import {
 	_setConnectionSession,
 	getRequest,
 	getScope,
+	setRequest,
 } from "../runtime/context.ts";
 import {
 	_currentTs,
@@ -58,6 +59,7 @@ import {
 	capOverrideSet,
 	type PendingFlip,
 	takeConnectionFlips,
+	takeConnectionNavigation,
 } from "./connection-session.ts";
 import { renderToReadableStream } from "./flight-runtime.ts";
 import { wrapStreamWithFpTrailer } from "./fp-trailer.ts";
@@ -411,7 +413,9 @@ export async function driveSegmentedResponse(
 			let deliverySeq: number | null = null;
 			if (session !== null) {
 				deliverySeq = ++session.deliverySeq;
-				controller.enqueue(segmentDeliverySeqEntry(deliverySeq));
+				controller.enqueue(
+					segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq),
+				);
 			}
 
 			const flightStream = renderSegment();
@@ -472,7 +476,7 @@ export async function driveSegmentedResponse(
 					tokens.push([id, fp]),
 				);
 				if (session !== null && deliverySeq !== null) {
-					_recordDelivery(session, deliverySeq, tokens);
+					_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
 				}
 				controller.enqueue(nextMarker);
 				controller.enqueue(buildMarker(TAG_LANES_OPEN, 0));
@@ -656,13 +660,14 @@ function enqueueConnectionId(
 	controller.enqueue(body);
 }
 
-/** A payload segment's delivery-seq `seq` entry bytes — body is the
- *  decimal seq alone (the lane form prefixes the parton id; the client
- *  tells them apart by the newline). Emitted ahead of the segment's
- *  Flight rows so the client holds the seq before the commit that
- *  records it. */
-function segmentDeliverySeqEntry(seq: number): Uint8Array {
-	const body = new TextEncoder().encode(String(seq));
+/** A payload segment's delivery-seq `seq` entry bytes — body is
+ *  `<seq> <asof>` (the lane form prefixes the parton id; the client
+ *  tells them apart by the newline). `asof` is the navigation point
+ *  the segment renders as-of (`session.consumedNavSeq`). Emitted ahead
+ *  of the segment's Flight rows so the client holds seq AND as-of
+ *  before the commit-or-drop decision. */
+function segmentDeliverySeqEntry(seq: number, asOf: number): Uint8Array {
+	const body = new TextEncoder().encode(`${seq} ${asOf}`);
 	const marker = buildMarker(TAG_DELIVERY_SEQ, body.byteLength);
 	const out = new Uint8Array(marker.byteLength + body.byteLength);
 	out.set(marker, 0);
@@ -670,14 +675,20 @@ function segmentDeliverySeqEntry(seq: number): Uint8Array {
 	return out;
 }
 
-/** A lane delivery's `seq` entry bytes — `<parton-id>\n<seq>`, the mux
- *  frames' id-first shape, framed for the lanes region (one buffer:
- *  the lane driver's `enqueue` is all-or-nothing per chunk). Written
- *  immediately BEFORE the lane's `muxend`, so the client's per-parton
- *  seq queue holds the value before the lane body closes and its
- *  decode — then commit — can complete. */
-function laneDeliverySeqEntry(partonId: string, seq: number): Uint8Array {
-	const body = new TextEncoder().encode(`${partonId}\n${seq}`);
+/** A lane delivery's `seq` entry bytes — `<parton-id>\n<seq> <asof>`,
+ *  the mux frames' id-first shape, framed for the lanes region (one
+ *  buffer: the lane driver's `enqueue` is all-or-nothing per chunk).
+ *  Written immediately BEFORE the lane's `muxend`, so the client's
+ *  per-parton seq queue holds the value before the lane body closes
+ *  and its decode — then commit — can complete. As-of at drain equals
+ *  as-of at render: a navigation tears open lanes before it applies,
+ *  so no lane ever drains across a consume. */
+function laneDeliverySeqEntry(
+	partonId: string,
+	seq: number,
+	asOf: number,
+): Uint8Array {
+	const body = new TextEncoder().encode(`${partonId}\n${seq} ${asOf}`);
 	const marker = buildMarker(TAG_DELIVERY_SEQ, body.byteLength);
 	const out = new Uint8Array(marker.byteLength + body.byteLength);
 	out.set(marker, 0);
@@ -705,6 +716,11 @@ interface LaneRuntime {
 	 *  instead of opening a second lane. */
 	dirty: boolean;
 	done: Promise<void>;
+	/** Cancels the pump's CURRENT render reader — the navigation tear's
+	 *  reach into a pump parked on a suspended render (a read on a
+	 *  loader-blocked Flight stream has no other check point). Set per
+	 *  render iteration while its reader is held; `null` between. */
+	abortRead: (() => void) | null;
 }
 
 /**
@@ -745,6 +761,16 @@ interface LaneRuntime {
  * re-renders the returning state fresh (its fp folds every bump that
  * landed while parked, so it can't false-skip).
  *
+ * Navigation outranks every wake: a channel envelope's `url` frame
+ * latches on the session, and the driver — at wait entry or preempting
+ * whatever arm won — tears the open lanes, applies the URL to the
+ * connection's request state (the `setRequest` seam server-side
+ * navigation uses), and answers with one full payload segment for the
+ * new state before reopening the lanes region (`handleNavigation`). A
+ * newer frame landing mid-render supersedes the in-flight navigation
+ * render (`emitNavSegment`'s abort seam — the shape the explicit
+ * cancel frame kind will reuse).
+ *
  * Visibility flips are the fourth wake: a channel envelope's `visible`
  * frame updates the connection session's set and queues each flipped
  * id with the frame's OWN statement about it, and the driver lanes
@@ -774,9 +800,18 @@ async function driveLaneStream(
 	} catch {
 		return;
 	}
-	const routeKey = computeRouteKey(request.url);
+	// Mutable: a consumed url frame moves the connection's request state,
+	// and every per-wake read below (snapshots, expiry scan, registry
+	// re-entry) must follow it to the new route.
+	let routeKey = computeRouteKey(request.url);
 	const lanes = new Map<string, LaneRuntime>();
 	const openLaneIds = new Set<string>();
+	// Ids whose NEXT lane renders EXPLICIT (the lane state's
+	// explicitIds) — a url statement's `__force` targets: fp-skip and
+	// the defer gate both yield, exactly as for a discrete `?partials=`
+	// target. Consumed at lane start (one-shot — the render satisfies
+	// the force).
+	const forcedLaneIds = new Set<string>();
 	let closed = false;
 
 	// Stop release for pumps parked at the demand gate when the wake
@@ -791,6 +826,25 @@ async function driveLaneStream(
 	let stopping = false;
 	const gateWaiters = new Set<() => void>();
 
+	// Navigation lane tear. A consumed url frame ends the lanes region
+	// with a `next` delimiter, and no mux frame may follow it — so every
+	// open lane winds down FIRST: the flag turns each pump's next check
+	// point into an exit (no muxend, no seq entry — the client's region
+	// exit errors the torn body, rejecting only that lane's un-committed
+	// decode), `abortRead` breaks pumps parked on a suspended render,
+	// and the gate release frees pumps parked on demand. The torn lanes'
+	// content is obsolete by definition — it renders the route the
+	// client just left.
+	let tearingLanesForNav = false;
+	const tearLanesForNavigation = async (): Promise<void> => {
+		if (lanes.size === 0) return;
+		tearingLanesForNav = true;
+		for (const runtime of lanes.values()) runtime.abortRead?.();
+		for (const release of [...gateWaiters]) release();
+		await Promise.allSettled([...lanes.values()].map((l) => l.done));
+		tearingLanesForNav = false;
+	};
+
 	// Lane-output demand gate. Parks while the consumer's queue is
 	// full; the stream's pull releases it. Returns false when the lane
 	// must wind down instead of enqueue: the consumer cancelled (the
@@ -804,6 +858,7 @@ async function driveLaneStream(
 		if (!demand) return true;
 		while (
 			!stopping &&
+			!tearingLanesForNav &&
 			!demand.cancelled &&
 			controller.desiredSize !== null &&
 			controller.desiredSize <= 0
@@ -867,7 +922,11 @@ async function driveLaneStream(
 			open.dirty = true;
 			return;
 		}
-		const runtime: LaneRuntime = { dirty: false, done: Promise.resolve() };
+		const runtime: LaneRuntime = {
+			dirty: false,
+			done: Promise.resolve(),
+			abortRead: null,
+		};
 		lanes.set(id, runtime);
 		openLaneIds.add(id);
 		runtime.done = pumpLane(id, runtime);
@@ -886,25 +945,31 @@ async function driveLaneStream(
 		// connection never carried `?cached=`) → no state → every lane
 		// renders fresh, exactly as a cold client would be served.
 		const laneOverride = _getCachedOverride();
-		if (laneOverride) {
+		// A forced lane (a url statement's `__force` target) renders
+		// EXPLICIT: `explicitForces` bypasses the fp-skip verdict and the
+		// defer gate renders the body — the refetch contract on the lane
+		// path. One-shot: the force is consumed here; re-lanes of the same
+		// parton skip and defer as usual.
+		const forced = forcedLaneIds.delete(id);
+		if (laneOverride || forced) {
 			enterPartialState({
 				requestedIds: null,
 				isPartialRefetch: true,
 				populateCache: false,
-				cachedFingerprints: laneOverride.fingerprints,
-				cachedMatchKeys: laneOverride.matchKeys,
+				cachedFingerprints: laneOverride?.fingerprints ?? new Map(),
+				cachedMatchKeys: laneOverride?.matchKeys ?? new Map(),
 				// The mirror's ACKED layer — client-proven holdings the
 				// verdict falls back to on an optimistic miss (an fp the
 				// per-id cap evicted from the override but the client
 				// verifiably committed).
 				ackedFingerprints: session?.ackedFps ?? null,
-				explicitIds: new Set(),
+				explicitIds: forced ? new Set([id]) : new Set(),
 				cullFlip: false,
 				seenIds: new Set(),
 			});
 		}
 		try {
-			while (!closed) {
+			while (!closed && !tearingLanesForNav) {
 				runtime.dirty = false;
 				const snap = lookupPartial(id);
 				if (!snap) break;
@@ -947,17 +1012,21 @@ async function driveLaneStream(
 					},
 				);
 				const reader = wrapped.getReader();
+				// The navigation tear's reach into a read parked on a suspended
+				// render — cancelling settles the pending read so the pump can
+				// observe the tear and wind down without a muxend.
+				runtime.abortRead = () => void reader.cancel().catch(() => {});
 				try {
 					while (true) {
 						const { done, value } = await reader.read();
-						if (done) break;
+						if (done || tearingLanesForNav) break;
 						if (value && value.byteLength > 0) {
 							// Pull-gated: park before the enqueue while the consumer's
 							// queue is full. Not reading the NEXT chunk until then
 							// propagates the wait into the lane's Flight stream, so a
 							// stalled reader holds at most one frame per lane
 							// server-side instead of every wake's full payload.
-							if (!(await awaitDemand())) {
+							if (!(await awaitDemand()) || tearingLanesForNav) {
 								await reader.cancel().catch(() => {});
 								return;
 							}
@@ -968,8 +1037,13 @@ async function driveLaneStream(
 						}
 					}
 				} finally {
+					runtime.abortRead = null;
 					reader.releaseLock();
 				}
+				// A torn pump exits before its muxend/seq: the client's region
+				// exit errors the open body — a rejection of this lane's own
+				// un-committed decode, nothing more.
+				if (tearingLanesForNav) return;
 				if (!(await awaitDemand())) return;
 				// The delivery seq entry precedes the `muxend` on the wire, so
 				// the client's per-parton seq queue holds it before the lane
@@ -977,7 +1051,10 @@ async function driveLaneStream(
 				let deliverySeq: number | null = null;
 				if (session !== null) {
 					deliverySeq = ++session.deliverySeq;
-					if (!enqueue(laneDeliverySeqEntry(id, deliverySeq))) return;
+					if (
+						!enqueue(laneDeliverySeqEntry(id, deliverySeq, session.consumedNavSeq))
+					)
+						return;
 				}
 				if (!enqueue(muxEndFrame(id))) return;
 				// The delivery is fully on the wire — the connection's first
@@ -996,14 +1073,19 @@ async function driveLaneStream(
 					carried.push([tid, fp]),
 				);
 				if (session !== null && deliverySeq !== null) {
-					_recordDelivery(session, deliverySeq, carried);
+					_recordDelivery(session, deliverySeq, carried, session.consumedNavSeq);
 				}
 				if (!runtime.dirty) return;
 			}
 		} finally {
 			lanes.delete(id);
 			openLaneIds.delete(id);
-			if (!closed && lanes.size === 0) enqueue(settledMarker);
+			// No quiesce marker while tearing for a navigation: the torn
+			// lanes' client bodies are still open (deliberately — the region
+			// exit is what rejects them), so "every lane drained" would be a
+			// false statement; the navigation segment's own `settled` follows.
+			if (!closed && !tearingLanesForNav && lanes.size === 0)
+				enqueue(settledMarker);
 			noteLaneDrained();
 		}
 	};
@@ -1200,7 +1282,10 @@ async function driveLaneStream(
 		let deliverySeq: number | null = null;
 		if (session !== null) {
 			deliverySeq = ++session.deliverySeq;
-			if (!enqueue(segmentDeliverySeqEntry(deliverySeq))) return false;
+			if (
+				!enqueue(segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq))
+			)
+				return false;
 		}
 		const reader = renderFullSegment().getReader();
 		try {
@@ -1229,10 +1314,195 @@ async function driveLaneStream(
 			tokens.push([id, fp]),
 		);
 		if (session !== null && deliverySeq !== null) {
-			_recordDelivery(session, deliverySeq, tokens);
+			_recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq);
 		}
 		if (!enqueue(nextMarker)) return false;
 		return enqueue(lanesMarker);
+	};
+
+	// ── Navigation segments ──
+	// A consumed url frame answers with one full payload segment for the
+	// new request state, in stream order: `next` ends the lanes region
+	// (open lanes torn first — see tearLanesForNavigation), the segment
+	// flows with its delivery seq + as-of, `settled`, then `next` +
+	// `lanes` reopens the region (the caller writes the reopen after the
+	// LAST chained navigation). fp-skip applies as on any segment — a
+	// navigation to a mostly-mirrored route ships placeholders.
+	//
+	// Mid-render supersede — the internal seam W5b's explicit cancel
+	// frame reuses: a NEWER url frame latching while this segment
+	// renders makes the render moot (the client's as-of guard will drop
+	// the delivery), so the emitter aborts it — the read races a
+	// nav-latch arm on the session's wake set (disposer-registered, one
+	// per emission — the wake-arm release invariant), the reader is
+	// cancelled (aborting the Flight render), and the caller consumes
+	// the newer statement. The truncated segment is closed by the next
+	// `next` delimiter; the client drains it without decoding past the
+	// as-of check, and its consumed-not-recorded seq stays honest via
+	// the processed-drop ack.
+	const emitNavSegment = async (): Promise<"done" | "superseded" | "closed"> => {
+		if (!enqueue(nextMarker)) return "closed";
+		let deliverySeq: number | null = null;
+		if (session !== null) {
+			deliverySeq = ++session.deliverySeq;
+			if (
+				!enqueue(segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq))
+			)
+				return "closed";
+		}
+		const consumedSeq = session?.consumedNavSeq ?? 0;
+		const supersededBy = (): boolean =>
+			session !== null &&
+			session.pendingNav !== null &&
+			session.pendingNav.seq > consumedSeq;
+		const reader = renderFullSegment().getReader();
+		let navArm: (() => void) | null = null;
+		const disposeArm = (): void => {
+			if (session !== null && navArm !== null) session.flipWakes.delete(navArm);
+			navArm = null;
+		};
+		try {
+			while (true) {
+				if (supersededBy()) {
+					await reader.cancel().catch(() => {});
+					return "superseded";
+				}
+				// Race the read against a nav latch: a suspended render (a
+				// slow loader on the destination route) produces no bytes, so
+				// without the arm a superseding url frame couldn't preempt
+				// until the loader resolved.
+				let notify: (() => void) | null = null;
+				const latched = new Promise<"nav">((resolve) => {
+					notify = () => resolve("nav");
+				});
+				navArm = () => {
+					if (supersededBy()) notify?.();
+				};
+				if (session !== null) session.flipWakes.add(navArm);
+				const winner = await Promise.race([
+					reader.read().then((r) => ({ kind: "read" as const, r })),
+					latched.then(() => ({ kind: "nav" as const })),
+				]);
+				disposeArm();
+				if (winner.kind === "nav") {
+					await reader.cancel().catch(() => {});
+					return "superseded";
+				}
+				const { done, value } = winner.r;
+				if (done) break;
+				if (value && value.byteLength > 0) {
+					if (!(await awaitDemand())) {
+						await reader.cancel().catch(() => {});
+						return "closed";
+					}
+					if (!enqueue(value)) {
+						await reader.cancel().catch(() => {});
+						return "closed";
+					}
+				}
+			}
+		} finally {
+			disposeArm();
+			reader.releaseLock();
+		}
+		if (supersededBy()) return "superseded";
+		if (!(await awaitDemand())) return "closed";
+		if (!enqueue(settledMarker)) return "closed";
+		if (session !== null) session.firstDeliverySettledAt ??= Date.now();
+		const tokens: Array<readonly [string, string]> = [];
+		promoteSnapshotsToCachedOverride(undefined, (id, fp) =>
+			tokens.push([id, fp]),
+		);
+		if (session !== null && deliverySeq !== null) {
+			_recordDelivery(session, deliverySeq, tokens, consumedSeq);
+		}
+		return "done";
+	};
+
+	// Consume every latched url frame (a chain when navigations
+	// supersede mid-render) and land exactly one settled navigation
+	// segment — the newest statement's. Applies each statement to the
+	// connection's request state through the same seam a server-side
+	// `getServerNavigation().navigate` uses (`setRequest` on the ALS
+	// store), refreshes the route reads, prunes the unacked pre-nav
+	// deliveries (their client commits are as-of-dropped by protocol —
+	// the optimistic promotions they carried must not confirm phantom
+	// holdings), and reopens the lanes region after the final segment.
+	// Returns false when the connection closed under it.
+	const handleNavigation = async (): Promise<boolean> => {
+		if (session === null) return true;
+		await tearLanesForNavigation();
+		// The final consumed statement's `__force` selector — the targets
+		// that lane after the region reopens. Superseded statements' force
+		// sets are moot (the covering statement's stands).
+		let forceSelector: string | null = null;
+		while (true) {
+			const nav = takeConnectionNavigation(session);
+			if (nav === null) break;
+			const current = new URL(request.url);
+			const target = new URL(nav.url, current.origin);
+			// `__force` is the statement's one-shot overlay, never part of
+			// the request state: forced targets render as LANES below —
+			// isolated snapshot renders, the same path a discrete
+			// `?partials=` refetch takes — because a whole-tree render
+			// cannot force a target whose ANCESTOR fp-skips (the ancestor's
+			// fold doesn't move on a force, so its placeholder would cut
+			// the target out of the tree) or whose ancestor replays a byte
+			// cache.
+			forceSelector = target.searchParams.get("__force");
+			for (const p of ["partials", "cached", "__populateCache", "__cullFlip", "__force"]) {
+				target.searchParams.delete(p);
+			}
+			// The connection's own transport flags describe the CONNECTION,
+			// not the page — carry them across the statement's page URL.
+			for (const p of ["live", "streaming"]) {
+				const v = current.searchParams.get(p);
+				if (v !== null && !target.searchParams.has(p)) {
+					target.searchParams.set(p, v);
+				}
+			}
+			setRequest(new Request(target, { headers: request.headers }));
+			request = getRequest();
+			routeKey = computeRouteKey(request.url);
+			session.consumedNavSeq = nav.seq;
+			pruneDeliveriesBeforeNav(session, nav.seq);
+			const outcome = await emitNavSegment();
+			if (outcome === "closed") return false;
+			if (outcome === "superseded") continue;
+		}
+		lastFullSegmentAt = Date.now();
+		since = _currentTs();
+		if (!enqueue(nextMarker)) return false;
+		if (!enqueue(lanesMarker)) return false;
+		// The statement's forced targets lane on the reopened region:
+		// resolved against the new route's just-committed snapshots (id
+		// match first, then label fan-out — the same resolution a discrete
+		// `?partials=` takes) and rendered EXPLICIT (`forcedLaneIds` — the
+		// lane state's explicitIds), so fp-skip and the defer gate both
+		// yield: a refetch target must re-render, never match-and-skip.
+		if (forceSelector !== null) {
+			const snapshots = _readSnapshotsForRoute(scope, routeKey);
+			const wanted = forceSelector
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
+			const ids = new Set<string>();
+			for (const name of wanted) {
+				if (snapshots.has(name)) ids.add(name);
+			}
+			for (const [id, snap] of snapshots) {
+				if (ids.has(id)) continue;
+				if (snap.labels.some((l) => wanted.includes(l))) ids.add(id);
+			}
+			if (ids.size > 0) {
+				enterRequestRegistry(routeKey, "cache");
+				for (const id of ids) {
+					forcedLaneIds.add(id);
+					startLane(id);
+				}
+			}
+		}
+		return true;
 	};
 
 	// `session.detached` exits alongside `closed`: an explicit detach
@@ -1263,14 +1533,21 @@ async function driveLaneStream(
 		// entry check). Deferred flips deliberately do NOT short-circuit
 		// the wait: they only re-resolve on a real wake, so an unknown id
 		// can't busy-loop the driver.
+		// Navigation FIRST: a latched url frame outranks every other
+		// latch — the client already lives on the new URL, so old-route
+		// work is moot. Flips queued for the old route then resolve
+		// against the new routeKey and defer (no snapshot on the new
+		// route) — harmless: deferred ids linger without arming a wake.
 		const latchedWake = (): SegmentWake | null =>
-			session !== null && session.pendingFlips.size > 0
-				? "visibility"
-				: laneDrainedPending
-					? "lane-drained"
-					: windowDirty.size > 0 && !deliveryWindowExceeded()
-						? "window"
-						: null;
+			session !== null && session.pendingNav !== null
+				? "navigation"
+				: session !== null && session.pendingFlips.size > 0
+					? "visibility"
+					: laneDrainedPending
+						? "lane-drained"
+						: windowDirty.size > 0 && !deliveryWindowExceeded()
+							? "window"
+							: null;
 		let wake: SegmentWake | null = latchedWake();
 		while (wake === null && pendingWarmStatement()) {
 			// About to park with an unconsumed telemetry statement — the
@@ -1318,6 +1595,15 @@ async function driveLaneStream(
 		}
 		if (wake === "lane-drained") laneDrainedPending = false;
 		announceUpstreamApplied();
+		// A latched navigation preempts everything below regardless of
+		// which arm won the race (a url frame's wake fires the same flip
+		// arms). Other latches survive the continue — the next wait entry
+		// consumes them against the new route.
+		if (session !== null && session.pendingNav !== null) {
+			if (!(await handleNavigation())) break;
+			idleDeadline = Date.now() + KEEPALIVE_MS;
+			continue;
+		}
 		const snapshots = _readSnapshotsForRoute(scope, routeKey);
 		if (snapshots.size === 0) break;
 		// The reconcile backstop — heals lane-relevance false-negatives
@@ -1486,9 +1772,12 @@ const VISIBILITY_WAKE = Symbol("visibility-wake");
 const DEGRADE_WAKE = Symbol("degrade-wake");
 
 /** Which arm woke a segment/lane wait. `false` closes the stream.
- *  `"window"` is minted only by the lane driver's wait-entry latch (an
- *  ack freed the delivery window while the driver was busy); the wait
- *  itself never returns it. `"degrade"` is the never-acked deadline. */
+ *  `"window"` and `"navigation"` are minted only by the lane driver's
+ *  wait-entry latch (an ack freed the delivery window / a url frame
+ *  latched while the driver was busy); the wait itself never returns
+ *  them — a url frame's wake fires the flip arms, and the loop's
+ *  pendingNav check preempts regardless of the winning arm.
+ *  `"degrade"` is the never-acked deadline. */
 type SegmentWake =
 	| false
 	| "bump"
@@ -1496,6 +1785,7 @@ type SegmentWake =
 	| "lane-drained"
 	| "visibility"
 	| "window"
+	| "navigation"
 	| "degrade";
 
 interface SegmentWakeOptions {
@@ -1700,6 +1990,35 @@ function computeNextExpiresAtDelay(
 	}
 	if (!Number.isFinite(min)) return null;
 	return min - Date.now();
+}
+
+/**
+ * Drop the unacked delivery records rendered before `navSeq`, undoing
+ * their optimistic promotions. Their client commits are as-of-dropped
+ * by protocol (the client's navigation point is exactly `navSeq`), so
+ * neither layer of the mirror may keep treating those fps as holdings:
+ * the acked layer never sees them (the record dies here; the fold gate
+ * covers the latch→consume window), and the optimistic entries they
+ * promoted are removed — an evicted entry costs an over-fetch, a kept
+ * phantom would blank a parton. Genuinely-committed-but-unacked
+ * pre-nav deliveries are pruned too: conservative, never stale.
+ * MatchKeys stay — without a matching fp they confirm nothing; they
+ * only shape hidden-variant emission.
+ */
+function pruneDeliveriesBeforeNav(
+	session: ConnectionSession,
+	navSeq: number,
+): void {
+	const override = _getCachedOverride();
+	for (const [seq, record] of session.pendingDeliveries) {
+		if (record.asOf >= navSeq) continue;
+		if (override) {
+			for (const [id, fp] of record.tokens) {
+				override.fingerprints.get(id)?.delete(fp);
+			}
+		}
+		session.pendingDeliveries.delete(seq);
+	}
 }
 
 /**

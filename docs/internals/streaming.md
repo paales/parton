@@ -97,7 +97,12 @@ any selector-routing logic that could replace it.
      `visible` frame lands on the connection session, naming flipped
      parton ids ([`channel.md`](./channel.md)). The same listener-set
      arm carries every session-state wake: a delivery `ack` freeing
-     the unacked window, an applied-watermark advance to announce.
+     the unacked window, an applied-watermark advance to announce,
+     and a `url` frame latching — which outranks every other latch at
+     wait entry: the driver tears open lanes, applies the statement's
+     URL to the connection's request state, and answers with a
+     whole-tree navigation segment before anything else runs
+     ([`channel.md`](./channel.md) §Navigation rides the channel).
    - Never-acked degrade arm (lane driver only) — a timer anchored at
      the connection's first delivered-settle while its first ack is
      outstanding; on firing, the session notes
@@ -632,10 +637,16 @@ Behaviour:
 - **Interval re-fires** every 5s by default — but each tick is a
   no-op if a stream is already open. So in steady state there's
   exactly one streaming connection.
-- **On any `navigate`**, aborts the in-flight stream; the next
-  interval tick reopens on the now-current URL. Every page change is
-  partial here, so there is no "same page" to keep the old stream
-  for — it always reopens for the new URL. The abort is
+- **On a `navigate`**, the abort check defers one microtask and
+  consumes the channel's navigation claim: a CLAIMED navigation (the
+  navigate listener routed it through the channel — attached,
+  non-degraded, window-scoped) KEEPS the stream, because the `url`
+  frame moves the server's request state and the navigation segment
+  arrives on this very connection; tearing it would strand the
+  navigation ([`channel.md`](./channel.md) §Navigation rides the
+  channel). An UNCLAIMED navigation (discrete GET, frame session
+  updates, pre-attach) aborts the in-flight stream as before; the
+  next interval tick reopens on the now-current URL. The abort is
   **cooperative**: the transport (`splitSegments`) holds it until the
   in-flight segment's render has settled (the server's `settled`
   marker — see [Wire shape](#wire-shape)), then cancels the reader. So
@@ -708,11 +719,14 @@ emitted once per connection, ahead of the first segment's Flight rows
 (or right after the `lanes` marker on a catch-up boot), so the
 transport can address the session before the first render drains. On
 a live connection two more entry tags flow: `seq` — the per-connection
-monotonic DELIVERY seq every payload segment (decimal body, ahead of
-its Flight rows) and every lane (`<parton-id>\n<seq>`, immediately
-before its `muxend`) carries, the currency of the client's commit
-acks — and `applied`, the cumulative upstream-envelope-applied
-watermark that prunes the client transport's retransmit buffer
+monotonic DELIVERY seq plus the navigation point the emission was
+rendered as-of, on every payload segment (body `<seq> <asof>`, ahead
+of its Flight rows) and every lane (`<parton-id>\n<seq> <asof>`,
+immediately before its `muxend`) — the currency of the client's
+commit acks and of its stale-commit arbitration
+([`channel.md`](./channel.md) §Navigation rides the channel) — and
+`applied`, the cumulative upstream-envelope-applied watermark that
+prunes the client transport's retransmit buffer
 ([`channel.md`](./channel.md) §Delivery is evidenced).
 
 The client's `splitSegments` consumes body bytes until a `\xFF`
@@ -761,10 +775,21 @@ Every exit from a lanes region tears its still-open lanes the same
 way — source close, invalid frame, and a `next` delimiter arriving
 mid-payload all error the open bodies, so a lane's decode always
 settles (rejects) rather than hanging on a stream nothing closes. A
-lanes region CAN end cleanly with a `next` delimiter at quiesce: the
-driver's scheduled whole-tree reconcile flows one payload segment on
-the same connection, then reopens the region with `next` + `lanes`
-([`channel.md`](./channel.md) §The whole-tree reconcile).
+lanes region ends cleanly with a `next` delimiter in two cases, both
+flowing a payload segment and reopening the region with `next` +
+`lanes`: the driver's scheduled whole-tree reconcile, at quiesce
+([`channel.md`](./channel.md) §The whole-tree reconcile), and a
+consumed `url` frame's navigation segment — which does NOT wait for
+quiesce: the driver tears the open lanes server-side first (each
+pump exits at its next check point, or its render reader is
+cancelled; no `muxend`, no `seq` entry — the client's region exit
+rejects exactly those bodies), because their content is the route
+the client just left ([`channel.md`](./channel.md) §Navigation rides
+the channel). After a navigation segment's reopen, the statement's
+`?__force=` targets lane immediately, rendered EXPLICIT — the lane
+state's `explicitIds`, so fp-skip and the defer gate both yield: a
+refetch target re-renders on the lane path exactly as it would on a
+discrete `?partials=` render.
 
 ## The stream must pass through untransformed
 

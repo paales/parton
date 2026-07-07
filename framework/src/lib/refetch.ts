@@ -12,6 +12,7 @@
  * intercept stands down) and the client-side selector parser.
  */
 
+import { _channelNavAvailable, _channelNavigate } from "./channel-client.ts"
 import type { AttachStatement } from "./channel-protocol.ts"
 import {
   getAllCachedPartialTokens,
@@ -211,6 +212,62 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
       : signals.length === 1
         ? signals[0]
         : AbortSignal.any(signals)
+
+  // Channel routing. An attached, non-degraded page states a batched
+  // selector refetch as a `url` frame — the page URL with the batch's
+  // `?__force=` overlay, intent "silent" — and the response arrives
+  // as a payload segment on the held stream (milestones wired to that
+  // segment's commit/settle by `_channelNavigate`'s records, so the
+  // [fire, {committed, streaming, finished}] contract is unchanged).
+  // `__force`, not `partials`: the statement's segment is WHOLE-TREE
+  // (the URL may have moved with the batch — a `navigate({selector})`
+  // — and every parton must re-evaluate it; fp-skip prunes the
+  // unchanged to placeholders), with the named targets forced past
+  // fp-skip server-side (`explicitForces`). No `?cached=` and no
+  // forced-label strip: the connection's mirror is the manifest. No
+  // issue seq and no pageUrlKey capture either — stream order plus
+  // the as-of guard subsume both; their twins live on below for the
+  // discrete path. Stays discrete: attach fires (they ARE the
+  // channel's discrete leg), live subscriptions, culling flips (only
+  // minted with no connection), and batches carrying ephemeral
+  // `params` (a discrete-GET concept — the channel statement is the
+  // page URL, which must not absorb one-shot view state).
+  if (
+    !attach &&
+    !liveMode &&
+    !cullFlip &&
+    extraParams.size === 0 &&
+    labelSet.size > 0 &&
+    _channelNavAvailable()
+  ) {
+    const stated = new URL(window.location.href)
+    stated.searchParams.set("__force", [...labelSet].join(","))
+    const routed = _channelNavigate({
+      url: stated.pathname + stated.search,
+      intent: "silent",
+      streaming: streamingMode,
+      signal,
+    })
+    if (routed) {
+      routed.streaming.then(
+        () => {
+          for (const e of batch) e.resolveStreaming()
+        },
+        (err) => {
+          for (const e of batch) e.rejectStreaming(err)
+        },
+      )
+      routed.finished.then(
+        () => {
+          for (const e of batch) e.resolveFinished()
+        },
+        (err) => {
+          for (const e of batch) e.rejectFinished(err)
+        },
+      )
+      return
+    }
+  }
 
   const url = new URL(window.location.href)
   if (labelSet.size > 0) url.searchParams.set("partials", [...labelSet].join(","))

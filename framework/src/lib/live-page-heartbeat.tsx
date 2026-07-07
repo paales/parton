@@ -4,7 +4,9 @@ import { useEffect } from "react"
 import {
   _channelAppliedWatermark,
   _channelConnectionClosed,
+  _channelConsumeWindowNavClaim,
   _channelIsDegraded,
+  _registerLiveStreamAbort,
 } from "./channel-client.ts"
 import { _anyCullObservers } from "./cull-park.ts"
 import { useNavigation } from "./partial-client.tsx"
@@ -228,21 +230,41 @@ export function LivePageHeartbeat({ intervalMs = DEFAULT_INTERVAL_MS }: Props = 
 
     const nav = getNavigation()
     const onNavigate = () => {
-      // Every navigation reopens the stream for the now-current URL: in
-      // this framework all page changes are partial, so there is no
-      // "same page" to keep the old stream for. The abort is safe — it's
-      // cooperative in the transport (`splitSegments` holds it until the
-      // in-flight segment's render has settled), so it never tears a
-      // mid-render body. The next interval tick reopens on the new URL.
-      if (inFlight) inFlight.abort()
+      // A navigation the channel carries KEEPS the stream — the url
+      // frame moves the server's request state and the nav segment
+      // arrives on this very connection; tearing it would strand the
+      // navigation. The router (the browser entry's navigate listener)
+      // sets the claim synchronously during this same event dispatch,
+      // and this listener registered FIRST (child effects run before
+      // the parent's), so the check defers one microtask — after every
+      // listener ran, before the intercept handler. Unclaimed
+      // navigations (discrete GETs, frame session updates, pre-attach)
+      // abort as always: the stream reopens for the now-current URL on
+      // the next interval tick. The abort is cooperative — the
+      // transport (`splitSegments`) holds it until the in-flight
+      // segment's render has settled, so it never tears a mid-render
+      // body.
+      queueMicrotask(() => {
+        if (_channelConsumeWindowNavClaim()) return
+        if (inFlight) inFlight.abort()
+      })
     }
     nav?.addEventListener("navigate", onNavigate as EventListener)
+
+    // The escape hatch a claimed-then-unroutable navigation pulls (the
+    // connection died between the claim and the fire): abort the kept
+    // stream so the next tick reopens on the now-current URL instead of
+    // idling on the old one for the keepalive.
+    _registerLiveStreamAbort(() => {
+      if (inFlight) inFlight.abort()
+    })
 
     return () => {
       alive = false
       if (timer) clearInterval(timer)
       window.removeEventListener("load", startCadence)
       nav?.removeEventListener("navigate", onNavigate as EventListener)
+      _registerLiveStreamAbort(null)
       if (inFlight) inFlight.abort()
     }
   }, [reload, intervalMs])
