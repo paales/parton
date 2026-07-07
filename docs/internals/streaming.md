@@ -301,11 +301,17 @@ null root:
    cell (a mixed batch is false — the non-deferred cell still needs its
    render). Both live on the request-scoped store in `context.ts`.
 2. **Null-root response.** The framework's RSC handler
-   (`createRscHandler` in `framework/src/entry/rsc.tsx`) builds the action payload
-   as `root: isAction && actionStatus === undefined && _actionSuppressesCommit() ? null : <Root/>`.
-   A suppressed action renders no tree — the POST body is just the
-   `returnValue`. Errored actions (`actionStatus` set) always render so
-   the failure surfaces.
+   (`createRscHandler` in `framework/src/entry/rsc.tsx`) suppresses the
+   action payload's root — `root: suppressRoot ? null : <Root/>` — when
+   `isAction && actionStatus === undefined && (_actionSuppressesCommit()
+   || consequenceBox.seqs !== null)`. A suppressed action renders no tree
+   — the POST body is just the `returnValue` (+ `formState` + any
+   url-trailer). Errored actions (`actionStatus` set) always render so
+   the failure surfaces. The deferred-only tally is one of two suppress
+   triggers; the other is an ATTACHED action that reserved consequences
+   on its named connection (`consequenceBox.seqs` non-null — the held
+   stream carries the re-render, so the in-body root would double-deliver
+   it; see [`channel.md`](./channel.md) § "Action consequence seqs").
 3. **Client skip-commit.** `setServerCallback` still captures
    `returnValue` (so the `cell.set` promise resolves and the optimistic
    overlay reconciles) but guards the commit: `if (payload.root != null)

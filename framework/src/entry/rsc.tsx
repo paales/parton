@@ -349,17 +349,33 @@ export function createRscHandler(config: RscHandlerConfig): {
 			}
 		}
 
-		// A deferred-only action — every write went to a `deferred` cell —
-		// omits its response re-render (`root: null`). The new value rides the
-		// already-open streaming connection (the heartbeat's `?streaming=1`
-		// segment); the client skips committing a null root. Mixed batches and
-		// errored actions (`actionStatus` set) still render so non-deferred
-		// writes and failures surface on the POST. See
-		// `docs/internals/streaming.md` § "Deferred (stream-only) writes".
+		// An action omits its response re-render (`root: null`) when the
+		// held stream will carry the consequences instead — the body then
+		// carries only `returnValue` + `formState` + any url-trailer. Two
+		// triggers, both suppressing the same way:
+		//   1. Deferred-only — every write went to a `deferred` cell: the
+		//      new value rides the open streaming connection, nothing to
+		//      reserve (`_actionSuppressesCommit()`).
+		//   2. Attached with reserved consequences — the action named a
+		//      live connection (`x-parton-conn`) whose route has matching
+		//      invalidations, so `_reserveActionConsequences` assigned each
+		//      target a delivery seq (`consequenceBox.seqs`). Those exact
+		//      partons re-render on the held stream consuming those seqs and
+		//      the optimistic overlay holds on the committed watermark
+		//      (`x-parton-consequences`); an in-body whole-tree root would
+		//      DOUBLE-deliver the same consequences.
+		// The in-body root stays for the UNATTACHED / binding-mismatch /
+		// no-match path (`consequenceBox.seqs` is null — never `[]`, the
+		// reserve collapses an empty match set to null): no held stream is
+		// guaranteed to carry the render, so the body root is the only
+		// carrier. Mixed batches and errored actions (`actionStatus` set)
+		// still render so non-deferred writes and failures surface on the
+		// POST. See `docs/internals/streaming.md` § "Deferred (stream-only)
+		// writes" and `docs/internals/channel.md` § "Action consequence seqs".
 		const suppressRoot =
 			renderRequest.isAction === true &&
 			actionStatus === undefined &&
-			_actionSuppressesCommit();
+			(_actionSuppressesCommit() || consequenceBox.seqs !== null);
 		const buildRscPayload = (): RscPayload => ({
 			root: suppressRoot ? null : <Root />,
 			formState,

@@ -661,12 +661,23 @@ connection it opened.
 ## Action consequence seqs
 
 Actions stay discrete POSTs (the pinned decision), but with a channel
-attached the response carries the delivery seqs its invalidation
-consequences will ride — and the client's optimistic overlay holds
-until its committed watermark covers them, never clearing at the
+attached the response body carries NO render — only the delivery seqs
+its invalidation consequences will ride. The held stream is the sole
+consequence carrier: the transaction-commit wake re-renders each
+reserved parton on the open stream, so an in-body whole-tree `<Root/>`
+would double-deliver the exact same consequences. When the reservation
+is non-empty the entry sets `suppressRoot` (the same null-root path the
+deferred-only tally takes — [`streaming.md`](./streaming.md) § "Deferred
+(stream-only) writes"), and the body is just `returnValue` + `formState`
++ any url-trailer. The client's optimistic overlay holds until its
+committed watermark covers the reserved seqs, never clearing at the
 returnValue alone (under window coalescing the consequence lane can
 trail the response by the whole backpressure window, which is exactly
-when a returnValue-cleared overlay flashes the stale server value):
+when a returnValue-cleared overlay flashes the stale server value).
+UNATTACHED, a binding mismatch, or a write with no matching route
+snapshots reserves nothing (`_reserveActionConsequences` collapses an
+empty match set to `null`, never `[]`) — the in-body `<Root/>` renders
+as the only carrier, unchanged:
 
 - **The client names its connection** (`x-parton-conn` on the action
   POST — an explicit statement, never inferred), when attached and
