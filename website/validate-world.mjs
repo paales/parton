@@ -94,16 +94,17 @@ try {
   page.on("pageerror", (e) => pageErrors.push(e.message.slice(0, 200)))
 
   // Live-stream byte accounting: decoded bytes per data event on any
-  // held `?live=1` response, timestamped so assertions can budget a
-  // window. dataLength (decoded) rather than encodedDataLength so the
-  // budget doesn't depend on compression behavior.
+  // held `/__parton/live` attach response (the channel's held stream),
+  // timestamped so assertions can budget a window. dataLength (decoded)
+  // rather than encodedDataLength so the budget doesn't depend on
+  // compression behavior.
   const cdp = await page.context().newCDPSession(page)
   await cdp.send("Network.enable")
   const liveRequestIds = new Set()
   const liveChunks = []
   const liveUrls = []
   cdp.on("Network.requestWillBeSent", (e) => {
-    if (e.request.url.includes("live=1")) {
+    if (e.request.url.includes("/__parton/live")) {
       liveRequestIds.add(e.requestId)
       liveUrls.push(e.request.url)
     }
@@ -113,7 +114,7 @@ try {
   // reads the anchor off the first fire's body.
   const liveFires = []
   page.on("request", (r) => {
-    if (r.url().includes("live=1")) {
+    if (r.url().includes("/__parton/live")) {
       liveFires.push({ method: r.method(), post: r.postData() ?? "" })
     }
   })
