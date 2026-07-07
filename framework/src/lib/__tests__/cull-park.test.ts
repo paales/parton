@@ -27,6 +27,7 @@ import {
 	cullStateGone,
 	registerCullObserver,
 	reportCullState,
+	reportedStateEvicted,
 	reportedVisibility,
 } from "../cull-park.ts"
 import {
@@ -131,12 +132,24 @@ describe("observer refcount", () => {
 		expect(gone).toEqual(["a"])
 	})
 
-	it("gone drops every trace of the id", () => {
+	it("gone drops the id's live traces and leaves the eviction tombstone", () => {
 		seedContent("a")
 		reportCullState("a", false)
 		cullStateGone("a")
 		expect(reportedVisibility("a")).toBeUndefined()
 		expect(_parkedIds()).toEqual([])
 		expect(_isParkedSince("a")).toBe(false)
+		// The pair emission can outlive the map entries inside a cached
+		// ancestor — the tombstone is what keeps a restore's prime from
+		// trusting its pre-drop props.
+		expect(reportedStateEvicted("a")).toBe(true)
+	})
+
+	it("a fresh content store retires the eviction tombstone", () => {
+		reportCullState("a", false)
+		cullStateGone("a")
+		expect(reportedStateEvicted("a")).toBe(true)
+		contentSlotStored("a")
+		expect(reportedStateEvicted("a")).toBe(false)
 	})
 })

@@ -54,6 +54,23 @@ export const CULL_PARK_CAP = 64
  *  `culled` prop of its rendered payload. */
 const _reported = new Map<string, boolean>()
 
+/** ids whose reported state was dropped by `cullStateGone` while an
+ *  ancestor's cached subtree may still hold their pre-drop emissions —
+ *  a subtree parked inside a cached ancestor ages out of the client
+ *  maps (content + fps destroyed) without its pair emission going
+ *  anywhere. A pair re-mounting from such an emission primes the
+ *  visibility controller with props minted BEFORE the park — the same
+ *  stale evidence the live-report overlay exists to override, except
+ *  the overlay's report side is gone too. The tombstone is the
+ *  remaining signal: `_primeVisible` treats a tombstoned id as
+ *  displayed-out (without content the skeleton is what shows), so the
+ *  observer's first measurement is authoritative — an in-flip drives
+ *  the revalidation, an out-agreement rides. Retired when fresh
+ *  content stores for the id (`contentSlotStored` — the commit walk
+ *  runs before the pair's prime effect, so a route-back's fresh
+ *  emission primes normally). */
+const _reportEvicted = new Set<string>()
+
 /** Parked-by-culling LRU: ids currently in the culled state,
  *  insertion order = cull recency (re-culling re-inserts). */
 const _parked = new Map<string, true>()
@@ -102,6 +119,13 @@ export function reportedVisibility(id: string): boolean | undefined {
 	return _reported.get(id)
 }
 
+/** Whether `cullStateGone` evicted the id's reported state and no
+ *  fresh content has stored since — the prime path's cold token (see
+ *  `_reportEvicted` above). */
+export function reportedStateEvicted(id: string): boolean {
+	return _reportEvicted.has(id)
+}
+
 export function contentGeneration(id: string): number {
 	return _generation.get(id) ?? 0
 }
@@ -131,20 +155,25 @@ export function reportCullState(id: string, isInView: boolean): void {
 	notify()
 }
 
-/** The id left the page — the merge layer's prune dropped its last
- *  cache/fp entries (`_setIdPrunedListener` below), so no commit
- *  references it rendered, skipped, or parked anymore. Drop every
- *  per-id trace. Observer lifecycles are NOT this signal: an Activity
- *  flip can unmount one slot's observer in a different render pass
- *  than it mounts the other's, so a momentarily observer-less parton
- *  is still very much on the page. No notify: a pruned parton has no
- *  mounted slot left to update, and a journey across a large cullable
- *  field prunes many ids per commit — notifying from each would nest
- *  commit chains past React's update-depth limit. */
+/** The id left the client maps — the merge layer's prune dropped its
+ *  last cache/fp entries (`_setIdPrunedListener` below), so no commit
+ *  references it rendered, skipped, or parked anymore. Drop every live
+ *  per-id trace, leaving only the eviction tombstone: the id's pair
+ *  emission can outlive its map entries inside a cached ancestor's
+ *  subtree, and a restore that re-mounts it must not trust its
+ *  pre-drop props (see `_reportEvicted`). Observer lifecycles are NOT
+ *  this signal: an Activity flip can unmount one slot's observer in a
+ *  different render pass than it mounts the other's, so a momentarily
+ *  observer-less parton is still very much on the page. No notify: a
+ *  pruned parton has no mounted slot left to update, and a journey
+ *  across a large cullable field prunes many ids per commit —
+ *  notifying from each would nest commit chains past React's
+ *  update-depth limit. */
 export function cullStateGone(id: string): void {
 	_reported.delete(id)
 	_parked.delete(id)
 	_parkedSince.delete(id)
+	_reportEvicted.add(id)
 }
 
 _setIdPrunedListener(cullStateGone)
@@ -162,6 +191,9 @@ _setIdPrunedListener(cullStateGone)
  * here would be an update-during-render.
  */
 export function contentSlotStored(id: string): void {
+	// Fresh content retires the eviction tombstone: from this store on,
+	// the id's emissions are current evidence and priming may trust them.
+	_reportEvicted.delete(id)
 	if (!_parkedSince.has(id)) return
 	_parkedSince.delete(id)
 	_generation.set(id, (_generation.get(id) ?? 0) + 1)
@@ -180,6 +212,7 @@ export function contentSlotConfirmed(id: string): void {
 /** Test/HMR hook — reset every map. */
 export function _resetCullPark(): void {
 	_reported.clear()
+	_reportEvicted.clear()
 	_parked.clear()
 	_parkedSince.clear()
 	_generation.clear()

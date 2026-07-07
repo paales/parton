@@ -453,9 +453,18 @@ same `reported ?? culled` precedence the pair's own display uses;
 a restored parked subtree re-mounts pairs whose emissions predate
 their cull-outs, and a raw-prop prime would poison the baseline so
 the observer's genuine flip against the showing skeleton reads as a
-no-delta duplicate and never dispatches) — so a first measurement
-that agrees with what's actually shown dispatches nothing, and
-priming is inert once an id has a real report. The controller is the
+no-delta duplicate and never dispatches), and falls COLD for an id
+whose reported state the page-membership prune evicted
+(`cullStateGone` leaves a tombstone in `cull-park.ts`, retired by the
+id's next fresh content store: a subtree parked inside a cached
+ancestor ages out of the client maps while that ancestor still holds
+its pre-park emission, so with the report side of the overlay gone
+the raw prop is the same stale evidence — the baseline is out, the
+skeleton being what shows without content, and the observer's first
+measurement is authoritative: an in-flip drives the revalidation, an
+out-agreement rides) — so a first measurement that agrees with
+what's actually shown dispatches nothing, and priming is inert once
+an id has a real report. The controller is the
 channel's first PRODUCER (`lib/channel-client.ts` — see
 [`channel.md`](./channel.md)): real deltas schedule a transport
 flush (rAF-coalesced, one dispatch in flight), ordered

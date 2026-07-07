@@ -69,7 +69,12 @@ import {
 	scheduleChannelFlush,
 } from "./channel-client.ts"
 import type { ChannelFrame, VisibleFrame } from "./channel-protocol.ts"
-import { registerCullObserver, reportCullState, reportedVisibility } from "./cull-park.ts"
+import {
+	registerCullObserver,
+	reportCullState,
+	reportedStateEvicted,
+	reportedVisibility,
+} from "./cull-park.ts"
 import { _getLiveConnectionId, cachedTokensFor } from "./partial-client-state.ts"
 import { enqueueRefetch } from "./refetch.ts"
 
@@ -175,13 +180,21 @@ let fallbackInFlight = false
  * display contradicts — the observer's first real measurement (a
  * genuine flip against the showing skeleton) would read as a no-delta
  * duplicate and never dispatch, stranding the subtree as a skeleton
- * no report can ever revive. Doesn't touch `measured` — a primed set
- * is still an unmeasured one.
+ * no report can ever revive. When the report side of that overlay was
+ * itself evicted (`reportedStateEvicted` — the page-membership prune
+ * dropped the id's state while a cached ancestor still holds its
+ * pre-park emission), the raw prop is the same stale evidence with
+ * nothing left to override it: the prime falls COLD instead — the id's
+ * content is gone, the skeleton is what shows, so the baseline is out
+ * and the observer's first measurement is authoritative (an in-flip
+ * drives the revalidation, an out-agreement rides). Doesn't touch
+ * `measured` — a primed set is still an unmeasured one.
  */
 export function _primeVisible(id: string, isInView: boolean): void {
 	if (everReported.has(id)) return
 	const reported = reportedVisibility(id)
-	const displayed = reported === undefined ? isInView : reported
+	const displayed =
+		reported !== undefined ? reported : reportedStateEvicted(id) ? false : isInView
 	if (displayed) inView.add(id)
 	else inView.delete(id)
 }

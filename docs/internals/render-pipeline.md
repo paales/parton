@@ -465,7 +465,12 @@ replacement. The moving parts, end to end:
   flip loop). On mount the pair PRIMES the controller with its
   emission's server-computed state (`_primeVisible`), overlaid by any
   live report for the id — the DISPLAY state — so first measurements
-  that agree with what's actually shown dispatch nothing.
+  that agree with what's actually shown dispatch nothing. An id whose
+  reported state the page-membership prune evicted primes COLD
+  instead (`cullStateGone` leaves a tombstone, retired by the next
+  fresh content store): its emission predates the park, so the
+  baseline is out and the observer's first measurement is
+  authoritative — an in-flip drives, an out-agreement rides.
 - **The revalidation.** With a live connection open, flips ride the
   connection as session state (a `visible` frame on a channel
   envelope; flipped-IN partons come back as lane segments, cull-OUTs
