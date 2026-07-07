@@ -305,7 +305,14 @@ live connection — is two layers, not one:
   (`promoteSnapshotsToCachedOverride` at segment end and lane drain,
   `promoteFpUpdatesToCachedOverride` for trailer heals). This is the
   hot layer: a same-parton re-lane within one RTT — long before any
-  ack could arrive — still fp-skips off it.
+  ack could arrive — still fp-skips off it. On a lane drain the trailer
+  heal folds AFTER the subtree promote: the warm `to` fp joins the SLOT
+  the promote just established for its cold `from` (evicted as a unit
+  when a sibling variant overwrites the slot), and a heal whose `from`
+  no slot holds is DROPPED — the exact discipline of the client's
+  `_applyFpUpdates`. Folding a heal before its slot exists would strand
+  the warm fp slotless, un-evictable — a return-toggle (a nested frame's
+  A→B→A) would then fp-skip against that phantom and show stale content.
 - **ACKED watermark** (`ConnectionSession.ackedFps`): when the
   client's cumulative ack covers a delivery seq, the `(id, fp)` pairs
   that emission carried (captured in the same walk that promoted
