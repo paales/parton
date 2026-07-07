@@ -271,14 +271,16 @@ async function main() {
 		// rendered before it. Channel deliveries carry a wire as-of
 		// instead.
 		const issueNavPoint = _channelNavPoint();
-		// One guard seam, reached two ways. Seq'd deliveries (the live
-		// stream, whose URL follows the client's channel url statements)
-		// arbitrate by the AS-OF against the navigation point — the
-		// pageUrlKey guard generalized into the protocol — plus the
-		// stated-URL identity (a DISCRETE navigation that moved the page
-		// out from under a still-open stream). Un-seq'd responses (every
-		// discrete GET) keep the pageUrlKey twin, plus the per-selector
-		// monotonic claim their dispatcher minted.
+		// Two commit-guard paths, plainly SEPARATE — never one shared
+		// implementation. Seq'd deliveries (the live stream, whose URL
+		// follows the client's channel url statements) arbitrate by the
+		// AS-OF against the navigation point — the pageUrlKey idea
+		// generalized into the protocol — plus the stated-URL identity
+		// (a DISCRETE navigation that moved the page out from under a
+		// still-open stream). Un-seq'd responses (every discrete GET)
+		// keep their own guards exactly as they are: the pageUrlKey
+		// stale-commit check plus the per-selector monotonic claim their
+		// dispatcher minted.
 		const expectedStreamPageKey = (): string => {
 			const stated = _channelStatedWindowUrl();
 			return stated !== null
@@ -495,9 +497,9 @@ async function main() {
 							throw err;
 						}
 						const delivery = takeSegmentDelivery();
-						// One guard seam, two arbitrations (see
-						// expectedStreamPageKey). Dropped commits skip trailers
-						// too — they would register fingerprints for a stale tree.
+						// Two separate guard paths (see expectedStreamPageKey).
+						// Dropped commits skip trailers too — they would register
+						// fingerprints for a stale tree.
 						if (delivery !== null) {
 							// Seq'd delivery (the live stream): as-of vs the
 							// navigation point, then the stated-URL identity.

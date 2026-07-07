@@ -367,6 +367,14 @@ Frame-scoped navigation keeps its dedicated long-poll connections
 | Traverse with frame diffs (`__frame` pairs), culling flips, batches with ephemeral `params`, `live` fires | — (frame-scoped / no-session work) | discrete GET |
 | Heartbeat attach, action POSTs, preload/warm, cold start | — | discrete by design (the channel's own legs) |
 
+The discrete `_.rsc` GET column is the fallback the channel degrades
+to; its complete removal — degraded mode as browser-native document
+navigation, the attach on a dedicated endpoint, the
+`?cached=`/`?partials=`/transport-param grammar retired — is a
+planned follow-up package
+([`../notes/channel-design.md`](../notes/channel-design.md)
+§ Landing sequence).
+
 The pieces:
 
 - **The claim.** The navigate-event listener decides the route
@@ -426,11 +434,12 @@ The pieces:
   equals the connection's last-stated URL (a DISCRETE navigation
   moving the page out from under a still-open stream is a dying
   stream — its commits stall-drop as before). Un-seq'd responses
-  (every discrete GET) keep the twins: the pageUrlKey stale-commit
-  guard and the per-selector monotonic issue-seq claim
-  (`refetch-ordering.ts`). One guard seam in the browser entry,
-  reached two ways — the channel path mints no issue seqs and
-  captures no pageUrlKey; stream order plus the as-of subsume both.
+  (every discrete GET) keep their own guards, untouched: the
+  pageUrlKey stale-commit guard and the per-selector monotonic
+  issue-seq claim (`refetch-ordering.ts`). The two paths are plainly
+  SEPARATE branches in the browser entry, never one shared
+  implementation — the channel path mints no issue seqs and captures
+  no pageUrlKey; stream order plus the as-of subsume both.
 - **The mirror stays honest across navigations.** At consume, the
   driver prunes every unacked delivery record rendered before the
   new navigation point and removes their optimistic promotions

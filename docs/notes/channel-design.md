@@ -148,7 +148,10 @@ fp/url/settled trailers. Two additions:
   segment scoped to the new request state, in stream order. The
   refetch-ordering seq and deferred-abort supersede retire where the
   as-of correlation subsumes them; their discrete-mode twins survive
-  in the GET fallback (one implementation, reached two ways).
+  in the GET fallback as-is, plainly separate from the channel path —
+  no unification: the GET side is scheduled for deletion (§ Landing
+  sequence, the discrete-path removal package), so shared-seam work
+  there is waste.
 - Producer-await streams (chat) do NOT fold into plain lanes: a lane
   ends at drain, a producer streams until its render resolves — and
   `markConnectionLive` is only honored in the whole-tree segment loop
@@ -184,7 +187,9 @@ no native HTTP/3, so it waits on a terminating-proxy story.
   alone: under backpressure coalescing that reopens the stale-flash
   window exactly when it matters. Writes are the request/response
   holdouts by design, not debt.
-- **Degraded mode stays GET-shaped.** The discrete twin keeps
+- **Degraded mode stays GET-shaped** — until the discrete-path
+  removal package (§ Landing sequence) lands, when it becomes
+  browser-native document navigation. Today the discrete twin keeps
   `?cached=` + the manifest cap (CDN-cacheable, preload-compatible);
   attach is the only body-manifest request. "Attached" means
   DUPLEX-VERIFIED: a channel that has never acked once (blocked
@@ -256,10 +261,13 @@ only; cull-outs are purely local skeleton swaps), and emit-time mirror
 promotion — both families: `promoteSnapshotsToCachedOverride` and
 `promoteFpUpdatesToCachedOverride` (replaced by acks).
 
-Remains, permanently: cold-start GET (CDN), action POSTs, the attach
-request itself, the GET-shaped discrete fallback with every retired
-guard's twin, and the pageUrlKey idea itself — generalized into the
-as-of correlation seq rather than deleted.
+Remains, permanently: cold-start GET (CDN), action POSTs, and the
+pageUrlKey idea itself — generalized into the as-of correlation seq
+rather than deleted. Remains only until the discrete-path removal
+package (§ Landing sequence): the attach request in its current
+page-URL shape, and the GET-shaped discrete fallback with every
+retired guard's twin — kept byte-identical, never unified with the
+channel path, precisely because it is scheduled for deletion.
 
 ## Landing sequence
 
@@ -349,6 +357,15 @@ Each package is a worktree branch, lands green (`yarn test` +
   lane replays in ~3ms where the same parton's cold lane pays its
   full body (~127ms at a 120ms body) —
   `channel-warm.rsc.test.tsx`.
+- **Discrete-path removal (follow-up, author-approved, unscheduled).**
+  The discrete `_.rsc` GET path retires COMPLETELY: degraded mode
+  becomes browser-native document navigation (a full load is the one
+  fallback that needs no framework transport), the attach moves to a
+  dedicated endpoint, and the `?cached=` / `?partials=` / transport-
+  param grammar retires with the request line it protected. The
+  GET-path guard twins (refetch-ordering issue seq, the pageUrlKey
+  stale-commit guard) delete with the path — which is why W5a left
+  them plainly separate from the channel path instead of unifying.
 - **Docs sweep** rides each package. The prior-art LiveView rewrite
   landed with W6: state authority + degradation + wire/cache model
   replaced the per-request-HTTP contrast
