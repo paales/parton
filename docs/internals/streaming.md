@@ -115,16 +115,25 @@ any selector-routing logic that could replace it.
      outstanding; on firing, the session notes
      `degradedReason: "never-acked"` and the driver stops holding
      ([`channel.md`](./channel.md) §The never-acked degrade).
-   - Idle timeout (~20s) — the connection closes cleanly. The
-     heartbeat's next interval tick (~5s default) reopens. In the
-     lane loop the deadline is anchored at the last USEFUL activity
-     (a lane started, a flip processed), not re-armed per wake: bump
-     wakes whose touched set comes up empty (all matches parked)
-     ship nothing, and a torn connection is only detectable at
-     enqueue time — a per-wake re-arm would let steady bump traffic
-     hold a fully-parked, possibly torn connection open forever,
-     each wake re-scanning the route (zombie connections accumulate
-     one per refresh and peg the server).
+   - Idle timeout — the abandoned-connection BACKSTOP (`KEEPALIVE_MS`,
+     minutes), not a routine cycle. The common teardowns reap promptly
+     and independently of it: `pagehide` sends a `detach`
+     (→ `session.detached`, the loop exits at its next wake) and a torn
+     held stream fires the response's `cancel()`
+     (→ `demand.cancelled`, surfaced at the next lane enqueue). This
+     timer only closes a connection that is genuinely GONE with its
+     detach lost AND its cancel unfired; the heartbeat's next interval
+     tick (~5s default) reopens if the client is in fact still there.
+     In the lane loop the deadline is anchored at the last USEFUL
+     activity (a lane started, a flip processed), not re-armed per
+     wake — so an active page's shipped lanes re-anchor it continuously
+     and it holds indefinitely, while bump wakes whose touched set
+     comes up empty (all matches parked) ship nothing and DON'T
+     re-anchor it. That anchoring is load-bearing: a torn connection is
+     only detectable at enqueue time, so a per-wake re-arm would let
+     steady bump traffic hold a fully-parked, possibly torn connection
+     open forever, each wake re-scanning the route (zombie connections
+     accumulate one per refresh and peg the server).
 4. **On a relevant bump, an expiry boundary, or a visibility flip,
    the driver renders per-parton lanes.** The wake resolves WHICH
    snapshot ids it touched (`_routeMatchingBumpIds` for bumps;
@@ -211,15 +220,16 @@ any selector-routing logic that could replace it.
 
 Relevance false-negatives (a dependency the label/constraint surface
 doesn't capture) degrade to a MISSED update on the lane path, where
-the old whole-tree path degraded to a wasted re-render. Two backstops
-cover the two connection lifetimes: an IDLE connection closes after
-~20s (keepalive), the heartbeat reopens it, and the reopened
-connection's first segment is always whole-tree; a connection that
-steady relevant wakes keep alive indefinitely emits a scheduled
-whole-tree reconcile segment ON its own stream instead —
-`RECONCILE_INTERVAL_MS`, anchored at the last full segment, evaluated
-at wakes ([`channel.md`](./channel.md) §The whole-tree reconcile).
-Either way, a full fp-skip pass reconciles anything the lanes missed.
+the old whole-tree path degraded to a wasted re-render. The scheduled
+whole-tree reconcile is the primary healer: any connection held past
+`RECONCILE_INTERVAL_MS` — an active one wake traffic keeps alive
+indefinitely, or an idle one held for the minutes-long keepalive
+backstop — emits a whole-tree reconcile segment ON its own stream
+(anchored at the last full segment, evaluated at wakes;
+[`channel.md`](./channel.md) §The whole-tree reconcile). The other
+path is a connection that does close idle: its eventual reopen's first
+segment is always whole-tree. Either way, a full fp-skip pass
+reconciles anything the lanes missed.
 
 ## Writes stay non-streaming
 
@@ -267,7 +277,7 @@ render called `markConnectionLive()`. A targeted
 progressively and the connection closes. It does **not** park for the
 keepalive — a one-shot refetch that held open would pin any
 `committed && !finished` spinner in its loading state for the full
-20s.
+keepalive window (minutes).
 
 The two subscription kinds emit differently after their first
 segment. A `?live=1` subscription switches to per-parton lanes (its

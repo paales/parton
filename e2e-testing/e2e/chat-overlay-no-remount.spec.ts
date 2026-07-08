@@ -85,14 +85,22 @@ async function marks(page: Page): Promise<Record<string, string>> {
 
 test("opening the chat overlay does not remount the page while notes stream", async ({
   browser,
+  baseURL,
 }) => {
-  // The heartbeat's chat-closed connection must idle out (20s keepalive)
-  // before it reopens chat-aware and overlaps the frame long-poll.
+  // The heartbeat's chat-closed connection must idle out before it
+  // reopens chat-aware and overlaps the frame long-poll. The production
+  // keepalive is a minutes-long abandoned-connection backstop, so this
+  // spec forces the old short window through the DEV-only override
+  // endpoint (the e2e reach for `_setKeepaliveMs`) and restores the
+  // default in the finally. 20s = the framework's historical value, so
+  // concurrent workers (this override is process-global) see only
+  // proven behavior during the bracket.
   test.setTimeout(75_000)
   // Default-scope context (no per-worker header) → real-time streaming.
   const context = await browser.newContext()
   const page = await context.newPage()
   try {
+    await context.request.get(`${baseURL}/__test/set-keepalive?ms=20000`)
     // Warm-up: load the page and open the chat once so Vite optimizes
     // every module these routes pull in. A cold dep-optimization round
     // triggers a full-page reload mid-test, which would wipe the marks and
@@ -157,6 +165,9 @@ test("opening the chat overlay does not remount the page while notes stream", as
     expect(result["nav"], "the nav remounted").toBe("alive")
     expect(result["grid-card"], "a page grid card remounted").toBe("alive")
   } finally {
+    // Restore the production keepalive default before the context (and
+    // its request handle) go away — other workers rely on it.
+    await context.request.get(`${baseURL}/__test/set-keepalive`).catch(() => {})
     await context.close()
   }
 })

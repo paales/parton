@@ -234,6 +234,20 @@ export function createRscHandler(config: RscHandlerConfig): {
 				}
 				return new Response("ok", { status: 200 });
 			}
+			// The e2e tier's reach for the same `_setKeepaliveMs` override
+			// the in-process rsc harness and soak bench use — over HTTP,
+			// since the dev server is a separate process. Process-global
+			// (the keepalive is one module-level value), so a spec needing
+			// a short idle close brackets its run: set a value, then
+			// restore the default (`ms` absent) in a finally.
+			if (url.pathname === "/__test/set-keepalive") {
+				const { _setKeepaliveMs } = await import(
+					"../lib/segmented-response.ts"
+				);
+				const raw = url.searchParams.get("ms");
+				_setKeepaliveMs(raw === null ? undefined : Number(raw));
+				return new Response("ok", { status: 200 });
+			}
 		}
 
 		const renderRequest = parseRenderRequest(request);

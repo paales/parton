@@ -137,6 +137,30 @@ accepted bet, but the bench must still pass. This is the change with
 the clearest resource cost — validate against `bench/` + the soak
 category before merging.
 
+**Shipped (Option A — `DEFAULT_KEEPALIVE_MS` = 5 min).** The survey
+reframed the keepalive: it is NOT a routine liveness cycle but a
+BACKSTOP for a genuinely-abandoned connection whose `detach` was lost
+AND whose held-stream `cancel()` never fired. The common teardowns
+already reap promptly and independently of the value — `pagehide`
+`detach` → `session.detached` (loop exits at its next wake), a torn
+held stream → `demand.cancelled` (surfaced at the next lane enqueue) —
+and an active page never reaches the deadline (shipped lanes re-anchor
+it; the 30s reconcile heals drift). So the 20s value only bought a
+close+reopen churn on an idle-but-alive page for no benefit. Raising to
+5 min holds one stream for any real session while still reaping a
+leaked connection in bounded time. Option B (page-lifetime + a
+downstream keepalive PING) was rejected as not clearly clean: a
+downstream write to an abandoned-but-un-RST socket sits in the send
+buffer until TCP retransmit timeout (minutes) — it is not a reliable
+prompt abandonment detector, so it adds machinery without bounding
+abandonment better than the timer. A side-effect win: an idle
+connection now lives long enough to hit the 30s reconcile cadence, so
+it heals on-stream instead of only at a reopen. The `_setKeepaliveMs`
+override is unchanged and now also reachable over HTTP for the e2e tier
+(`GET /__test/set-keepalive?ms=`, DEV-only) — the chat-overlay-remount
+spec brackets its run with the old 20s window, which it needs to force
+a chat-closed connection to idle out and reopen chat-aware.
+
 ### P0d — actions return no RSC; consequences downstream (task #23)
 
 **The machinery already exists — this is a policy flip, not new wiring.**

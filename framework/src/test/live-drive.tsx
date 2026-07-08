@@ -33,7 +33,7 @@ export interface DriveHandle {
   entries: Array<{ tag: string; body: string }>
   /** Ends the connection: cancels the client reader and wakes the
    *  parked driver with a bump so its enqueue fails and the loop
-   *  exits without waiting out the 20s keepalive. */
+   *  exits without waiting out the keepalive backstop. */
   shutdown: (wakeSelector: string) => Promise<void>
 }
 

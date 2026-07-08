@@ -102,11 +102,26 @@ import {
 } from "./segment-relevance.ts";
 import { _getWarmProjector, type WarmCandidate } from "./warm-projection.ts";
 
-/** How long the driver holds the response open after each segment.
- *  Bumped to 20s — long enough that most realtime updates land
- *  without a reconnect, short enough that idle connections don't
- *  pile up. */
-const DEFAULT_KEEPALIVE_MS = 20_000;
+/** How long the driver holds the response open after the last USEFUL
+ *  segment before closing an otherwise-silent connection.
+ *
+ *  This is a BACKSTOP for an abandoned connection, not a routine
+ *  liveness cycle. The common teardowns reap promptly and independently
+ *  of this bound: `pagehide` sends a `detach` frame (→ `session.detached`
+ *  → the drive loop exits at its next wake) and a torn held stream fires
+ *  the response's `cancel()` (→ `demand.cancelled`, surfaced at the next
+ *  lane enqueue). An ACTIVE page never reaches the deadline at all — every
+ *  shipped lane re-anchors it, and the 30s reconcile heals drift on a
+ *  connection wake traffic keeps alive. The only connection this timer
+ *  closes is one that is genuinely GONE with its detach lost AND its
+ *  cancel unfired (an abrupt crash / network-loss of an idle connection,
+ *  no wake traffic to surface the tear) — so it can be long.
+ *
+ *  5 minutes: an idle-but-alive page (the heartbeat open over nothing
+ *  live) holds its ONE stream instead of churning a close+reopen every
+ *  ~20s for no benefit, while a leaked connection is still reaped within
+ *  a bounded window rather than held for the page's life. */
+const DEFAULT_KEEPALIVE_MS = 5 * 60_000;
 
 /** Active keepalive window. Mutable only through `_setKeepaliveMs`:
  *  the soak benchmark parks thousands of in-process connections for
@@ -191,22 +206,24 @@ export function _setFirstAckDeadlineMs(ms?: number): void {
  * Cadence of the whole-tree reconcile a long-lived lanes connection
  * emits on its own stream — the scheduled backstop for lane-relevance
  * false-negatives (a dependency the label/constraint surface doesn't
- * capture misses its lane; the next full segment heals it). An IDLE
- * connection needs none: the keepalive closes it within 20s and the
- * reopened connection's first segment is always whole-tree — this
- * cadence exists for connections that steady wake traffic keeps alive
- * indefinitely, which the reopen cycle can no longer reconcile.
+ * capture misses its lane; the next full segment heals it). It is the
+ * drift healer for any connection held past its cadence: an active page
+ * holds indefinitely (wake traffic re-anchors the keepalive), and even
+ * an idle page now holds for the full keepalive backstop (minutes, not
+ * seconds), so the reopen-whole-tree path is too rare to rely on —
+ * the reconcile carries the healing.
  *
  * Anchored at the last full segment (connection open, an honored
  * catch-up anchor, or the previous reconcile) and evaluated at wakes —
  * no standing timer: a connection quiet long enough to drift past the
- * cadence without a wake is closed by the keepalive first.
+ * cadence without a wake is closed by the keepalive first (and its
+ * eventual reopen's first segment is whole-tree).
  *
  * 30s: the reconcile costs one whole-route fp-skip pass (~a warm tick)
  * and ~zero wire bytes when nothing was missed, so the bound is CPU
  * cadence, not bytes — 1/30Hz per held connection is negligible next
- * to the soak's wake-filter tax — while healing latency stays in the
- * class the retired reopen cycle provided (20s keepalive + 5s tick).
+ * to the soak's wake-filter tax — while keeping drift-healing latency
+ * tight regardless of how long the connection holds.
  */
 const DEFAULT_RECONCILE_INTERVAL_MS = 30_000;
 

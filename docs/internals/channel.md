@@ -714,11 +714,12 @@ as the only carrier, unchanged:
 
 ## The whole-tree reconcile
 
-An indefinitely-lived lanes connection (steady relevant wakes keep
-extending the keepalive) would silently lose the correctness backstop
-the reopen cycle provides idle connections — a relevance
-false-negative (a dependency the label/constraint surface doesn't
-capture) would never heal. The driver makes it explicit: past
+A long-lived lanes connection — an active one steady relevant wakes
+keep alive indefinitely, or an idle one the minutes-long keepalive
+backstop holds open — needs the correctness backstop that a
+close+reopen would otherwise provide: a relevance false-negative (a
+dependency the label/constraint surface doesn't capture) would never
+heal on lanes alone. The driver makes it explicit: past
 `RECONCILE_INTERVAL_MS` (30s, anchored at the last full segment —
 connection open, an honored catch-up anchor, or the previous
 reconcile), the next wake at quiesce (no open lanes; the `next`
@@ -727,9 +728,11 @@ whole-tree payload segment ON the stream — `next`, the segment (its
 own delivery seq, fp-skip pruning it to placeholders when nothing was
 missed), `settled`, then `next` + `lanes` to reopen the region — and
 advances the wake cursor past everything the segment covered.
-Evaluated at wakes, no standing timer: an idle connection never
-reaches the cadence (the keepalive closes it first, and its reopen's
-first segment is whole-tree anyway). The reconcile is
+Evaluated at wakes, no standing timer: a connection needs a wake to
+reach the cadence, so a totally silent one is closed by the keepalive
+first (its eventual reopen's first segment is whole-tree anyway) — but
+any connection with even trickling wake traffic, idle or active, now
+reconciles every 30s rather than waiting on a reopen. The reconcile is
 server-scheduled, not client-evidenced activity, so it does not
 extend the keepalive.
 
