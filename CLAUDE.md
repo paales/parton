@@ -164,6 +164,7 @@ yarn dev                # Vite 8.1 (Rolldown) + RSC dev server (e2e-testing, por
 yarn dev:magento        # Companion e2e-magento showcase (port 5181)
 yarn dev:website        # The parton demo site (port 5183)
 yarn build / build:magento
+yarn build:all && yarn preview:all  # prod build + preview (e2e :5173, magento :5181)
 yarn typecheck          # tsc --noEmit, every workspace
 yarn test               # typecheck + Vitest node + rsc projects
 yarn test:node          # node tier only (jsdom) — fast, skips typecheck
@@ -212,10 +213,17 @@ Operational notes that save hours:
   gets silently reused (`reuseExistingServer: true`) and cross-origin
   specs fail with `fetch failed`. Let `yarn test:e2e` own the servers;
   kill strays first.
-- **Prod-parity verification matters**: prod redacts error messages
-  (DEV-gated), so a fix verified only in dev can hide behind a debug
-  row. Dev-build Flight also captures raw props into debug-info rows —
-  don't read those rows as fresh renders in wire-level assertions.
+- **Prod-parity verification matters**: the canonical way to verify a
+  change is the prod build+preview, not `yarn dev` —
+  `yarn build:all && yarn preview:all` (e2e-testing on
+  `http://localhost:5173`, magento companion on `:5181`). Prod redacts
+  error messages (DEV-gated), so a fix verified only in dev can hide
+  behind a debug row — reproduce in prod, but read the actual message
+  in dev. Dev-build Flight also captures raw props into debug-info
+  rows — don't read those rows as fresh renders in wire-level
+  assertions. `preview-all.sh` detaches its vite grandchildren, so to
+  restart cleanly kill the whole `yarn preview:all` tree (or the port
+  holders on `:5173` / `:5181`), not just the yarn shim.
 - HMR dispose hooks clear cache + registry on edits — server restarts
   are rarely needed during dev.
 
@@ -299,6 +307,54 @@ case in this codebase where the History API is the right tool.
 - **Document metadata** (`<title>`/`<meta>`/`<link>`) hoists from anywhere.
 - **Forms/actions:** `<form action>`, `useActionState`, `useFormStatus`, `useOptimistic`, `startTransition` around async actions.
 - **React Compiler** — opt-in (`compilationMode: "annotation"`): add `"use memo"` to compile a component/hook. Browser environment only — server components and their read-tracking are never compiled. `yarn lint` surfaces blockers.
+
+### API surface discipline
+
+- **Plain components over factories.** Only reach for a `parton()` /
+  `block()`-style constructor when define-time work genuinely requires
+  it (catalog registration, selector/URLPattern compile, the
+  Render→Component bridge). When the only "construction" is reading
+  props, use a plain component — `<Frame name initialUrl>` carries the
+  same information as a factory would, without the indirection.
+- **No speculative primitives (YAGNI).** Don't add a hook, helper, or
+  factory until a real in-tree call site needs it — "the use cases
+  sound reasonable" is not enough. If nothing in the tree hits the
+  manual form yet, it stays in `docs/notes/IDEAS.md`, not the code;
+  when you do ship a primitive, ship it with its first caller.
+  (Exception: framework infrastructure where the framework itself is
+  the caller.)
+- **The framework provides, not the app.** Cross-cutting capabilities
+  wire into the root primitives — `PartialRoot` (page scope) and
+  `Frame` (frame scope) — so every app gets them with zero app-side
+  plumbing. Never introduce an app-placed provider the app must mount;
+  keep such components framework-internal (out of the public barrel).
+
+### Formatting — match the file, never bulk-format
+
+The repo is **not** Biome-format-clean. `biome.json` enables the
+formatter, but much of the tree predates it and the style is mixed
+*file by file*: the apps (`website/`, `e2e-testing/`) and some
+`framework/src/lib` files (e.g. `partial.tsx`) are 2-space /
+no-semicolon, while others (`partial-cache.ts`, `visibility.tsx`) are
+tab / semicolon. `biome check --write` across files churns 100+ lines
+of untouched code. Never bulk-format — match the style of the specific
+file you are editing. `yarn lint` is ESLint (advisory); there is no
+enforced format gate.
+
+### Research mode — shave to the core
+
+This is a primitives-research project, not a roadmap. The mode is an
+elegance game: work a problem through, make it as elegant as possible,
+then shave to the essential core. A dead end is an acceptable
+outcome — exploration that ends in deletion is a success, not waste;
+the win is a primitive that couldn't exist in an existing framework
+(the move that replaced explicit `vary` with auto-tracked reads is the
+model). Frame proposals as consolidation and surface-deletion, not
+productionization checklists. Multi-process is expected to work;
+sticky sessions are an acceptable constraint. Don't pitch the project
+as a CMS framework — the CMS editor is one demo surface among several
+(its storage is deliberately demo-grade); the leverage is the wire
+format, streaming, and server-state substrate.
 
 ## Working in a worktree
 
