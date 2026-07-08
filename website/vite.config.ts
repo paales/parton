@@ -4,6 +4,7 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react"
 import rsc from "@vitejs/plugin-rsc"
 import tailwindcss from "@tailwindcss/vite"
 import { defineConfig } from "vite"
+import { partonChannelServer } from "@parton/framework/vite/channel-server.ts"
 import { rscCompression } from "@parton/framework/vite/compression.ts"
 
 // The website keeps its own content store — it never shares the e2e
@@ -41,6 +42,10 @@ const HOOK_CALLING_DEPS = [/^@base-ui\//, /^@radix-ui\//, /^lucide-react$/]
 
 export default defineConfig(() => ({
   plugins: [
+    // Serve the opt-in WebSocket channel transport's `/__parton/ws`
+    // upgrade in dev + preview (additive — the default fetch transport is
+    // untouched, and only a page opting in with `?transport=ws` uses it).
+    partonChannelServer(),
     rscCompression(),
     rsc(),
     react(),

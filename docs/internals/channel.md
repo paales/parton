@@ -1017,7 +1017,22 @@ lives at the handshake, not per-message.
 `upgrade` event, accepts the `/__parton/ws` handshake (leaving Vite's HMR
 upgrade alone), adapts each `ws` socket to a `ChannelSocket`, and drives
 it through the app's `handleChannelSocket` — reached via the runnable
-`rsc` environment in dev, the built RSC bundle in preview.
+`rsc` environment in dev, the built RSC bundle in preview. It is ADDITIVE:
+it only serves the extra endpoint, so an app that adds it is unchanged on
+the default fetch path. Usage — add it to the app's `plugins` (the
+website does, `website/vite.config.ts`):
+
+```ts
+import { partonChannelServer } from "@parton/framework/vite/channel-server.ts"
+// plugins: [ partonChannelServer(), rsc(), react(), … ]
+```
+
+The app's RSC entry must default-export `createRscHandler({ Root })` (it
+exposes `handleChannelSocket`); the plugin resolves the entry from the
+`rsc` environment's `build.rollupOptions.input` (canonically `index`).
+Then load any page with `?transport=ws` — the whole channel (attach,
+lanes, navigation segments, every upstream envelope) rides the one socket
+and NOTHING POSTs to `/__parton/live` or `/__parton/channel`.
 
 **Selection.** `selectChannelTransport()` (run once at `bootBrowser`)
 installs the WebSocket transport only on an explicit opt-in
@@ -1026,12 +1041,32 @@ installs the WebSocket transport only on an explicit opt-in
 stands, so every existing page — and the whole test suite — is
 unaffected.
 
-**Verification.** The tunnel is proven end to end over a REAL socket by
-`channel-ws.rsc.test.tsx` (the client transport + `driveChannelSocket`:
-attach, first segment, an expiry lane, and an upstream envelope whose seq
-surfaces on the `applied` marker). The Vite plugin's dev/preview upgrade
-glue is not yet exercised by an automated gate — add `partonChannelServer()`
-to an app's `plugins` and load it with `?transport=ws` to try it.
+**Verification.** Two gates, one for the tunnel and one for the live
+glue:
+
+- `channel-ws.rsc.test.tsx` proves the TUNNEL end to end over a REAL
+  socket (the client transport + `driveChannelSocket`: attach, first
+  segment, an expiry lane, and an upstream envelope whose seq surfaces on
+  the `applied` marker) — but with a hand-built `ws` server, not the Vite
+  glue.
+- `website/validate-ws.mjs` proves the Vite PLUGIN's dev/preview upgrade
+  glue in a running server (`yarn build:website && node
+  website/validate-ws.mjs`, and `--dev` for the dev server): it drives
+  Chromium at `/?transport=ws` and asserts the socket establishes (the
+  `conn` handshake sets `data-parton-live`), the attach + scroll-driven
+  lanes stream down as BINARY frames, the scroll's visibility flips ride
+  UP the same socket (and the server acts on them — the flipped-in chunk
+  streams down), pulses stay live, ZERO POST hits either fetch endpoint,
+  and — in dev — Vite's own HMR still round-trips over its untouched
+  socket. The default fetch world stays gated by `validate-world.mjs`
+  (the plugin is additive, so it stays green unchanged).
+
+One teardown note the live gate surfaced: a hard socket close during an
+in-flight render logs `Error: The render was aborted by the server
+without a reason.` — this is React Flight's abort of the cancelled render,
+already classified as an EXPECTED render error (`runtime/errors.ts`) and
+identical on the fetch path (a torn `/__parton/live` hold does the same),
+not a WebSocket-specific fault. The server stays healthy across the churn.
 
 ### The WebTransport transport (opt-in)
 

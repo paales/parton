@@ -321,17 +321,29 @@ additive on top (commit B). As built:
 - **Dev/preview** Vite plugin `partonChannelServer`
   (`framework/src/vite/channel-server.ts`) — the FOURTH hook onto the
   http server's `upgrade` event, bridging into the runnable `rsc`
-  environment (dev) / the built bundle (preview).
+  environment (dev) / the built bundle (preview). WIRED into the website
+  (`website/vite.config.ts`) — the additive, backend-free, heaviest
+  streaming/culling app, so the socket path is exercisable end to end.
 - **Selection** `selectChannelTransport()` at boot — opt-in
   (`?transport=ws` / `window.__partonTransport`); default stays fetch, so
   the whole existing suite is unaffected.
 - **Verified:** the tunnel end to end over a real socket
   (`channel-ws.rsc.test.tsx`: attach + first segment + an expiry lane +
-  an upstream envelope's `applied` round-trip). **Not yet gate-verified:**
-  the Vite plugin's upgrade glue in a live dev/preview server (wiring
-  documented — add the plugin + `?transport=ws`). The opaque-tunnel
-  decision held: no `buildMarker`/`SegmentIterator` change, the WS carries
-  the same `\xFF`-marker bytes.
+  an upstream envelope's `applied` round-trip), AND — new — the Vite
+  plugin's live upgrade glue in a running dev + preview server
+  (`website/validate-ws.mjs`, both modes green): the socket establishes
+  (`conn` → `data-parton-live`), attach + scroll-driven lanes stream down
+  as binary, scroll visibility flips ride UP the socket and flip chunks
+  in, pulses stay live, ZERO POST to `/__parton/live` or
+  `/__parton/channel`, and Vite HMR still round-trips (its upgrade
+  untouched). The opaque-tunnel decision held: no
+  `buildMarker`/`SegmentIterator` change, the WS carries the same
+  `\xFF`-marker bytes. The live path surfaced no server bug — the real
+  `upgrade` handshake, `bufferedAmount`/`onDrain` backpressure under a
+  2 MB dev replay, binary framing, the RSC-env module load, and
+  socket-close teardown all held. (A hard close mid-render logs Flight's
+  `render was aborted` — pre-existing, identical on the fetch path, and
+  already an expected render error; not WS-specific.)
 
 ### P2 — WebTransport (task #22)
 

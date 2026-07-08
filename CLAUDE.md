@@ -177,6 +177,12 @@ node website/validate-world.mjs  # standing world gate (prod build): boot wire
                         # stream-in timing, refresh/stress/parked checks.
                         # Run after any streaming/culling framework change:
                         # `yarn build:website` first.
+node website/validate-ws.mjs     # WebSocket-transport gate: drives the world
+                        # at ?transport=ws and proves establish/attach/
+                        # stream/upstream all ride the one /__parton/ws
+                        # socket (zero fetch to /__parton/{live,channel}),
+                        # HMR intact. Preview by default; `--dev` for dev.
+                        # `yarn build:website` first (preview mode).
 ```
 
 `yarn test` and `yarn test:e2e` cover disjoint suites — **both must
