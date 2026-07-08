@@ -4,6 +4,7 @@ import {
   expect,
   recordPartialDispatches,
   request,
+  waitForLiveConnection,
   waitForPageInteractive,
 } from "./fixtures"
 
@@ -46,6 +47,67 @@ test.describe("Partial defer demo", () => {
       (c) => c.partials != null && c.partials.split(",").includes("manual"),
     )
     expect(hits.length, "expected exactly one refetch dispatch for `manual`").toBeGreaterThanOrEqual(1)
+  })
+
+  test("client nav STREAMS: shell reveals, then async content arrives (no tear)", async ({
+    page,
+  }) => {
+    // A full window navigation over the channel commits root-ready — the
+    // destination's newly-introduced Suspense boundaries flash their
+    // fallbacks, then their content streams in as the nav segment's
+    // Flight continuation resolves. Regression guard for two failures a
+    // streaming nav could hit:
+    //   - the async continuation never lands (the segment closes early),
+    //     so `slow-content` never appears; and
+    //   - a same-URL on-mount activation refetch (the `<WhenMounted>`
+    //     defers on this page) supersedes the in-flight streaming nav and
+    //     tears its committed shell — the torn Suspense refs reject with
+    //     "Connection closed.", surfacing a per-partial "failed to render"
+    //     card instead of the content.
+    const consoleErrors: string[] = []
+    page.on("console", (m) => {
+      if (m.type() === "error") consoleErrors.push(m.text())
+    })
+
+    // Land on a page with NO async boundaries, so the channel is fully
+    // established before we do the client-side navigation under test.
+    await page.goto("/")
+    await waitForLiveConnection(page)
+
+    await page.evaluate(() => {
+      // The Navigation API — the only client URL path (never History).
+      window.navigation.navigate("/defer-demo")
+    })
+
+    // The streaming shell: the slow parton's Suspense fallback shows
+    // while its 1.5s body streams. It commits root-ready, so this is
+    // quick — but the assertion that matters is that it appears at all
+    // AND is later replaced by content, not stranded.
+    await expect(page.locator('[data-testid="slow-fallback"]')).toBeVisible({
+      timeout: 2000,
+    })
+
+    // The Flight continuation drains into the committed tree: the async
+    // parton's content lands after its ~1.5s server await. Before the
+    // fix this never arrived on this page (the defer activation refetch
+    // tore the nav segment).
+    await expect(page.locator('[data-testid="slow-content"]')).toBeVisible({
+      timeout: 4000,
+    })
+
+    // The on-mount defer partons still activate — their forced refetch
+    // applies once the streaming nav drains, not by superseding it.
+    await expect(page.locator('[data-testid="batch-a-content"]')).toBeVisible({
+      timeout: 4000,
+    })
+
+    // No partial was torn into its error card, and no "Connection
+    // closed." reached the console.
+    expect(await page.getByText("failed to render").count()).toBe(0)
+    expect(
+      consoleErrors.filter((e) => e.includes("Connection closed")),
+      "a superseded streaming nav must not tear its committed shell",
+    ).toEqual([])
   })
 
   test("<WhenVisible>: scroll-into-view activates the Partial", async ({ page }) => {

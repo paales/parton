@@ -494,6 +494,27 @@ The pieces:
   delivery PROCESSED. This internal seam — "a newer statement aborts
   the in-flight navigation render" — is what the explicit cancel
   frame kind will address directly.
+- **Streaming navs drain past a same-URL refetch.** The supersede has
+  one carve-out (`supersededBy` in `emitNavSegment`): a STREAMING nav
+  (the default commit mode for a window navigation) has already
+  committed a root-ready SHELL on the client — its Suspense fallbacks
+  are showing and its boundaries resolve as the body streams. A
+  pending statement to the SAME effective URL (transport params —
+  `?__force=` &c. — stripped) is a REFETCH of the page being loaded,
+  not a nav away: an on-mount `defer` activation firing off the fresh
+  shell, a selector force. It does NOT supersede. Aborting the stream
+  for it would close the client's committed shell with its Suspense
+  refs still pending, rejecting them (`"Connection closed."`) and
+  tearing the just-revealed partons into their per-partial error
+  cards. Instead the stream DRAINS — its boundaries commit
+  progressively — and the refetch consumes next, its `?__force=`
+  targets riding the reopened region's lanes (fp-skipped whole-tree
+  segment + forced lanes, a cheap covering pass since the drained nav
+  already registered every snapshot). A DIFFERENT effective URL is a
+  genuine navigation-away and still supersedes (serve the new page
+  fast). Atomic navs never reach the carve-out: they buffer their
+  Flight bytes to the atomic swap, so a superseded atomic nav has no
+  committed shell to tear.
 - **The as-of guard — pageUrlKey generalized into the protocol.**
   The client's commit arbitration for seq'd deliveries: commit iff
   the delivery's as-of ≥ the navigation point

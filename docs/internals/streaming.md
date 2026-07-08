@@ -272,7 +272,17 @@ subscription. There are two URL flags, and conflating them is a bug:
   CLIENT commit-mode switch. `true` commits each segment
   progressively (`setPayloadRaw` — Suspense fallbacks, per-chunk
   reveal); `false` swaps atomically inside a transition. It has **no**
-  server effect — it does not hold the connection open.
+  server effect — it does not hold the connection open. A full window
+  navigation DEFAULTS to streaming (`browser.tsx`'s `onNavigation`):
+  the destination's Suspense boundaries are newly introduced, so the
+  React-default reveal shows each fallback then streams its content in
+  — the same behaviour as `startTransition` into a fresh tree. Selector
+  refetches (`enqueueRefetch` — `reload/navigate({selector})`) default
+  to ATOMIC: they replace EXISTING content, where a fallback flash reads
+  as a flicker. A streaming nav's root-ready commit needs one
+  supersede carve-out server-side to stay tear-safe — see
+  [`channel.md`](./channel.md) §Navigation rides the channel
+  (Mid-render supersede).
 - **`?live=1`** (`reload({live: true})`) is the SERVER hold-open
   subscription. The segment driver parks the connection for the
   keepalive and pushes a fresh segment on every route-relevant bump /

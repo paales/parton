@@ -172,9 +172,19 @@ async function main() {
 				// page answers null — and degraded pages never intercept, so
 				// the null branch is unreachable here.
 				const routed = _channelNavigate({
+					// A full window navigation STREAMS — the React-default reveal.
+					// The destination's Suspense boundaries are newly introduced,
+					// so the segment commits root-ready (`setPayloadRaw`): each new
+					// boundary shows its fallback immediately, then its content
+					// streams in as the nav segment's Flight continuation resolves,
+					// exactly as a `startTransition` into a fresh tree behaves. The
+					// atomic swap (`streaming: false`) is for selector refetches
+					// that REPLACE existing content, where a fallback flash reads as
+					// a flicker — those ride `enqueueRefetch`/`refetch.ts`, never
+					// this window-navigation path.
 					url: target.pathname + target.search,
 					intent: intent ?? "push",
-					streaming: false,
+					streaming: true,
 					signal,
 				});
 				return routed ? routed.finished : Promise.resolve();

@@ -571,6 +571,46 @@ function liveCatchupTs(): number | null {
 	return since.ts;
 }
 
+/** Framework transport params — stripped before an effective-URL
+ *  comparison, so a `?__force=` refetch of the current page reads as the
+ *  SAME navigation, not a new one. Mirror of `TRANSPORT_PARAMS`
+ *  (see CLAUDE.md § match); match never sees these either. */
+const NAV_TRANSPORT_PARAMS = [
+	"partials",
+	"cached",
+	"live",
+	"streaming",
+	"visible",
+	"__frame",
+	"__frameUrl",
+	"__cullFlip",
+	"__force",
+] as const;
+
+/** The navigation-identifying part of a URL: pathname + app search
+ *  params (transport params dropped, order-independent). Two statements
+ *  with the same effective URL address the same page — a refetch, not a
+ *  navigation. */
+function effectiveNavUrl(url: string): string {
+	const u = new URL(url, "http://parton.local");
+	for (const p of NAV_TRANSPORT_PARAMS) u.searchParams.delete(p);
+	u.searchParams.sort();
+	const search = u.searchParams.toString();
+	return search ? `${u.pathname}?${search}` : u.pathname;
+}
+
+/** Whether two nav statements target the same page (ignoring transport
+ *  params). A same-effective-URL statement arriving over an in-flight
+ *  streaming nav is a refetch of the page being loaded, not a nav away
+ *  — see `supersededBy` in `emitNavSegment`. */
+function sameEffectiveNavUrl(a: string, b: string): boolean {
+	try {
+		return effectiveNavUrl(a) === effectiveNavUrl(b);
+	} catch {
+		return false;
+	}
+}
+
 /** The attach statement's one-shot `__force` overlay — the selector a
  *  pre-establishment refetch folded into the statement's URL. Read off
  *  the statement (the entry strips it from request state before any
@@ -1716,10 +1756,31 @@ async function driveLaneStream(
 			bufferedSegment.length = 0;
 			return true;
 		};
-		const supersededBy = (): boolean =>
-			session !== null &&
-			session.pendingNav !== null &&
-			session.pendingNav.seq > consumedSeq;
+		const supersededBy = (): boolean => {
+			if (session === null || session.pendingNav === null) return false;
+			if (session.pendingNav.seq <= consumedSeq) return false;
+			// A STREAMING nav has already committed a root-ready shell on the
+			// client — its Suspense fallbacks are showing and its boundaries
+			// resolve as the body streams. A pending statement to the SAME
+			// effective URL is a REFETCH of the page being loaded (a defer /
+			// on-mount activation firing off that fresh shell, a selector
+			// force), not a navigation away. Aborting the in-flight stream for
+			// it would close the client's committed shell with its Suspense
+			// refs still pending, rejecting them ("Connection closed.") and
+			// tearing the just-revealed partons. Let the stream DRAIN so its
+			// boundaries commit progressively; the refetch's forces apply once
+			// it consumes next. A DIFFERENT effective URL is a genuine
+			// navigation-away and still supersedes (serve the new page fast).
+			// Atomic navs never reach here with this carve-out — they buffer,
+			// so a superseded atomic nav has no committed shell to tear.
+			if (
+				session.consumedNavStreaming === true &&
+				sameEffectiveNavUrl(session.pendingNav.url, request.url)
+			) {
+				return false;
+			}
+			return true;
+		};
 		const reader = renderFullSegment().getReader();
 		let navArm: (() => void) | null = null;
 		const disposeArm = (): void => {
