@@ -352,6 +352,47 @@ server, or deploy behind an HTTP/3 edge). Verified only to the extent
 the environment allows — the seam guarantees it's a pipe swap, not a
 protocol rewrite.
 
+**Shipped (additive, opt-in, default stays fetch).** As built, mirroring
+the WebSocket transport commit:
+- **Client** `WebTransportTransport` (`channel-transport.ts`) — one bidi
+  QUIC stream, attach as the first upstream line, downstream marker bytes
+  off the stream's readable into a `ReadableStream`, `send` = write the
+  envelope to the writable → `true`. The abort stays the splitter's
+  (cooperative, segment-boundary — the body `cancel` closes the session),
+  never wired to the live pipe. The ONE addition over WS: a QUIC stream
+  has no message boundaries, so the UPSTREAM half is newline-delimited
+  JSON (`JSON.stringify` never emits a literal `\n`); the DOWNSTREAM half
+  is byte-identical, unframed — still an opaque tunnel.
+- **Server** `driveChannelWebTransport` + `createWebTransportServer({Root})`
+  (`channel-server.ts` + the RSC entry) — reuse `driveSegmentedResponse`
+  and the connection session UNCHANGED. The controller shim's `enqueue`
+  writes the writable half; its `demand` reads the writable's native
+  backpressure (`writer.desiredSize` / `writer.ready`), cleaner than the
+  WS `bufferedAmount`/`onDrain` pair (no timers, no indirection). The
+  frame-apply switch is the SHARED `applyEnvelopeToSession` /
+  `_resolveBoundSession` (one switch, all three transports). The
+  whole-tree render closure is the SHARED `channelRenderOnce` (with the WS
+  server).
+- **Selection** `selectChannelTransport()` — opt-in
+  (`?transport=webtransport` / `window.__partonTransport`), gated on a
+  `WebTransport` global; default stays fetch, so the whole existing suite
+  is unaffected.
+- **NO Vite plugin** (unlike WS): WebTransport needs an HTTP/3 listener
+  Vite doesn't serve, so the server is a STANDALONE hook. To run it: a
+  QUIC server (`@fails-components/webtransport`'s `Http3Server`, or an
+  HTTP/3 edge) builds a `Request` per session on `/__parton/wt` and calls
+  `createWebTransportServer({Root}).handleSession(session, request)`;
+  `session` exposes `incomingBidirectionalStreams`.
+- **Verified:** the tunnel over a FAKE duplex — a `TransformStream` pair +
+  a stubbed `WebTransport` global (`channel-webtransport.rsc.test.tsx`:
+  attach + first segment + an expiry lane + an upstream envelope's
+  `applied` round-trip). The seam guarantee is what makes the fake duplex
+  a faithful proof: `driveSegmentedResponse` + the splitter never name a
+  transport, so only the QUIC socket is mocked. **Not gate-verified:** end
+  to end over a real HTTP/3 connection — the CI environment hosts no QUIC
+  server. The opaque-tunnel decision held (no `buildMarker`/`SegmentIterator`
+  change; the downstream carries the same `\xFF`-marker bytes).
+
 ## Testing strategy
 
 Every change gates on the FULL surface before merge — the channel's

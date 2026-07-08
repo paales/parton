@@ -28,6 +28,7 @@ import {
 	type AttachStatement,
 	CHANNEL_ENDPOINT,
 	CHANNEL_WS_ENDPOINT,
+	CHANNEL_WT_ENDPOINT,
 	type ChannelEnvelope,
 } from "./channel-protocol.ts";
 import { NavigationError } from "../runtime/navigation-error.ts";
@@ -283,6 +284,152 @@ export class WebSocketTransport implements ChannelTransport {
 	}
 }
 
+/**
+ * The WebTransport (HTTP/3) transport — the opt-in full-duplex pipe over
+ * QUIC. ONE bidirectional stream carries both roles: the attach statement
+ * + upstream envelopes go up as newline-delimited JSON on the stream's
+ * writable half, the SAME `\xFF`-marker downstream byte stream comes down
+ * on the readable half (an OPAQUE TUNNEL — the server tunnels
+ * `driveSegmentedResponse`'s bytes unchanged, so `splitSegments` parses
+ * them exactly as over fetch). The only addition over fetch/WS is the
+ * upstream newline delimiter: a QUIC stream is raw bytes with no message
+ * boundaries, so the attach and each envelope are `\n`-terminated (safe —
+ * `JSON.stringify` never emits a literal newline); the DOWNSTREAM tunnel
+ * is byte-identical, unframed. Reliability lives ABOVE the transport (the
+ * retransmit buffer + the downstream `applied` marker), so `send` is
+ * fire-and-forget → `true`. One instance owns its current session: `open`
+ * establishes it (and `send` reuses its writer) for the fire's lifetime,
+ * `close` releases it.
+ */
+export class WebTransportTransport implements ChannelTransport {
+	private wt: WebTransport | null = null;
+	private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+	/** Explicit https:// URL — the browser derives it from `location`; a
+	 *  test points it at a fake session. */
+	private readonly url: string | undefined;
+	private readonly encoder = new TextEncoder();
+
+	constructor(url?: string) {
+		this.url = url;
+	}
+
+	async open(
+		statement: AttachStatement,
+		signal?: AbortSignal,
+	): Promise<{ body: ReadableStream<Uint8Array> }> {
+		if (signal?.aborted) throw abortError();
+		const url = this.url ?? channelWtUrl();
+		let wt: WebTransport;
+		try {
+			wt = new WebTransport(url);
+		} catch (err) {
+			throw new NavigationError({ kind: "network", url, cause: err });
+		}
+		this.wt = wt;
+
+		// Pre-establishment abort closes the session (rejecting the awaits
+		// below); once the stream is open the signal is the splitter's (via
+		// the caller — it cancels the body at a segment boundary, which
+		// closes the session), so this listener is dropped, mirroring the
+		// fetch/WS discipline of never wiring the signal to the live pipe.
+		const onAbort = (): void => {
+			try {
+				wt.close();
+			} catch {}
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+
+		try {
+			await wt.ready;
+			const stream = await wt.createBidirectionalStream();
+			const writer = stream.writable.getWriter();
+			this.writer = writer;
+			// The attach is the FIRST upstream message (mirrors the fetch
+			// attach's POST body / the WS first text frame), newline-terminated.
+			await writer.write(this.frame(statement));
+			signal?.removeEventListener("abort", onAbort);
+
+			// The downstream: the bidi stream's readable IS the `\xFF`-marker
+			// tunnel `splitSegments` reads. A stream `cancel` (the caller's
+			// cooperative abort at a segment boundary) closes the session — the
+			// WebTransport twin of the fetch body's / the WS body's cancel.
+			const reader = (stream.readable as ReadableStream<Uint8Array>).getReader();
+			const body = new ReadableStream<Uint8Array>({
+				async pull(controller) {
+					let result: ReadableStreamReadResult<Uint8Array>;
+					try {
+						result = await reader.read();
+					} catch (err) {
+						controller.error(err);
+						return;
+					}
+					if (result.done) {
+						// A clean end (server wind-down on keepalive) ends the body
+						// stream — `splitSegments` finishes, the caller resolves
+						// `finished`.
+						controller.close();
+						return;
+					}
+					controller.enqueue(result.value);
+				},
+				cancel(reason) {
+					try {
+						reader.cancel(reason);
+					} catch {}
+					try {
+						wt.close();
+					} catch {}
+				},
+			});
+			return { body };
+		} catch (err) {
+			// Any establishment failure (ready / bidi-open / attach write
+			// rejected) tears the session. A concurrent abort surfaces as the
+			// untouched AbortError — a normal supersede, not a degrade — while
+			// a genuine connection failure maps to a typed NavigationError, the
+			// same split the fetch transport draws.
+			signal?.removeEventListener("abort", onAbort);
+			try {
+				wt.close();
+			} catch {}
+			if (signal?.aborted) throw abortError();
+			throw new NavigationError({ kind: "network", url, cause: err });
+		}
+	}
+
+	send(envelope: ChannelEnvelope): Promise<boolean> {
+		const writer = this.writer;
+		if (writer === null) return Promise.resolve(false);
+		try {
+			// Fire-and-forget: reliability is above the seam (the retransmit
+			// buffer + the downstream `applied` marker), so a queued write
+			// that later fails is dropped, never surfaced as a false here.
+			void writer.write(this.frame(envelope)).catch(() => {});
+			return Promise.resolve(true);
+		} catch {
+			return Promise.resolve(false);
+		}
+	}
+
+	close(): void {
+		const wt = this.wt;
+		this.wt = null;
+		this.writer = null;
+		if (wt !== null) {
+			try {
+				wt.close();
+			} catch {}
+		}
+	}
+
+	/** Encode one upstream message as newline-terminated JSON bytes — the
+	 *  framing the byte stream needs (a message boundary the WebSocket
+	 *  provides for free). */
+	private frame(value: AttachStatement | ChannelEnvelope): Uint8Array {
+		return this.encoder.encode(`${JSON.stringify(value)}\n`);
+	}
+}
+
 /** The ws:// URL for the channel socket, derived from the page origin
  *  (`wss:` under https). */
 function channelWsUrl(): string {
@@ -291,22 +438,44 @@ function channelWsUrl(): string {
 	return `${wsProtocol}//${host}${CHANNEL_WS_ENDPOINT}`;
 }
 
+/** The https:// URL for the WebTransport session, derived from the page
+ *  origin. WebTransport mandates HTTP/3 over TLS, so the scheme is always
+ *  `https:` (a non-secure origin has no WebTransport global to select). */
+function channelWtUrl(): string {
+	return `https://${window.location.host}${CHANNEL_WT_ENDPOINT}`;
+}
+
 function abortError(): Error {
 	return new DOMException("The channel open was aborted.", "AbortError");
 }
 
 /**
- * Boot-time transport selection. The WebSocket transport is OPT-IN — a
- * `?transport=ws` query param or `window.__partonTransport === "ws"`,
- * AND a `WebSocket` global present. Absent the opt-in the default fetch
- * transport stands, so every existing page (and the whole test suite) is
- * unaffected. Call once before the heartbeat's first fire.
+ * Boot-time transport selection. The full-duplex transports are OPT-IN —
+ * a `?transport=` query param or `window.__partonTransport`, each gated
+ * on its global being present:
+ *
+ *   - `"webtransport"` → `WebTransportTransport` (needs a `WebTransport`
+ *     global AND a standalone HTTP/3 server — see [[channel-server]]'s
+ *     `createWebTransportServer`).
+ *   - `"ws"` → `WebSocketTransport` (needs a `WebSocket` global AND the
+ *     `partonChannelServer` Vite plugin serving `/__parton/ws`).
+ *
+ * Absent a matching opt-in (or with the named global missing) the default
+ * fetch transport stands, so every existing page — and the whole test
+ * suite — is unaffected. Call once before the heartbeat's first fire.
  */
 export function selectChannelTransport(): void {
-	if (typeof window === "undefined" || typeof WebSocket === "undefined") return;
-	const optedIn =
-		new URLSearchParams(window.location.search).get("transport") === "ws" ||
-		(window as unknown as { __partonTransport?: string }).__partonTransport ===
-			"ws";
-	if (optedIn) setChannelTransport(new WebSocketTransport());
+	if (typeof window === "undefined") return;
+	const requested =
+		new URLSearchParams(window.location.search).get("transport") ??
+		(window as unknown as { __partonTransport?: string }).__partonTransport;
+	if (requested === "webtransport") {
+		if (typeof WebTransport !== "undefined")
+			setChannelTransport(new WebTransportTransport());
+		return;
+	}
+	if (requested === "ws") {
+		if (typeof WebSocket !== "undefined")
+			setChannelTransport(new WebSocketTransport());
+	}
 }

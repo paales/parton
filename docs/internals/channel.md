@@ -1012,6 +1012,77 @@ surfaces on the `applied` marker). The Vite plugin's dev/preview upgrade
 glue is not yet exercised by an automated gate — add `partonChannelServer()`
 to an app's `plugins` and load it with `?transport=ws` to try it.
 
+### The WebTransport transport (opt-in)
+
+`WebTransportTransport` (`channel-transport.ts`) is the HTTP/3 full-duplex
+pipe — ONE bidirectional QUIC stream to `/__parton/wt` for both roles.
+`open` constructs `new WebTransport(url)` (always `https:` — QUIC mandates
+TLS), awaits `wt.ready`, opens a bidi stream (`createBidirectionalStream()`),
+writes the `AttachStatement` as the first upstream line, and returns a
+`ReadableStream` fed by the stream's readable half — the server tunnels
+`driveSegmentedResponse`'s bytes down it as the SAME `\xFF`-marker wire,
+which `splitSegments` parses exactly as over fetch. `send` writes the JSON
+envelope to the stream's writable half → `true` (reliability is above the
+seam, so no per-message ack). `close` = `wt.close`. The signal is the
+caller's cooperative abort, the same discipline as fetch/WS: post-establishment
+it drives `splitSegments`, whose stream `cancel` closes the session — never
+wired to the live pipe.
+
+**The one framing difference — upstream only.** A QUIC stream is raw bytes
+with no message boundaries, so the UPSTREAM half carries newline-delimited
+JSON: the attach and each envelope are `\n`-terminated (safe — `JSON.stringify`
+never emits a literal newline). This is the message boundary the WebSocket
+gives for free; the WS transport needs no delimiter. The DOWNSTREAM half is
+byte-identical to fetch/WS — the marker wire is unframed, still an OPAQUE
+TUNNEL, so nothing above the transport changes.
+
+**Server (`channel-server.ts` + the RSC entry).** `driveChannelWebTransport`
+is the WebTransport twin of `driveChannelSocket`: it takes the bidi stream's
+two halves (`ChannelDuplexStream` = `{ readable, writable }`, structurally
+`WebTransportBidirectionalStream`), reads the attach off the first upstream
+line, binds it, and runs `driveSegmentedResponse` UNCHANGED against a
+controller whose `enqueue` writes the writable half and whose `demand` reads
+the writable's NATIVE backpressure — `writer.desiredSize` (queue headroom)
+and `writer.ready` (a queued write flushed), no `bufferedAmount` indirection,
+no timers. Each later upstream line decodes to an envelope and applies
+through the SAME `applyEnvelopeToSession` switch (the shared
+`_resolveBoundSession` binding check runs first) — no duplicated apply
+logic, exactly as the WS driver. `createWebTransportServer({ Root })` (the
+RSC entry) is the WebTransport twin of `createChannelServer`: its
+`handleSession(session, request)` accepts the client's first incoming bidi
+stream off the QUIC session and drives it with the SAME `<Root/>` render
+closure (`channelRenderOnce`, shared with the WS server).
+
+**Infra requirement (no Vite plugin).** WebTransport needs an HTTP/3 (QUIC)
+listener, which Vite dev/preview (Node HTTP/1.1) does not provide and Node
+has no stable server for. So there is NO framework Vite plugin for it — the
+WebTransport server is a STANDALONE hook. To serve it: stand up a QUIC/HTTP3
+server (e.g. `@fails-components/webtransport`'s `Http3Server`, or deploy
+behind an HTTP/3 edge that terminates WebTransport), and for each session on
+`/__parton/wt` build a `Request` from the connect (its `Cookie` header
+supplies the scope + session binding, its URL the origin) and call
+`createWebTransportServer({ Root }).handleSession(session, request)` — where
+`session` exposes `incomingBidirectionalStreams` (a readable of bidi
+streams, each with `.readable`/`.writable`). Keep it OFF the default path;
+the client opts in with `?transport=webtransport`.
+
+**Selection.** `selectChannelTransport()` installs the WebTransport transport
+only on an explicit opt-in (`?transport=webtransport` or
+`window.__partonTransport === "webtransport"`) with a `WebTransport` global
+present. Absent the opt-in the default fetch transport stands.
+
+**Verification.** The tunnel is proven end to end over a FAKE duplex (a pair
+of `TransformStream`s standing in for the bidi stream, a stubbed
+`WebTransport` global) by `channel-webtransport.rsc.test.tsx`: attach as the
+first newline-framed line, the whole-tree segment + an expiry lane tunneled
+down as opaque marker bytes, and an upstream envelope applied through the
+shared switch, its seq surfacing on the `applied` marker. The seam guarantee
+is what lets a fake duplex exercise the tunnel byte-for-byte —
+`driveSegmentedResponse` and the client splitter never name a transport, so
+only the QUIC socket underneath is mocked. NOT gate-verified end to end over
+a real HTTP/3 connection — that needs the standalone QUIC server above,
+which the CI environment cannot host.
+
 ## Testing
 
 - rsc tier: `channel-endpoint.rsc.test.tsx` (decode — incl. the
@@ -1057,7 +1128,15 @@ to an app's `plugins` and load it with `?transport=ws` to try it.
   `driveChannelSocket`: the attach as the first text message, the
   whole-tree segment + an expiry lane tunneled down as opaque binary
   marker bytes, and an upstream envelope applied through the shared
-  switch, its seq surfacing on the `applied` marker).
+  switch, its seq surfacing on the `applied` marker),
+  `channel-webtransport.rsc.test.tsx` (the WebTransport transport over a
+  FAKE duplex — the client `WebTransportTransport` + the server
+  `driveChannelWebTransport`: the attach as the first newline-framed
+  line, the whole-tree segment + an expiry lane tunneled down the
+  readable half as opaque marker bytes, and an upstream envelope applied
+  through the shared switch, its seq surfacing on the `applied` marker;
+  no QUIC server, so a `TransformStream` pair + a stubbed `WebTransport`
+  global stand in — the seam guarantees the tunnel is byte-identical).
 - node tier: `channel-client.test.ts` (coalescing, page-lifetime seq,
   serialization, the fallback signal, pagehide detach, the cookie
   producer — a client cookie change states `cookie` frames on the open

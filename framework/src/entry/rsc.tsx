@@ -38,8 +38,10 @@ import {
 	decodeAttachStatement,
 } from "../lib/channel-protocol.ts";
 import {
+	type ChannelDuplexStream,
 	type ChannelSocket,
 	driveChannelSocket,
+	driveChannelWebTransport,
 } from "../lib/channel-server.ts";
 import {
 	bindAttachStatement,
@@ -526,8 +528,19 @@ export function createRscHandler(config: RscHandlerConfig): {
 export function createChannelServer(config: { Root: ComponentType }): {
 	handleSocket(socket: ChannelSocket, request: Request): Promise<void>;
 } {
-	const { Root } = config;
-	const renderOnce = (): ReadableStream<Uint8Array> =>
+	const renderOnce = channelRenderOnce(config.Root);
+	return {
+		handleSocket: (socket, request) =>
+			driveChannelSocket(socket, request, renderOnce),
+	};
+}
+
+/** The whole-tree segment closure both full-duplex servers drive — the
+ *  SAME `<Root/>` render the fetch attach serves, fp-trailer-wrapped. */
+function channelRenderOnce(
+	Root: ComponentType,
+): () => ReadableStream<Uint8Array> {
+	return () =>
 		wrapStreamWithFpTrailer(
 			renderToReadableStream<RscPayload>(
 				{ root: <Root /> },
@@ -535,9 +548,62 @@ export function createChannelServer(config: { Root: ComponentType }): {
 			),
 			_captureCommitHandle(),
 		);
+}
+
+/** A WebTransport server session, structurally — the surface
+ *  `createWebTransportServer` needs from whatever HTTP/3 server drives it
+ *  (`@fails-components/webtransport`, a deployed edge). Both the
+ *  standardized WebTransport interface and the common Node QUIC server
+ *  expose `incomingBidirectionalStreams` as a readable of bidi streams. */
+export interface WebTransportServerSession {
+	/** Resolves when the session handshake completes; awaited before the
+	 *  first bidi stream is accepted (optional — some servers hand an
+	 *  already-ready session). */
+	readonly ready?: Promise<unknown>;
+	/** The client-initiated bidi streams — the channel uses the FIRST
+	 *  (the one the client's `WebTransportTransport.open` created). */
+	readonly incomingBidirectionalStreams: ReadableStream<ChannelDuplexStream>;
+}
+
+/**
+ * The WebTransport (HTTP/3) twin of `createChannelServer` — a channel
+ * server bound to an app's `Root`, driven by a standalone QUIC listener
+ * (Vite serves no HTTP/3, so unlike the WebSocket path there is no
+ * framework Vite plugin; see `docs/internals/channel.md` § The
+ * WebTransport transport). `handleSession(session, request)` accepts the
+ * client's first incoming bidirectional stream and drives it through
+ * `driveChannelWebTransport`: the SAME whole-tree render the fetch attach
+ * serves, tunneled over the bidi stream as opaque `\xFF`-marker bytes,
+ * reusing `driveSegmentedResponse` + the connection session unchanged.
+ *
+ * `request` is a `Request` the caller builds from the QUIC connect — its
+ * `Cookie` header supplies the scope + session binding, its URL the origin
+ * the attach's stated URL validates against (the WebTransport twin of the
+ * WebSocket upgrade request). The DEFAULT transport stays fetch — this
+ * serves the opt-in WebTransport transport ([[channel-transport]]'s
+ * `WebTransportTransport`).
+ */
+export function createWebTransportServer(config: { Root: ComponentType }): {
+	handleSession(
+		session: WebTransportServerSession,
+		request: Request,
+	): Promise<void>;
+} {
+	const renderOnce = channelRenderOnce(config.Root);
 	return {
-		handleSocket: (socket, request) =>
-			driveChannelSocket(socket, request, renderOnce),
+		handleSession: async (session, request) => {
+			if (session.ready) await session.ready;
+			const reader = session.incomingBidirectionalStreams.getReader();
+			let stream: ChannelDuplexStream;
+			try {
+				const first = await reader.read();
+				if (first.done) return;
+				stream = first.value;
+			} finally {
+				reader.releaseLock();
+			}
+			await driveChannelWebTransport(stream, request, renderOnce);
+		},
 	};
 }
 

@@ -60,6 +60,19 @@ export const ATTACH_ENDPOINT = "/__parton/live";
  *  The channel semantics are transport-agnostic; only the pipe swaps. */
 export const CHANNEL_WS_ENDPOINT = "/__parton/ws";
 
+/** WebTransport (HTTP/3) path for the full-duplex transport (the opt-in
+ *  WebTransport transport — [[channel-transport]]). ONE bidirectional
+ *  QUIC stream carries both roles: the attach statement + upstream
+ *  envelopes ride up as newline-delimited JSON on the stream's writable
+ *  half (the byte stream has no message boundaries, so a framing
+ *  delimiter the message-oriented WebSocket gives for free is added on
+ *  the UPSTREAM half only), and the SAME `\xFF`-marker downstream byte
+ *  stream rides down on the readable half (an OPAQUE TUNNEL — no
+ *  reframing). WebTransport requires HTTP/3, which Vite dev/preview does
+ *  not serve; a standalone QUIC listener drives `createWebTransportServer`
+ *  ([[channel-server]]). */
+export const CHANNEL_WT_ENDPOINT = "/__parton/wt";
+
 /** Max delivery seqs a connection may have in flight past the client's
  *  cumulative ack before the driver stops opening lanes — the server's
  *  backpressure gate (sizing rationale at [[segmented-response]]'s
