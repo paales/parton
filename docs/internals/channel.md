@@ -1026,9 +1026,21 @@ delivery/envelope timelines) is transport-independent module state, so
 
 1. **Boot on fetch.** `selectChannelTransport()` keeps fetch unless a
    `?transport=` force pins one; first content rides the fetch attach.
-2. **Background probe.** Once the fetch connection establishes (first
-   content already delivered — the upgrade costs the user nothing), a
-   BACKGROUND probe opens a speculative WS attach on a throwaway socket
+2. **Capability gate, then background probe.** The upgrade arms ONLY on
+   an app whose server ADVERTISED it serves the socket:
+   `partonChannelServer` (the Vite plugin registering the `/__parton/ws`
+   handler) sets `PARTON_WS_AVAILABLE` in the render process,
+   `renderHTML` reflects it into every document's bootstrap as
+   `self.__partonWsAvailable`, and `armTransportUpgrade` stands down
+   unless that flag is present. No plugin → no flag → no probe: a
+   plugin-less app opens ZERO sockets and logs no error. This is the
+   no-heuristic rule — the server that serves the socket advertises it;
+   the client never probes an unadvertised endpoint (a blind probe would
+   open a doomed socket the host leaves hanging, close 1006, twice).
+
+   Once advertised AND the fetch connection establishes (first content
+   already delivered — the upgrade costs the user nothing), a BACKGROUND
+   probe opens a speculative WS attach on a throwaway socket
    (`probeWebSocketTransport`). It confirms iff the server-minted `conn`
    handshake arrives over the socket — the SAME establishment signal the
    live path reads (`splitSegments`' `TAG_CONNECTION_ID`), not a bare
@@ -1044,15 +1056,16 @@ delivery/envelope timelines) is transport-independent module state, so
    watermark, so fp-skip + the layered mirror elide anything the client
    already holds, and the retransmit buffer covers reliable frames in the
    brief overlap — it IS an ordinary re-attach, only its trigger is new.
-4. **Failed/absent → stay on fetch.** A blocked or absent `/__parton/ws`
-   fails the probe (the WS handshake errors before `onopen`, or `conn`
-   never arrives within the timeout); the probe socket closes and
-   everything stays on fetch, transparently. A bounded, backed-off
-   re-probe (up to `MAX_UPGRADE_PROBES`) covers a transient stumble, then
-   it gives up for the page lifetime — never hammering a blocked
-   endpoint. An app WITHOUT `partonChannelServer` (e.g. e2e-testing) is
-   the archetypal WS-unavailable surface: the probe fails silently and
-   the page is fetch, unchanged.
+4. **Failed → stay on fetch.** An ADVERTISED endpoint that still fails to
+   confirm (the WS handshake errors before `onopen`, or `conn` never
+   arrives within the timeout — a proxy stripping the upgrade, a
+   transient) closes the probe socket and stays on fetch, transparently.
+   A bounded, backed-off re-probe (up to `MAX_UPGRADE_PROBES`) covers a
+   transient stumble, then it gives up for the page lifetime — never
+   hammering a blocked endpoint. An app WITHOUT `partonChannelServer`
+   (e.g. e2e-testing) never reaches this branch at all: unadvertised, the
+   upgrade arms no probe (step 2), so the page is fetch, unchanged, and
+   opens ZERO sockets — no doomed handshake, no console error.
 
 A `?transport=` force (`fetch`/`ws`/`webtransport`) is the user's
 explicit choice and STANDS THE UPGRADE DOWN: `isTransportForced()` is
@@ -1099,7 +1112,15 @@ upgrade alone), adapts each `ws` socket to a `ChannelSocket`, and drives
 it through the app's `handleChannelSocket` — reached via the runnable
 `rsc` environment in dev, the built RSC bundle in preview. It is ADDITIVE:
 it only serves the extra endpoint, so an app that adds it is unchanged on
-the default fetch path. Usage — add it to the app's `plugins` (the
+the default fetch path. It also ADVERTISES the endpoint: registering the
+upgrade handler sets `PARTON_WS_AVAILABLE` in the render process (shared
+across the dev module-runner environments and the preview process — a
+module global is not, hence `process.env`), which `renderHTML` reflects
+into every document's bootstrap as `self.__partonWsAvailable`. That flag
+is the auto-upgrade's capability gate (§The default, step 2): absent it,
+the client never probes, so a plugin-less app opens no socket.
+
+Usage — add it to the app's `plugins` (the
 website does, `website/vite.config.ts`):
 
 ```ts
@@ -1121,8 +1142,9 @@ and promotes itself. `?transport=ws` (or `window.__partonTransport ===
 "ws"`) FORCES it at boot instead — the whole channel rides the socket
 from the first attach, skipping the fetch-first dance
 (`selectChannelTransport()`, run once at `bootBrowser`). An app WITHOUT
-the plugin has no `/__parton/ws`, so the upgrade probe fails and the page
-stays fetch — the default suite is unaffected.
+the plugin never advertises `/__parton/ws`, so the auto-upgrade never
+probes (it opens no socket) and the page stays fetch — the default suite
+is unaffected.
 
 **Verification.** Three gates — the tunnel, the forced-WS live glue, and
 the auto-upgrade:
@@ -1156,6 +1178,14 @@ the auto-upgrade:
   fetch-endpoint POSTs and no tear/duplication. The FETCH world stays
   gated by `validate-world.mjs` (`?transport=fetch`, forced — its budgets
   are fetch-transport contracts).
+- `website/validate-no-ws.mjs` proves the CAPABILITY GATE — the inverse of
+  the auto-upgrade (`yarn build && node website/validate-no-ws.mjs`). The
+  plugin-less app is e2e-testing (the website always ships the plugin), so
+  it drives that app's preview at `/` and asserts the fetch channel
+  establishes and stays held (`data-parton-live`, a `POST /__parton/live`)
+  while ZERO `/__parton/ws` sockets ever open, no WebSocket console error
+  fires, and the served bootstrap carries no `__partonWsAvailable` flag —
+  the upgrade stood down because the server never advertised.
 
 One teardown note the live gate surfaced: a hard socket close during an
 in-flight render logs `Error: The render was aborted by the server

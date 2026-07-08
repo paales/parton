@@ -129,12 +129,25 @@ const MAX_UPGRADE_PROBES = 2
  * and everything stays on fetch, transparently — no user-visible delay,
  * bounded backed-off re-probes, then it gives up for the page lifetime.
  *
- * Stands down entirely when a `?transport=` force pins the transport (the
- * user's explicit choice) or no `WebSocket` global exists.
+ * The probe is CAPABILITY-GATED: it fires only when the server ADVERTISED
+ * it serves the socket. `partonChannelServer` (the Vite plugin registering
+ * the `/__parton/ws` upgrade handler) sets `PARTON_WS_AVAILABLE`, which
+ * `renderHTML` reflects into the bootstrap as `self.__partonWsAvailable`.
+ * No flag → no plugin → no handler; probing would open a doomed socket the
+ * host leaves hanging (close 1006) and log a console error, twice. This is
+ * the no-heuristic rule: the server that serves the socket advertises it;
+ * the client never probes an unadvertised endpoint.
+ *
+ * Stands down entirely when the endpoint is unadvertised, when a
+ * `?transport=` force pins the transport (the user's explicit choice — a
+ * forced `ws` boots WS directly, no probe), or when no `WebSocket` global
+ * exists.
  */
 function armTransportUpgrade(): void {
   if (isTransportForced()) return
   if (typeof WebSocket === "undefined") return
+  // The capability gate: probe only an endpoint the server advertised.
+  if (!(window as unknown as { __partonWsAvailable?: number }).__partonWsAvailable) return
 
   let upgraded = false
   let probing = false

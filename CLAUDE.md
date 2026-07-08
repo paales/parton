@@ -191,6 +191,14 @@ node website/validate-upgrade.mjs # AUTO-UPGRADE gate: boots the world with NO
                         # /__parton/live) then UPGRADE to the /__parton/ws
                         # socket, streaming/culling intact across the switch,
                         # zero further fetch POSTs. `yarn build:website` first.
+node website/validate-no-ws.mjs  # CAPABILITY-GATE gate: boots the PLUGIN-LESS
+                        # e2e-testing app (no partonChannelServer → the
+                        # server never advertises `self.__partonWsAvailable`)
+                        # and proves the auto-upgrade stands down — ZERO
+                        # `/__parton/ws` sockets, no WS console error, fetch
+                        # channel stays live. Run after any auto-upgrade /
+                        # capability-gate change: `yarn build` first (builds
+                        # e2e-testing, since the website always ships plugin).
 ```
 
 `yarn test` and `yarn test:e2e` cover disjoint suites — **both must

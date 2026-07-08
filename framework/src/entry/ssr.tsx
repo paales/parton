@@ -38,11 +38,21 @@ export async function renderHTML(
 
   const bootstrapScriptContent = await import.meta.viteRsc.loadBootstrapScriptContent("index")
 
+  // Advertise the WS channel endpoint to the client ONLY when this server
+  // serves it: `partonChannelServer` (the Vite plugin registering the
+  // `/__parton/ws` upgrade handler) sets `PARTON_WS_AVAILABLE` in this same
+  // OS process. The browser entry's auto-upgrade probes the socket ONLY
+  // when this flag rides the bootstrap — never an unadvertised endpoint
+  // (no-heuristic: the server that serves the socket advertises it). An app
+  // without the plugin leaves it unset, so no probe fires and no doomed
+  // socket opens. This is server-side code, so process.env is fine.
+  const wsAdvert = process.env.PARTON_WS_AVAILABLE === "1" ? "self.__partonWsAvailable=1;" : ""
+
   let htmlStream: ReadableStream<Uint8Array>
   let status: number | undefined
   try {
     htmlStream = await renderToReadableStream(<SsrRoot />, {
-      bootstrapScriptContent: options?.debugNojs ? undefined : bootstrapScriptContent,
+      bootstrapScriptContent: options?.debugNojs ? undefined : wsAdvert + bootstrapScriptContent,
       nonce: options?.nonce,
       formState: options?.formState,
       onError: onSsrRenderError,
@@ -56,7 +66,7 @@ export async function renderHTML(
         </body>
       </html>,
       {
-        bootstrapScriptContent: `self.__NO_HYDRATE=1;${options?.debugNojs ? "" : bootstrapScriptContent}`,
+        bootstrapScriptContent: `self.__NO_HYDRATE=1;${options?.debugNojs ? "" : wsAdvert + bootstrapScriptContent}`,
         nonce: options?.nonce,
         onError: onSsrRenderError,
       },

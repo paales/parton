@@ -82,6 +82,15 @@ function attachUpgrade(
   httpServer: HttpServer,
   loadHandler: () => Promise<ChannelSocketHandler>,
 ): void {
+  // Advertise that THIS server serves the socket. `renderHTML` reflects
+  // the flag into every document's bootstrap (`self.__partonWsAvailable`),
+  // and the browser entry's auto-upgrade probes `/__parton/ws` ONLY when
+  // advertised — never an unserved endpoint. process.env (not a module
+  // global): the SSR render runs in a different module-runner environment
+  // than this plugin hook but the SAME OS process (dev module-runner +
+  // preview alike), and env is what they share. Absent this plugin the
+  // flag stays unset, so a plugin-less app opens zero doomed sockets.
+  process.env.PARTON_WS_AVAILABLE = "1"
   const wss = new WebSocketServer({ noServer: true })
   httpServer.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     let pathname: string

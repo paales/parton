@@ -366,10 +366,20 @@ the upgrade reuses the one the framework runs on every keepalive/nav.
 - **Boot on fetch** (`selectChannelTransport` — default, unless
   `?transport=` forces one). First content rides fetch: instant, no wait
   on a WS handshake, no penalty when WS is blocked.
+- **Capability gate** (`armTransportUpgrade`, browser entry): the upgrade
+  arms ONLY when the server advertised it serves the socket.
+  `partonChannelServer` sets `PARTON_WS_AVAILABLE` in the render process;
+  `renderHTML` reflects it into the document bootstrap as
+  `self.__partonWsAvailable`; `armTransportUpgrade` stands down without it.
+  No plugin → no flag → no probe: a plugin-less app opens ZERO sockets (a
+  blind probe would open a doomed socket the host leaves hanging — close
+  1006, twice — and log a console error). The no-heuristic rule applied to
+  existence itself: the server that serves the socket advertises it; the
+  client never probes an unadvertised endpoint.
 - **Background probe** (`probeWebSocketTransport`, `channel-transport.ts`)
-  fires a short delay after the FETCH connection establishes: a
-  throwaway speculative WS attach that resolves `true` iff the
-  server-minted `conn` handshake arrives over the socket — the SAME
+  fires a short delay after the FETCH connection establishes (once
+  advertised): a throwaway speculative WS attach that resolves `true` iff
+  the server-minted `conn` handshake arrives over the socket — the SAME
   establishment signal the live path reads (`splitSegments`'
   `TAG_CONNECTION_ID`), NOT a bare `onopen` (which proves only the TCP
   upgrade, never that the server drove the socket — a heuristic the "no
@@ -406,10 +416,12 @@ heartbeat's single-`inFlight` invariant holds — the re-fire runs after
 undriven/absent one), the auto-upgrade end to end
 (`website/validate-upgrade.mjs` — fetch-first → socket-after, streaming +
 culling intact across the switch, zero further fetch POSTs), and the
-WS-unavailable fallback (`yarn test:e2e` on the plugin-less e2e-testing
-app — the probe fails silently, everything stays on fetch). The
-forced-fetch world (`validate-world.mjs`, now `?transport=fetch`) and
-forced-WS glue (`validate-ws.mjs`) gate the two pinned transports.
+CAPABILITY GATE (`website/validate-no-ws.mjs` on the plugin-less
+e2e-testing app — ZERO `/__parton/ws` sockets, no console error, the
+fetch channel stays held; the upgrade never arms because the server never
+advertised). The forced-fetch world (`validate-world.mjs`, now
+`?transport=fetch`) and forced-WS glue (`validate-ws.mjs`) gate the two
+pinned transports.
 
 ### P2 — WebTransport (task #22)
 
