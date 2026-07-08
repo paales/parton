@@ -2108,6 +2108,7 @@ __metadata:
   dependencies:
     "@types/react": "npm:^19.2.17"
     "@types/react-dom": "npm:^19.2.3"
+    "@types/ws": "npm:^8.18.1"
     "@vitejs/plugin-react": "npm:latest"
     "@vitejs/plugin-rsc": "patch:@vitejs/plugin-rsc@npm%3A0.5.24#~/.yarn/patches/@vitejs-plugin-rsc-npm-0.5.24-0a8431f84b.patch"
     "@vitest/browser": "npm:3.2.4"
@@ -2118,6 +2119,7 @@ __metadata:
     rsc-html-stream: "npm:^0.0.7"
     vite: "npm:^8.1.0"
     vitest: "npm:^3.1.4"
+    ws: "npm:^8.20.0"
   bin:
     parton: ./scripts/parton-cli.mjs
   languageName: unknown
@@ -3827,7 +3829,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/ws@npm:^8.0.0":
+"@types/ws@npm:^8.0.0, @types/ws@npm:^8.18.1":
   version: 8.18.1
   resolution: "@types/ws@npm:8.18.1"
   dependencies:

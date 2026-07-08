@@ -195,6 +195,14 @@ any selector-routing logic that could replace it.
    consumer stopped pulling (client-safe: a torn lane rejects only
    its own un-committed decode).
 
+   `driveSegmentedResponse` is transport-AGNOSTIC — it touches only
+   `controller.enqueue` + `demand`, never `Response` — so the opt-in
+   WebSocket transport reuses it UNCHANGED: `driveChannelSocket`
+   (`channel-server.ts`) supplies an `enqueue` that does `ws.send` and a
+   `demand` tied to the socket's `bufferedAmount` + send-flush, tunneling
+   the same segment/lane bytes down the socket ([`channel.md`](./channel.md)
+   § The transport seam).
+
    **Lane OPENING gates on the unacked delivery window too** — the
    second backpressure signal, catching what `desiredSize` can't see
    (bytes the kernel swallowed that the client never committed).

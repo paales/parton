@@ -952,11 +952,65 @@ held open for the downstream; `send` = `POST /__parton/channel`
 fire-and-forget (`keepalive: true`), `204` → `true`; `close` a no-op
 (each attach is its own fetch, torn cooperatively via the splitter's
 signal, and every envelope is a discrete request). A full-duplex
-transport (WebSocket, WebTransport) folds both roles onto ONE
-connection behind the same interface — an OPAQUE TUNNEL carrying the
-SAME marker bytes, no reframing — so nothing above this module changes.
+transport folds both roles onto ONE connection behind the same
+interface — an OPAQUE TUNNEL carrying the SAME marker bytes, no
+reframing — so nothing above this module changes.
 `getChannelTransport()` / `setChannelTransport()` select it; the
 default stays fetch until something opts in.
+
+### The WebSocket transport (opt-in)
+
+`WebSocketTransport` (`channel-transport.ts`) is the full-duplex pipe —
+ONE socket to `/__parton/ws` for both roles. `open` upgrades the socket,
+sends the `AttachStatement` as the first (text) message, and returns a
+`ReadableStream` fed by `ws.onmessage` — the server tunnels
+`driveSegmentedResponse`'s bytes down as BINARY frames, which
+`splitSegments` parses exactly as over fetch. `send` =
+`ws.send(JSON.stringify(envelope))` → `true` (reliability is above the
+seam, so no per-message `204`). `close` = `ws.close`. The signal is the
+caller's cooperative abort: post-establishment it drives `splitSegments`
+(which cancels the stream at a segment boundary → the stream's `cancel`
+closes the socket), so an abort never tears a mid-segment body — the
+same discipline the fetch transport keeps by not wiring the signal to
+`fetch`.
+
+**Server (`channel-server.ts` + the RSC entry).** The socket lives
+OUTSIDE `createRscHandler`'s Request→Response surface, so the server
+wiring is a FOURTH hook. `createChannelServer({ Root })` (the socket-side
+twin of `createRscHandler`, also exposed as `handleChannelSocket` off
+its return) drives one upgraded socket: `driveChannelSocket` reads the
+attach off the first message, binds it, and runs `driveSegmentedResponse`
+UNCHANGED against a controller whose `enqueue` is `ws.send` and whose
+`demand` reads the socket's `bufferedAmount` + send-flush (`onDrain`) —
+no timers. Each later message decodes to an envelope and applies through
+the SAME `applyEnvelopeToSession` switch the fetch endpoint uses, in a
+request scope carrying the upgrade's cookies (so a frame-url's session
+write lands where the client's cookie resolves). `_resolveBoundSession`
+is the shared binding check both transports run: the envelope must name a
+session under the current request's scope + session identity. The socket
+is inherently bound (one connection per socket), so the origin check
+lives at the handshake, not per-message.
+
+**Dev/preview wiring** is the framework Vite plugin `partonChannelServer`
+(`framework/src/vite/channel-server.ts`): it hooks the Node http server's
+`upgrade` event, accepts the `/__parton/ws` handshake (leaving Vite's HMR
+upgrade alone), adapts each `ws` socket to a `ChannelSocket`, and drives
+it through the app's `handleChannelSocket` — reached via the runnable
+`rsc` environment in dev, the built RSC bundle in preview.
+
+**Selection.** `selectChannelTransport()` (run once at `bootBrowser`)
+installs the WebSocket transport only on an explicit opt-in
+(`?transport=ws` or `window.__partonTransport === "ws"`) with a
+`WebSocket` global present. Absent the opt-in the default fetch transport
+stands, so every existing page — and the whole test suite — is
+unaffected.
+
+**Verification.** The tunnel is proven end to end over a REAL socket by
+`channel-ws.rsc.test.tsx` (the client transport + `driveChannelSocket`:
+attach, first segment, an expiry lane, and an upstream envelope whose seq
+surfaces on the `applied` marker). The Vite plugin's dev/preview upgrade
+glue is not yet exercised by an automated gate — add `partonChannelServer()`
+to an app's `plugins` and load it with `?transport=ws` to try it.
 
 ## Testing
 
@@ -997,7 +1051,13 @@ default stays fetch until something opts in.
   navigation segment — the mirror surviving navigation (held partons
   fold on the covering ack; a `dropped` delivery is evicted), the
   descendant fold excluding a nav's forced targets,
-  stale-restatement idempotence).
+  stale-restatement idempotence),
+  `channel-ws.rsc.test.tsx` (the WebSocket transport end to end over a
+  REAL socket — the client `WebSocketTransport` + the server
+  `driveChannelSocket`: the attach as the first text message, the
+  whole-tree segment + an expiry lane tunneled down as opaque binary
+  marker bytes, and an upstream envelope applied through the shared
+  switch, its seq surfacing on the `applied` marker).
 - node tier: `channel-client.test.ts` (coalescing, page-lifetime seq,
   serialization, the fallback signal, pagehide detach, the cookie
   producer — a client cookie change states `cookie` frames on the open

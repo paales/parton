@@ -300,6 +300,39 @@ surface. Add a `createChannelServer({Root})` that owns the socket:
   endpoint reachable, else fetch); the heartbeat/`fireAttach` drive the
   chosen transport's `open`. Default stays fetch until WS proven.
 
+**Shipped (two commits).** The seam landed behavior-preserving first
+(commit A: `ChannelTransport` + the extracted fetch transport, every gate
+green with byte-identical behavior), then the WebSocket transport
+additive on top (commit B). As built:
+- **Client** `WebSocketTransport` (`channel-transport.ts`) — one socket,
+  attach as the first text message, downstream binary marker bytes into a
+  `ReadableStream`, `send` = `ws.send` → `true`. The abort stays the
+  splitter's (cooperative, segment-boundary) — never wired to the socket
+  post-establishment, mirroring the fetch transport's not-to-`fetch` rule.
+- **Server** `driveChannelSocket` + `createChannelServer({Root})`
+  (`channel-server.ts` + the RSC entry's `handleChannelSocket`) — reuse
+  `driveSegmentedResponse` and `openLiveConnectionSession` UNCHANGED
+  (survey held: a `{enqueue: ws.send, desiredSize: HWM − bufferedAmount}`
+  shim + a `bufferedAmount`/`onDrain` demand is all the driver needs). The
+  frame-apply switch was extracted to `applyEnvelopeToSession` and the
+  binding check to `_resolveBoundSession`, both SHARED with the fetch
+  endpoint's `handleChannelPost` (one switch, two transports — no
+  duplicated apply logic). `ws` is a framework dependency.
+- **Dev/preview** Vite plugin `partonChannelServer`
+  (`framework/src/vite/channel-server.ts`) — the FOURTH hook onto the
+  http server's `upgrade` event, bridging into the runnable `rsc`
+  environment (dev) / the built bundle (preview).
+- **Selection** `selectChannelTransport()` at boot — opt-in
+  (`?transport=ws` / `window.__partonTransport`); default stays fetch, so
+  the whole existing suite is unaffected.
+- **Verified:** the tunnel end to end over a real socket
+  (`channel-ws.rsc.test.tsx`: attach + first segment + an expiry lane +
+  an upstream envelope's `applied` round-trip). **Not yet gate-verified:**
+  the Vite plugin's upgrade glue in a live dev/preview server (wiring
+  documented — add the plugin + `?transport=ws`). The opaque-tunnel
+  decision held: no `buildMarker`/`SegmentIterator` change, the WS carries
+  the same `\xFF`-marker bytes.
+
 ### P2 — WebTransport (task #22)
 
 Same seam, same opaque tunnel — a WebTransport session's bidirectional

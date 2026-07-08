@@ -38,6 +38,10 @@ import {
 	decodeAttachStatement,
 } from "../lib/channel-protocol.ts";
 import {
+	type ChannelSocket,
+	driveChannelSocket,
+} from "../lib/channel-server.ts";
+import {
 	bindAttachStatement,
 	handleChannelPost,
 	isSameOriginPost,
@@ -94,6 +98,7 @@ export interface RscHandlerConfig {
 
 export function createRscHandler(config: RscHandlerConfig): {
 	fetch(request: Request): Promise<Response>;
+	handleChannelSocket(socket: ChannelSocket, request: Request): Promise<void>;
 } {
 	const { Root, notFound: NotFound } = config;
 
@@ -498,7 +503,42 @@ export function createRscHandler(config: RscHandlerConfig): {
 		});
 	}
 
-	return { fetch: handler };
+	return {
+		fetch: handler,
+		handleChannelSocket: createChannelServer({ Root }).handleSocket,
+	};
+}
+
+/**
+ * The socket-side twin of `createRscHandler` — a channel server bound
+ * to an app's `Root`. `handleSocket(socket, request)` drives one
+ * upgraded WebSocket: the SAME whole-tree render the fetch attach
+ * serves, tunneled over the socket as an opaque `\xFF`-marker byte
+ * stream (`docs/internals/channel.md` § The transport seam), reusing
+ * `driveSegmentedResponse` + the connection session unchanged. A
+ * framework Vite plugin (`@parton/framework/vite/channel-server`) owns
+ * the `ws` upgrade and adapts each connection into a `ChannelSocket`
+ * for this; `createRscHandler` also exposes it as `handleChannelSocket`
+ * so the plugin can reach it off the app's existing default export. The
+ * DEFAULT transport stays fetch — this serves the opt-in WebSocket
+ * transport ([[channel-transport]]'s `WebSocketTransport`).
+ */
+export function createChannelServer(config: { Root: ComponentType }): {
+	handleSocket(socket: ChannelSocket, request: Request): Promise<void>;
+} {
+	const { Root } = config;
+	const renderOnce = (): ReadableStream<Uint8Array> =>
+		wrapStreamWithFpTrailer(
+			renderToReadableStream<RscPayload>(
+				{ root: <Root /> },
+				{ onError: onRscRenderError },
+			),
+			_captureCommitHandle(),
+		);
+	return {
+		handleSocket: (socket, request) =>
+			driveChannelSocket(socket, request, renderOnce),
+	};
 }
 
 // Production strips the message off a render error and ships only a

@@ -52,6 +52,14 @@ export const CHANNEL_ENDPOINT = "/__parton/channel";
  *  ever carries transport params for it. */
 export const ATTACH_ENDPOINT = "/__parton/live";
 
+/** WebSocket upgrade path for the full-duplex transport (the opt-in
+ *  WebSocket transport — [[channel-transport]]). ONE socket carries
+ *  both roles: the attach statement + upstream envelopes ride up as
+ *  JSON text messages, the SAME `\xFF`-marker downstream byte stream
+ *  rides down as binary messages (an OPAQUE TUNNEL — no reframing).
+ *  The channel semantics are transport-agnostic; only the pipe swaps. */
+export const CHANNEL_WS_ENDPOINT = "/__parton/ws";
+
 /** Max delivery seqs a connection may have in flight past the client's
  *  cumulative ack before the driver stops opening lanes — the server's
  *  backpressure gate (sizing rationale at [[segmented-response]]'s

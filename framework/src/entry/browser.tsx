@@ -55,7 +55,10 @@ import {
 	type AttachStatement,
 	type UrlFrame,
 } from "../lib/channel-protocol.ts";
-import { getChannelTransport } from "../lib/channel-transport.ts";
+import {
+	getChannelTransport,
+	selectChannelTransport,
+} from "../lib/channel-transport.ts";
 import type { FpUpdatesPayload } from "../lib/fp-trailer-marker.ts";
 import {
 	type DemuxedLane,
@@ -90,6 +93,11 @@ import { createRscRenderRequest } from "../runtime/request.tsx";
 import type { RscPayload } from "./rsc.tsx";
 
 export function bootBrowser(): void {
+	// Pick the channel transport before anything fires. Opt-in only
+	// (`?transport=ws` / `window.__partonTransport`); the default stays
+	// fetch, so an unopted page — and the whole test suite — is
+	// unaffected. See [[channel-transport]].
+	selectChannelTransport();
 	void main();
 }
 

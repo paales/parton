@@ -957,11 +957,54 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 	} catch {
 		return new Response(null, { status: 400 });
 	}
-	const session = sessions.get(envelope.connection);
+	const session = _resolveBoundSession(envelope.connection);
 	if (!session) return new Response(null, { status: 404 });
-	if (getScope() !== session.scope) return new Response(null, { status: 404 });
-	if ((getSessionId() ?? "") !== session.boundSessionId)
-		return new Response(null, { status: 404 });
+	const applied = applyEnvelopeToSession(session, envelope, request.url);
+	return new Response(null, { status: applied.status });
+}
+
+/**
+ * Resolve the session an envelope addresses, gated by its binding: the
+ * globally-unique connection id must exist AND its recorded scope +
+ * session identity must match the CURRENT request's (`getScope()` /
+ * `getSessionId()`, read from the ALS). A miss — gone, or a scope /
+ * cookie mismatch — returns `null`, which callers answer as `404`
+ * (indistinguishable from "connection gone", so a hostile beacon can't
+ * probe which of the two it hit). Both transports resolve through here:
+ * the fetch transport's `handleChannelPost` above, and the WebSocket
+ * handler ([[channel-server]]) — the socket is inherently bound, but it
+ * still proves the envelope names ITS session's id under the same
+ * scope + cookie the attach recorded.
+ */
+export function _resolveBoundSession(
+	connectionId: string,
+): ConnectionSession | null {
+	const session = sessions.get(connectionId);
+	if (!session) return null;
+	if (getScope() !== session.scope) return null;
+	if ((getSessionId() ?? "") !== session.boundSessionId) return null;
+	return session;
+}
+
+/**
+ * Apply a decoded, session-bound envelope: validate any url/warm target
+ * same-origin, run the in-order frame-apply pass, advance the upstream
+ * watermark, and wake the driver. This is the SINGLE frame-apply
+ * switch — both transports reach it. The fetch transport's
+ * `handleChannelPost` calls it after its origin/scope/cookie binding
+ * checks (the envelope arrived as a separate POST, so it must re-prove
+ * its binding); the WebSocket transport's per-message handler
+ * ([[channel-server]]) calls it directly — the socket is inherently
+ * bound to its one session, so it only checks the envelope names that
+ * connection. Returns the status the caller answers: `400` for a
+ * cross-origin url/warm target (a protocol violation — nothing from the
+ * envelope applied), else `204`.
+ */
+export function applyEnvelopeToSession(
+	session: ConnectionSession,
+	envelope: ChannelEnvelope,
+	requestUrl: string,
+): { status: number } {
 	// Same-origin validation for url and warm frames, BEFORE anything
 	// applies: a cross-origin target is a protocol violation (`400`,
 	// nothing from the envelope applied) — the channel states this
@@ -971,10 +1014,10 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 	for (const frame of envelope.frames) {
 		if (frame.kind !== "url" && frame.kind !== "warm") continue;
 		try {
-			if (new URL(frame.url, request.url).origin !== new URL(request.url).origin)
-				return new Response(null, { status: 400 });
+			if (new URL(frame.url, requestUrl).origin !== new URL(requestUrl).origin)
+				return { status: 400 };
 		} catch {
-			return new Response(null, { status: 400 });
+			return { status: 400 };
 		}
 	}
 	// One in-order pass: frame order within the envelope is the applied
@@ -1009,7 +1052,7 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 			case "warm":
 				// The wake is the park point's cue — an explicit preload
 				// intent should warm promptly, not at the next natural wake.
-				applyWarmFrame(session, envelope.seq, frame.url, request.url);
+				applyWarmFrame(session, envelope.seq, frame.url, requestUrl);
 				wakeNeeded = true;
 				break;
 			case "cookie":
@@ -1021,14 +1064,14 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 				break;
 			case "url":
 				if (frame.frame === undefined) {
-					applyUrlFrame(session, envelope.seq, frame, request.url);
+					applyUrlFrame(session, envelope.seq, frame, requestUrl);
 				} else {
 					applyFrameUrlFrame(
 						session,
 						envelope.seq,
 						frame,
 						frame.frame,
-						request.url,
+						requestUrl,
 					);
 				}
 				wakeNeeded = true;
@@ -1047,7 +1090,7 @@ export async function handleChannelPost(request: Request): Promise<Response> {
 		if (session.appliedSeq > session.announcedAppliedSeq) wakeNeeded = true;
 	}
 	if (wakeNeeded) for (const wake of [...session.flipWakes]) wake();
-	return new Response(null, { status: 204 });
+	return { status: 204 };
 }
 
 function applyVisibleFrame(
