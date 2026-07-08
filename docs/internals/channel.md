@@ -545,10 +545,19 @@ The pieces:
 - **Milestones ride the covering segment.** A channel-routed fire's
   `streaming` resolves when a payload segment whose as-of covers its
   navigation point COMMITS; `finished` when that segment SETTLES
-  (its trailers resolve). The commit mode follows the covered
-  callers: any covering fire that asked for the atomic swap
-  (`streaming: false`) makes the segment a transition commit; with
-  no covering fire the live stream's default raw commit stands. A
+  (its trailers resolve). The commit mode follows the NEWEST covered
+  navigation (`_channelNavPrefersTransition`): if the newest pending
+  statement at or below the segment's as-of asked for the atomic swap
+  (`streaming: false`) the segment is a transition commit; a streaming
+  statement (the default for a window navigation) leaves the live
+  stream's raw commit in place. Consulting the NEWEST — not "any
+  covered pending fire" — is load-bearing: a superseded atomic force
+  (an on-mount `defer` refetch whose page was navigated away from
+  before its own segment ran, so its `streaming: false` record lingers
+  unsettled) must NOT drag the next window navigation into a
+  withholding transition — that is what makes a destination "stop
+  streaming" on a second navigation. With no covered navigation the
+  live stream's default raw commit stands. A
   forced target's fresh bytes can trail `finished` by one lane — the
   lane path is the framework's own freshness delivery, moments
   later. A window-force lane whose caller asked for STREAMING commits

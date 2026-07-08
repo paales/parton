@@ -38,6 +38,7 @@ import {
 	_channelNavAvailable,
 	_channelNavigate,
 	_channelNavPoint,
+	_channelNavPrefersStreaming,
 	_channelNavPrefersTransition,
 	_channelNavSegmentCommitted,
 	_channelNavSegmentSettled,
@@ -335,6 +336,47 @@ describe("milestones ride the covering segment", () => {
 		expect(_channelNavPrefersTransition(1)).toBe(false)
 		_channelNavSegmentCommitted(1)
 		_channelNavSegmentSettled(1)
+	})
+
+	it("a superseded on-mount force never drags the next window nav into a transition", async () => {
+		_channelEstablished("c1")
+		// A streaming window navigation (navPoint 1).
+		const nav1 = _channelNavigate({
+			url: "/defer-demo",
+			intent: "push",
+			streaming: true,
+		})
+		raf()
+		await settle()
+		// The destination's on-mount `defer` fires a same-page atomic force
+		// (`streaming: false`, navPoint 2). Its covering whole-tree segment is
+		// deferred behind the streaming nav's drain — so navigating away before
+		// that drain leaves this record pending, never covered by a segment.
+		const force = _channelNavigate({
+			url: "/defer-demo?__force=x",
+			intent: "silent",
+			streaming: false,
+		})
+		raf()
+		await settle()
+		// The genuine navigation AWAY — another streaming window nav (navPoint 3).
+		const nav2 = _channelNavigate({ url: "/", intent: "push", streaming: true })
+		raf()
+		await settle()
+		if (!nav1 || !force || !nav2) throw new Error("expected channel routing")
+
+		// The nav-away's covering segment (as-of 3) commits PROGRESSIVELY: it
+		// is a `streaming: true` window navigation. The lingering atomic force
+		// (navPoint 2, still unsettled) must NOT drag it into a withholding
+		// transition — the NEWEST navigation at or below the as-of decides, and
+		// that is the streaming nav. The two commit-mode reads stay complements.
+		expect(_channelNavPrefersTransition(3)).toBe(false)
+		expect(_channelNavPrefersStreaming(3)).toBe(true)
+
+		// A segment as-of the force's OWN point still reads atomic — there the
+		// force is the newest statement, so its content swaps without a flash.
+		expect(_channelNavPrefersTransition(2)).toBe(true)
+		expect(_channelNavPrefersStreaming(2)).toBe(false)
 	})
 
 	it("an aborted signal rejects the record with AbortError", async () => {

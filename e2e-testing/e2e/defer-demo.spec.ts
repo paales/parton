@@ -101,12 +101,87 @@ test.describe("Partial defer demo", () => {
       timeout: 4000,
     })
 
-    // No partial was torn into its error card, and no "Connection
-    // closed." reached the console.
+    // The streaming commit mode must survive REPEATED full navigations —
+    // the second and third away-and-back behave like the first, never
+    // reverting to a withholding transition and never tearing. On a settled
+    // return the mirror restores the unchanged-fp slow parton, so its
+    // content lands; the invariant under test is that the navigation always
+    // delivers and never surfaces an error card.
+    for (const round of [2, 3]) {
+      await page.evaluate(() => {
+        window.navigation.navigate("/")
+      })
+      await page.waitForFunction(() => location.pathname === "/")
+      await page.evaluate(() => {
+        window.navigation.navigate("/defer-demo")
+      })
+      await expect(page.locator('[data-testid="slow-content"]')).toBeVisible({
+        timeout: 4000,
+      })
+      expect(
+        await page.getByText("failed to render").count(),
+        `away-and-back nav ${round} must not tear`,
+      ).toBe(0)
+    }
+
+    // No partial was torn into its error card across ANY of the
+    // navigations, and no "Connection closed." reached the console.
     expect(await page.getByText("failed to render").count()).toBe(0)
     expect(
       consoleErrors.filter((e) => e.includes("Connection closed")),
       "a superseded streaming nav must not tear its committed shell",
+    ).toEqual([])
+  })
+
+  test("rapid nav: an interrupted stream's leftover force never stops the return re-streaming", async ({
+    page,
+  }) => {
+    // NAV 1's on-mount `defer` fires a same-URL `?__force=` refetch — a
+    // `streaming: false` statement. If a rapid away-nav interrupts the
+    // stream BEFORE that force's segment runs (it is deferred behind the
+    // streaming render's drain), its record lingers unsettled. The next
+    // window navigation must still commit PROGRESSIVELY: the commit-mode
+    // read consults the NEWEST pending navigation, so the leftover atomic
+    // force can no longer drag it into a withholding transition. The parked
+    // shell is still on its fallback (the stream never finished), so the
+    // return RE-STREAMS — fallback fast, then fresh content — never stranded.
+    const consoleErrors: string[] = []
+    page.on("console", (m) => {
+      if (m.type() === "error") consoleErrors.push(m.text())
+    })
+
+    await page.goto("/")
+    await waitForLiveConnection(page)
+
+    // Interrupt the very first streaming nav mid-flight (before the ~1.5s
+    // body resolves), so its on-mount force is left unsettled.
+    await page.evaluate(() => {
+      window.navigation.navigate("/defer-demo")
+    })
+    await expect(page.locator('[data-testid="slow-fallback"]')).toBeVisible({
+      timeout: 2000,
+    })
+    await page.waitForTimeout(400)
+    await page.evaluate(() => {
+      window.navigation.navigate("/")
+    })
+    await page.waitForFunction(() => location.pathname === "/")
+
+    // The return: it must still stream — fallback then fresh content.
+    await page.evaluate(() => {
+      window.navigation.navigate("/defer-demo")
+    })
+    await expect(page.locator('[data-testid="slow-fallback"]')).toBeVisible({
+      timeout: 2000,
+    })
+    await expect(page.locator('[data-testid="slow-content"]')).toBeVisible({
+      timeout: 4000,
+    })
+
+    expect(await page.getByText("failed to render").count()).toBe(0)
+    expect(
+      consoleErrors.filter((e) => e.includes("Connection closed")),
+      "the interrupted nav's leftover force must not tear the return",
     ).toEqual([])
   })
 

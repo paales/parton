@@ -717,16 +717,6 @@ export function _channelNavigate(init: {
 	return { streaming, finished };
 }
 
-/** True when a covering commit (`asOf` ≥ some pending record's navSeq)
- *  should land as a TRANSITION commit — any covered caller asked for
- *  the atomic swap (`streaming: false`). No covered record → the live
- *  stream's default raw commit. */
-export function _channelNavPrefersTransition(asOf: number): boolean {
-	return pendingNavRecords.some(
-		(r) => !r.settled && r.navSeq <= asOf && !r.streaming,
-	);
-}
-
 /** The commit-mode wish per navigation point, kept for the connection's
  *  lifetime (not just while the record is pending): a selector nav's
  *  forced lanes commit AFTER the covering whole-tree segment settles —
@@ -748,6 +738,33 @@ export function _channelNavPrefersStreaming(asOf: number): boolean {
 		}
 	}
 	return bestSeq >= 0 && streaming;
+}
+
+/** True when a covering commit should land as a TRANSITION (atomic
+ *  swap) rather than a progressive `setPayloadRaw`. The NEWEST unsettled
+ *  navigation at or below `asOf` decides: that statement is what the
+ *  client is now displaying, so its commit-mode wish (`streaming: false`
+ *  → transition) is the one that matters. Consulting the newest — not
+ *  "any covered pending record" — is load-bearing: an on-mount `defer`
+ *  force (`streaming: false`) whose page was navigated AWAY from before
+ *  its own segment ran leaves an unsettled record behind (it is retired
+ *  only at a covering segment's settle, one step after the next nav's
+ *  commit-mode is read). Counting that superseded record would drag the
+ *  next window navigation — a `streaming: true` statement — into a
+ *  withholding transition, so its destination stops streaming. Reads
+ *  the pending records (retired at settle), so a landed navigation no
+ *  longer shapes a later segment's mode. No covered navigation → the
+ *  live stream's default raw commit. */
+export function _channelNavPrefersTransition(asOf: number): boolean {
+	let bestSeq = -1;
+	let streaming = true;
+	for (const record of pendingNavRecords) {
+		if (record.settled) continue;
+		if (record.navSeq > asOf || record.navSeq <= bestSeq) continue;
+		bestSeq = record.navSeq;
+		streaming = record.streaming;
+	}
+	return bestSeq >= 0 && !streaming;
 }
 
 /** A payload segment rendered as-of `asOf` COMMITTED on the live
