@@ -156,3 +156,5 @@ jobs:
         run: node website/validate-world.mjs
       - name: Validate WebSocket transport
         run: node website/validate-ws.mjs
+      - name: Validate fetch→WebSocket auto-upgrade
+        run: node website/validate-upgrade.mjs
