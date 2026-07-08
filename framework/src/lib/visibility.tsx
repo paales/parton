@@ -336,6 +336,7 @@ export function _resetVisibilityController(): void {
 	measured = false
 	measurementWaiters = []
 	fullSyncPending = false
+	sweepScheduled = false
 	registerChannelProducer(visibilityProducer)
 	onChannelEstablished(armEstablishmentSync)
 }
@@ -369,11 +370,29 @@ const reattachHandles = new Map<string, Set<() => void>>()
  * track at least one connected node are left alone, so a sweep is
  * O(observers) map walks and re-fires IntersectionObserver callbacks
  * only for boundaries that were unmeasurable before it.
+ *
+ * Those signals fire in BURSTS — a scroll's flip wave mounts a whole
+ * column of observers in one commit, each a sweep request — so the
+ * requests coalesce to ONE sweep per microtask (`sweepScheduled`).
+ * Without it the wave is O(mounts × observers); with it, O(observers),
+ * run once after the commit's DOM has fully materialized. A microtask
+ * (not a timer) keeps it in the same frame, and the re-observe's
+ * IntersectionObserver callback is async either way, so nothing waits
+ * longer for content to become measurable.
  */
+let sweepScheduled = false
+
 export function _sweepEmptyVisibilityObservers(): void {
-	for (const handles of reattachHandles.values()) {
-		for (const handle of handles) handle()
-	}
+	// One sweep per microtask — a commit's burst of requests collapses to
+	// a single O(observers) walk (see the coalescing note above).
+	if (sweepScheduled) return
+	sweepScheduled = true
+	queueMicrotask(() => {
+		sweepScheduled = false
+		for (const handles of reattachHandles.values()) {
+			for (const handle of handles) handle()
+		}
+	})
 }
 
 /**

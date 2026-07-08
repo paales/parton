@@ -580,11 +580,15 @@ lifecycle:
     unresolved Flight lazies) re-attaches when content arrives —
     `_sweepEmptyVisibilityObservers()`, run on the framework's
     content-arrival signals: a cullable boundary's observer mounting
-    and every `PartialsClient` commit. React's `FragmentInstance`
-    attaches observers to later PLACEMENTS on its own, but not to
-    hydration ADOPTIONS — without the sweep, such a parton never
-    reports, the session's set never contains it, and everything the
-    server parks behind it stays parked (the world's
+    and every `PartialsClient` commit. Those signals fire in BURSTS
+    (a scroll's flip wave mounts a whole column of observers in one
+    commit), so the sweep COALESCES to one run per microtask — the
+    burst is O(observers), not O(mounts × observers), and it runs
+    once after the commit's DOM has fully materialized. React's
+    `FragmentInstance` attaches observers to later PLACEMENTS on its
+    own, but not to hydration ADOPTIONS — without the sweep, such a
+    parton never reports, the session's set never contains it, and
+    everything the server parks behind it stays parked (the world's
     frozen-after-refresh bug: the seed quad tiles hydrate exactly
     like this). Covered by
     `visibility-late-content.browser.test.tsx` (real Chromium,
