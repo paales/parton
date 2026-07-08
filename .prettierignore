@@ -1,0 +1,10 @@
+.yarn/
+.claude/
+**/dist/
+**/.vite/
+**/test-results/
+**/*-env.d.ts
+# vendored shadcn (upstream; mirrors eslint.config.js ignores)
+copies/src/components/ai-elements/
+copies/src/components/ui/
+copies/src/hooks/use-mobile.ts

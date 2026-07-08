@@ -2,11 +2,11 @@ import tsParser from "@typescript-eslint/parser"
 import reactHooks from "eslint-plugin-react-hooks"
 
 // ESLint is scoped to ONE job here: the React Compiler / rules-of-hooks
-// diagnostics, which Biome doesn't implement. The "recommended-latest" preset
-// of eslint-plugin-react-hooks bundles rules-of-hooks + exhaustive-deps plus
-// the compiler rules (purity, refs, immutability, set-state-in-render, …) that
-// tell you why a component can't be safely compiled. Biome remains the
-// formatter and general linter; it is not replaced.
+// diagnostics. The "recommended-latest" preset of eslint-plugin-react-hooks
+// bundles rules-of-hooks + exhaustive-deps plus the compiler rules (purity,
+// refs, immutability, set-state-in-render, …) that tell you why a component
+// can't be safely compiled. Formatting is Prettier's job (see .prettierrc);
+// there is no separate general linter.
 const reactHooksRecommended = reactHooks.configs.flat["recommended-latest"]
 
 export default [

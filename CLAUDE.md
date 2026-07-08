@@ -171,7 +171,8 @@ yarn test:node          # node tier only (jsdom) — fast, skips typecheck
 yarn test:rsc           # rsc tier only (in-process Flight)
 yarn test:browser       # real Chromium via Vitest browser mode
 yarn test:e2e           # Playwright, e2e-testing/e2e/ (auto-starts dev servers)
-yarn lint               # ESLint: React Compiler + rules-of-hooks (advisory; Biome formats)
+yarn lint               # ESLint: React Compiler + rules-of-hooks (advisory)
+yarn format             # Prettier --write (config in .prettierrc)
 yarn bench:server       # warm-tick CPU benchmark — see bench/README.md
 node website/validate-world.mjs  # FETCH-transport world gate (prod build):
                         # forces ?transport=fetch (its byte/beacon budgets
@@ -329,17 +330,15 @@ case in this codebase where the History API is the right tool.
   plumbing. Never introduce an app-placed provider the app must mount;
   keep such components framework-internal (out of the public barrel).
 
-### Formatting — match the file, never bulk-format
+### Formatting — Prettier owns it
 
-The repo is **not** Biome-format-clean. `biome.json` enables the
-formatter, but much of the tree predates it and the style is mixed
-*file by file*: the apps (`website/`, `e2e-testing/`) and some
-`framework/src/lib` files (e.g. `partial.tsx`) are 2-space /
-no-semicolon, while others (`partial-cache.ts`, `visibility.tsx`) are
-tab / semicolon. `biome check --write` across files churns 100+ lines
-of untouched code. Never bulk-format — match the style of the specific
-file you are editing. `yarn lint` is ESLint (advisory); there is no
-enforced format gate.
+Formatting is Prettier, config in `.prettierrc` (`printWidth: 100`,
+`semi: false`; 2-space and double quotes by default). It runs on save
+and via `yarn format` (`yarn format:check` verifies). Let Prettier
+format — don't hand-tune spacing or wrapping against it, and don't add
+a second formatter. `.prettierignore` holds out the vendored shadcn
+under `copies/` and the generated `*-env.d.ts` files. `yarn lint` is
+ESLint, scoped to the React Compiler / rules-of-hooks diagnostics only.
 
 ### Research mode — shave to the core
 

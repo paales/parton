@@ -171,7 +171,7 @@ export type PartialOptions<V> = Pick<
  *  FULL render; a culled instance never touches them). `any` (the
  *  options-literal flow, where V isn't inferable) stays fully loose. */
 export type CullProps<V> = 0 extends 1 & V
-  ? // biome-ignore lint/suspicious/noExplicitAny: propagating an explicit any
+  ? // propagating an explicit any
     any
   : {
       [K in keyof V as V[K] extends ResolvedCell<unknown> ? never : K]: V[K]
@@ -227,7 +227,7 @@ interface InternalSpecConfig<V> {
    *  match-string param flow) — the config's callbacks can't be
    *  contextually typed by it without a cycle; annotate the seed's
    *  parameter and the skeleton's props at their definition sites. */
-  // biome-ignore lint/suspicious/noExplicitAny: V flows FROM the options literal — see above
+  // V flows FROM the options literal — see above
   cull?: CullConfig<any>
   /** Refetch labels (whitespace string or array). First label is the
    *  spec catalog id; additional labels are extra fan-out targets.
@@ -1192,7 +1192,7 @@ function cullPropsOf(
   return out
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: erased-generic call surface — V is unknowable here
+// erased-generic call surface — V is unknowable here
 function buildSkeletonElement(
   cull: CullConfig<any>,
   props: Record<string, unknown>,
