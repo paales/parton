@@ -55,6 +55,7 @@ import {
 	type AttachStatement,
 	type UrlFrame,
 } from "../lib/channel-protocol.ts";
+import { getChannelTransport } from "../lib/channel-transport.ts";
 import type { FpUpdatesPayload } from "../lib/fp-trailer-marker.ts";
 import {
 	type DemuxedLane,
@@ -242,39 +243,16 @@ async function main() {
 		void (async () => {
 			let streamingResolved = false;
 			try {
-				// Network → HTTP → decode. Each failure mode maps to a typed
-				// NavigationError kind so consumers can branch on it without
-				// string matching. AbortError stays untouched — it's a normal
-				// lifecycle signal, not a failure.
-				//
-				// NOTE: `signal` is deliberately NOT passed to `fetch`.
-				// Aborting the fetch errors `response.body` mid-read, which
-				// tears a partially-committed Flight tree. Instead the signal
-				// goes to `splitSegments` below, which aborts cooperatively at
-				// a SEGMENT BOUNDARY — the in-flight segment finishes, then
-				// iteration stops and the reader is cancelled.
-				let response: Response;
-				try {
-					response = await fetch(ATTACH_ENDPOINT, {
-						method: "POST",
-						headers: { "content-type": "application/json" },
-						body: JSON.stringify(statement),
-					});
-				} catch (err) {
-					if (err instanceof Error && err.name === "AbortError") throw err;
-					throw new NavigationError({
-						kind: "network",
-						url: ATTACH_ENDPOINT,
-						cause: err,
-					});
-				}
-				if (!response.ok || !response.body) {
-					throw new NavigationError({
-						kind: "http",
-						url: ATTACH_ENDPOINT,
-						status: response.status,
-					});
-				}
+				// Open the downstream through the active channel transport
+				// ([[channel-transport]]) — the default fetch transport POSTs
+				// the statement to `/__parton/live` and hands back the held
+				// body, mapping network / HTTP failures to typed
+				// NavigationErrors (AbortError stays untouched, a normal
+				// lifecycle signal). `signal` is deliberately NOT wired to the
+				// request — aborting it mid-read tears a partially-committed
+				// Flight tree — it goes to `splitSegments` below, which aborts
+				// cooperatively at a SEGMENT BOUNDARY.
+				const { body } = await getChannelTransport().open(statement, signal);
 				// Decode + commit one per-parton lane. The body carries the
 				// lane's Flight payload plus its own fp trailer; decode fully
 				// (the lane closed at its `muxend`, so all bytes are here),
@@ -458,7 +436,7 @@ async function main() {
 					// handshake — the server-minted connection id, established
 					// with the channel transport the moment it is read.
 					for await (const segment of splitSegments(
-						response.body,
+						body,
 						signal,
 						onWireEntry,
 					)) {

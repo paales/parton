@@ -6,10 +6,11 @@
  *
  *   - **Envelope assembly + seq.** Each flush collects at most one
  *     frame per registered producer, wraps them in one
- *     `{connection, seq, frames}` envelope, and POSTs it fire-and-
- *     forget (`keepalive: true`, so an in-flight envelope survives a
- *     page unload). `seq` is per-connection monotonic, restarting at
- *     establishment.
+ *     `{connection, seq, frames}` envelope, and hands it to the active
+ *     channel transport ([[channel-transport]]) — the default fetch
+ *     transport POSTs it fire-and-forget (`keepalive: true`, so an
+ *     in-flight envelope survives a page unload). `seq` is
+ *     per-connection monotonic, restarting at establishment.
  *   - **Coalescing + serialization.** Flushes coalesce per animation
  *     frame and serialize — one envelope in flight; a flush requested
  *     mid-flight re-fires when it lands. Producers therefore batch
@@ -69,12 +70,11 @@
  */
 
 import {
-	CHANNEL_ENDPOINT,
-	type ChannelEnvelope,
 	type ChannelFrame,
 	UNACKED_DELIVERY_WINDOW,
 	type UrlFrame,
 } from "./channel-protocol.ts";
+import { getChannelTransport } from "./channel-transport.ts";
 import {
 	TAG_CONNECTION_ID,
 	TAG_DELIVERY_SEQ,
@@ -1606,7 +1606,7 @@ async function flush(): Promise<void> {
 		try {
 			for (const entry of [...retransmitBuffer]) {
 				if (_getLiveConnectionId() !== connection) return;
-				const ok = await postEnvelope({
+				const ok = await getChannelTransport().send({
 					connection,
 					seq: entry.seq,
 					frames: entry.frames,
@@ -1656,7 +1656,7 @@ async function flush(): Promise<void> {
 		if (reliableFrames.length > 0) {
 			retransmitBuffer.push({ seq, frames: reliableFrames });
 		}
-		const delivered = await postEnvelope({
+		const delivered = await getChannelTransport().send({
 			connection,
 			seq,
 			frames: carried.map((c) => c.frame),
@@ -1711,23 +1711,6 @@ async function flush(): Promise<void> {
 	}
 }
 
-/** POST one envelope. `true` iff the server applied it (`204`);
- *  `false` on any other answer or a network failure. */
-async function postEnvelope(envelope: ChannelEnvelope): Promise<boolean> {
-	try {
-		const res = await fetch(CHANNEL_ENDPOINT, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(envelope),
-			// Fire-and-forget: let an in-flight envelope survive a page unload.
-			keepalive: true,
-		});
-		return res.status === 204;
-	} catch {
-		return false;
-	}
-}
-
 /** Send the explicit close for the open connection (if any) and clear
  *  the published id — a bfcache restore re-establishes via the
  *  heartbeat's next fire. The keepalive fetch is the one transport
@@ -1736,7 +1719,7 @@ function sendDetach(): void {
 	const connection = _getLiveConnectionId();
 	if (connection === null) return;
 	_setLiveConnectionId(null);
-	void postEnvelope({
+	void getChannelTransport().send({
 		connection,
 		seq: ++envelopeSeq,
 		frames: [{ kind: "detach" }],

@@ -921,6 +921,43 @@ producer's statement and the envelope on the wire:
   it (§The never-acked degrade). `_channelAppliedWatermark()` is the
   heard upstream watermark the next attach statement presents.
 
+## The transport seam — one pipe, two roles
+
+The byte/message plumbing under the channel is pluggable behind one
+interface (`framework/src/lib/channel-transport.ts`), so the channel
+SEMANTICS above — frames, delivery seqs, acks, the connection-session
+mirror — stay transport-agnostic while only the pipe swaps:
+
+```
+interface ChannelTransport {
+  open(statement, signal?): Promise<{ body: ReadableStream<Uint8Array> }>  // downstream
+  send(envelope): Promise<boolean>                                          // upstream
+  close(): void
+}
+```
+
+- **downstream** — `open` hands back a byte stream of the same
+  `\xFF`-marker wire the splitter (`splitSegments`) already parses. The
+  browser entry (`consumeLiveStream`) reads it and never names a
+  transport.
+- **upstream** — `send` delivers one coalesced envelope; the boolean is
+  the whole contract ("the server will see it"). Reliability lives
+  ABOVE the seam (the retransmit buffer + the downstream `applied`
+  marker — §Delivery is evidenced), so a transport that can't answer
+  per-message returns `true`.
+- **close** — release whatever the transport holds.
+
+The default is the **fetch transport**: `open` = `POST /__parton/live`
+held open for the downstream; `send` = `POST /__parton/channel`
+fire-and-forget (`keepalive: true`), `204` → `true`; `close` a no-op
+(each attach is its own fetch, torn cooperatively via the splitter's
+signal, and every envelope is a discrete request). A full-duplex
+transport (WebSocket, WebTransport) folds both roles onto ONE
+connection behind the same interface — an OPAQUE TUNNEL carrying the
+SAME marker bytes, no reframing — so nothing above this module changes.
+`getChannelTransport()` / `setChannelTransport()` select it; the
+default stays fetch until something opts in.
+
 ## Testing
 
 - rsc tier: `channel-endpoint.rsc.test.tsx` (decode — incl. the
