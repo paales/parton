@@ -144,6 +144,5 @@ test("server warm-tick benchmark", async () => {
   if (unfaithful.length > 0) {
     throw new Error(`correctness gate FAILED for: ${unfaithful.map((r) => r.name).join(", ")}`)
   }
-}, // Plain timeout (ms): ~14 scenarios × (warmup + measure) renders, with
-// N=1000 ticks at tens of ms each, runs minutes — far past the 5s default.
+}, // N=1000 ticks at tens of ms each, runs minutes — far past the 5s default. // Plain timeout (ms): ~14 scenarios × (warmup + measure) renders, with
 600_000)

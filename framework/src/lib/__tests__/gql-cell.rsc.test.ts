@@ -53,23 +53,21 @@ describe("gqlCell — doc mode", () => {
   })
 
   it("honours an explicit id override", () => {
-    const doc =
-      graphql(`
-        query Whatever {
-          foo
-        }
-      `)
+    const doc = graphql(`
+      query Whatever {
+        foo
+      }
+    `)
     const cell = gqlCell(fakeClient(null), doc, { id: "custom.id" })
     expect(cell.id).toBe("custom.id")
   })
 
   it("throws on an anonymous operation with no explicit id", () => {
-    const doc =
-      graphql(`
-        query {
-          foo
-        }
-      `)
+    const doc = graphql(`
+      query {
+        foo
+      }
+    `)
     expect(() => gqlCell(fakeClient(null), doc)).toThrow(/anonymous operation/)
   })
 
