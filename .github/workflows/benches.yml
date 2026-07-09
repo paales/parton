@@ -1,12 +1,10 @@
 name: Benches
 
-# Slow and machine-variant, so kept OFF the per-PR path: master pushes,
+# Slow and machine-variant, so kept OFF the per-PR path: main pushes,
 # a nightly run, and manual dispatch only.
 on:
   push:
-    branches: [master]
-  schedule:
-    - cron: "0 6 * * *"
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
