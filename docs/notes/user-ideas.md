@@ -79,3 +79,37 @@ Streaming vs Transition
 
 Cells
 Actions + Atomic cells
+
+---
+
+We're choosing the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API) as our base. This allows us to intercept communication and handle it in ways that the framework likes, without breaking navigation.
+
+We are using a single world model where every navigation, intersection (using IntersctionObserver), viewport size, configurations are streamed to the server in real time. We keep this UI State in a tiny box on the server. We know what you see, we know what you have in cache.
+
+Each new UI State update is a _full_ rerender of the whole world. We send this new world over the wire with React's server component wire format. ~~Each block/piece/area/part..~~ Each _parton_ can have a simple match wheter it even tries to render using the [URL Pattern API](https://developer.mozilla.org/en-US/docs/Web/API/URL_Pattern_API) renders itsself or not. We can do this incredibly fast and we can easily do this for each user UI state change. By doing smart tracking of how each parton reads our server hooks like cookie, searchParam, header, pathname, param, match and session, time, staleUnitl we know exactly what to do when a one of these pieces of information changes.
+
+The whole idea of React is; Rerender the world, but now more efficient. This is exactly what we are doing over the wire. We do not need to rerender something outside of the viewport, on a different page, outside of our 'view'.
+
+But to get a clear picture of what we have we need to understand a building block that we call 'parton'. A parton is a wrapper around a regular server component.
+
+```tsx
+import { parton } from "@parton/framework"
+
+return parton(
+  async function LiveLeafRender(_: RenderArgs) {
+    renderCount++
+    const v = await localCell("value", { shape: "number", initial: 0 })
+    return <span data-leaf={i}>{String(v.value)}</span>
+  },
+  { selector: `#${prefix}leaf-${i}` },
+)
+```
+
+---
+
+---
+
+Choosing for a persistent connection between server and client:
+We've seen many products that are very chatty over the wire. Sending HTML down, communicating over API's. Sending all the communicated information to a third party analytics tool. Debugging tools like sentry send the information over the wire at a staggering rate.
+
+Persistent connections are cheap and allow us to communicate at a very quick rate. Parton uses a single down stream and a single upstreamm, using websockets or regular http fetch.
