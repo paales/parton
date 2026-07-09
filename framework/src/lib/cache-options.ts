@@ -13,7 +13,7 @@
  *   request misses.
  * - `staleWhileRevalidate`: additional seconds past `maxAge` during
  *   which stale bytes are served while a background refresh runs.
- * - `slowSource` (dev only): emit stored bytes in artificially
+ * - `__slowSource` (dev only): emit stored bytes in artificially
  *   throttled chunks so a hit-path replay exercises Suspense
  *   streaming end-to-end. Used by `cache-streaming-demo.tsx`.
  *
@@ -35,5 +35,5 @@ export interface CacheOptions {
    * into the host's outer render. Not for production: every hit pays
    * the artificial latency.
    */
-  slowSource?: { perChunkMs: number; chunkBytes?: number }
+  __slowSource?: { perChunkMs: number; chunkBytes?: number }
 }

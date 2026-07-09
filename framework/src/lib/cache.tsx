@@ -217,11 +217,11 @@ async function replayEntry(entry: Entry, options: CacheOptions): Promise<ReactNo
   // resolve it even though the cached spec's body was short-circuited.
   for (const hole of entry.holes) registerPartial(hole.partialId, hole.snapshot)
 
-  const feed = options.slowSource
+  const feed = options.__slowSource
     ? slowBytesToStream(
         entry.bytes,
-        options.slowSource.perChunkMs,
-        options.slowSource.chunkBytes ?? 64,
+        options.__slowSource.perChunkMs,
+        options.__slowSource.chunkBytes ?? 64,
       )
     : bytesToStream(entry.bytes)
   const spliced = spliceHoles(feed, entry.holes, entry.meta, renderHoleStream)

@@ -33,7 +33,7 @@ a background refresh. Past both: miss.
 interface CacheOptions {
   maxAge?: number                  // fresh window in seconds
   staleWhileRevalidate?: number    // additional stale-but-servable window
-  slowSource?: {…}                 // dev-only debug
+  __slowSource?: {…}                 // dev-only debug
 }
 ```
 
@@ -78,13 +78,13 @@ trigger, so keep them aligned.
 
 ```ts
 interface TimeScope {
-  readonly now: number          // Date.now() captured at scope construction
-  readonly nextSecond: number   // next whole-second boundary
-  readonly nextMinute: number   // next whole-minute boundary
-  readonly nextHour: number     // next whole-hour boundary
-  readonly nextDay: number      // next UTC-day boundary
-  in(ms: number): number        // now + ms
-  readonly never: number        // +Infinity — sentinel for "never expires"
+  readonly now: number // Date.now() captured at scope construction
+  readonly nextSecond: number // next whole-second boundary
+  readonly nextMinute: number // next whole-minute boundary
+  readonly nextHour: number // next whole-hour boundary
+  readonly nextDay: number // next UTC-day boundary
+  in(ms: number): number // now + ms
+  readonly never: number // +Infinity — sentinel for "never expires"
 }
 ```
 
@@ -152,7 +152,7 @@ Three axes:
 
 1. **Server-side `reload({selector})`.** An action body (or any
    server-side task) calls `getServerNavigation().reload({selector:
-   "cart price"})` and the framework bumps the invalidation registry
+"cart price"})` and the framework bumps the invalidation registry
    so every spec whose id or label list contains "cart" or "price"
    sees a fresh fingerprint on the next render — bypassing their
    cache.
@@ -170,6 +170,7 @@ Three axes:
    > is too broad by default" in
    > [`../notes/IDEAS.md`](../notes/IDEAS.md) for the ergonomic
    > follow-up being tracked.
+
 2. **Tracked-input change.** A page nav that changes a tracked
    read's value (or a match param) produces a different cache key.
    The old entry stays in the store but isn't queried.

@@ -87,16 +87,16 @@ corrupt a splice.
 
 ```ts
 interface Entry {
-  bytes: Uint8Array          // stripped scaffolding (holes are placeholders)
-  holes: StoredHole[]        // inner partons to splice live, in document order
-  meta: SpliceMeta           // { maxId, shared } — renumber/dedup facts
+  bytes: Uint8Array // stripped scaffolding (holes are placeholders)
+  holes: StoredHole[] // inner partons to splice live, in document order
+  meta: SpliceMeta // { maxId, shared } — renumber/dedup facts
   expiresAt: number
   staleUntil: number
 }
 interface StoredHole {       // HoleRef + the registry snapshot
-  rowId: string              // the seam id the parent `$L`s
+  rowId: string // the seam id the parent `$L`s
   partialId: string
-  snapshot: PartialSnapshot  // parentPath/frameChain drive the fresh render
+  snapshot: PartialSnapshot // parentPath/frameChain drive the fresh render
 }
 ```
 
@@ -176,7 +176,7 @@ in-flight render.
 
 ## Slow-source diagnostic
 
-`CacheOptions.slowSource: { perChunkMs, chunkBytes? }` (dev-only)
+`CacheOptions.__slowSource: { perChunkMs, chunkBytes? }` (dev-only)
 feeds the splice's scaffold stream in fixed-size chunks separated by a
 delay. Because `spliceHoles` forwards scaffold rows at feed pace, slow
 replay staggers each row's arrival at the decoder — standing in for

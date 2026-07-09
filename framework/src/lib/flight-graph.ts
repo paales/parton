@@ -312,7 +312,7 @@ function toHex(n: number): string {
  * Stream the stored scaffolding and splice a fresh render at each hole.
  *
  * The scaffold arrives as a *stream* (fast `bytesToStream`, or throttled
- * for the `slowSource` diagnostic / a slow remote source) and passes
+ * for the `__slowSource` diagnostic / a slow remote source) and passes
  * through row-by-row at feed pace — so a no-hole payload degenerates to
  * pure passthrough (the streaming-preservation path, unified). Each
  * hole's fresh rows are renumbered into a private id lane (root → the

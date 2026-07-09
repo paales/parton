@@ -3,7 +3,7 @@
  *
  * Validates that the cache's decode → re-emit pipeline preserves
  * Suspense streaming when the source emits bytes slowly. The cache
- * wrapper around `CachedRegion` is configured with `slowSource` so
+ * wrapper around `CachedRegion` is configured with `__slowSource` so
  * stored bytes feed the decoder in small chunks separated by a
  * delay — the same shape a `<RemoteFrame>` will see from a slow
  * cross-origin Flight payload.
@@ -84,7 +84,7 @@ const CachedRegion = parton(
       // Each section occupies ~5KB of stored Flight bytes (dev-mode
       // overhead is large). 25ms × 256B gives roughly 500ms between
       // section reveals — clearly staggered, total ~3s for a reload.
-      slowSource: { perChunkMs: 25, chunkBytes: 256 },
+      __slowSource: { perChunkMs: 25, chunkBytes: 256 },
     },
     fallback: (
       <div data-testid="cached-region-fallback" className="rounded bg-muted p-3 text-sm italic">
