@@ -68,6 +68,7 @@ import {
   takeConnectionNavigation,
 } from "./connection-session.ts"
 import { getEphemeralCellStorage } from "../runtime/cell-storage.ts"
+import { RenderCancelledError } from "../runtime/errors.ts"
 import { renderToReadableStream } from "./flight-runtime.ts"
 import { wrapStreamWithFpTrailer } from "./fp-trailer.ts"
 import {
@@ -99,6 +100,17 @@ import {
   _routeMatchingSelectorIds,
 } from "./segment-relevance.ts"
 import { _getWarmProjector, type WarmCandidate } from "./warm-projection.ts"
+
+/**
+ * The explicit reason threaded through every driver-initiated cancel of
+ * a Flight-backed stream — a torn/superseded lane or segment, a closed
+ * connection's wind-down. React folds a stream-cancel reason into the
+ * render-error channel, so the marker tells `reportServerRenderError`
+ * the teardown is expected lifecycle; a reason-less cancel would log
+ * React's "aborted by the server without a reason" stack on every
+ * client disconnect.
+ */
+const DRIVER_CANCEL_REASON = new RenderCancelledError("segment driver wind-down")
 
 /** How long the driver holds the response open after the last USEFUL
  *  segment before closing an otherwise-silent connection.
@@ -1256,13 +1268,13 @@ async function driveLaneStream(
           // The navigation tear's / cancel's reach into a read parked on
           // a suspended render — cancelling settles the pending read so
           // the pump can observe the tear and wind down.
-          runtime.abortRead = () => void reader.cancel().catch(() => {})
+          runtime.abortRead = () => void reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
           try {
             while (true) {
               const { done, value } = await reader.read()
               if (done) break
               if (tearingLanesForNav || runtime.cancelled) {
-                await reader.cancel().catch(() => {})
+                await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
                 return "torn"
               }
               if (value && value.byteLength > 0) {
@@ -1275,11 +1287,11 @@ async function driveLaneStream(
                   bufferedFrames.push(muxFrame(id, value))
                 } else {
                   if (!(await awaitDemand(runtime)) || tearingLanesForNav || runtime.cancelled) {
-                    await reader.cancel().catch(() => {})
+                    await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
                     return runtime.cancelled || tearingLanesForNav ? "torn" : "closed"
                   }
                   if (!enqueue(muxFrame(id, value))) {
-                    await reader.cancel().catch(() => {})
+                    await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
                     return "closed"
                   }
                 }
@@ -1289,7 +1301,7 @@ async function driveLaneStream(
               // the mark lands on the wire before the render's producer
               // await stalls the body.
               if (!(await maybeAnnounceProducer())) {
-                await reader.cancel().catch(() => {})
+                await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
                 return "closed"
               }
             }
@@ -1626,11 +1638,11 @@ async function driveLaneStream(
         if (done) break
         if (value && value.byteLength > 0) {
           if (!(await awaitDemand())) {
-            await reader.cancel().catch(() => {})
+            await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
             return false
           }
           if (!enqueue(value)) {
-            await reader.cancel().catch(() => {})
+            await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
             return false
           }
         }
@@ -1724,7 +1736,7 @@ async function driveLaneStream(
     try {
       while (true) {
         if (supersededBy()) {
-          await reader.cancel().catch(() => {})
+          await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
           return "superseded"
         }
         // Race the read against a nav latch: a suspended render (a
@@ -1745,7 +1757,7 @@ async function driveLaneStream(
         ])
         disposeArm()
         if (winner.kind === "nav") {
-          await reader.cancel().catch(() => {})
+          await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
           return "superseded"
         }
         const { done, value } = winner.r
@@ -1755,11 +1767,11 @@ async function driveLaneStream(
             bufferedSegment.push(value)
           } else {
             if (!(await awaitDemand())) {
-              await reader.cancel().catch(() => {})
+              await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
               return "closed"
             }
             if (!enqueue(value)) {
-              await reader.cancel().catch(() => {})
+              await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
               return "closed"
             }
           }

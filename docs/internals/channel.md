@@ -159,16 +159,16 @@ POST /__parton/channel
 
 Frame kinds shipped:
 
-| Kind | Carries | Server effect |
-|---|---|---|
-| `visible` | `{changed, visible, cached?}` — the visibility statement: flipped ids, the wholesale snapshot, the client's actual holdings for the changed ids | Applied to the connection session; flipped-IN partons lane on the EXISTING stream (never on this response) |
-| `ack` | `{delivered, dropped?}` — the highest CONTIGUOUSLY committed delivery seq (cumulative), plus the seqs within the newly-acked range the client received but did NOT hold (its as-of guard dropped them) | Advances the session's ack watermark, folds each covered delivery's fps into the ACKED mirror layer — UNLESS its seq is `dropped`, which EVICTS the delivery's optimistic promotions instead — frees the unacked delivery window (the parked driver wakes), and — any ack frame at all — proves the duplex (`firstAckReceived`, the never-acked degrade's off-switch) |
-| `detach` | `{atPark?}` | Explicit close: the parked driver wakes, the drive loop exits, the session closes. Best-effort by nature (sent on `pagehide` via keepalive fetch); the keepalive timeout remains the backstop. `atPark` softens it to the transport handover's GRACEFUL wind-down: the loop exits at its next FULL PARK — nothing latched, no open lanes — so everything in flight is served first (open lanes drain and commit, latched statements get their covering renders) and the close tears nothing on either side |
-| `telemetry` | `{viewport: {w,h}, scroll: {x,y,vx,vy}, at}` — the client's scroll context: container box, position, velocity (px/s), performance-clock timestamp | Replaces the session's `telemetry` slot, latest-wins by envelope seq. NOTHING else: no invalidation, no wake, never a render — the channel carries freshness statements, and telemetry is CONTEXT, not a dependency. Consumers read the slot when awake for their own reasons (the warm pass — see §Telemetry) |
-| `url` | `{url, intent, frame?}` — a URL statement for a scope the client owns: absent `frame`, the WINDOW URL (a `?__force=` overlay names a refetch's forced targets); present, the named FRAME's URL (the frame path's segments). `intent` is the history semantic (`push`/`replace`/`silent` — descriptive: the client's history work is done by send time) | Same-origin-validated (`400` the envelope on a cross-origin target — a violation, nothing applies). WINDOW scope: LATCHED on the session (newest seq wins; a seq at or below the consumed navigation is a stale restatement, a no-op — retransmit idempotence); the driver consumes it navigation-FIRST at wait entry and answers with a whole-tree payload segment, then forced-target lanes — §Navigation rides the channel. FRAME scope: the session frame URL is written AT THE ENDPOINT (the same store `?__frame=` writes through — and the one channel response that can mint the session cookie; an anonymous binding rebinds in place); the render latches per frame key and the driver lanes the frame's targets on the open region — §Frames ride the channel |
-| `cancel` | `{scope}` — supersede the scope's in-flight renders: the frame's top-level name | Aborts the scope's open lane renders synchronously at apply (the driver's `cancelListeners` arm — the same reach into a suspended render the window supersede's nav-latch arm has). A cancelled body closes with a `muxend` and NO delivery announcement, so the client's decode settles, the content never commits, and the id can reopen for the covering statement's lane. Per-scope seq gate: a replayed cancel at or below its scope's applied seq is a no-op — it can never abort a newer statement's render |
-| `warm` | `{url}` — a stated preload target (`useNavigation().preload` on hover) | Same-origin-validated like `url` (the target becomes a render's request state). Replaces the session's warm slot (newest-wins by seq) and wakes the driver; the park point consumes it with ONE byte-silent whole-tree render of the target — bounded, window-respecting, never keepalive activity — so the navigation statement that follows renders against warm caches. Nothing reaches the wire for it |
-| `cookie` | `{name, value}` — a client cookie change (`value: null` = delete), the wire form of `document.cookie` | Applied to the connection's mutable cookie OVERLAY (name → value, `null` tombstone), which `parseCookies` layers under the per-request `setCookie` writes and over the raw header — so held-stream `cookie()` reads reflect the change without a reattach. Queues the name for the driver, which lanes EXACTLY the snapshots whose tracked `cookie:<name>` deps name it (their fp folds the overlay through `parseCookies`); a changed value re-renders, an unchanged one fp-skips. MATCH GATES bypass the overlay (`parseRawCookies` reads the raw header) — a delta re-renders `cookie()` bodies, never a parked variant's existence gate. Per-connection (this client's jar), so it wakes only its own session via the flip-wake arm — never a process-global `refreshSelector` |
+| Kind        | Carries                                                                                                                                                                                                                                                                                                                                                | Server effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `visible`   | `{changed, visible, cached?}` — the visibility statement: flipped ids, the wholesale snapshot, the client's actual holdings for the changed ids                                                                                                                                                                                                        | Applied to the connection session; flipped-IN partons lane on the EXISTING stream (never on this response)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ack`       | `{delivered, dropped?}` — the highest CONTIGUOUSLY committed delivery seq (cumulative), plus the seqs within the newly-acked range the client received but did NOT hold (its as-of guard dropped them)                                                                                                                                                 | Advances the session's ack watermark, folds each covered delivery's fps into the ACKED mirror layer — UNLESS its seq is `dropped`, which EVICTS the delivery's optimistic promotions instead — frees the unacked delivery window (the parked driver wakes), and — any ack frame at all — proves the duplex (`firstAckReceived`, the never-acked degrade's off-switch)                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `detach`    | `{atPark?}`                                                                                                                                                                                                                                                                                                                                            | Explicit close: the parked driver wakes, the drive loop exits, the session closes. Best-effort by nature (sent on `pagehide` via keepalive fetch); the keepalive timeout remains the backstop. `atPark` softens it to the transport handover's GRACEFUL wind-down: the loop exits at its next FULL PARK — nothing latched, no open lanes — so everything in flight is served first (open lanes drain and commit, latched statements get their covering renders) and the close tears nothing on either side                                                                                                                                                                                                                                                                         |
+| `telemetry` | `{viewport: {w,h}, scroll: {x,y,vx,vy}, at}` — the client's scroll context: container box, position, velocity (px/s), performance-clock timestamp                                                                                                                                                                                                      | Replaces the session's `telemetry` slot, latest-wins by envelope seq. NOTHING else: no invalidation, no wake, never a render — the channel carries freshness statements, and telemetry is CONTEXT, not a dependency. Consumers read the slot when awake for their own reasons (the warm pass — see §Telemetry)                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `url`       | `{url, intent, frame?}` — a URL statement for a scope the client owns: absent `frame`, the WINDOW URL (a `?__force=` overlay names a refetch's forced targets); present, the named FRAME's URL (the frame path's segments). `intent` is the history semantic (`push`/`replace`/`silent` — descriptive: the client's history work is done by send time) | Same-origin-validated (`400` the envelope on a cross-origin target — a violation, nothing applies). WINDOW scope: LATCHED on the session (newest seq wins; a seq at or below the consumed navigation is a stale restatement, a no-op — retransmit idempotence); the driver consumes it navigation-FIRST at wait entry and answers with a whole-tree payload segment, then forced-target lanes — §Navigation rides the channel. FRAME scope: the session frame URL is written AT THE ENDPOINT (the same store `?__frame=` writes through — and the one channel response that can mint the session cookie; an anonymous binding rebinds in place); the render latches per frame key and the driver lanes the frame's targets on the open region — §Frames ride the channel           |
+| `cancel`    | `{scope}` — supersede the scope's in-flight renders: the frame's top-level name                                                                                                                                                                                                                                                                        | Aborts the scope's open lane renders synchronously at apply (the driver's `cancelListeners` arm — the same reach into a suspended render the window supersede's nav-latch arm has). A cancelled body closes with a `muxend` and NO delivery announcement, so the client's decode settles, the content never commits, and the id can reopen for the covering statement's lane. Per-scope seq gate: a replayed cancel at or below its scope's applied seq is a no-op — it can never abort a newer statement's render                                                                                                                                                                                                                                                                 |
+| `warm`      | `{url}` — a stated preload target (`useNavigation().preload` on hover)                                                                                                                                                                                                                                                                                 | Same-origin-validated like `url` (the target becomes a render's request state). Replaces the session's warm slot (newest-wins by seq) and wakes the driver; the park point consumes it with ONE byte-silent whole-tree render of the target — bounded, window-respecting, never keepalive activity — so the navigation statement that follows renders against warm caches. Nothing reaches the wire for it                                                                                                                                                                                                                                                                                                                                                                         |
+| `cookie`    | `{name, value}` — a client cookie change (`value: null` = delete), the wire form of `document.cookie`                                                                                                                                                                                                                                                  | Applied to the connection's mutable cookie OVERLAY (name → value, `null` tombstone), which `parseCookies` layers under the per-request `setCookie` writes and over the raw header — so held-stream `cookie()` reads reflect the change without a reattach. Queues the name for the driver, which lanes EXACTLY the snapshots whose tracked `cookie:<name>` deps name it (their fp folds the overlay through `parseCookies`); a changed value re-renders, an unchanged one fp-skips. MATCH GATES bypass the overlay (`parseRawCookies` reads the raw header) — a delta re-renders `cookie()` bodies, never a parked variant's existence gate. Per-connection (this client's jar), so it wakes only its own session via the flip-wake arm — never a process-global `refreshSelector` |
 
 Responses carry no body: `204` applied; `400` malformed; `403`
 cross-site; `404` connection gone — see §Security. Frame kinds split
@@ -449,15 +449,15 @@ held stream in stream order.
 
 **The routing table, as shipped:**
 
-| Interaction | Attached + healthy | Pre-establishment | Degraded |
-|---|---|---|---|
-| Window navigation (`nav.navigate`, intercepted) | `url` frame, intent `push`/`replace` (a traverse states `replace`) | latches; rides the attach it triggers (the statement's `url`) | not intercepted — browser-native document load |
-| Silent window URL sync (`silent: true`, server-push application) | `url` frame, intent `silent`, fire-and-forget | nothing (the next attach's `url` restates it) | client-local URL work only (still intercepted — no server leg exists) |
-| Batched selector refetch (`reload({selector})`, `navigate({selector})`) | `url` frame, intent `silent`, page URL + `?__force=<labels>` | latches; the overlay rides the attach `url` and the targets lane at region open | resolves as a no-op (document loads are the page's renders) |
-| Frame navigation (`useNavigation(frame).navigate/reload`, frame traverse) | frame-scoped `url` frame (+ a `cancel` co-rider when it supersedes an unsettled fire for the same frame) — §Frames ride the channel | latches; rides the attach's `frames` intent | document navigation carrying `__frame`/`__frameUrl` document params |
-| Culling flips | `visible` frames | PEND until establishment (the attach seed + first segment carry the truth) | none (no transport) |
-| Preload (`useNavigation().preload`) | `warm` frame | dropped (advisory) | Speculation Rules document prefetch |
-| Action POSTs, cold start | discrete by design (the action carries `x-parton-conn` when attached — §Action consequence seqs — and then NO `?cached=`, the server reads the connection mirror; the capped URL manifest survives only on the unattached POST) | same | same (native form posts included) |
+| Interaction                                                               | Attached + healthy                                                                                                                                                                                                              | Pre-establishment                                                               | Degraded                                                              |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Window navigation (`nav.navigate`, intercepted)                           | `url` frame, intent `push`/`replace` (a traverse states `replace`)                                                                                                                                                              | latches; rides the attach it triggers (the statement's `url`)                   | not intercepted — browser-native document load                        |
+| Silent window URL sync (`silent: true`, server-push application)          | `url` frame, intent `silent`, fire-and-forget                                                                                                                                                                                   | nothing (the next attach's `url` restates it)                                   | client-local URL work only (still intercepted — no server leg exists) |
+| Batched selector refetch (`reload({selector})`, `navigate({selector})`)   | `url` frame, intent `silent`, page URL + `?__force=<labels>`                                                                                                                                                                    | latches; the overlay rides the attach `url` and the targets lane at region open | resolves as a no-op (document loads are the page's renders)           |
+| Frame navigation (`useNavigation(frame).navigate/reload`, frame traverse) | frame-scoped `url` frame (+ a `cancel` co-rider when it supersedes an unsettled fire for the same frame) — §Frames ride the channel                                                                                             | latches; rides the attach's `frames` intent                                     | document navigation carrying `__frame`/`__frameUrl` document params   |
+| Culling flips                                                             | `visible` frames                                                                                                                                                                                                                | PEND until establishment (the attach seed + first segment carry the truth)      | none (no transport)                                                   |
+| Preload (`useNavigation().preload`)                                       | `warm` frame                                                                                                                                                                                                                    | dropped (advisory)                                                              | Speculation Rules document prefetch                                   |
+| Action POSTs, cold start                                                  | discrete by design (the action carries `x-parton-conn` when attached — §Action consequence seqs — and then NO `?cached=`, the server reads the connection mirror; the capped URL manifest survives only on the unattached POST) | same                                                                            | same (native form posts included)                                     |
 
 The pieces:
 
@@ -768,23 +768,24 @@ would double-deliver the exact same consequences. When the reservation
 is non-empty the entry sets `suppressRoot` (the same null-root path the
 deferred-only tally takes — [`streaming.md`](./streaming.md) § "Deferred
 (stream-only) writes"), and the body is just `returnValue` + `formState`
-+ any url-trailer. The client's optimistic overlay holds until its
-committed watermark covers the reserved seqs, never clearing at the
-returnValue alone (under window coalescing the consequence lane can
-trail the response by the whole backpressure window, which is exactly
-when a returnValue-cleared overlay flashes the stale server value).
-UNATTACHED, a binding mismatch, or a write with no matching route
-snapshots reserves nothing (`_reserveActionConsequences` collapses an
-empty match set to `null`, never `[]`) — the in-body `<Root/>` renders
-as the only carrier, unchanged:
 
-- **The client names its connection** (`x-parton-conn` on the action
+- any url-trailer. The client's optimistic overlay holds until its
+  committed watermark covers the reserved seqs, never clearing at the
+  returnValue alone (under window coalescing the consequence lane can
+  trail the response by the whole backpressure window, which is exactly
+  when a returnValue-cleared overlay flashes the stale server value).
+  UNATTACHED, a binding mismatch, or a write with no matching route
+  snapshots reserves nothing (`_reserveActionConsequences` collapses an
+  empty match set to `null`, never `[]`) — the in-body `<Root/>` renders
+  as the only carrier, unchanged:
+
+* **The client names its connection** (`x-parton-conn` on the action
   POST — an explicit statement, never inferred), when attached and
   non-degraded. On such a POST the client sends NO `?cached=` manifest:
   the server already knows this connection's holdings (its session
   mirror), which the action adopts. The capped URL manifest survives
   only on the UNATTACHED / degraded POST, where there is no mirror.
-- **The action adopts the connection's state**
+* **The action adopts the connection's state**
   (`_adoptConnectionForAction`, before the action body runs). Two
   things follow the connection so the action and its held stream agree:
   its **ephemeral cell storage** — so the action's `.set`/`.invalidate`
@@ -796,7 +797,7 @@ as the only carrier, unchanged:
   (the `?cached=` replacement above). The mirror snapshot decouples the
   action's read-only fp checks from the driver's concurrent mutation of
   the live one.
-- **The server reserves INSIDE the action's transaction**
+* **The server reserves INSIDE the action's transaction**
   (`_reserveActionConsequences`, called by the entry between the
   action body and the commit): the pending selectors match the
   connection's route snapshots (`_routeMatchingSelectorIds`, parked
@@ -814,13 +815,13 @@ as the only carrier, unchanged:
   assignment reuses it: one render of the latest state covers both
   writes. Binding checks mirror the envelope's (scope + session
   identity); a mismatched header reserves nothing.
-- **The pump consumes at iteration start;** every skip path VOIDS the
+* **The pump consumes at iteration start;** every skip path VOIDS the
   assignment (`voidSeqs` → the `seqvoid` entry: parked flips, a gone
   snapshot, window-freed-then-parked ids, a navigation tear — which
   voids everything). The client counts voided seqs PROCESSED, so the
   contiguous watermark can always pass a reservation — a silent gap
   would wedge the unacked window and hold the gate forever.
-- **The response header** (`x-parton-consequences: s1,s2`) registers
+* **The response header** (`x-parton-consequences: s1,s2`) registers
   a gate (`_registerActionConsequences`) before the action's returned
   promise resolves; the cell overlay's clear point awaits
   `_awaitActionConsequences()` after the write POST lands — the `.set`
@@ -1073,6 +1074,7 @@ connection can never roll the page back. The steps:
    server opens the probe's session straight into a parked lanes region
    — `conn` arrives with near-zero server work, and closing the probe
    socket tears no render.
+
 3. **Confirmed → graceful wind-down, then the replacing attach.**
    `_channelBeginTransportHandover()` states the fetch connection's
    `atPark` detach: the server winds the held stream down at its next
@@ -1222,7 +1224,7 @@ state, the forced-WS live glue, and the auto-upgrade:
   releasing at establishment, and the quiesce gate (`_channelIdle`).
 - `website/validate-ws.mjs` proves the Vite PLUGIN's dev/preview upgrade
   glue in a running server (`yarn build:website && node
-  website/validate-ws.mjs`, and `--dev` for the dev server): it drives
+website/validate-ws.mjs`, and `--dev` for the dev server): it drives
   Chromium at `/?transport=ws` (FORCED) and asserts the socket establishes
   (the `conn` handshake sets `data-parton-live`), the attach +
   scroll-driven lanes stream down as BINARY frames, the scroll's
@@ -1252,16 +1254,20 @@ state, the forced-WS live glue, and the auto-upgrade:
   exactly the state a plugin-less server leaves the page in). It drives
   the e2e-testing preview at `/` and asserts the fetch channel
   establishes and stays held (`data-parton-live`, a `POST
-  /__parton/live`) while ZERO `/__parton/ws` sockets ever open and no
+/__parton/live`) while ZERO `/__parton/ws` sockets ever open and no
   WebSocket console error fires — with the served bootstrap asserted to
   CARRY the flag as the control (the client gate is what stood down).
 
-One teardown note the live gate surfaced: a hard socket close during an
-in-flight render logs `Error: The render was aborted by the server
-without a reason.` — this is React Flight's abort of the cancelled render,
-already classified as an EXPECTED render error (`runtime/errors.ts`) and
-identical on the fetch path (a torn `/__parton/live` hold does the same),
-not a WebSocket-specific fault. The server stays healthy across the churn.
+One teardown note: a hard socket close during an in-flight render
+cancels that render's Flight stream. Every driver-initiated cancel
+carries an explicit `RenderCancelledError` reason
+(`DRIVER_CANCEL_REASON` in `segmented-response.ts`) — React folds a
+stream-cancel reason into the render-error channel, and
+`reportServerRenderError` (`runtime/errors.ts`) classifies the marker
+as expected lifecycle, so a client disconnect tears down silently
+instead of logging an abort stack. Identical on the fetch path (a torn
+`/__parton/live` hold winds down the same lanes), not a
+WebSocket-specific behavior. The server stays healthy across the churn.
 
 ### The WebTransport transport (opt-in)
 

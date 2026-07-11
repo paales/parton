@@ -68,12 +68,15 @@ const STUB_SERVER_CONSUMER_MANIFEST = {
 
 type FlightRenderOptions = { onError?: (error: unknown) => string | undefined }
 
+// `@vitejs/plugin-rsc/rsc` binds the client manifest itself, so its
+// `renderToReadableStream(data, options, extraOptions?)` takes the
+// React options SECOND — unlike the vendored react-server-dom entry's
+// `(data, clientManifest, options)`. Passing options in the vendored
+// position silently drops `onError` (it lands in the plugin's
+// `extraOptions`, which only reads `onClientReference`), leaving every
+// error on these streams to React's default console.error.
 type ProdRuntime = {
-  renderToReadableStream: <T>(
-    data: T,
-    clientManifest?: unknown,
-    options?: FlightRenderOptions,
-  ) => ReadableStream<Uint8Array>
+  renderToReadableStream: <T>(data: T, options?: FlightRenderOptions) => ReadableStream<Uint8Array>
   createFromReadableStream: <T>(stream: ReadableStream<Uint8Array>) => Promise<T>
 }
 
@@ -100,7 +103,7 @@ export function renderToReadableStream<T>(data: T): ReadableStream<Uint8Array> {
     })
   }
   if (_prodRuntime) {
-    return _prodRuntime.renderToReadableStream(data, undefined, { onError: onCacheRenderError })
+    return _prodRuntime.renderToReadableStream(data, { onError: onCacheRenderError })
   }
   // Sync caller, async load — kick off the load and stream once it
   // resolves. Vite's plugin-rsc resolves synchronously after first
@@ -109,7 +112,7 @@ export function renderToReadableStream<T>(data: T): ReadableStream<Uint8Array> {
     async start(controller) {
       try {
         const runtime = await loadProdRuntime()
-        const stream = runtime.renderToReadableStream(data, undefined, {
+        const stream = runtime.renderToReadableStream(data, {
           onError: onCacheRenderError,
         })
         const reader = stream.getReader()

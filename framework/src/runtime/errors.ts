@@ -72,6 +72,23 @@ export function isFrameworkSentinel(e: unknown): e is NotFoundError | RedirectEr
 }
 
 /**
+ * The reason the framework passes when IT cancels a Flight render it
+ * no longer needs — the segment driver winding a held connection down
+ * (client disconnect, keepalive elapse, transport handover) or tearing
+ * a superseded lane/segment mid-render. React folds a stream-cancel
+ * reason into the render-error channel (`onError` receives it), so
+ * this marker is the explicit signal `isExpectedRenderError` keys on
+ * to treat the teardown as lifecycle rather than a failure to log.
+ */
+export class RenderCancelledError extends Error {
+  readonly __framework = "render-cancelled" as const
+  constructor(why: string) {
+    super(`Render cancelled: ${why}`)
+    this.name = "RenderCancelledError"
+  }
+}
+
+/**
  * True for the "errors" that are normal render lifecycle, not failures
  * worth logging: client disconnects / supersede aborts, and the
  * redirect / not-found control-flow sentinels that ride the render
@@ -80,6 +97,7 @@ export function isFrameworkSentinel(e: unknown): e is NotFoundError | RedirectEr
  */
 export function isExpectedRenderError(error: unknown): boolean {
   if (isFrameworkSentinel(error)) return true
+  if (error instanceof RenderCancelledError) return true
   if (error instanceof Error) {
     return (
       error.name === "AbortError" ||
