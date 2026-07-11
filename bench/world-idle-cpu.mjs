@@ -5,12 +5,13 @@
  * The scenario that motivated it: load the world, scroll to the top
  * edge, dwell, scroll to the top-left corner, and stop. Every chunk
  * the tour rendered left a snapshot in the route bucket and started a
- * pulse ticker; every ticker bump wakes the held connection's driver
- * into the bump-relevance filter over ALL of those snapshots. The
- * server's idle CPU after the tour is therefore the direct price of
- * the wake-filter path — `_routeMatchingBumpIds` → `queryMatchingTs`
- * over the pulse cell's partition entries — under a realistically
- * large snapshot × partition × bump-rate product.
+ * pulse ticker, so the server's idle CPU after the tour is the direct
+ * price of the wake path under a realistically large snapshot ×
+ * partition × bump-rate product. Today that path is the inverted wake
+ * index's commit-time delivery — the tour's parked chunks record
+ * silently and wake nothing — where the per-wake relevance filter it
+ * replaced re-scanned every snapshot per bump per connection (the
+ * saturation this bench caught).
  *
  * Run: `yarn build:website && node bench/world-idle-cpu.mjs`
  *   [--viewport=2560x1440]   viewport (default 1440p; try 3840x2160)

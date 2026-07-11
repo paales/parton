@@ -131,13 +131,13 @@ Which to use:
 
 ## Scenarios
 
-| Category               | Sweep                                 | Holds                         | Measures                                                                                                                                        |
-| ---------------------- | ------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **scaling** (headline) | N ∈ {10, 50, 100, 500, 1000}          | M=1, D=2                      | warm-tick µs vs world size — the O(tree) tax curve                                                                                              |
-| **dashboard**          | M ∈ {1, 10, 50, 200}                  | N=200, D=2                    | cost per tick as change-density rises; each tick bumps ALL M cells so one segment carries M changes and the fixed overhead amortizes            |
-| **depth**              | D ∈ {1, 4, 16}                        | N=100, M=1                    | descendant-fold cost of proving a deep subtree unchanged                                                                                        |
-| **pulse**              | bump history ∈ {512, 20k}             | N=M=512, D=2, one shared cell | invalidation-registry query cost under ticker history — the two rows must cost the same                                                         |
-| **soak**               | N ∈ {100, 1000, 5000} × M ∈ {0, N/10} | 3 partons/connection          | per-HELD-CONNECTION cost: steady-state heap/RSS, idle wake-filter CPU, per-wake tick CPU — see [soak](#soak--what-a-held-live-connection-costs) |
+| Category               | Sweep                                 | Holds                         | Measures                                                                                                                                 |
+| ---------------------- | ------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **scaling** (headline) | N ∈ {10, 50, 100, 500, 1000}          | M=1, D=2                      | warm-tick µs vs world size — the O(tree) tax curve                                                                                       |
+| **dashboard**          | M ∈ {1, 10, 50, 200}                  | N=200, D=2                    | cost per tick as change-density rises; each tick bumps ALL M cells so one segment carries M changes and the fixed overhead amortizes     |
+| **depth**              | D ∈ {1, 4, 16}                        | N=100, M=1                    | descendant-fold cost of proving a deep subtree unchanged                                                                                 |
+| **pulse**              | bump history ∈ {512, 20k}             | N=M=512, D=2, one shared cell | invalidation-registry query cost under ticker history — the two rows must cost the same                                                  |
+| **soak**               | N ∈ {100, 1000, 5000} × M ∈ {0, N/10} | 3 partons/connection          | per-HELD-CONNECTION cost: steady-state heap/RSS, idle bump CPU, per-wake tick CPU — see [soak](#soak--what-a-held-live-connection-costs) |
 
 The fixture is `buildDashboardPage({ partons: N, liveCells: M, depth: D })`
 (`bench/server/fixture.tsx`): N addressable leaf partons, M of them live
@@ -172,15 +172,16 @@ race) and holds them while measuring. Kernel-side per-connection cost
 of scope — the client end is an in-process discarding reader; what's
 measured is the FRAMEWORK's share: the request ALS scope, the
 connection session, the parked driver's promise/timer graph, the
-route's snapshots + cached-override maps, and the per-bump wake-filter
-scan.
+route's snapshots + cached-override maps + wake-index registrations,
+and the per-bump delivery lookup.
 
 Each connection serves its own 3-parton page (1 live leaf + 1 static
 leaf + 1 wrapper, id-prefixed) in its own state bucket — a
 per-connection `x-test-scope`, the framework's existing seam for
 isolating process-wide snapshot buckets — so one cell bump is relevant
-to exactly one connection; the other N−1 wake, run the relevance
-filter over their own snapshots, and re-arm without rendering. The
+to exactly one connection: the wake index delivers it there, and the
+other N−1 parked drivers never wake at all (the bump misses their
+registrations). The
 scope seam is dev-only, so **soak is a dev-Flight category**: it probes
 the seam up front and hard-fails under `--prod` rather than silently
 measuring cross-talk (the dev→prod lane-render ratio is already
@@ -199,24 +200,25 @@ Per scenario (N connections, M = N/10 or 0 active):
   Post-gc heap needs a real `global.gc`; the CLI passes `--expose-gc`
   via NODE_OPTIONS.
 - **idle µs** — the idle keepalive path: CPU per IRRELEVANT
-  `refreshSelector` across all N. Every bump wakes every parked
-  driver's bump arm; each scans its own snapshots
-  (`routeHasRelevantBump`), misses, and re-arms fresh wake promises +
-  keepalive timer without rendering a thing. This is the standing tax
-  bump traffic levies on every held connection.
+  `refreshSelector` across all N. The bump misses every connection's
+  wake-index registration, so no parked driver wakes and nothing
+  renders — the cost is one index miss plus the store write,
+  independent of N. This is the standing tax bump traffic levies on
+  every held connection (previously a per-connection relevance scan
+  per bump, linear in N).
 - **p50 / cpu / µs/lane / tick B** — a wake tick: M cell bumps fired in
   one synchronous batch (one wake round for every driver), completing
   at the Mth `settled` marker. Wall p50 is the client-observable wake
-  latency; cpu is process-CPU per tick (including the N−M idle scans);
-  µs/lane amortizes it per delivered lane.
+  latency; cpu is process-CPU per tick (the N−M idle connections cost
+  nothing — the bumps miss their registrations); µs/lane amortizes it
+  per delivered lane.
 - **B/wake** — heap a parked connection accretes per wake round
   (post-gc drift ÷ wakes). ≈0, gc noise: every wake arm is a
   disposer-registered listener released when its race iteration
   settles, so a parked connection's heap doesn't grow with bump
   traffic. This column is the regression detector for that invariant
   — a promise-shaped arm (a `.then` reaction frees only when its
-  promise settles, and irrelevant bumps re-arm the race inside one
-  park) reads directly as hundreds of B/wake. The soak widens the
+  promise settles) reads directly as hundreds of B/wake. The soak widens the
   keepalive (`_setKeepaliveMs`, a bench-visible override in
   `segmented-response.ts` — the production window is shorter than a
   5000-connection scenario's span), which is what makes the drift
@@ -240,8 +242,8 @@ detected from the driver's own wire milestones — the `lanes` marker
 (switched to per-parton lanes, parked at the wake race) and the
 `settled` marker (a wake's lanes fully drained) — never from timing.
 
-Soak ticks are far heavier than warm ticks (one tick = M lane renders
-plus N−M wake-filter scans), so the category has its own defaults
+Soak ticks are far heavier than warm ticks (one tick = M lane
+renders), so the category has its own defaults
 (warmup=5, measure=30); explicit `--warmup`/`--measure` apply to soak
 too. The `measure` count doubles as the idle-phase bump count.
 
@@ -445,9 +447,11 @@ through the scenario that first exposed the wake-filter pathology: load
 at the origin, scroll to the top edge, dwell, scroll to the top-left
 corner, stop. The tour leaves hundreds of chunk/quad snapshots in the
 route bucket and hundreds of pulse tickers bumping at 0.1–5s each; the
-server's idle CPU afterwards is the direct price of the per-bump
-relevance filter (`_routeMatchingBumpIds` → `queryMatchingTs`) over
-that snapshot × partition × bump-rate product.
+server's idle CPU afterwards is the direct price of the wake path
+over that snapshot × partition × bump-rate product — today the wake
+index's commit-time delivery (the tour's parked chunks record
+silently and wake nothing); previously the per-bump relevance filter
+this bench caught saturating.
 
 Three phases, each the server tree's %CPU (per-second `ps` samples,
 last-10s average):
@@ -473,4 +477,4 @@ software compositor, so its paint share overstates a real GPU; use
 Each run APPENDS to the committed artifact
 `bench/results/world-idle-cpu.json` (git SHA, node version, viewport,
 phase averages), so the corner-idle number is directly comparable
-across commits — the regression substrate for the wake-filter path.
+across commits — the regression substrate for the wake path.

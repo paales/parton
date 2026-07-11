@@ -14,9 +14,14 @@
  * how long the server has been up.
  *
  * Partial fingerprints fold in the latest matching `ts` so any tagged
- * invalidation shifts the partial's fp on the next render. Pure
- * version-stamp model, no per-client bookkeeping — the client's
- * `?cached=` is the source of truth for what fp it has.
+ * invalidation shifts the partial's fp on the next render. Version-
+ * stamp model — the client's `?cached=` is the source of truth for
+ * what fp it has. The one per-connection structure here is the
+ * inverted wake index (below): live connections subscribe their route
+ * snapshots under the same (name, constraintsKey) keys the store
+ * uses, and a commit delivers the touched parton ids to exactly the
+ * subset-matching subscriptions instead of waking every held driver
+ * into a relevance scan.
  *
  * Selector grammar (matches the client-side `selector` vocabulary —
  * same labels declared via `selector: ["cart"]` on a spec):
@@ -229,66 +234,310 @@ function commitOne(parsed: ParsedSelector): void {
   } else {
     perName.set(key, { name: parsed.name, constraints: parsed.constraints, ts })
   }
-  notifyWaiters()
+  deliverBump(parsed.name, key, parsed.constraints)
 }
 
-// ─── Event bus for the segment driver ─────────────────────────────────
+// ─── The inverted wake index (bump → subscribed connections) ──────────
+//
+// The registry's wake side is KEYED like its storage side: a live
+// connection registers each route snapshot under exactly the
+// (name, constraintsKey) map keys a matching entry could be stored
+// under (`constraintProbeKeys` — the same enumeration the query
+// probes), so a commit delivers the touched parton ids to precisely
+// the subset-matching subscriptions in map lookups. A bump nothing
+// subscribed to touches no connection at all — the parked drivers
+// never wake, which is what makes N held connections free under
+// irrelevant bump traffic (the old shape woke every driver into a
+// per-route relevance scan per bump).
+//
+// Surfaces past `PROBE_SUBSET_CAP` can't be key-registered; they land
+// in the subscription's scan set, checked per bump only against those
+// entries (the delivery twin of the query's linear fallback).
 
-type Waiter = (ts: number) => void
-const waiters = new Set<Waiter>()
+/**
+ * Per-connection state the delivery gate reads live — closures over
+ * the connection session, supplied at subscription open so this module
+ * stays ignorant of session shape.
+ */
+export interface WakeSubscriberContext {
+  /** The connection's current measured visible set (`null` before any
+   *  measurement — parks nothing, every delivery wakes). */
+  visible(): ReadonlySet<string> | null
+  /** True when `id` holds an assigned consequence delivery seq (an
+   *  action's reservation) — a parked delivery still wakes so the
+   *  driver can void the seq promptly instead of wedging the client's
+   *  ack watermark until an unrelated wake. */
+  hasAssignedSeq(id: string): boolean
+}
 
-function notifyWaiters(): void {
-  if (waiters.size === 0) return
-  const ts = nextTs - 1
-  const list = [...waiters]
-  waiters.clear()
-  for (const w of list) w(ts)
+/** One registered route snapshot, as the delivery path needs it. */
+export interface WakeSubscriptionEntryInit {
+  /** The snapshot's refetch labels — the bump NAMES that can touch it. */
+  labels: readonly string[]
+  /** The snapshot's compiled constraint surface (match params ∪ bound
+   *  cell args). `query.probes === null` → over-cap, scan fallback. */
+  query: CompiledSurfaceQuery
+  /** The id's lane carrier as of registration — the nearest addressable
+   *  snapshot whose lane would ship this id's update. `null` = nothing
+   *  can carry it (delivery records, never wakes). Drain-time
+   *  escalation stays authoritative for WHAT lanes; this copy only
+   *  decides WAKING. */
+  carrier: string | null
+  /** Ids whose absence from the visible set parks the carrier (its own
+   *  id when cull-gated, plus cull-gated ancestors) — a parked
+   *  delivery records without waking; the flip-in revalidation is the
+   *  parked parton's catch-up. `null` = never parked. */
+  carrierParkGates: readonly string[] | null
+}
+
+interface WakeSubscriptionEntry extends WakeSubscriptionEntryInit {
+  /** The (name, constraintsKey) index addresses this entry registered
+   *  under — walked for removal. `null` for scan entries. */
+  keys: ReadonlyArray<readonly [string, string]> | null
+}
+
+export interface WakeSubscription {
+  /** Parton ids bumps have delivered since the last drain — deduped
+   *  across bumps by construction (coalescing is intrinsic; each lane
+   *  renders current state). */
+  readonly pending: Set<string>
+  /** Wake listeners, disposer-registered per park (the flipWakes
+   *  shape — the wake-arm release invariant). */
+  readonly wakes: Set<() => void>
+  readonly context: WakeSubscriberContext
+  /** id → registered entry (keyed and scan entries alike). */
+  readonly entries: Map<string, WakeSubscriptionEntry>
+  /** The over-cap fallback: entries whose surface couldn't be
+   *  key-registered, matched per bump by the linear predicate. */
+  readonly scanEntries: Map<string, WakeSubscriptionEntry>
+}
+
+/** name → constraintsKey → subscription → (parton id → entry). */
+const wakeIndex = new Map<
+  string,
+  Map<string, Map<WakeSubscription, Map<string, WakeSubscriptionEntry>>>
+>()
+/** Subscriptions holding at least one scan entry. */
+const scanSubscribers = new Set<WakeSubscription>()
+/** Every open subscription — the wake-arm probe's denominator. */
+const openSubscriptions = new Set<WakeSubscription>()
+
+export function _openWakeSubscription(context: WakeSubscriberContext): WakeSubscription {
+  const sub: WakeSubscription = {
+    pending: new Set(),
+    wakes: new Set(),
+    context,
+    entries: new Map(),
+    scanEntries: new Map(),
+  }
+  openSubscriptions.add(sub)
+  return sub
+}
+
+/** Close a subscription: every index registration is removed, so no
+ *  future bump can deliver to (or retain) the connection. */
+export function _closeWakeSubscription(sub: WakeSubscription): void {
+  for (const id of [...sub.entries.keys()]) _removeWakeSubscriptionEntry(sub, id)
+  openSubscriptions.delete(sub)
+  scanSubscribers.delete(sub)
+  sub.pending.clear()
+  sub.wakes.clear()
 }
 
 /**
- * Registered bump waiters. The wake-arm release invariant's probe: a
- * parked connection holds at most one registration here; a wait that
- * exited through another arm must have released its own.
+ * Register (or replace) the subscription's entry for one parton id.
+ * Keyed registration inserts the id under every `labels × probes`
+ * address; an over-cap surface (`probes === null`) lands in the scan
+ * set instead. Replacing removes the prior registration first, so a
+ * re-registered snapshot with a changed surface can't keep matching
+ * its old partition.
  */
-export function _bumpWaiterCount(): number {
-  return waiters.size
-}
-
-/**
- * Returns the current registry timestamp. Pair with `_waitForNextBump`
- * to wait for any future `refreshSelector` activity past this point.
- */
-export function _currentTs(): number {
-  return nextTs - 1
-}
-
-/**
- * Register `cb` for the next `refreshSelector` landing (any name, any
- * constraints) with a `ts > sinceTs`. If a newer bump has already
- * happened at call time, `cb` fires on the next microtask.
- *
- * One-shot, and DISPOSABLE: the returned function removes the waiter.
- * The segment driver's wake race arms several signals per park and
- * releases the losers when one fires — an undisposed waiter would sit
- * in this process-wide set until the next bump anywhere, accumulating
- * one closure (retaining its whole wake race) per idle wake on every
- * parked connection.
- */
-export function _onNextBump(sinceTs: number, cb: (ts: number) => void): () => void {
-  if (nextTs - 1 > sinceTs) {
-    // Already past — fire on the next microtask unless disposed first.
-    let disposed = false
-    queueMicrotask(() => {
-      if (!disposed) cb(nextTs - 1)
-    })
-    return () => {
-      disposed = true
+export function _setWakeSubscriptionEntry(
+  sub: WakeSubscription,
+  id: string,
+  init: WakeSubscriptionEntryInit,
+): void {
+  _removeWakeSubscriptionEntry(sub, id)
+  const probes = init.query.probes
+  if (probes === null) {
+    sub.scanEntries.set(id, { ...init, keys: null })
+    sub.entries.set(id, sub.scanEntries.get(id)!)
+    scanSubscribers.add(sub)
+    return
+  }
+  const keys: Array<readonly [string, string]> = []
+  const entry: WakeSubscriptionEntry = { ...init, keys }
+  for (const label of init.labels) {
+    for (const key of probes) {
+      let perName = wakeIndex.get(label)
+      if (!perName) {
+        perName = new Map()
+        wakeIndex.set(label, perName)
+      }
+      let perKey = perName.get(key)
+      if (!perKey) {
+        perKey = new Map()
+        perName.set(key, perKey)
+      }
+      let ids = perKey.get(sub)
+      if (!ids) {
+        ids = new Map()
+        perKey.set(sub, ids)
+      }
+      ids.set(id, entry)
+      keys.push([label, key])
     }
   }
-  waiters.add(cb)
-  return () => {
-    waiters.delete(cb)
+  sub.entries.set(id, entry)
+}
+
+export function _removeWakeSubscriptionEntry(sub: WakeSubscription, id: string): void {
+  const entry = sub.entries.get(id)
+  if (!entry) return
+  sub.entries.delete(id)
+  if (entry.keys === null) {
+    sub.scanEntries.delete(id)
+    if (sub.scanEntries.size === 0) scanSubscribers.delete(sub)
+    return
   }
+  for (const [name, key] of entry.keys) {
+    const perName = wakeIndex.get(name)
+    const perKey = perName?.get(key)
+    const ids = perKey?.get(sub)
+    if (!ids) continue
+    ids.delete(id)
+    if (ids.size === 0) {
+      perKey!.delete(sub)
+      if (perKey!.size === 0) {
+        perName!.delete(key)
+        if (perName!.size === 0) wakeIndex.delete(name)
+      }
+    }
+  }
+}
+
+/** Drain the subscription's delivered ids — the bump wake's worklist.
+ *  Synchronous with the caller's cursor advance, so no bump can land
+ *  between the take and the covering `_currentTs()` read. */
+export function _takeWakeSubscriptionPending(sub: WakeSubscription): string[] {
+  const ids = [...sub.pending]
+  sub.pending.clear()
+  return ids
+}
+
+/** Drop the pending set without draining — a whole-tree segment
+ *  (navigation, reconcile) just covered everything delivered so far. */
+export function _clearWakeSubscriptionPending(sub: WakeSubscription): void {
+  sub.pending.clear()
+}
+
+/** Seed one id into the pending set WITHOUT firing wakes — the sync
+ *  path's catch-up for a record registered after its bump landed (the
+ *  caller is awake; its next wait entry consumes the latch). */
+export function _seedWakeSubscriptionPending(sub: WakeSubscription, id: string): void {
+  sub.pending.add(id)
+}
+
+/**
+ * Registered wake listeners across every open subscription. The
+ * wake-arm release invariant's probe: a parked connection holds at
+ * most one listener; a wait that exited through another arm must have
+ * released its own.
+ */
+export function _wakeSubscriptionArmCount(): number {
+  let count = 0
+  for (const sub of openSubscriptions) count += sub.wakes.size
+  return count
+}
+
+/** Test/debug: index shape. `registrations` counts (name, key, sub, id)
+ *  leaf entries. */
+export function _wakeIndexStats(): {
+  names: number
+  keys: number
+  registrations: number
+  scanEntries: number
+  subscriptions: number
+} {
+  let keys = 0
+  let registrations = 0
+  for (const perName of wakeIndex.values()) {
+    keys += perName.size
+    for (const perKey of perName.values()) {
+      for (const ids of perKey.values()) registrations += ids.size
+    }
+  }
+  let scanEntries = 0
+  for (const sub of scanSubscribers) scanEntries += sub.scanEntries.size
+  return {
+    names: wakeIndex.size,
+    keys,
+    registrations,
+    scanEntries,
+    subscriptions: openSubscriptions.size,
+  }
+}
+
+/**
+ * Commit-time delivery: push the bump's matched parton ids into every
+ * subset-matching subscription's pending set and wake the ones the
+ * delivery is actionable for. The keyed lookup is exact by the
+ * probe-key equivalence (an entry key is hit iff `matchesConstraints`
+ * would accept it); scan entries run the predicate itself.
+ */
+function deliverBump(name: string, constraintsKey: string, constraints: Record<string, unknown>) {
+  const perKey = wakeIndex.get(name)?.get(constraintsKey)
+  if (perKey !== undefined) {
+    for (const [sub, ids] of perKey) {
+      let wake = false
+      for (const [id, entry] of ids) {
+        sub.pending.add(id)
+        if (!wake) wake = deliveryWakes(sub, entry)
+      }
+      if (wake) fireSubscriptionWakes(sub)
+    }
+  }
+  for (const sub of scanSubscribers) {
+    let wake = false
+    for (const [id, entry] of sub.scanEntries) {
+      if (!entry.labels.includes(name)) continue
+      if (!matchesConstraints(entry.query.surface, constraints)) continue
+      sub.pending.add(id)
+      if (!wake) wake = deliveryWakes(sub, entry)
+    }
+    if (wake) fireSubscriptionWakes(sub)
+  }
+}
+
+/**
+ * Whether a delivery should wake its subscription's driver. Parked
+ * carriers don't (their pending ids drain park-checked at the next
+ * real wake; the flip-in revalidation is their catch-up — staleness-
+ * free because the in-state fp folds every bump that landed while
+ * parked), UNLESS the carrier holds an assigned consequence seq the
+ * driver must void promptly. Carrier-less entries never wake — the
+ * drain would drop them at escalation anyway.
+ */
+function deliveryWakes(sub: WakeSubscription, entry: WakeSubscriptionEntry): boolean {
+  if (entry.carrier === null) return false
+  const gates = entry.carrierParkGates
+  if (gates === null) return true
+  const visible = sub.context.visible()
+  if (visible === null) return true
+  for (const gate of gates) {
+    if (!visible.has(gate)) return sub.context.hasAssignedSeq(entry.carrier)
+  }
+  return true
+}
+
+function fireSubscriptionWakes(sub: WakeSubscription): void {
+  for (const wake of [...sub.wakes]) wake()
+}
+
+/** Returns the current registry timestamp — the bump cursor every
+ *  catch-up anchor and covered-record probe compares against. */
+export function _currentTs(): number {
+  return nextTs - 1
 }
 
 // ─── Transactions ─────────────────────────────────────────────────────

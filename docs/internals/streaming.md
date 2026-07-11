@@ -67,41 +67,55 @@ any selector-routing logic that could replace it.
    ([`channel.md`](./channel.md) §The never-acked degrade).
 3. **Server-side segment driver runs.** For each rendered segment,
    it races the wake arms:
-   - `_onNextBump` — a `refreshSelector` lands (CRUD writes,
-     `cell.set`, server-action invalidations) **that is relevant to
-     this route**: it matches a rendered partial's labels +
-     constraint args (match params ∪ bound cell args)
-     (`_routeHasMatchingBump`, see `segment-relevance.ts`). A bump for
-     a different partition (another viewer's `cartId`, another
-     session's cell) re-arms the wait WITHOUT re-rendering — so one
-     viewer's write doesn't wake every open stream into a fp-skip
-     pass. The wake itself is global (`_onNextBump` fires on any
-     bump); the relevance check is what gates the re-render. The
-     check is cheap by design — it runs on EVERY bump for every held
-     connection: each snapshot's constraint surface is compiled once
-     and memoized on the snapshot (WeakMap in `segment-relevance.ts`),
-     and the registry query probes the per-name entry map by exact
-     key instead of scanning entries (see
-     [`registry-internals.md`](./registry-internals.md)), so steady
-     ticker traffic over a large route bucket (the website world's
-     ~100 pulse bumps/sec against hundreds of snapshots) filters in
-     map lookups, not stringify work.
+   - The wake-subscription bump arm — a `refreshSelector` lands (CRUD
+     writes, `cell.set`, server-action invalidations) **that this
+     connection registered**. The connection holds one persistent
+     subscription in the registry's **inverted wake index**
+     (`invalidation-registry.ts`): each route snapshot is registered
+     under exactly the `(name, constraintsKey)` map keys a matching
+     entry could be stored under (the same `constraintProbeKeys`
+     enumeration the fp query probes — see
+     [`registry-internals.md`](./registry-internals.md)), so the
+     commit itself delivers the touched parton ids into the
+     connection's pending set and fires its wake listeners. A bump
+     for a different partition (another viewer's `cartId`, another
+     session's cell) touches NO registration and wakes NO driver —
+     the per-wake relevance filter this replaced re-derived relevance
+     from scratch on every bump for every held connection
+     (O(bumps × snapshots × connections), the world's corner-idle
+     tax). Deliveries whose lane carrier is parked record silently
+     (no wake — see the parked-partons note below); an id holding an
+     assigned consequence seq wakes even parked, so the driver can
+     void the reservation promptly. The subscription is diffed against
+     the route's snapshot map whenever the driver is awake anyway (a
+     pointer-diff — `_syncRouteWakeSubscription` in
+     `segment-relevance.ts`), and every newly-covered record probes
+     the registry once so a bump that landed before the registration
+     still lanes. Surfaces past `PROBE_SUBSET_CAP` fall to a small
+     per-connection scan set, checked per bump only against those
+     entries. `_assertWakeParity` (opt-in via `PARTON_WAKE_PARITY=1`
+     or the parity tests) re-derives each drain's lane set through
+     the retired pull filter (`_routeMatchingBumpIds`) and asserts
+     delivery COVERS it post-park — subset, not equality: an id's
+     registered labels can shrink between delivery and drain (a
+     cull-out re-registers the CULLED variant, which drops cell
+     labels), so delivery legitimately over-covers; extras park or
+     dedup into the flip's own lane, never staleness.
 
      Every park's arms observe per-park state and release on wake —
      the **wake-arm release invariant**: wake arms are
      disposer-registered listeners with entry latches, never `.then`
      reactions on a promise that outlives one race iteration. A
-     reaction only frees when its promise settles, and an irrelevant
-     bump re-arms the race WITHIN one park — so a promise-shaped arm
-     on long-lived state (the registry's waiter set, the session's
-     `flipWakes`, the lane driver's drain wakes) accretes one
-     reaction, retaining its whole wake race, per idle wake for as
-     long as the connection holds. `waitForSegmentWake` builds one
-     deferred per race iteration and disposes every registration
-     when it settles; the lane driver's drain signal and the
-     session's flip signal are latch + listener set, the latch
-     re-checked at each iteration's entry so a signal that raced a
-     losing arm is consumed, not starved.
+     reaction only frees when its promise settles — so a
+     promise-shaped arm on long-lived state (the subscription's wake
+     set, the session's `flipWakes`, the lane driver's drain wakes)
+     would accrete one reaction, retaining its whole wake race, per
+     wake for as long as the connection holds. `waitForSegmentWake`
+     builds one deferred per park and disposes every registration
+     when it settles; the bump signal, the lane driver's drain signal
+     and the session's flip signal are latch + listener set, the
+     latch checked at wait entry so a signal that landed while the
+     driver was busy is consumed, not starved.
 
    - Expiry arm — the earliest `expires()` boundary among the
      route's snapshots (read through `effectiveExpiresAt`) elapses.
@@ -145,11 +159,16 @@ any selector-routing logic that could replace it.
      open forever, each wake re-scanning the route (zombie connections
      accumulate one per refresh and peg the server).
 
-4. **On a relevant bump, an expiry boundary, or a visibility flip,
-   the driver renders per-parton lanes.** The wake resolves WHICH
-   snapshot ids it touched (`_routeMatchingBumpIds` for bumps;
-   the due-expiry set for time wakes; the statement's `changed` ids
-   for visibility flips), and each touched parton
+4. **On a delivered bump, an expiry boundary, or a visibility flip,
+   the driver renders per-parton lanes.** The wake's worklist is
+   already resolved for bumps — the drain takes the subscription's
+   pending set (deduped across every bump since the last drain — the
+   coalescing is intrinsic, each lane renders current state), maps it
+   onto lane carriers against snapshots current at render, and
+   park-checks each carrier (drain-time state stays authoritative;
+   delivery-time gating only decided waking). Time wakes resolve the
+   due-expiry set; visibility flips carry the statement's `changed`
+   ids. Each touched parton
    renders in isolation through the snapshot-reconstruction path a
    `?partials=` refetch uses (`partialFromSnapshot` →
    `renderToReadableStream`). Each render's bytes frame as an
@@ -311,7 +330,7 @@ keepalive window (minutes).
 
 The two subscription kinds emit differently after their first
 segment. A `?live=1` subscription switches to per-parton lanes (its
-wakes are relevance-matched bumps / `expires()` boundaries, which
+wakes are index-delivered bumps / `expires()` boundaries, which
 name the partons to render). A `markConnectionLive()` subscription
 (the chat's `ChunkSlot`) stays whole-tree on a DISCRETE cache-mode
 GET: its next content comes from the render itself resolving a
@@ -361,7 +380,8 @@ setPayload(payload)`. A null root is never committable — committing
 
 The bump itself is unchanged: it lands in the invalidation registry
 exactly as a non-deferred write's would, so the **already-open
-heartbeat** wakes on it (relevance-gated like any other), re-renders,
+heartbeat** wakes on it (delivered through the wake index like any
+other), re-renders,
 and ships the new value as the next segment — to the writer and every
 other viewer alike. The asymmetry is the point: the write goes up on a
 cheap one-shot POST, the value comes down on the shared stream.

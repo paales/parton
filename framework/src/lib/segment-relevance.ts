@@ -1,50 +1,44 @@
 /**
- * Relevance predicate for the streaming segment driver.
- *
- * A held-open stream re-renders a new segment only when a
- * `refreshSelector` bump touches something the stream's route actually
- * renders. Without this, one viewer's `cell.set` would wake every open
- * stream into a (fp-skip) re-render — the cross-stream storm that
- * saturates the server under N concurrent viewers.
+ * Snapshot-relevance vocabulary for the streaming segment driver: the
+ * route wake subscription (each live connection's registration into
+ * the inverted wake index — bump-time delivery to exactly the
+ * connections a selector touches), lane-carrier escalation, and the
+ * scan-based twins that stay off the bump path (the action-reservation
+ * selector match, cookie-dep routing, and the parity filter).
  *
  * Lives in its own module (rather than inside `segmented-response.ts`)
- * so the predicate is unit-testable without dragging in the render
- * graph (`partial.tsx` et al.) that the driver imports.
+ * so all of it is unit-testable without dragging in the render graph
+ * (`partial.tsx` et al.) that the driver imports.
  */
 
 import {
+  _closeWakeSubscription,
   _compileSurfaceQuery,
+  _openWakeSubscription,
   _queryCompiledMatchingTs,
+  _seedWakeSubscriptionPending,
   _selectorMatchesSurface,
+  _setWakeSubscriptionEntry,
+  _removeWakeSubscriptionEntry,
   type CompiledSurfaceQuery,
   type ParsedSelector,
+  type WakeSubscriberContext,
+  type WakeSubscription,
 } from "../runtime/invalidation-registry.ts"
 import type { PartialSnapshot } from "./partial-registry.ts"
 
 /**
- * True iff some bump with `ts > sinceTs` matches any of these
- * snapshots' labels + constraint surface. The surface is each
- * snapshot's `varyKey` (stable-stringified vary result) unioned with
- * its `constraintArgs` (bound-cell args) — the same inputs the live
- * fp folds through `queryMatchingTs`. A bump for a different partition
- * (another viewer's cart) or to an unrendered label returns `false`.
- */
-export function _routeHasMatchingBump(
-  snapshots: ReadonlyMap<string, PartialSnapshot>,
-  sinceTs: number,
-): boolean {
-  for (const [, snap] of snapshots) {
-    if (snapshotHasMatchingBump(snap, sinceTs)) return true
-  }
-  return false
-}
-
-/**
- * The ids whose snapshots a bump with `ts > sinceTs` touched — same
- * predicate as `_routeHasMatchingBump`, returning the matches instead
- * of short-circuiting. The per-parton segment driver renders exactly
- * these as lanes, so one viewer's partition-scoped write re-renders
- * only the partons it actually constrains.
+ * The ids whose snapshots a bump with `ts > sinceTs` touched, mapped
+ * to their lane carriers. The surface per snapshot is its `varyKey`
+ * (stable-stringified vary result) unioned with its `constraintArgs`
+ * (bound-cell args) — the same inputs the live fp folds through
+ * `queryMatchingTs`; a bump for a different partition (another
+ * viewer's cart) or to an unrendered label never matches.
+ *
+ * This is the PULL form of the wake index's push delivery — retired
+ * from the driver's bump path (the index delivers at commit time) but
+ * kept as the parity oracle: `_assertWakeParity` re-derives the lane
+ * set from scratch and asserts delivery covers it post-park.
  */
 export function _routeMatchingBumpIds(
   snapshots: ReadonlyMap<string, PartialSnapshot>,
@@ -52,9 +46,9 @@ export function _routeMatchingBumpIds(
 ): string[] {
   const ids: string[] = []
   for (const [id, snap] of snapshots) {
-    if (snapshotHasMatchingBump(snap, sinceTs)) ids.push(id)
+    if (_queryCompiledMatchingTs(snap.labels, surfaceQueryOf(snap)) > sinceTs) ids.push(id)
   }
-  return escalateToLaneCarriers(ids, snapshots)
+  return _escalateToLaneCarriers(ids, snapshots)
 }
 
 /**
@@ -89,8 +83,10 @@ function laneCarrierFor(
  *  the uncarriable and deduping — several non-addressable children of
  *  one addressable ancestor collapse to a single ancestor lane, so its
  *  one render re-renders them all. First-occurrence order is preserved
- *  (delivery order for the driver's lane pass). */
-function escalateToLaneCarriers(
+ *  (delivery order for the driver's lane pass). Exported for the
+ *  driver's bump drain: the pending set holds MATCHED ids; the drain
+ *  escalates against snapshots current at render. */
+export function _escalateToLaneCarriers(
   matched: Iterable<string>,
   snapshots: ReadonlyMap<string, PartialSnapshot>,
 ): string[] {
@@ -125,7 +121,7 @@ export function _routeMatchingSelectorIds(
     )
     if (hit) ids.push(id)
   }
-  return escalateToLaneCarriers(ids, snapshots)
+  return _escalateToLaneCarriers(ids, snapshots)
 }
 
 /**
@@ -198,6 +194,163 @@ function surfaceQueryOf(snap: PartialSnapshot): CompiledSurfaceQuery {
   return query
 }
 
-function snapshotHasMatchingBump(snap: PartialSnapshot, sinceTs: number): boolean {
-  return _queryCompiledMatchingTs(snap.labels, surfaceQueryOf(snap)) > sinceTs
+/** Whether `deps` records `id`'s own cull-gate read
+ *  (`visible:<id>?seed=…`) — the snapshot is a cullable spec whose
+ *  visibility the session set gates. Shared by the driver's drain-time
+ *  park check (`isParkedOnConnection`) and the subscription's
+ *  registration-time park gates, so both read the SAME signal. */
+export function _hasCullGateDep(deps: ReadonlySet<string> | undefined, id: string): boolean {
+  if (!deps) return false
+  const prefix = `visible:${id}`
+  for (const d of deps) {
+    if (d === prefix || d.startsWith(`${prefix}?`)) return true
+  }
+  return false
+}
+
+// ─── The route wake subscription ──────────────────────────────────────
+
+/**
+ * A live connection's registration into the inverted wake index: one
+ * subscription per connection, holding an index entry per route
+ * snapshot. `registered` remembers WHICH snapshot object each entry
+ * was built from, so a sync is a pointer-diff over the route map —
+ * a re-render registers a FRESH snapshot object, and only those ids
+ * recompile their surface and re-register.
+ */
+export interface RouteWakeSubscription {
+  readonly sub: WakeSubscription
+  /** id → the snapshot object whose surface/carrier is registered. */
+  readonly registered: Map<string, PartialSnapshot>
+}
+
+export function _openRouteWakeSubscription(context: WakeSubscriberContext): RouteWakeSubscription {
+  return { sub: _openWakeSubscription(context), registered: new Map() }
+}
+
+export function _closeRouteWakeSubscription(rws: RouteWakeSubscription): void {
+  _closeWakeSubscription(rws.sub)
+  rws.registered.clear()
+}
+
+/**
+ * Diff the subscription against the route's current snapshots. Runs
+ * whenever the driver is awake anyway (lanes open, a wake's drain, a
+ * navigation/reconcile segment) — never per bump, which is the point:
+ * an idle connection's subscription is exactly as fresh as its last
+ * wake, and deliveries against it are exact for every surface
+ * registered then.
+ *
+ * `coveredTs` closes the register-after-bump window: a NEW or REPLACED
+ * entry probes the registry once, and a matching bump newer than the
+ * driver's cursor seeds the id into the pending set — the record the
+ * subscription didn't cover while the bump landed still lanes (a
+ * bump the fresh render already folded seeds too; that lane fp-skips
+ * to a confirmation — over-fetch, never stale).
+ */
+export function _syncRouteWakeSubscription(
+  rws: RouteWakeSubscription,
+  snapshots: ReadonlyMap<string, PartialSnapshot>,
+  coveredTs: number,
+): void {
+  for (const [id, snap] of snapshots) {
+    if (rws.registered.get(id) === snap) continue
+    const query = surfaceQueryOf(snap)
+    const carrier = laneCarrierFor(id, snapshots)
+    _setWakeSubscriptionEntry(rws.sub, id, {
+      labels: snap.labels,
+      query,
+      carrier,
+      carrierParkGates: carrier === null ? null : carrierParkGates(carrier, snapshots),
+    })
+    rws.registered.set(id, snap)
+    if (_queryCompiledMatchingTs(snap.labels, query) > coveredTs) {
+      _seedWakeSubscriptionPending(rws.sub, id)
+    }
+  }
+  if (rws.registered.size !== snapshots.size) {
+    for (const id of [...rws.registered.keys()]) {
+      if (!snapshots.has(id)) {
+        _removeWakeSubscriptionEntry(rws.sub, id)
+        rws.registered.delete(id)
+      }
+    }
+  }
+}
+
+/** The ids whose absence from the session's visible set parks
+ *  `carrierId` — its own id when cull-gated, plus every cull-gated
+ *  ancestor. The registration-time image of `isParkedOnConnection`'s
+ *  drain-time walk (which stays authoritative — a stale gate here
+ *  only mis-times a wake, never what lanes). `null` = never parked. */
+function carrierParkGates(
+  carrierId: string,
+  snapshots: ReadonlyMap<string, PartialSnapshot>,
+): readonly string[] | null {
+  const snap = snapshots.get(carrierId)
+  if (!snap) return null
+  let gates: string[] | null = null
+  if (_hasCullGateDep(snap.deps, carrierId)) (gates ??= []).push(carrierId)
+  for (const ancestorId of snap.parentPath) {
+    if (ancestorId === carrierId) continue
+    const ancestor = snapshots.get(ancestorId)
+    if (!ancestor) continue
+    if (_hasCullGateDep(ancestor.deps, ancestorId)) (gates ??= []).push(ancestorId)
+  }
+  return gates
+}
+
+// ─── Parity cross-check (opt-in, DEV/tests) ───────────────────────────
+
+let wakeParityCheck = typeof process !== "undefined" && process.env?.PARTON_WAKE_PARITY === "1"
+
+/** Enable/disable the wake-index parity assert — the regression probe
+ *  for any wake-path change. Off by default (the oracle re-runs the
+ *  retired per-route filter, exactly the cost the index removed);
+ *  enabled by the parity rsc suite and via `PARTON_WAKE_PARITY=1`. */
+export function _setWakeParityCheck(on: boolean): void {
+  wakeParityCheck = on
+}
+
+export function _wakeParityCheckEnabled(): boolean {
+  return wakeParityCheck
+}
+
+/**
+ * Assert the index delivered every lane the retired pull filter would
+ * produce — the staleness direction, and the exact contract: both
+ * sides escalate to carriers against the same snapshots and drop
+ * PARKED carriers (`isParked`, the drain's own filter), and the
+ * filter's set must be a subset of the delivered one.
+ *
+ * Deliberately NOT strict equality. An id's registered labels can
+ * SHRINK between delivery and drain — a cull-out re-registers the
+ * id's CULLED variant, whose labels drop the cell labels — so a
+ * delivered id can stop matching the filter by drain time. Those
+ * extras are harmless by construction: the id is parked (dropped
+ * here, exactly as the drain drops it) or was flipped back in, where
+ * its lane renders CURRENT state and dedups with the flip's own lane
+ * — an over-fetch, never staleness. The filter itself is equally
+ * time-inconsistent in the other direction (it re-matches old bumps
+ * against snapshots registered after them — which the sync's
+ * covered-record probe mirrors), so post-park subset IS the lane-set
+ * equivalence. `delivered` ids whose snapshot vanished drop at
+ * escalation on both sides.
+ */
+export function _assertWakeParity(
+  snapshots: ReadonlyMap<string, PartialSnapshot>,
+  sinceTs: number,
+  delivered: ReadonlySet<string>,
+  isParked: (id: string) => boolean,
+): void {
+  const expected = _routeMatchingBumpIds(snapshots, sinceTs).filter((id) => !isParked(id))
+  const present: string[] = []
+  for (const id of delivered) if (snapshots.has(id)) present.push(id)
+  const actual = new Set(_escalateToLaneCarriers(present, snapshots).filter((id) => !isParked(id)))
+  const missing = expected.filter((id) => !actual.has(id))
+  if (missing.length === 0) return
+  throw new Error(
+    `wake-index parity violation — the filter would lane [${missing.join(", ")}] ` +
+      `but the index delivered [${[...actual].join(", ")}]`,
+  )
 }

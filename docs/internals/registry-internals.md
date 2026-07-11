@@ -215,9 +215,8 @@ Content changes and record removal are separate mechanisms:
   entry no matter how long the server has been up. The website's
   `world.pulse` (up to 512 partitions under one selector name,
   bumping every 0.1–5s) is the motivating shape; the bench's
-  `pulse/*` scenarios gate it. The bump counter (`_currentTs` /
-  `_onNextBump`) advances monotonically per bump, independent
-  of what's stored.
+  `pulse/*` scenarios gate it. The bump counter (`_currentTs`)
+  advances monotonically per bump, independent of what's stored.
 
   The query itself is KEYED, not scanned. Because the per-name map is
   keyed by `stableStringify(constraints)`, the set of keys an entry
@@ -233,10 +232,35 @@ Content changes and record removal are separate mechanisms:
   probes or the linear `matchesConstraints` scan (also the fallback
   for surfaces past `PROBE_SUBSET_CAP` keys, where the product would
   explode). A partition-heavy name (`world.pulse`'s 512 entries) is
-  therefore a handful of map hits per query, not a scan. The segment
-  driver's wake filter memoizes one compiled query per snapshot
-  (`_compileSurfaceQuery`, WeakMap in `segment-relevance.ts`) so the
-  per-bump relevance pass does no re-parsing or re-enumeration at all.
+  therefore a handful of map hits per query, not a scan. Compiled
+  surfaces are memoized per snapshot (`_compileSurfaceQuery`, WeakMap
+  in `segment-relevance.ts`), shared by the fp fold, the reservation
+  scan, and the wake-index registration.
+
+  **The wake side is the same keying, inverted.** A live connection
+  holds one persistent subscription in the **inverted wake index**
+  (`_openWakeSubscription` et al.): each route snapshot registers its
+  parton id under every `(name, constraintsKey)` address in
+  `labels × constraintProbeKeys(surface)` — exactly the keys a
+  matching entry could be stored under, so the probe-key equivalence
+  proven for the query holds unchanged for delivery. `commitOne`
+  looks up `(name, stableStringify(constraints))` and pushes the
+  registered parton ids into each hit subscription's pending set —
+  the segment driver's bump wake says "these ids changed", not
+  "something changed, go look". A bump nothing registered touches no
+  connection: parked drivers stay parked (the soak bench's idle
+  µs/bump is a map miss, independent of N). Over-cap surfaces land in
+  a per-connection scan set, checked per bump only against those
+  entries. Each registration also carries its lane CARRIER and the
+  carrier's park gates (cull-gated ancestor ids): a delivery whose
+  carrier is parked records into the pending set without waking —
+  the flip-in revalidation is the parked parton's catch-up — unless
+  the carrier holds an assigned consequence seq (the driver must void
+  it promptly). Subscriptions are diffed against the route snapshot
+  map while the driver is awake (`_syncRouteWakeSubscription`,
+  pointer-diff per id) and removed wholesale at connection close;
+  compaction needs no change (entries and registrations share the
+  keying, and a subscription outliving its entries is a lookup miss).
 
 - **Snapshot invalidation.** `invalidateSnapshot(id)` removes the
   id's registry records entirely (inside a request: buffered into

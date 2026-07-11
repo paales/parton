@@ -3,18 +3,18 @@
  * accumulate registrations on long-lived state. Each park in
  * `waitForSegmentWake` arms several signals (bump, keepalive, expiry,
  * lane-drained, visibility); a promise reaction only frees when its
- * promise settles, and the registry's bump waiter set is shared by
- * every connection — so an arm that outlives its park grows the heap
- * linearly in wake count on a pure-idle connection (zero renders,
- * zero bytes shipped). The probe reads the registry's own waiter set:
- * after N expiry-driven wakes, it holds at most the currently-parked
- * wait's single registration.
+ * promise settles, and the wake subscription's listener set lives for
+ * the whole connection — so an arm that outlives its park grows the
+ * heap linearly in wake count on a pure-idle connection (zero
+ * renders, zero bytes shipped). The probe reads the wake index's own
+ * listener count: after N expiry-driven wakes, it holds at most the
+ * currently-parked wait's single registration.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
-  _bumpWaiterCount,
   _clearInvalidationRegistry,
+  _wakeSubscriptionArmCount,
 } from "../../runtime/invalidation-registry.ts"
 import {
   decodeLane,
@@ -81,11 +81,12 @@ describe("live segment driver — wake-arm release", () => {
         }
         expect(renders.clock).toBeGreaterThanOrEqual(7)
 
-        // Every exited wait released its bump registration; only the
-        // currently-parked wait may hold one. Without release the set
-        // grows one closure per wake — each retaining its whole wake
-        // race — for as long as no bump lands anywhere in the process.
-        expect(_bumpWaiterCount()).toBeLessThanOrEqual(2)
+        // Every exited wait released its bump-arm registration; only
+        // the currently-parked wait may hold one. Without release the
+        // subscription's listener set grows one closure per wake —
+        // each retaining its whole wake race — for as long as the
+        // connection holds.
+        expect(_wakeSubscriptionArmCount()).toBeLessThanOrEqual(2)
 
         await h.shutdown("leak-clock")
       },

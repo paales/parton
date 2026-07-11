@@ -848,7 +848,9 @@ delimiter would tear them) with room in the delivery window emits a
 whole-tree payload segment ON the stream — `next`, the segment (its
 own delivery seq, fp-skip pruning it to placeholders when nothing was
 missed), `settled`, then `next` + `lanes` to reopen the region — and
-advances the wake cursor past everything the segment covered.
+advances the wake cursor past everything the segment covered (the
+wake subscription's pending set clears and re-syncs with it — the
+delivered-but-undrained ids were covered too).
 Evaluated at wakes, no standing timer: a connection needs a wake to
 reach the cadence, so a totally silent one is closed by the keepalive
 first (its eventual reopen's first segment is whole-tree anyway) — but

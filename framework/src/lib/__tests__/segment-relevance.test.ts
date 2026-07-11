@@ -1,17 +1,17 @@
 /**
- * Segment-driver relevance gate.
+ * Segment-driver relevance predicate.
  *
  * A streaming connection must re-render only for bumps that touch what
  * its route actually renders — never for a different viewer's or
- * partition's mutation. Without this, one client's `cell.set` wakes
- * every open stream into a (fp-skip) re-render: the cross-stream storm
- * that saturates the server under N concurrent viewers. These tests pin
- * the predicate `_routeHasMatchingBump` that the segment driver gates
- * each re-render on.
+ * partition's mutation. These tests pin `_routeMatchingBumpIds` — the
+ * label + constraint-subset predicate the wake index's delivery is
+ * proven equivalent to (`_assertWakeParity` re-derives lane sets
+ * through it), and whose scan twins (`_routeMatchingSelectorIds`,
+ * `_routeMatchingCookieIds`) share the same surface reads.
  */
 
 import { afterEach, describe, expect, it } from "vitest"
-import { _routeHasMatchingBump } from "../segment-relevance.ts"
+import { _routeMatchingBumpIds } from "../segment-relevance.ts"
 import type { PartialSnapshot } from "../partial-registry.ts"
 import {
   _clearInvalidationRegistry,
@@ -32,7 +32,14 @@ function snap(
     parentPath: [],
     constraintArgs: opts.constraintArgs,
     varyKey: opts.varyKey,
+    // Addressable — its own lane carrier, so escalation keeps the id.
+    emittedFp: "fp",
+    matchKey: "mk",
   }
+}
+
+function hasMatch(snapshots: Map<string, PartialSnapshot>, since: number): boolean {
+  return _routeMatchingBumpIds(snapshots, since).length > 0
 }
 
 function route(...entries: Array<[string, PartialSnapshot]>): Map<string, PartialSnapshot> {
@@ -50,25 +57,25 @@ describe("segment driver — relevance gate", () => {
   it("does NOT wake for a bump on a different partition (another viewer's cart)", () => {
     const since = _currentTs()
     refreshSelector("cell:cart-badge?cartId=B")
-    expect(_routeHasMatchingBump(cartA(), since)).toBe(false)
+    expect(hasMatch(cartA(), since)).toBe(false)
   })
 
   it("wakes for a bump on this partition", () => {
     const since = _currentTs()
     refreshSelector("cell:cart-badge?cartId=A")
-    expect(_routeHasMatchingBump(cartA(), since)).toBe(true)
+    expect(hasMatch(cartA(), since)).toBe(true)
   })
 
   it("does NOT wake for a bump to a label this route doesn't render", () => {
     const since = _currentTs()
     refreshSelector("cell:something-else?cartId=A")
-    expect(_routeHasMatchingBump(cartA(), since)).toBe(false)
+    expect(hasMatch(cartA(), since)).toBe(false)
   })
 
   it("wakes for an unconstrained (broadcast) bump on a rendered label", () => {
     const since = _currentTs()
     refreshSelector("cell:cart-badge") // no constraints → matches any cartId
-    expect(_routeHasMatchingBump(cartA(), since)).toBe(true)
+    expect(hasMatch(cartA(), since)).toBe(true)
   })
 
   it("matches against vary inputs (varyKey JSON), not just bound args", () => {
@@ -76,17 +83,17 @@ describe("segment driver — relevance gate", () => {
       route(["badge", snap(["cell:cart-badge"], { varyKey: JSON.stringify({ cartId: "A" }) })])
     const since = _currentTs()
     refreshSelector("cell:cart-badge?cartId=A")
-    expect(_routeHasMatchingBump(varied(), since)).toBe(true)
+    expect(hasMatch(varied(), since)).toBe(true)
     const since2 = _currentTs()
     refreshSelector("cell:cart-badge?cartId=Z")
-    expect(_routeHasMatchingBump(varied(), since2)).toBe(false)
+    expect(hasMatch(varied(), since2)).toBe(false)
   })
 
   it("only counts bumps newer than sinceTs", () => {
     refreshSelector("cell:cart-badge?cartId=A") // a bump the driver already saw
     const since = _currentTs()
-    expect(_routeHasMatchingBump(cartA(), since)).toBe(false)
+    expect(hasMatch(cartA(), since)).toBe(false)
     refreshSelector("cell:cart-badge?cartId=A") // a fresh one
-    expect(_routeHasMatchingBump(cartA(), since)).toBe(true)
+    expect(hasMatch(cartA(), since)).toBe(true)
   })
 })

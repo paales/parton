@@ -11,9 +11,10 @@
  * existing seam for isolating process-wide snapshot buckets (route
  * buckets key on `(scope, routeKey)`, and routeKey derives from match
  * signatures, which selector-only pages don't have). One cell bump is
- * therefore relevant to exactly one connection: the other N−1 wake,
- * run the relevance filter over their own snapshots, and re-arm
- * without rendering — the production N-independent-viewers shape. The
+ * therefore relevant to exactly one connection: the wake index
+ * delivers it there and the other N−1 parked drivers never wake at
+ * all (the bump misses their registrations) — the production
+ * N-independent-viewers shape. The
  * scope seam is dev-mode-only, so the category probes it up front and
  * hard-fails under `--prod` rather than silently measuring cross-talk.
  *
@@ -30,10 +31,12 @@
  *      `lanes` marker (the wire signal that it switched to lanes — and,
  *      having yielded, is parked at its wake race). gc, sample again:
  *      the delta / N is the per-connection steady-state footprint.
- *   3. Idle-wake phase: fire irrelevant bumps one at a time. Every
- *      parked driver wakes, scans, re-arms; NOTHING may render — the
- *      zero-render gate — and the CPU delta / bumps is the cost of one
- *      irrelevant invalidation against N held connections.
+ *   3. Idle-wake phase: fire irrelevant bumps one at a time. The bump
+ *      misses every connection's wake-index registration, so NO parked
+ *      driver wakes and NOTHING may render — the zero-render gate —
+ *      and the CPU delta / bumps is the cost of one irrelevant
+ *      invalidation against N held connections (one index miss plus
+ *      the store write; independent of N by construction).
  *   4. Wake ticks (M > 0): each tick bumps M distinct cells (one per
  *      active connection) in one synchronous batch, then waits for M
  *      `settled` markers — the driver's own "this wake's lanes fully
@@ -146,23 +149,22 @@ export interface SoakScenarioResult {
      *  across the measured wake traffic. */
     afterTicksHeapBytes: number
     heapDriftPerConnection: number
-    /** Wake rounds each parked connection saw between the two samples —
-     *  every idle bump and every tick is one wake per connection. */
+    /** Bump rounds fired between the two samples — every idle bump and
+     *  every tick is one delivery pass against the wake index (a
+     *  parked connection an irrelevant bump misses does no work at
+     *  all; the denominator is the traffic, not observed wakes). */
     wakesPerConnection: number
-    /** heapDriftPerConnection / wakesPerConnection — what one wake
-     *  round leaves behind on a parked connection. Non-zero today: each
-     *  re-arm of the parked driver's wake race attaches fresh reactions
-     *  to the connection's long-lived `laneDrained` / visibility-flip
-     *  promises, which only release when those promises settle — so a
-     *  parked connection's heap grows with bump traffic (production
-     *  bounds it via the 20s keepalive; the soak widens the keepalive,
-     *  which is what makes the accumulation measurable). */
+    /** heapDriftPerConnection / wakesPerConnection — what one bump
+     *  round leaves behind on a parked connection. ≈0 (gc noise): an
+     *  irrelevant bump never touches a parked connection, and every
+     *  armed wake listener is disposer-released when its race settles
+     *  (the wake-arm release invariant). */
     heapDriftPerConnectionPerWake: number
   }
-  /** The idle keepalive path: one irrelevant `refreshSelector` wakes
-   *  every parked driver's bump arm; each runs the relevance filter
-   *  over its route's snapshots and re-arms (fresh wake promises +
-   *  keepalive timer) without rendering or shipping a byte. */
+  /** The idle keepalive path: one irrelevant `refreshSelector` misses
+   *  every connection's wake-index registration — no parked driver
+   *  wakes, nothing renders; the cost is the store write plus one
+   *  index miss, independent of N. */
   idleWake: {
     bumps: number
     /** Process CPU (user+system) per bump — the cost of ONE irrelevant
@@ -172,15 +174,16 @@ export interface SoakScenarioResult {
     cpuNsPerConnectionPerBump: number
   }
   /** Wake-tick numbers (null when M = 0). One tick = M cell bumps in a
-   *  synchronous batch → M lane renders across M connections. */
+   *  synchronous batch → M lane renders across M connections (the
+   *  index delivers each bump to exactly its one subscriber). */
   ticks: {
     measured: number
     lanesPerTick: number
     /** Wall time from firing the bumps to the LAST connection's
      *  `settled` marker — the client-observable wake latency. */
     wall: { p50us: number; p95us: number; p99us: number; meanUs: number }
-    /** Process CPU per tick, including the N−M idle wake-filter scans
-     *  and the post-drain driver bookkeeping. */
+    /** Process CPU per tick, including the post-drain driver
+     *  bookkeeping. */
     cpuMeanUs: number
     /** cpuMeanUs / M — amortized CPU per delivered lane. */
     cpuPerLaneUs: number
@@ -457,10 +460,11 @@ export async function runSoakScenario(
 
     // ── Phase 3: idle keepalive path + the zero-render gate. ──
     // One bump per iteration, with a macrotask turn between them so
-    // each bump is a distinct wake round (synchronous bumps coalesce
-    // into one). The turn also guarantees every driver's scan-and-re-arm
-    // continuation has run before the next sample — event-loop ordering,
-    // not a timing guess.
+    // each bump is a distinct delivery round. The turn also guarantees
+    // any continuation a bump could have scheduled has run before the
+    // next sample — event-loop ordering, not a timing guess (with the
+    // wake index, an irrelevant bump schedules none: it misses every
+    // registration and no parked driver wakes).
     resetRenderCount()
     const idleBumps = Math.max(1, measure)
     const idleCpu0 = cpuNowUs()

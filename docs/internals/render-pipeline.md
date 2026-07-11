@@ -205,7 +205,7 @@ Wire layer (trailers, segments, lanes — see
 | `fp-trailer-marker.ts` | The `\xFF[parton:tag:length]\n` marker grammar + tag taxonomy (`fp`, `url`, `conn`, `next`, `settled`, `lanes`, `mux`, `muxend`). |
 | `fp-trailer-split.ts` | The client splitter: `splitSegments` (no-holdback, milestone-gated cooperative abort, the progressive `onEntry` surface the `conn` handshake rides), `splitAtFpTrailer`. |
 | `segment-trailers-client.ts` | Applying a segment's standard trailers client-side — `fp` via `_applyFpUpdates`, `url` via `_windowNav().navigate(…, { silent: true })`. |
-| `segmented-response.ts` / `segment-relevance.ts` / `parton-mux.ts` | The server segment driver + lane pump, the bump-relevance predicate, and the per-parton lane mux/demux framing. |
+| `segmented-response.ts` / `segment-relevance.ts` / `parton-mux.ts` | The server segment driver + lane pump; the route wake subscription (registration into the inverted wake index, sync diff, lane-carrier escalation, the parity oracle); and the per-parton lane mux/demux framing. |
 | `connection-session.ts` / `channel-protocol.ts` | Per-live-connection session state keyed by the SERVER-minted connection id — the visible set the cull gate reads on a live connection, statement application (`reportConnectionVisibility`), and the channel endpoint body (`handleChannelPost` — `POST /__parton/channel`, with its origin + attach-binding checks); the shared envelope grammar (`ChannelEnvelope`, frame kinds, `decodeChannelEnvelope`). See [channel.md](./channel.md) and [streaming.md](./streaming.md) §Visibility rides the connection. |
 
 Client merge layer:

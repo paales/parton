@@ -75,5 +75,36 @@
       "baseline": 313.9,
       "cornerIdle": 2.6
     }
+  },
+  {
+    "sha": "ace3831",
+    "date": "2026-07-11T13:05:59.935Z",
+    "node": "v24.11.1",
+    "viewport": "2560x1440",
+    "serverPct": {
+      "baseline": 3.9,
+      "cornerIdle": 6,
+      "afterClose": 5.3
+    },
+    "headlessBrowserPct": {
+      "baseline": 118,
+      "cornerIdle": 41.9
+    }
+  },
+  {
+    "sha": "ace3831",
+    "date": "2026-07-11T13:08:31.021Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 33.8,
+      "cornerIdle": 10.6,
+      "afterClose": 10.7
+    },
+    "headlessBrowserPct": {
+      "baseline": 285.1,
+      "cornerIdle": 3
+    }
   }
 ]
