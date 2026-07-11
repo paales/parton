@@ -28,5 +28,52 @@
       "baseline": 70,
       "cornerIdle": 50.3
     }
+  },
+  {
+    "sha": "d3425ff",
+    "date": "2026-07-11T11:59:46.142Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "serverPct": {
+      "baseline": 7.2,
+      "cornerIdle": 19.3,
+      "afterClose": 4.4
+    },
+    "headlessBrowserPct": {
+      "baseline": 137.1,
+      "cornerIdle": 154.7
+    }
+  },
+  {
+    "sha": "d3425ff",
+    "date": "2026-07-11T12:01:50.031Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 56,
+      "cornerIdle": 98.9,
+      "afterClose": 99.1
+    },
+    "headlessBrowserPct": {
+      "baseline": 295.9,
+      "cornerIdle": 3
+    }
+  },
+  {
+    "sha": "d3425ff",
+    "date": "2026-07-11T12:04:02.075Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 66.8,
+      "cornerIdle": 103.3,
+      "afterClose": 101.6
+    },
+    "headlessBrowserPct": {
+      "baseline": 313.9,
+      "cornerIdle": 2.6
+    }
   }
 ]

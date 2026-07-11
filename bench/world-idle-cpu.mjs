@@ -14,6 +14,9 @@
  *
  * Run: `yarn build:website && node bench/world-idle-cpu.mjs`
  *   [--viewport=2560x1440]   viewport (default 1440p; try 3840x2160)
+ *   [--query=k=v&...]        query string appended to the page URL
+ *                            (e.g. --query=chunk=128 for the dense
+ *                            world geometry); recorded in the artifact
  *   [--prof]                 boot the preview under --cpu-prof
  *                            (profiles land in /tmp/parton-cpu-prof)
  *
@@ -52,6 +55,8 @@ const RESULTS = new URL("./results/world-idle-cpu.json", import.meta.url).pathna
 const vpArg = process.argv.find((a) => a.startsWith("--viewport="))?.split("=")[1] ?? "2560x1440"
 const [VW, VH] = vpArg.split("x").map(Number)
 const PROF = process.argv.includes("--prof")
+const QUERY = process.argv.find((a) => a.startsWith("--query="))?.slice("--query=".length)
+const PAGE_URL = QUERY ? `${BASE}/?${QUERY}` : BASE
 
 // Refuse a dirty port — a leftover server would silently invalidate the run.
 try {
@@ -146,7 +151,7 @@ const sampleWindow = async (label, seconds) => {
   return { server: avg(srv), browser: avg(brw) }
 }
 
-await page.goto(BASE) // default transport — the auto-upgrade (fetch→ws) path
+await page.goto(PAGE_URL) // default transport — the auto-upgrade (fetch→ws) path
 const scroller = '[data-testid="world-scroller"]'
 await page.waitForSelector(scroller, { timeout: 15000 })
 await page.waitForTimeout(3000)
@@ -196,7 +201,12 @@ history.push({
   date: new Date().toISOString(),
   node: process.version,
   viewport: `${VW}x${VH}`,
-  serverPct: { baseline: baseline.server, cornerIdle: cornerIdle.server, afterClose: afterClose.server },
+  ...(QUERY ? { query: QUERY } : {}),
+  serverPct: {
+    baseline: baseline.server,
+    cornerIdle: cornerIdle.server,
+    afterClose: afterClose.server,
+  },
   headlessBrowserPct: { baseline: baseline.browser, cornerIdle: cornerIdle.browser },
 })
 writeFileSync(RESULTS, JSON.stringify(history, null, 2) + "\n")

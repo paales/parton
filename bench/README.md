@@ -7,7 +7,7 @@ subtrees. It exists to profile, optimize, and regression-track that cost.
 
 **The headline question:** when only ONE cell changes, how does the
 warm-tick cost grow with world size N? A curve that grows with N proves
-that *proving a subtree unchanged costs O(tree)* — the tax we want to
+that _proving a subtree unchanged costs O(tree)_ — the tax we want to
 target.
 
 ```bash
@@ -54,7 +54,7 @@ without the wake/keepalive timing:
    write fires), render, drain, record elapsed + bytes, promote.
 
 A subtlety the loop handles: the **first** warm tick still re-renders
-everything. A leaf's cell dependency is only recorded *during* its
+everything. A leaf's cell dependency is only recorded _during_ its
 render, so its warm fingerprint differs from its cold fingerprint until
 one warm pass folds it in — only from the second warm tick does the
 fp-skip steady state hold. The runner runs one settling tick, then
@@ -92,7 +92,7 @@ render + fp-skip path — only React's serialization differs.
 
 `--prod` sets `NODE_ENV=production` in the spawned bench process so the
 vitest worker requires the production build. Vitest's `NODE_ENV ??=
-"test"` is a *nullish* assignment, so an explicit value survives; the
+"test"` is a _nullish_ assignment, so an explicit value survives; the
 worker hard-fails the run if `--prod` was requested but `NODE_ENV` is not
 `production` at render time, so a clobbered env can never masquerade as a
 prod result. The Flight build in effect is stamped into the artifact's
@@ -131,13 +131,13 @@ Which to use:
 
 ## Scenarios
 
-| Category | Sweep | Holds | Measures |
-|---|---|---|---|
-| **scaling** (headline) | N ∈ {10, 50, 100, 500, 1000} | M=1, D=2 | warm-tick µs vs world size — the O(tree) tax curve |
-| **dashboard** | M ∈ {1, 10, 50, 200} | N=200, D=2 | cost per tick as change-density rises; each tick bumps ALL M cells so one segment carries M changes and the fixed overhead amortizes |
-| **depth** | D ∈ {1, 4, 16} | N=100, M=1 | descendant-fold cost of proving a deep subtree unchanged |
-| **pulse** | bump history ∈ {512, 20k} | N=M=512, D=2, one shared cell | invalidation-registry query cost under ticker history — the two rows must cost the same |
-| **soak** | N ∈ {100, 1000, 5000} × M ∈ {0, N/10} | 3 partons/connection | per-HELD-CONNECTION cost: steady-state heap/RSS, idle wake-filter CPU, per-wake tick CPU — see [soak](#soak--what-a-held-live-connection-costs) |
+| Category               | Sweep                                 | Holds                         | Measures                                                                                                                                        |
+| ---------------------- | ------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **scaling** (headline) | N ∈ {10, 50, 100, 500, 1000}          | M=1, D=2                      | warm-tick µs vs world size — the O(tree) tax curve                                                                                              |
+| **dashboard**          | M ∈ {1, 10, 50, 200}                  | N=200, D=2                    | cost per tick as change-density rises; each tick bumps ALL M cells so one segment carries M changes and the fixed overhead amortizes            |
+| **depth**              | D ∈ {1, 4, 16}                        | N=100, M=1                    | descendant-fold cost of proving a deep subtree unchanged                                                                                        |
+| **pulse**              | bump history ∈ {512, 20k}             | N=M=512, D=2, one shared cell | invalidation-registry query cost under ticker history — the two rows must cost the same                                                         |
+| **soak**               | N ∈ {100, 1000, 5000} × M ∈ {0, N/10} | 3 partons/connection          | per-HELD-CONNECTION cost: steady-state heap/RSS, idle wake-filter CPU, per-wake tick CPU — see [soak](#soak--what-a-held-live-connection-costs) |
 
 The fixture is `buildDashboardPage({ partons: N, liveCells: M, depth: D })`
 (`bench/server/fixture.tsx`): N addressable leaf partons, M of them live
@@ -309,14 +309,14 @@ Open it:
 
 Where the time goes (N=1000, M=1):
 
-- **dev Flight.** The self-time is dominated by React's *dev-only* debug
+- **dev Flight.** The self-time is dominated by React's _dev-only_ debug
   serialization — `emitOutlinedDebugModelChunk` (~20%), `renderDebugModel`
   (~8%), `jsxDEV` (~6%), `collectStackTrace` (~5%), `outlineComponentInfo`
   — together roughly 40% of samples, plus ~15% GC churning the debug
   objects. The framework's own work is a thin slice on top: the parton
   `Component` body (`partial.tsx`) and fingerprint hashing (`hash.ts`) are
   each ~2%. So at large N the dev curve is mostly measuring React's debug
-  channel, not framework slop — which is exactly why dev is the *stable*
+  channel, not framework slop — which is exactly why dev is the _stable_
   signal for slop hunting (framework work stands out against a fixed dev
   backdrop) but not the honest absolute cost.
 - **prod Flight (`--prod`).** The entire debug-serialization band is gone
@@ -336,8 +336,8 @@ the cost by frame, which is enough to target.
 `node bench/client-scroll.mjs` — the standing tool for profiling the
 website world's **scroll frame on the client**. Where `bench:server`
 measures the per-tick server CPU and `website/validate-world.mjs`
-asserts correctness + wire budgets, this one answers: *where do the
-milliseconds of a scroll frame go?* It boots the prod website preview on
+asserts correctness + wire budgets, this one answers: _where do the
+milliseconds of a scroll frame go?_ It boots the prod website preview on
 its own port (mirroring `validate-world.mjs`), drives a fixed scripted
 scroll with Playwright, and captures three views through the Chrome
 DevTools Protocol.
@@ -404,7 +404,7 @@ are named `__benchStep` and excluded from the app's scripting total.
   the frame time.)
 
 Because the multi-agent / loaded-machine CPU contention that a bench box
-often runs under adds noise to *absolute* self-time, the robust
+often runs under adds noise to _absolute_ self-time, the robust
 before/after signal is a **function's or subsystem's share of scripting**
 (`% of scripting`) — that ratio is stable across runs even when the
 absolute total swings. The harness prints it and saves it.
@@ -460,8 +460,12 @@ last-10s average):
   Connection-driven burn drops away; the remainder is the tickers' own
   write cost.
 
-`--viewport=3840x2160` scales the visible set; `--prof` boots the
-preview under `--cpu-prof` (profiles in `/tmp/parton-cpu-prof`). The
+`--viewport=3840x2160` scales the visible set; `--query=k=v&...`
+appends a query string to the page URL (e.g. `--query=chunk=128`
+drives the world at the dense 128px chunk geometry — 16× the chunk
+density — and is recorded as a `query` field on the artifact entry);
+`--prof` boots the preview under `--cpu-prof` (profiles in
+`/tmp/parton-cpu-prof`). The
 browser column is the harness's own headless Chromium tree only —
 software compositor, so its paint share overstates a real GPU; use
 `client-scroll.mjs` for the client-side story.
