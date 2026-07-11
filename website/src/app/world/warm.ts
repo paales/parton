@@ -1,5 +1,5 @@
 import { registerWarmProjector } from "@parton/framework"
-import { CHUNK_PX, chunkOrigin } from "./constants.ts"
+import { GEOMETRIES, type WorldGeometry } from "./constants.ts"
 
 /**
  * The world's warm projector — the geometry half of predictive chunk
@@ -9,7 +9,9 @@ import { CHUNK_PX, chunkOrigin } from "./constants.ts"
  * segment driver's park point; the ids returned here get their bodies
  * rendered into the server byte-cache so the real flip-in lanes replay
  * warm bytes. Only chunks are worth projecting — quad tiles' bodies
- * are trivial structural JSX.
+ * are trivial structural JSX. A candidate's spec type names its
+ * geometry (`world-chunk`, `world-chunk-128`, …), which fixes the
+ * chunk size its coordinates are measured in.
  */
 
 /**
@@ -17,21 +19,25 @@ import { CHUNK_PX, chunkOrigin } from "./constants.ts"
  * swept viewport box runs from the statement's extrapolated NOW to
  * receivedAt + horizon; a statement older than its own horizon
  * projects nothing (it has been overtaken by its own extrapolation).
- * 1200ms reaches ~1.7 chunk rows at WASD speed (720px/s × 1.2s ≈
- * 864px ≈ 512px chunks) — the chunks whose flips fire next — without
- * sweeping half the world on a fast fling (the framework's per-park
- * cap truncates the rest, nearest first).
+ * 1200ms reaches ~1.7 chunk rows at WASD speed over the default
+ * geometry (720px/s × 1.2s ≈ 864px ≈ 512px chunks) — the chunks whose
+ * flips fire next — without sweeping half the world on a fast fling
+ * (the framework's per-park cap truncates the rest, nearest first).
  */
 const WARM_HORIZON_MS = 1200
 
 /**
- * Minimum speed (plane px/s) worth projecting. Below ~half a chunk
- * per second the cull runway (the chunk's 100px rootMargin) plus one
- * flip-lane round-trip already fills chunks before the viewport
- * reaches them — warming pays only when the viewport outruns that
- * pipeline.
+ * Minimum speed (plane px/s) worth projecting. Below ~half a default
+ * chunk per second the cull runway (the chunk's 100px rootMargin)
+ * plus one flip-lane round-trip already fills chunks before the
+ * viewport reaches them — warming pays only when the viewport outruns
+ * that pipeline.
  */
 const WARM_MIN_SPEED_PX_S = 240
+
+const geometryByChunkType = new Map<string, WorldGeometry>(
+  GEOMETRIES.map((geo) => [geo.chunkSpecId, geo]),
+)
 
 registerWarmProjector((telemetry, candidates) => {
   const { viewport, scroll, receivedAt } = telemetry
@@ -56,19 +62,20 @@ registerWarmProjector((telemetry, candidates) => {
 
   const hits: Array<{ id: string; d: number }> = []
   for (const c of candidates) {
-    if (c.type !== "world-chunk") continue
+    const geo = geometryByChunkType.get(c.type ?? "")
+    if (!geo) continue
     const cx = c.props?.cx
     const cy = c.props?.cy
     if (typeof cx !== "number" || typeof cy !== "number") continue
-    const bx = chunkOrigin(cx)
-    const by = chunkOrigin(cy)
-    if (bx >= right || bx + CHUNK_PX <= left) continue
-    if (by >= bottom || by + CHUNK_PX <= top) continue
+    const bx = geo.chunkOrigin(cx)
+    const by = geo.chunkOrigin(cy)
+    if (bx >= right || bx + geo.chunkPx <= left) continue
+    if (by >= bottom || by + geo.chunkPx <= top) continue
     // Nearest-to-viewport first: for a straight sweep, distance from
     // the current viewport center orders chunks by time-to-reach.
     hits.push({
       id: c.id,
-      d: Math.hypot(bx + CHUNK_PX / 2 - centerX, by + CHUNK_PX / 2 - centerY),
+      d: Math.hypot(bx + geo.chunkPx / 2 - centerX, by + geo.chunkPx / 2 - centerY),
     })
   }
   hits.sort((a, b) => a.d - b.d)

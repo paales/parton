@@ -42,7 +42,9 @@ body {
    Text sits ON the grid: line-height is exactly one tile, and
    letter-spacing pads each glyph's advance (1ch in a monospace face)
    up to exactly one tile, so every character occupies one 16×16px
-   cell. */
+   cell. `--chunk` follows the page's selected chunk geometry (the
+   scroller sets it for non-default sizes); the major grid lines and
+   chunk boxes derive from it, the tile grid is geometry-independent. */
 .plane {
   position: relative;
   width: 32768px;
@@ -57,8 +59,8 @@ body {
     linear-gradient(var(--grid-minor) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px);
   background-size:
-    512px 512px,
-    512px 512px,
+    var(--chunk, 512px) var(--chunk, 512px),
+    var(--chunk, 512px) var(--chunk, 512px),
     var(--tile) var(--tile),
     var(--tile) var(--tile);
 }
@@ -92,8 +94,29 @@ body {
 
 .chunk {
   position: absolute;
-  width: 512px;
-  height: 512px;
+  width: var(--chunk, 512px);
+  height: var(--chunk, 512px);
+}
+
+/* 128px chunks are 8 tiles across — tile-height type would drown the
+   cell, so the labels drop to half a tile and to the face's natural
+   advance. Legibility knob only; the 256/512 geometries keep the
+   one-character-per-tile world type. */
+.plane[data-chunk="128"] .chunk {
+  font-size: 8px;
+  line-height: 8px;
+  letter-spacing: 0;
+}
+
+.plane[data-chunk="128"] .chunk__coord {
+  left: 8px;
+  padding-left: 0;
+}
+
+.plane[data-chunk="128"] .chunk__pulse {
+  top: 8px;
+  left: 8px;
+  padding-left: 0;
 }
 
 /* Letter-spacing trails each glyph, leaving it left-hugged in its

@@ -1,27 +1,28 @@
 /**
  * World geometry. A tile is the atomic 16px grid cell — and the em
  * square of the world's type: every character advances exactly one
- * tile. A chunk is 32×32 tiles (512px) and is the content parton. The
+ * tile. A chunk is the content parton; its size is SELECTABLE per
+ * request (`?chunk=128|256|512`, default 512) — a scaling knob that
+ * drives the same 32768px plane at up to 16× the chunk density. The
  * plane above the chunk is a QUADTREE of cullable quad tiles: the
  * 32768px world splits into four 16384px roots, each subdividing in
- * half per level down to 1024px leaves that place 2×2 chunks. Every
- * level materializes its four children only near the viewport, so the
+ * half per level down to leaves that place 2×2 chunks. Every level
+ * materializes its four children only near the viewport, so the
  * placed tree is O(visible chunks + log₂ world) — a viewport costs
  * the same whether the plane is 32768px or a million.
  *
- * Chunk coordinates are signed: cx,cy ∈ [-32, 31], so chunk 0,0's
- * top-left corner is the exact center of the plane — where the
- * scroller starts.
+ * All chunk-size-derived numbers come from `worldGeometry(chunkPx)`;
+ * `GEOMETRIES` holds the whitelisted family, each with its own spec
+ * chain (suffixed catalog ids — the 512 default keeps the unsuffixed
+ * ids) and its own pulse cell. Chunk coordinates are signed:
+ * cx,cy ∈ [-chunkHalf, chunkHalf), so chunk 0,0's top-left corner is
+ * the exact center of the plane — where the scroller starts.
  */
 export const TILE_PX = 16
-export const CHUNK_TILES = 32
-export const CHUNK_PX = TILE_PX * CHUNK_TILES // 512
 
 export const WORLD_PX = 32768
 /** One quadtree root — a quarter of the plane. */
 export const QUAD_ROOT_PX = WORLD_PX / 2 // 16384
-/** The smallest quad tile; its four children are chunks. */
-export const QUAD_LEAF_PX = CHUNK_PX * 2 // 1024
 
 /** Plane coordinate of the world center — chunk 0,0's top-left. */
 export const CENTER_PX = WORLD_PX / 2
@@ -30,30 +31,6 @@ export const CENTER_PX = WORLD_PX / 2
  *  band, so you can watch chunks pop in as you scroll — the demo IS
  *  the loading. */
 export const CHUNK_FLIP_MARGIN_PX = 100
-
-/**
- * Materialization runway for a quad tile of `size` — STAGGERED per
- * level, because a tile's flip-in is what mounts its children's
- * cull-pairs (their skeletons and observers). Equal margins at parent
- * and child would put every freshly mounted observer already past its
- * own flip line: mount → measure → flip → lane → mount the next
- * level, one single-id statement per frame down the whole spine. With
- * the stagger, a column crosses each flip line with its observers
- * long mounted, and the IntersectionObserver batches the crossing
- * into ONE delivery → one statement carrying all its ids.
- *
- * The arithmetic: the leaf materializes its 2×2 chunks at 2×CHUNK_PX
- * (1024px), a 924px gap over the chunks' tight 100px pop-in line —
- * ~1.3s at the WASD cruise speed (720px/s), >700ms at the validator's
- * 1280px/s warm scroll, generous cover for the leaf lane's round trip
- * + skeleton mount + first measurement. Each level above adds one
- * CHUNK_PX: a tile of size S flips at margin(S) and mounts children
- * whose own line is margin(S/2) = margin(S) − 512, so every hop of
- * the spine gets one chunk-column of scroll (~0.4s at warm speed) to
- * complete its lane round trip before the next flip is due. Root
- * (16384) lands at 3072px. */
-export const quadMaterializeMargin = (size: number): number =>
-  2 * CHUNK_PX + CHUNK_PX * Math.log2(size / QUAD_LEAF_PX)
 
 /** The cold-seed viewport estimate: a 1920×1080 box centered on the
  *  plane's center. Every quad level and the chunks seed off the same
@@ -71,5 +48,98 @@ export const seedIntersects = (x: number, y: number, size: number): boolean =>
   y < CENTER_PX + SEED_HALF_H &&
   y + size > CENTER_PX - SEED_HALF_H
 
-/** A chunk's plane-coordinate box origin. */
-export const chunkOrigin = (c: number): number => CENTER_PX + c * CHUNK_PX
+/** The whitelisted chunk sizes. 512 is the default (and the only one
+ *  a bare URL ever serves); 256/128 are density stress geometries. */
+export const CHUNK_SIZES = [512, 256, 128] as const
+export type ChunkPx = (typeof CHUNK_SIZES)[number]
+export const DEFAULT_CHUNK_PX: ChunkPx = 512
+
+/** Per-geometry pulse-ticker cap (LRU past it). Scales with chunk
+ *  density so the stress geometries actually exercise the load a
+ *  dense viewport implies (a 4K viewport shows ~600 128px chunks)
+ *  instead of hiding it behind the 512 default's cap. */
+const TICKER_CAPS: Record<ChunkPx, number> = { 512: 512, 256: 1024, 128: 4096 }
+
+/**
+ * One chunk-size geometry — every number and identifier the spec
+ * chain, pulse layer, and warm projector derive from the chunk size.
+ * The default (512) geometry keeps the historical unsuffixed ids
+ * (`world-chunk`, `quad-tile-<size>`, `world.pulse`), so its wire and
+ * catalog are byte-for-byte what a bare URL always served; the others
+ * suffix everything with `-<chunkPx>` — the spec catalog is one flat
+ * namespace, so every spec of a chain needs a distinct id.
+ */
+export interface WorldGeometry {
+  chunkPx: ChunkPx
+  /** Tiles per chunk edge (the 16px grid is geometry-independent). */
+  chunkTiles: number
+  /** Chunk coords span [-chunkHalf, chunkHalf). */
+  chunkHalf: number
+  /** The smallest quad tile; its four children are chunks. */
+  quadLeafPx: number
+  /** Quad tile sizes, leaf → root (16384). */
+  quadSizes: readonly number[]
+  /** Catalog-id suffix: `""` for the default, `"-128"` etc. */
+  suffix: string
+  /** The chunk spec's catalog id (`world-chunk`, `world-chunk-128`). */
+  chunkSpecId: string
+  /** The pulse cell's id — distinct per geometry so partitions never
+   *  collide across chunk sizes. */
+  pulseCellId: string
+  /** Pulse-ticker LRU cap for this geometry's density. */
+  tickerCap: number
+  /** A chunk's plane-coordinate box origin. */
+  chunkOrigin(c: number): number
+  /**
+   * Materialization runway for a quad tile of `size` — STAGGERED per
+   * level, because a tile's flip-in is what mounts its children's
+   * cull-pairs (their skeletons and observers). Equal margins at
+   * parent and child would put every freshly mounted observer already
+   * past its own flip line: mount → measure → flip → lane → mount the
+   * next level, one single-id statement per frame down the whole
+   * spine. With the stagger, a column crosses each flip line with its
+   * observers long mounted, and the IntersectionObserver batches the
+   * crossing into ONE delivery → one statement carrying all its ids.
+   *
+   * The arithmetic: the leaf materializes its 2×2 chunks at 2×chunkPx,
+   * a wide gap over the chunks' tight 100px pop-in line — generous
+   * cover for the leaf lane's round trip + skeleton mount + first
+   * measurement at the WASD cruise speed (720px/s) and the validator's
+   * 1280px/s warm scroll. Each level above adds one chunkPx: a tile of
+   * size S flips at margin(S) and mounts children whose own line is
+   * margin(S/2) = margin(S) − chunkPx, so every hop of the spine gets
+   * one chunk-column of scroll to complete its lane round trip before
+   * the next flip is due.
+   */
+  quadMaterializeMargin(size: number): number
+}
+
+export function worldGeometry(chunkPx: ChunkPx): WorldGeometry {
+  const quadLeafPx = chunkPx * 2
+  const quadSizes: number[] = []
+  for (let size = quadLeafPx; size <= QUAD_ROOT_PX; size *= 2) quadSizes.push(size)
+  const suffix = chunkPx === DEFAULT_CHUNK_PX ? "" : `-${chunkPx}`
+  return {
+    chunkPx,
+    chunkTiles: chunkPx / TILE_PX,
+    chunkHalf: WORLD_PX / chunkPx / 2,
+    quadLeafPx,
+    quadSizes,
+    suffix,
+    chunkSpecId: `world-chunk${suffix}`,
+    pulseCellId: `world.pulse${suffix ? `.${chunkPx}` : ""}`,
+    tickerCap: TICKER_CAPS[chunkPx],
+    chunkOrigin: (c) => CENTER_PX + c * chunkPx,
+    quadMaterializeMargin: (size) => 2 * chunkPx + chunkPx * Math.log2(size / quadLeafPx),
+  }
+}
+
+/** The whitelisted geometry family — every spec chain registers at
+ *  module scope, one per entry. */
+export const GEOMETRIES: readonly WorldGeometry[] = CHUNK_SIZES.map(worldGeometry)
+
+/** Resolve a `?chunk=` param against the whitelist — anything else
+ *  (including absence) is the 512 default. */
+export const geometryFor = (chunkParam: string | null): WorldGeometry =>
+  GEOMETRIES.find((g) => String(g.chunkPx) === chunkParam) ??
+  (GEOMETRIES.find((g) => g.chunkPx === DEFAULT_CHUNK_PX) as WorldGeometry)

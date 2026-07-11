@@ -1,28 +1,25 @@
 import type { RenderArgs } from "@parton/framework"
 import { parton } from "@parton/framework"
-import { WorldChunk } from "./chunk.tsx"
-import {
-  CHUNK_PX,
-  QUAD_LEAF_PX,
-  QUAD_ROOT_PX,
-  quadMaterializeMargin,
-  seedIntersects,
-} from "./constants.ts"
+import { defineWorldChunk, type ChunkComponent } from "./chunk.tsx"
+import { CENTER_PX, seedIntersects, type WorldGeometry } from "./constants.ts"
 import { QuadShell } from "./quad-shell.tsx"
 
 /**
  * The quadtree's tiles — the recursive LOAD units, one cullable
- * parton SPEC PER LEVEL (1024 … 16384). A tile covers the
- * plane-coordinate box `[x, x+size)²`; in view it materializes its
- * four half-size children (the next level's tiles, or 2×2 chunks at
- * the leaf), out of view the framework skips its body and the client
- * renders `QuadShell` — so the whole subtree under an off-screen tile
- * costs one ~200-byte pair, no matter how much world it covers. Each
- * child sits in its own positioned box (`contain: strict`) so a
- * tile's materialization never lays out beyond its cell.
+ * parton SPEC PER LEVEL PER GEOMETRY (`geo.quadSizes`, leaf … 16384;
+ * catalog ids `quad-tile-<size>` for the 512 default, suffixed
+ * `quad-tile-<size>-<chunkPx>` for the density geometries — the
+ * catalog is one flat namespace). A tile covers the plane-coordinate
+ * box `[x, x+size)²`; in view it materializes its four half-size
+ * children (the next level's tiles, or 2×2 chunks at the leaf), out
+ * of view the framework skips its body and the client renders
+ * `QuadShell` — so the whole subtree under an off-screen tile costs
+ * one ~200-byte pair, no matter how much world it covers. Each child
+ * sits in its own positioned box (`contain: strict`) so a tile's
+ * materialization never lays out beyond its cell.
  *
  * The levels are separate specs because their cull runways are
- * STAGGERED (`quadMaterializeMargin`): each tile mounts its
+ * STAGGERED (`geo.quadMaterializeMargin`): each tile mounts its
  * children's observers one chunk-column of scroll before their own
  * flip line, so a steady scroll crosses every level's line with the
  * observers long mounted and the IntersectionObserver batches each
@@ -37,9 +34,14 @@ import { QuadShell } from "./quad-shell.tsx"
  */
 
 type QuadPos = { x: number; y: number }
-type QuadLevel = (props: QuadPos) => React.ReactNode | Promise<React.ReactNode>
+export type QuadLevel = (props: QuadPos) => React.ReactNode | Promise<React.ReactNode>
 
-function defineQuadLevel(size: number, Child: QuadLevel | null): QuadLevel {
+function defineQuadLevel(
+  geo: WorldGeometry,
+  size: number,
+  Child: QuadLevel | null,
+  Chunk: ChunkComponent,
+): QuadLevel {
   const half = size / 2
   return parton(
     function QuadTileRender({ x, y }: QuadPos & RenderArgs) {
@@ -55,7 +57,10 @@ function defineQuadLevel(size: number, Child: QuadLevel | null): QuadLevel {
               style={{ left: dx * half, top: dy * half, width: half, height: half }}
             >
               {Child === null ? (
-                <WorldChunk cx={cellX / CHUNK_PX - 32} cy={cellY / CHUNK_PX - 32} />
+                <Chunk
+                  cx={(cellX - CENTER_PX) / geo.chunkPx}
+                  cy={(cellY - CENTER_PX) / geo.chunkPx}
+                />
               ) : (
                 <Child x={cellX} y={cellY} />
               )}
@@ -66,9 +71,9 @@ function defineQuadLevel(size: number, Child: QuadLevel | null): QuadLevel {
       return <>{cells}</>
     },
     {
-      selector: `#quad-tile-${size}`,
+      selector: `#quad-tile-${size}${geo.suffix}`,
       cull: {
-        rootMargin: `${quadMaterializeMargin(size)}px`,
+        rootMargin: `${geo.quadMaterializeMargin(size)}px`,
         seed: ({ x, y }: QuadPos) => seedIntersects(x, y, size),
         skeleton: QuadShell,
       },
@@ -76,10 +81,15 @@ function defineQuadLevel(size: number, Child: QuadLevel | null): QuadLevel {
   )
 }
 
-// Leaf (1024, places 2×2 chunks) up to the root tile (16384).
-let level: QuadLevel | null = null
-for (let size = QUAD_LEAF_PX; size <= QUAD_ROOT_PX; size *= 2) {
-  level = defineQuadLevel(size, size === QUAD_LEAF_PX ? null : level)
+/** Build one geometry's whole spec chain — the chunk spec plus the
+ *  quad levels from the leaf (places 2×2 chunks) up to the root tile
+ *  (16384px, what the world page places). Called once per whitelisted
+ *  geometry at module scope. */
+export function defineQuadTree(geo: WorldGeometry): QuadLevel {
+  const Chunk = defineWorldChunk(geo)
+  let level: QuadLevel | null = null
+  for (const size of geo.quadSizes) {
+    level = defineQuadLevel(geo, size, size === geo.quadLeafPx ? null : level, Chunk)
+  }
+  return level as QuadLevel
 }
-/** The root-level (16384px) tile — what the world page places. */
-export const QuadTile = level as QuadLevel

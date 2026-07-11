@@ -22,8 +22,13 @@ import { CENTER_PX } from "./constants.ts"
  * envelopes other statements justify, adds no traffic of its own).
  * Server-side, the warm projector (./warm.ts) turns the statements
  * into predictive chunk warming.
+ *
+ * `chunkPx` follows the page's selected geometry: it drives the
+ * plane's `--chunk` CSS variable (chunk box size + major grid lines)
+ * and a `data-chunk` hook for density-specific type. The default
+ * geometry passes nothing — the plane renders exactly the 512 world.
  */
-export function WorldScroller({ children }: { children: ReactNode }) {
+export function WorldScroller({ children, chunkPx }: { children: ReactNode; chunkPx?: number }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -129,7 +134,16 @@ export function WorldScroller({ children }: { children: ReactNode }) {
 
   return (
     <div ref={scrollerRef} className="scroller" data-testid="world-scroller">
-      <div className="plane" data-testid="world-plane">
+      <div
+        className="plane"
+        data-testid="world-plane"
+        {...(chunkPx === undefined
+          ? {}
+          : {
+              "data-chunk": chunkPx,
+              style: { "--chunk": `${chunkPx}px` } as React.CSSProperties,
+            })}
+      >
         <div className="center-anchor" aria-hidden />
         {children}
       </div>
