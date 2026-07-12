@@ -2131,6 +2131,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
       (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
     addressable,
     capabilityType: options.capabilityType,
+    fpSkip: options.fpSkip,
   })
 
   // Attach `.props` as a phantom field. The runtime value is

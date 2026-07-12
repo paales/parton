@@ -138,7 +138,7 @@ Which to use:
 | **depth**              | D ∈ {1, 4, 16}                        | N=100, M=1                    | descendant-fold cost of proving a deep subtree unchanged                                                                                 |
 | **pulse**              | bump history ∈ {512, 20k}             | N=M=512, D=2, one shared cell | invalidation-registry query cost under write history — the two rows must cost the same                                                   |
 | **soak**               | N ∈ {100, 1000, 5000} × M ∈ {0, N/10} | 3 partons/connection          | per-HELD-CONNECTION cost: steady-state heap/RSS, idle bump CPU, per-wake tick CPU — see [soak](#soak--what-a-held-live-connection-costs) |
-| **shared**             | N ∈ {10, 100, 500} × M ∈ {1, 4}       | ONE 11-parton world           | N viewers of ONE world: renders/tick = N×M — the fan-out baseline broadcast lanes must beat — see [shared](#shared--n-viewers-one-world) |
+| **shared**             | N ∈ {10, 100, 500} × M ∈ {1, 4}       | ONE 11-parton world           | N viewers of ONE world: broadcast lanes collapse renders/tick to M, independent of N — see [shared](#shared--n-viewers-one-world)        |
 
 The fixture is `buildDashboardPage({ partons: N, liveCells: M, depth: D })`
 (`bench/server/fixture.tsx`): N addressable leaf partons, M of them live
@@ -256,15 +256,18 @@ shared category prices the other production shape: **N live
 connections all subscribed to the SAME page in the SAME scope
 bucket** — one route, one fixture (8 live leaves + 2 static leaves
 under 1 wrapper), M of its cells bumped per tick. Every bump is
-relevant to ALL N connections, so today each bumped parton lanes once
-PER CONNECTION:
+relevant to ALL N connections, so every connection's wire carries
+every bumped parton's lane — but the RENDER side is collapsed by
+broadcast lanes (`docs/notes/delivery-plane.md` §D2 — render once,
+fan out):
 
-- **renders/tick = N×M.** THE number. This linear-in-N fan-out is the
-  baseline broadcast lanes (`docs/notes/delivery-plane.md` §D2 —
-  render once, personalize framing) exist to collapse to M. The gate
-  pins it **exactly** — a tick must render precisely N×M bodies (each
-  bumped leaf once per connection; no sibling, no wrapper, nothing
-  else) — so the baseline is proven, not assumed.
+- **renders/tick = M, independent of N.** THE number. Each bumped
+  parton renders exactly once per tick — the first drainer publishes
+  the encoded body into the broadcast slot, the other N−1 connections
+  consume the bytes and pay only framing. The gate pins it
+  **exactly** — a tick must render precisely M bodies (each bumped
+  leaf once process-wide; no sibling, no wrapper, no per-connection
+  copy) — so the collapse is proven, not assumed.
 
 The connection plumbing, phase structure, memory accounting, and idle
 gate are the soak's; only the isolation inverts. Where the soak gives
@@ -280,8 +283,9 @@ already characterized by the main table).
 
 Per scenario (N ∈ {10, 100, 500} × M ∈ {1, 4}), the soak columns plus:
 
-- **rndr/tick** — gate-tick render count, gated to exactly N×M.
-- **µs/lane** — tick CPU ÷ N×M lanes.
+- **rndr/tick** — gate-tick render count, gated to exactly M.
+- **µs/lane** — tick CPU ÷ N×M wire lanes (framing + mirror
+  bookkeeping per delivered lane; the M renders amortize into it).
 - **tick B** — downstream bytes per tick aggregated across all N
   wires (each connection is shipped every bumped parton's lane).
 - **B/wake** — reads HIGHER here than in the soak (hundreds of bytes,
@@ -296,7 +300,7 @@ Per scenario (N ∈ {10, 100, 500} × M ∈ {1, 4}), the soak columns plus:
 The gates, in the established style — the run hard-fails on any
 violation:
 
-- **A tick renders exactly N×M bodies** — checked on the gate tick
+- **A tick renders exactly M bodies** — checked on the gate tick
   and every measured tick.
 - **Delivery correctness, per connection:** every connection's own
   wire must carry every wake round — each connection's `settled`
@@ -307,8 +311,8 @@ violation:
   across the irrelevant-bump phase (same zero-render gate as soak).
 - **Every connection stays held to teardown.**
 
-Shared ticks are the heaviest in the file (one tick = N×M lane
-renders), so the category shares the soak's smaller defaults
+Shared ticks are the heaviest in the file (one tick still frames and
+ships N×M lanes), so the category shares the soak's smaller defaults
 (warmup=5, measure=30).
 
 ## Reading the numbers

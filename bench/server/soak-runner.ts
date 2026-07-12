@@ -68,11 +68,15 @@
  * prevent; here it is the point, and the probe proves the bucket is a
  * deliberately-named shared one, not an accident of the default
  * scope). One fixture, P partons, M of them bumped per tick — and
- * every bump is relevant to ALL N connections, so a tick renders
- * exactly N×M bodies: each bumped leaf lanes once PER CONNECTION.
- * That N×M is the "N viewers, one world" fan-out baseline broadcast
- * lanes exist to collapse to M (delivery-plane.md §D2) — the gate
- * pins it exactly so the baseline is proven, not assumed.
+ * every bump is relevant to ALL N connections, so every connection's
+ * wire carries every bumped leaf's lane. With broadcast lanes
+ * (delivery-plane.md §D2) the RENDER side collapses: each bumped leaf
+ * renders exactly ONCE per tick (the first drainer publishes the
+ * encoded body into the broadcast slot; the other N−1 connections
+ * consume the bytes and pay only framing), so a tick renders exactly M
+ * bodies, independent of N — the gate pins it exactly, alongside the
+ * per-connection delivery gate (every connection still settles every
+ * wake round).
  */
 
 import {
@@ -146,13 +150,14 @@ export interface SharedSoakGateResult {
   /** Renders during those bumps — MUST be 0, same as the isolated
    *  soak: an irrelevant bump misses every registration. */
   idleRenders: number
-  /** Renders in the single gate tick — must equal N×M EXACTLY: every
-   *  bumped leaf is relevant to all N connections, so each lanes once
-   *  per connection. This is the fan-out baseline the measurement
-   *  exists to price; the gate proves it measures what it claims. */
+  /** Renders in the single gate tick — must equal M EXACTLY: each
+   *  bumped leaf renders once into the broadcast slot (the first
+   *  drainer publishes; the other N−1 connections consume the bytes),
+   *  independent of N. This is the render-collapse broadcast lanes
+   *  exist for; the gate proves it measures what it claims. */
   tickRenders: number
   expectedTickRenders: number
-  /** Measured ticks whose render delta deviated from N×M. */
+  /** Measured ticks whose render delta deviated from M. */
   tickRenderViolations: number
   /** Wake rounds every connection must have drained by the end of the
    *  measurement: the gate tick + warmup + measured ticks. */
@@ -826,20 +831,22 @@ export async function runSharedSoakScenario(
     // synchronous batch. Every bump is relevant to every connection:
     // all N parked drivers wake once (the M bumps land in each pending
     // set before its microtask continuation runs, so they drain in ONE
-    // round), each renders its M lanes, each emits one `settled`
-    // marker — the tick completes at the Nth marker.
+    // round), each ships its M lanes — but each bumped leaf RENDERS
+    // only once, into the broadcast slot the other N−1 consume — and
+    // each emits one `settled` marker; the tick completes at the Nth
+    // marker.
     const activeSelectors = fixture.liveSelectors.slice(0, m)
-    const expectedTickRenders = n * m
+    const expectedTickRenders = m
     const tick = async (): Promise<void> => {
       const target = counters.settles + n
       for (const sel of activeSelectors) refreshSelector(sel)
       await settlesReach(counters, target)
     }
 
-    // Gate tick: the render delta must be exactly N×M — each bumped
-    // leaf laned once per connection; no sibling, no wrapper, nothing
-    // else ran. THE number this category exists to pin: the fan-out
-    // baseline broadcast has to collapse.
+    // Gate tick: the render delta must be exactly M — each bumped leaf
+    // rendered once process-wide (broadcast); no sibling, no wrapper,
+    // no per-connection copy ran. THE number this category exists to
+    // pin: renders/tick independent of N.
     resetRenderCount()
     await tick()
     await yieldEventLoop()
@@ -931,8 +938,9 @@ export async function runSharedSoakScenario(
       },
       ticks: {
         measured: wallUs.length,
-        // Every bump lanes on every connection: N×M lanes per tick.
-        lanesPerTick: expectedTickRenders,
+        // Every bump still LANES on every connection (per-viewer bytes):
+        // N×M wire lanes per tick — only the renders collapsed to M.
+        lanesPerTick: n * m,
         wall: {
           p50us: percentile(sortedWall, 50),
           p95us: percentile(sortedWall, 95),
@@ -940,7 +948,7 @@ export async function runSharedSoakScenario(
           meanUs: wallMean,
         },
         cpuMeanUs: cpuMean,
-        cpuPerLaneUs: cpuMean / expectedTickRenders,
+        cpuPerLaneUs: cpuMean / (n * m),
         bytesMeanPerTick: bytesMean,
       },
     }
@@ -977,9 +985,10 @@ export const SOAK_SWEEP: SoakSpec[] = [100, 1000, 5000].flatMap((n) => [
 
 /** Shared-scope soak: N viewers of ONE world (one route, one scope
  *  bucket), M of its partons bumped per tick — every bump relevant to
- *  all N. The N-sweep at fixed M prints the fan-out curve (renders/tick
- *  = N×M today) that broadcast lanes must collapse to M; the M axis
- *  shows how the per-tick fixed overhead amortizes across lanes. */
+ *  all N. Broadcast lanes collapse the fan-out's render side: the
+ *  N-sweep at fixed M proves renders/tick = M independent of N (each
+ *  connection still SHIPS every lane — bytes stay per-viewer); the M
+ *  axis shows how the per-tick fixed overhead amortizes across lanes. */
 export const SHARED_SWEEP: SoakSpec[] = [10, 100, 500].flatMap((n) =>
   [1, 4].map((m) => ({
     name: `shared/N=${n}+M=${m}`,

@@ -73,8 +73,18 @@ import {
 } from "./connection-session.ts"
 import { getEphemeralCellStorage } from "../runtime/cell-storage.ts"
 import { RenderCancelledError } from "../runtime/errors.ts"
+import {
+  _acquireBroadcastRoute,
+  _broadcastEligible,
+  _broadcastMarkProducer,
+  _broadcastRouteShared,
+  _broadcastSlotTtlMs,
+  _claimBroadcastSlot,
+  type BroadcastClaim,
+  type BroadcastResult,
+} from "./broadcast.ts"
 import { renderToReadableStream } from "./flight-runtime.ts"
-import { wrapStreamWithFpTrailer } from "./fp-trailer.ts"
+import { _recomputeSubtreeWarmFp, wrapStreamWithFpTrailer } from "./fp-trailer.ts"
 import {
   buildMarker,
   type FpUpdatesPayload,
@@ -92,10 +102,15 @@ import type { PartialSnapshot } from "./partial-registry.ts"
 import {
   _readRouteDescendants,
   _readSnapshotsForRoute,
+  effectiveExpiresAt,
   enterRequestRegistry,
   lookupPartial,
 } from "./partial-registry.ts"
-import { enterPartialState, type PartialRequestState } from "./partial-request-state.ts"
+import {
+  enterPartialState,
+  runWithPartialState,
+  type PartialRequestState,
+} from "./partial-request-state.ts"
 import { muxEndFrame, muxFrame } from "./parton-mux.ts"
 import {
   _assertWakeParity,
@@ -967,6 +982,14 @@ async function driveLaneStream(
   // and every per-wake read below (snapshots, registry re-entry) must
   // follow it to the new route.
   let routeKey = computeRouteKey(request.url)
+  // This connection's refcount on its route's broadcast-slot space —
+  // keyed by (scope, effective URL) so two viewers share a slot only
+  // when their whole request-URL dimension is equal (the slot key is
+  // what makes `search:`/`match:` deps viewer-independent). Moved at a
+  // navigation consume; released with the subscription
+  // (`_closeRouteWakeSubscription`), so the last subscriber's exit
+  // drops the route's slots.
+  subscription.broadcastRoute ??= _acquireBroadcastRoute(`${scope}|${effectiveNavUrl(request.url)}`)
   // Register the route's snapshots into the wake index — and their
   // declared `expires()` boundaries into the connection's deadline
   // wheel — before the first park. `coveredTs = sinceTs` — the
@@ -978,6 +1001,30 @@ async function driveLaneStream(
   _syncRouteWakeSubscription(subscription, _readSnapshotsForRoute(scope, routeKey), sinceTs)
   const lanes = new Map<string, LaneRuntime>()
   const openLaneIds = new Set<string>()
+  // Whether this connection's mirror holds a matchKey OTHER than the
+  // canonical one for any id in `carrierId`'s subtree — the broadcast
+  // consume guard: variant siblings (hidden Activity slots for a
+  // connection's parked variants) are a PER-CONNECTION emission the
+  // shared body cannot carry, so such a connection renders its own.
+  const subtreeHasForeignVariant = (
+    carrierId: string,
+    all: ReadonlyMap<string, PartialSnapshot>,
+    override: { matchKeys: Map<string, Set<string>> },
+  ): boolean => {
+    const foreign = (cid: string): boolean => {
+      const mks = override.matchKeys.get(cid)
+      if (!mks || mks.size === 0) return false
+      const own = all.get(cid)?.matchKey
+      for (const mk of mks) if (mk !== own) return true
+      return false
+    }
+    if (foreign(carrierId)) return true
+    const subtree = _readRouteDescendants(scope, routeKey).get(carrierId)
+    if (subtree) {
+      for (const did of subtree) if (foreign(did)) return true
+    }
+    return false
+  }
   // Ids whose NEXT lane renders EXPLICIT (the lane state's
   // explicitIds) — a url statement's `__force` targets: fp-skip and
   // the defer gate both yield, exactly as for a discrete `?partials=`
@@ -1289,6 +1336,184 @@ async function driveLaneStream(
           announcedSeq = assignedSeq ?? ++session.deliverySeq
           return enqueue(muxLiveEntry(id, announcedSeq, session.consumedNavSeq, navSeq))
         }
+        // ── Broadcast slot (render once, fan out — delivery-plane D2) ──
+        // A viewer-independent lane (`_broadcastEligible` — the dep
+        // record is the proof) renders ONCE per generation process-wide:
+        // the first drainer publishes the encoded body into the route's
+        // slot; every other connection consumes the bytes and pays only
+        // framing. The publisher's render runs in a FRESH empty partial
+        // state (never fp-skips, never touches any connection's mirror)
+        // so the body is connection-neutral; everything per-connection —
+        // the seq entry, the muxend, the promote, the delivery record,
+        // and the fp-SKIP decision below — still happens per connection.
+        const publishBroadcastBody = async (
+          claim: Extract<BroadcastClaim, { role: "publish" }>,
+        ): Promise<BroadcastResult> => {
+          const failed: BroadcastResult = {
+            ok: false,
+            chunks: [],
+            heals: {},
+            resultSnap: null,
+            gen: null,
+            expiresAt: 0,
+          }
+          const chunks: Uint8Array[] = []
+          const heals: FpUpdatesPayload = {}
+          const bodyProbe = _createConnectionLiveProbe()
+          let ended: "drained" | "producer" | "torn"
+          try {
+            ended = await bodyProbe.run(() =>
+              runWithPartialState(
+                {
+                  // Fresh empty partial state — the shared body must
+                  // never fp-skip (a placeholder is a per-connection
+                  // statement) and must never read or mutate a mirror.
+                  requestedIds: null,
+                  isPartialRefetch: true,
+                  cachedFingerprints: new Map(),
+                  cachedMatchKeys: new Map(),
+                  ackedFingerprints: null,
+                  explicitIds: new Set(),
+                  seenIds: new Set(),
+                },
+                async () => {
+                  const flight = renderToReadableStream(partialFromSnapshot(id, snap))
+                  const wrapped = wrapStreamWithFpTrailer(flight, _captureCommitHandle(), {
+                    incremental: false,
+                    flushScopeId: id,
+                    onUpdates: (updates) => {
+                      Object.assign(heals, updates)
+                    },
+                  })
+                  const reader = wrapped.getReader()
+                  try {
+                    while (true) {
+                      const { done, value } = await reader.read()
+                      if (done) return "drained" as const
+                      if (bodyProbe.live()) {
+                        await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
+                        return "producer" as const
+                      }
+                      if (tearingLanesForNav || runtime.cancelled || demand?.cancelled === true) {
+                        await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
+                        return "torn" as const
+                      }
+                      if (value && value.byteLength > 0) chunks.push(value)
+                    }
+                  } finally {
+                    reader.releaseLock()
+                  }
+                },
+              ),
+            )
+          } catch {
+            claim.abandon()
+            return failed
+          }
+          if (ended === "producer") {
+            // The body declared itself a PRODUCER mid-stream — it holds
+            // its lane open until an unbounded await resolves, which a
+            // buffered slot can never model. Remember the id so the
+            // probe render never repeats; every connection renders its
+            // own producer lane, exactly as today.
+            const bKey = subscription.broadcastRoute?.key
+            if (bKey !== undefined) _broadcastMarkProducer(bKey, id)
+          }
+          if (ended !== "drained") {
+            claim.abandon()
+            return failed
+          }
+          // Reading to done ran the wrap's flush: the render's snapshot
+          // registrations are committed (the eager canonical publish)
+          // and the heals are final. The generation is the recomputed
+          // warm fp — the SAME value every consumer recomputes.
+          const resultSnap = _readSnapshotsForRoute(scope, routeKey).get(id) ?? null
+          const gen = _recomputeSubtreeWarmFp(scope, routeKey, id, request)
+          const boundary = resultSnap ? effectiveExpiresAt(resultSnap) : undefined
+          const expiresAt = Math.min(
+            boundary !== undefined && Number.isFinite(boundary) ? boundary : Infinity,
+            Date.now() + _broadcastSlotTtlMs(),
+          )
+          const result: BroadcastResult = {
+            ok: resultSnap !== null && gen !== null,
+            chunks,
+            heals,
+            resultSnap,
+            gen,
+            expiresAt,
+          }
+          claim.publish(result)
+          return result
+        }
+
+        // `null` = no slot path for this lane — render your own body
+        // (the normal iteration below). Every `null` is the over-render
+        // direction: broadcast can only skip work, never substitute
+        // bytes a per-connection verdict wouldn't have produced.
+        const runBroadcastIteration = async (): Promise<"drained" | "torn" | "closed" | null> => {
+          const bRoute = subscription.broadcastRoute
+          if (bRoute === null || session === null) return null
+          // Single-viewer routes take the ordinary per-connection render
+          // untouched — byte-identical wire, no buffering. Broadcast
+          // only engages where a second viewer exists to save a render.
+          if (!_broadcastRouteShared(bRoute.key)) return null
+          const all = _readSnapshotsForRoute(scope, routeKey)
+          // The looked-up snapshot must BE the canonical one (not a
+          // pending per-request overlay), or the generation recompute
+          // below would describe a different object.
+          if (all.get(id) !== snap) return null
+          if (!_broadcastEligible(id, all, _readRouteDescendants(scope, routeKey))) return null
+          // The generation: the fp a fresh render would emit right now
+          // (dep values re-read, live invalidation ts, descendant fold).
+          // Equal generations ⇒ equal bytes — fp-skip's own soundness
+          // contract; a newer bump moves it, so an older slot can never
+          // be served past a newer bump.
+          const gen = _recomputeSubtreeWarmFp(scope, routeKey, id, request)
+          if (gen === null) return null
+          // The per-connection fp-SKIP decision, untouched and in its
+          // usual place — BEFORE any body work: a connection whose
+          // mirror holds the generation (and whose snapshot is inside
+          // its declared freshness) takes the normal render, whose own
+          // verdict ships the skip placeholder, never the body.
+          const mirrorHolds =
+            (laneOverride?.fingerprints.get(id)?.has(gen) ?? false) ||
+            (session.ackedFps.get(id)?.has(gen) ?? false)
+          const claimBoundary = effectiveExpiresAt(snap)
+          const claimExpired = claimBoundary !== undefined && claimBoundary <= Date.now()
+          if (mirrorHolds && !claimExpired) return null
+          // Variant siblings are a per-connection emission: a mirror
+          // holding OTHER matchKeys for any id in the subtree needs its
+          // own render (the shared body carries no hidden Activity
+          // siblings for this connection's parked variants).
+          if (laneOverride !== null && subtreeHasForeignVariant(id, all, laneOverride)) return null
+          const claim = _claimBroadcastSlot(bRoute.key, id, snap, gen, Date.now())
+          if (claim === null) return null
+          const res =
+            claim.role === "publish" ? await publishBroadcastBody(claim) : await claim.result
+          if (!res.ok) return null
+          if (closed || tearingLanesForNav || runtime.cancelled) return "torn"
+          // Consume-time validation — over-render, never wrong bytes:
+          // the published snapshot must still be canonical, THIS
+          // connection's recompute must equal the published generation,
+          // and the body must be inside its declared freshness.
+          if (res.resultSnap === null) return null
+          if (_readSnapshotsForRoute(scope, routeKey).get(id) !== res.resultSnap) return null
+          if (Date.now() >= res.expiresAt) return null
+          if (_recomputeSubtreeWarmFp(scope, routeKey, id, request) !== res.gen) return null
+          for (const bytes of res.chunks) {
+            if (!(await awaitDemand(runtime)) || tearingLanesForNav || runtime.cancelled) {
+              return runtime.cancelled || tearingLanesForNav ? "torn" : "closed"
+            }
+            if (!enqueue(muxFrame(id, bytes))) return "closed"
+            wroteBytes = true
+          }
+          // The publisher's flush heals ride the shared result — folded
+          // into THIS connection's mirror below exactly as its own
+          // render's `onUpdates` would be.
+          Object.assign(laneHeals, res.heals)
+          return "drained"
+        }
+
         const runIteration = async (): Promise<"drained" | "torn" | "closed"> => {
           const flight = renderToReadableStream(partialFromSnapshot(id, snap))
           // A lane is a single parton's render — its flush already fires
@@ -1364,14 +1589,22 @@ async function driveLaneStream(
           if (tearingLanesForNav || runtime.cancelled) return "torn"
           return "drained"
         }
-        let outcome: "drained" | "torn" | "closed"
-        try {
-          outcome = await probe.run(runIteration)
-        } catch {
-          // A cancelled suspended render can reject its reader instead
-          // of resolving it done — same wind-down as an observed tear
-          // (the assigned-seq void below must still run).
-          outcome = "torn"
+        let outcome: "drained" | "torn" | "closed" | null = null
+        // Forced lanes (explicit refetch targets, frame-nav covering
+        // lanes) always render EXPLICIT — the refetch contract; only
+        // plain deliveries (bumps, expiry, freed window) may broadcast.
+        if (session !== null && !runtime.forced && navSeq === undefined) {
+          outcome = await runBroadcastIteration()
+        }
+        if (outcome === null) {
+          try {
+            outcome = await probe.run(runIteration)
+          } catch {
+            // A cancelled suspended render can reject its reader instead
+            // of resolving it done — same wind-down as an observed tear
+            // (the assigned-seq void below must still run).
+            outcome = "torn"
+          }
         }
         if (outcome !== "drained") {
           // Torn. A CANCELLED iteration on a CONTINUING region closes
@@ -1949,6 +2182,9 @@ async function driveLaneStream(
     // against the new route's snapshots before the region reopens.
     _clearWakeSubscriptionPending(subscription.sub)
     _syncRouteWakeSubscription(subscription, _readSnapshotsForRoute(scope, routeKey), since)
+    // Follow the connection to its new URL's slot space (releases the
+    // old key; the old route's slots drop with their last subscriber).
+    subscription.broadcastRoute?.move(`${scope}|${effectiveNavUrl(request.url)}`)
     if (!enqueue(nextMarker)) return false
     if (!enqueue(lanesMarker)) return false
     // The statement's forced targets lane on the reopened region:

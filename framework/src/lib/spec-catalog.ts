@@ -52,6 +52,11 @@ export interface SpecCatalogEntry {
    *  manifest so the `parton add` CLI can generate typed bindings.
    *  See `PartialOptions.capabilityType`. */
   capabilityType?: string
+  /** The spec's `fpSkip` option. `false` = always-authoritative (the
+   *  body runs on every request, never fp-skipped) — read by the
+   *  broadcast-lane eligibility classifier (`lib/broadcast.ts`), which
+   *  keeps such specs per-connection. */
+  fpSkip?: boolean
 }
 
 const specCatalog = new Map<string, SpecCatalogEntry>()

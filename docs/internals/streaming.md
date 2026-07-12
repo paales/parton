@@ -222,6 +222,50 @@ any selector-routing logic that could replace it.
    whole-tree segment; until then the ancestor over-fetches on its
    next render, never serves stale.
 
+   **Viewer-independent lanes render once and fan out (broadcast).**
+   When several live connections subscribe to the same
+   (scope, effective URL) — the multiplayer shape — a lane whose
+   recorded read set contains no per-viewer axis is rendered ONCE per
+   generation: the first drainer renders + encodes the body and
+   publishes the bytes into a process-global slot
+   (`lib/broadcast.ts`); concurrent drainers await the in-flight
+   publish, and later drainers within the generation consume the bytes
+   instead of rendering their own copy. Eligibility is the dep record
+   (`_broadcastEligible`), ANDed over the carrier's whole subtree, and
+   conservative — anything unclassifiable keeps the lane
+   per-connection (over-render, never wrong bytes): no `session:` /
+   `cookie:` / `header:` deps, no `visible:` gate (cullable partons —
+   the world's chunks — stay per-connection), only cells on the
+   process-global persistent storage with a partition that cannot
+   derive from request scope (`_cellBroadcastSafe`), no frame scope,
+   no remote source, no `fpSkip: false`, no custom dep kinds. The
+   GENERATION is the recomputed warm fp (`_recomputeSubtreeWarmFp` in
+   fp-trailer.ts) — the exact fold fp-skip trusts — computed by the
+   publisher at publish and re-computed by every consumer under its
+   OWN request at consume: equal folds ⇒ a render on either side would
+   produce the same bytes, and a newer bump moves the fold, so an
+   older slot can never be served past it. A slot is also invalid past
+   its body's declared `expires()` boundary and a one-drain-window
+   TTL. The shared render runs in a fresh empty partial state (it must
+   never fp-skip and never touch a mirror); its flush heals ride the
+   slot and fold into each consumer's mirror exactly as its own
+   render's would. Framing stays per-connection: delivery seqs, mux
+   frames, subtree promotes, delivery records — and crucially the
+   fp-SKIP decision, evaluated per connection BEFORE the slot is
+   consulted: a connection whose mirror holds the generation (inside
+   the snapshot's freshness) takes the normal render, whose own
+   verdict ships the skip placeholder. Slots hold encoded bytes only
+   and live under a per-route entry refcounted by the subscribed
+   connections (acquired at drive start, moved at a navigation
+   consume, released with the wake subscription — the last
+   subscriber's exit drops them); a consumer that misses re-renders.
+   Single-viewer routes bypass the slot entirely — their wire is
+   byte-identical to the per-connection path. Forced/explicit lanes,
+   frame lanes, flip and cookie lanes, and producer bodies
+   (`markConnectionLive()` mid-render abandons the slot and remembers
+   the id) never broadcast. Gated by `bench:server --only=shared`:
+   renders/tick = M bumped partons, independent of the N viewers.
+
    **Parked partons don't lane.** Delivery drains drop ids whose
    own snapshot, or a cullable ancestor's, is outside the session's
    measured visible set (`isParkedOnConnection` — the same

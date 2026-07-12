@@ -26,6 +26,7 @@ import {
   type WakeSubscriberContext,
   type WakeSubscription,
 } from "../runtime/invalidation-registry.ts"
+import type { BroadcastRouteHandle } from "./broadcast.ts"
 import { effectiveExpiresAt, type PartialSnapshot } from "./partial-registry.ts"
 
 /**
@@ -384,18 +385,26 @@ export interface RouteWakeSubscription {
    *  fires due ids into `sub.pending` through the shared delivery
    *  gate. */
   readonly wheel: DeadlineWheel
+  /** The connection's refcount on its route's broadcast-slot space
+   *  (`lib/broadcast.ts`) — acquired by the lane driver at drive start,
+   *  moved at a navigation consume, and released here with the
+   *  subscription so the last subscriber's exit drops the route's
+   *  slots. `null` on a driver that never opened the lane loop. */
+  broadcastRoute: BroadcastRouteHandle | null
 }
 
 export function _openRouteWakeSubscription(context: WakeSubscriberContext): RouteWakeSubscription {
   const sub = _openWakeSubscription(context)
   const wheel = _openDeadlineWheel((ids) => _deliverToWakeSubscription(sub, ids))
-  return { sub, registered: new Map(), wheel }
+  return { sub, registered: new Map(), wheel, broadcastRoute: null }
 }
 
 export function _closeRouteWakeSubscription(rws: RouteWakeSubscription): void {
   _closeDeadlineWheel(rws.wheel)
   _closeWakeSubscription(rws.sub)
   rws.registered.clear()
+  rws.broadcastRoute?.release()
+  rws.broadcastRoute = null
 }
 
 /**

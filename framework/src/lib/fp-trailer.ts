@@ -71,6 +71,33 @@ function computeFpUpdates(
   snapshots: Map<string, PartialSnapshot>,
   request: Request,
 ): FpUpdatesPayload | null {
+  const warm = computeWarmFps(snapshots, request)
+  const updates: FpUpdatesPayload = {}
+  for (const [id, snap] of snapshots) {
+    if (!snap.emittedFp) continue
+    const recomputed = warm.get(id)
+    if (recomputed !== undefined && recomputed !== snap.emittedFp) {
+      // `from` is the cold fp the body emitted; `to` the recomputed warm
+      // fp. The client aliases `to` onto the slot still holding `from`,
+      // matched by content — see `FpUpdate` in fp-trailer-marker.ts.
+      updates[id] = { from: snap.emittedFp, to: recomputed }
+    }
+  }
+  if (Object.keys(updates).length === 0) return null
+  return updates
+}
+
+/**
+ * The recompute core: for every snapshot with an `emittedFp`, the fp a
+ * render NOW would fold — dep keys re-read at `request`, live
+ * invalidation timestamps, and the descendant fold built from the map
+ * itself. Shared by the trailer diff above and by
+ * `_recomputeSubtreeWarmFp` (the broadcast slot's generation).
+ */
+function computeWarmFps(
+  snapshots: Map<string, PartialSnapshot>,
+  request: Request,
+): Map<string, string> {
   // Per-snapshot side-data we compute once and reuse across folds +
   // own-fp recompute. constraintSurface goes into queryMatchingTs;
   // contribution is the descendant's contribution string the fold
@@ -133,27 +160,55 @@ function computeFpUpdates(
     folds.set(ancestorId, `|desc=${hash(parts.join(","))}`)
   }
 
-  const updates: FpUpdatesPayload = {}
+  const warm = new Map<string, string>()
   for (const [id, snap] of snapshots) {
     if (!snap.emittedFp) continue
     const side = sideById.get(id)!
-    const recomputed = recomputeFpWithFold(
+    warm.set(
       id,
-      snap,
-      side.constraintSurface,
-      folds.get(id) ?? "",
-      side.selfRequest.url,
-      side.depsKey,
+      recomputeFpWithFold(
+        id,
+        snap,
+        side.constraintSurface,
+        folds.get(id) ?? "",
+        side.selfRequest.url,
+        side.depsKey,
+      ),
     )
-    if (recomputed !== snap.emittedFp) {
-      // `from` is the cold fp the body emitted; `to` the recomputed warm
-      // fp. The client aliases `to` onto the slot still holding `from`,
-      // matched by content — see `FpUpdate` in fp-trailer-marker.ts.
-      updates[id] = { from: snap.emittedFp, to: recomputed }
+  }
+  return warm
+}
+
+/**
+ * The recomputed (warm) fp for ONE parton against its route subtree —
+ * the fold a fresh render of `id` would emit right now, computed from
+ * committed snapshots without running any body. The broadcast slot's
+ * GENERATION (`lib/broadcast.ts`): it folds re-read dep values and the
+ * live invalidation timestamps, so a newer bump moves it and two equal
+ * values mean a render on either side would produce the same bytes —
+ * the same soundness contract fp-skip stands on. The subtree map is
+ * the id plus its transitive route descendants (the same set a lane's
+ * scoped flush heals), which is exactly what the id's own fold needs.
+ * `null` when the id has no committed addressable snapshot.
+ */
+export function _recomputeSubtreeWarmFp(
+  scope: string,
+  routeKey: string,
+  id: string,
+  request: Request,
+): string | null {
+  const all = _readSnapshotsForRoute(scope, routeKey)
+  const self = all.get(id)
+  if (!self?.emittedFp) return null
+  const snapshots = new Map<string, PartialSnapshot>([[id, self]])
+  const subtree = _readRouteDescendants(scope, routeKey).get(id)
+  if (subtree) {
+    for (const did of subtree) {
+      const snap = all.get(did)
+      if (snap) snapshots.set(did, snap)
     }
   }
-  if (Object.keys(updates).length === 0) return null
-  return updates
+  return computeWarmFps(snapshots, request).get(id) ?? null
 }
 
 /** Cache for `JSON.parse(varyKey)` — varyKey strings are stable across

@@ -150,5 +150,7 @@ processes; each process's index stays local.
   cell labels), so delivery legitimately over-covers the drain-time
   filter — extras park or dedup, never staleness; the armed world run
   is what surfaced this.
-- **W3 (follow-on, separate note if pursued) — broadcast.** Fan
-  viewer-independent lane bytes across subscribers via the same index.
+- **W3 — broadcast.** ✅ Shipped as delivery-plane D2
+  ([`delivery-plane.md`](./delivery-plane.md) §D2): viewer-independent
+  lane bytes render once and fan across subscribers; the index's
+  delivery is the fan-out, the slot only caches the encode.

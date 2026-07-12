@@ -24,8 +24,9 @@ export interface BenchArtifact {
   /** Held-connection soak category (its axes differ from the warm-tick
    *  scenarios, so it rides its own array + table). */
   soak: SoakScenarioResult[]
-  /** Shared-scope soak category: N viewers of ONE world — the fan-out
-   *  baseline broadcast lanes must beat (renders/tick = N×M today). */
+  /** Shared-scope soak category: N viewers of ONE world — broadcast
+   *  lanes collapse the fan-out's render side (renders/tick = M,
+   *  independent of N; the wire still carries N×M lanes). */
   shared: SharedSoakScenarioResult[]
 }
 
@@ -201,8 +202,9 @@ export function renderSharedSoakTable(artifact: BenchArtifact): string {
 
   lines.push("")
   lines.push(
-    "rndr/tick = gate-tick renders — must equal N×M exactly: every bumped parton lanes once PER connection. " +
-      "THE fan-out baseline broadcast lanes must collapse to M · tick B = downstream bytes/tick across all N wires · " +
+    "rndr/tick = gate-tick renders — must equal M exactly, independent of N: each bumped parton renders ONCE " +
+      "into the broadcast slot; the other N−1 connections consume the bytes (the wire still carries N×M lanes) · " +
+      "tick B = downstream bytes/tick across all N wires · " +
       "µs/lane = tick CPU / (N×M) · gate additionally proves 0 idle renders, every connection settled every wake round, 0 early closes",
   )
   return lines.join("\n")

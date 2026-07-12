@@ -14,7 +14,7 @@ enables.
 | Bumps (writes)          | delivered — wake index     | shipped                            |
 | Deadlines (`expires()`) | delivered — deadline wheel | shipped (D1)                       |
 | Flips / cookies         | session-scoped wakes       | unchanged (already per-connection) |
-| Fan-out (N viewers)     | N independent renders      | **D2: broadcast lanes**            |
+| Fan-out (N viewers)     | broadcast lanes            | shipped (D2)                       |
 
 ## D1 — the deadline wheel · ✅ Landed 2026-07-12
 
@@ -107,7 +107,81 @@ benches hold; wake-parity oracle green (deliveries must still cover
 the retired scan's lane sets — the oracle already encodes coverage,
 extend it to expiry-sourced deliveries); validators + e2e.
 
-## D2 — broadcast lanes (multiplayer's read side)
+## D2 — broadcast lanes (multiplayer's read side) · ✅ Landed 2026-07-12
+
+Shipped as designed (details as-built:
+[`../internals/streaming.md`](../internals/streaming.md) §How a live
+update lands — the "Viewer-independent lanes render once and fan out"
+block; the slot store + eligibility classifier live in
+`framework/src/lib/broadcast.ts`). The as-built refinements over the
+sketch below:
+
+- **The generation IS the recomputed warm fp** — no new fold was
+  invented. `_recomputeSubtreeWarmFp` (fp-trailer.ts, the same core the
+  trailer's cold→warm heal computes) folds re-read dep values, live
+  invalidation timestamps, props, and the descendant contributions;
+  the publisher stamps it at publish and every consumer recomputes it
+  under its OWN request at consume. Equal folds ⇒ equal bytes — the
+  soundness contract fp-skip already stands on — and a newer bump
+  moves the fold, so an older slot can never serve past it. Time rides
+  separately (`expires()` boundary + a one-drain-window TTL).
+- **The per-connection fp-skip verdict moved BEFORE the slot consult**:
+  a connection whose mirror holds the generation (inside the
+  snapshot's freshness) takes the normal render, whose own verdict
+  ships the skip placeholder — deterministic today-parity (pinned by
+  the expiry-round test: one body render, the mirror-holding viewer's
+  wire carries the placeholder).
+- **Cell classification got a real signal**: `_cellBroadcastSafe` —
+  process-global persistent storage AND a partition that cannot derive
+  from request scope (a partition CALLBACK can bake a session/cookie
+  identity into the partition without a tracked read, so only
+  absent/fixed partitions classify safe). Ephemeral-storage cells,
+  `visible:` gates (all cullable partons — the world), frames, remote
+  sources, `fpSkip: false`, and custom dep kinds are ineligible.
+- **Single-viewer routes bypass the slot entirely** (`count < 2`) —
+  their wire stays byte-identical to the per-connection path, which is
+  what keeps the world validators' budgets untouched.
+- **Producer bodies** (`markConnectionLive()` mid-render) abandon the
+  publish and remember the id per route; every connection renders its
+  own producer lane, as today.
+- Subscriber enumeration stayed the wake index (the bump's delivery IS
+  the fan-out; consumers pull the slot at their own drain); the slot
+  refcount handle rides the route wake subscription's lifecycle
+  (acquired at drive start, moved at a navigation consume, released
+  with `_closeRouteWakeSubscription`).
+
+**Gate results (same machine, one day — dev Flight, node v24,
+`bench:server --only=shared`, committed baseline → broadcast):**
+
+| N × M   | renders/tick | cpu/tick          | wall p50          | bytes/tick      |
+| ------- | ------------ | ----------------- | ----------------- | --------------- |
+| 10 × 1  | 10 → **1**   | 2.2 ms → 1.4 ms   | 1.8 ms → 0.53 ms  | 53 → 52 KiB     |
+| 100 × 1 | 100 → **1**  | 11.9 ms → 4.0 ms  | 9.1 ms → 2.2 ms   | 320 → 520 KiB   |
+| 500 × 1 | 500 → **1**  | 87.1 ms → 15.4 ms | 59.3 ms → 11.7 ms | 1849 → 1600 KiB |
+| 10 × 4  | 40 → **4**   | 7.0 ms → 2.1 ms   | 6.3 ms → 1.5 ms   | 188 → 208 KiB   |
+| 100 × 4 | 400 → **4**  | 55.0 ms → 9.0 ms  | 38.5 ms → 6.6 ms  | 1399 → 1275 KiB |
+| 500 × 4 | 2000 → **4** | 399 ms → 56.8 ms  | 248 ms → 43.6 ms  | 7436 → 9154 KiB |
+
+Renders/tick is exactly M, independent of N (the gate pins it), with
+the delivery gates still holding (every connection settles every wake
+round, zero idle renders, zero early closes). CPU and wall collapse
+correspondingly — 7×/5.7× at 500×4; the residual per-viewer cost is
+framing + mirror bookkeeping (µs/lane 199.5 → 28.4 at 500×4). Bytes
+stay O(N×M) BY DESIGN (per-viewer bytes; each wire still carries every
+lane) — per-lane bytes sit at ~2.6–5.2 KB in both worlds, with
+dev-Flight per-lane variance across N in the baseline and this run
+alike. Other categories in family: isolated soak untouched (its
+connections never share a route — the `count < 2` bypass), idle
+3–22 µs/bump, B/wake ≈ 0; `world-idle-cpu` holds (1440p 2.4/1.8/0.2;
+4K `?chunk=128` 22.4/65.4/0 — in the D1-era 19.5–28.9 / 58.3–68.5
+family). `PARTON_WAKE_PARITY=1 yarn test` fully green;
+`yarn test:e2e` 185 passed; validate-world / -ws / -upgrade ALL GREEN;
+the two-browser proof (`website/validate-two-viewers.mjs`, standalone
+so validate-world's single-viewer fetch budgets stay honest) ALL
+GREEN — both viewers' pulses advance concurrently, scrolling one never
+disturbs the other.
+
+Original design sketch (kept for the rationale):
 
 **Prerequisite · ✅ landed 2026-07-12: the `shared` bench category.**
 The soak bench prices N connections × N _distinct_ worlds; the

@@ -519,6 +519,22 @@ function constantPartition(): CellArgs {
   return {}
 }
 
+/** Marker on normalized partition callbacks whose output can never
+ *  derive from request scope (absent or a fixed record) — the broadcast
+ *  eligibility classifier's positive signal (`_cellBroadcastSafe`).
+ *  A user-supplied callback is never marked: it receives the partition
+ *  scope (session, cookies, headers, URL) and can bake a per-viewer
+ *  identity into the partition WITHOUT a tracked read. */
+const VIEWER_INDEPENDENT_PARTITION = Symbol("viewer-independent-partition")
+
+function markViewerIndependent(
+  fn: (scope: CellPartitionScope) => CellArgs,
+): (scope: CellPartitionScope) => CellArgs {
+  ;(fn as unknown as Record<symbol, boolean>)[VIEWER_INDEPENDENT_PARTITION] = true
+  return fn
+}
+markViewerIndependent(constantPartition)
+
 /** Normalize the `partition` option (fixed record | callback | absent)
  *  to the canonical callback form the handle stores. */
 function normalizePartition(
@@ -526,7 +542,38 @@ function normalizePartition(
 ): (scope: CellPartitionScope) => CellArgs {
   if (p === undefined) return constantPartition
   if (typeof p === "function") return p
-  return () => p
+  return markViewerIndependent(() => p)
+}
+
+/**
+ * Whether a `cell:<id>` dep is safe to treat as viewer-INDEPENDENT for
+ * broadcast-lane eligibility (`lib/broadcast.ts`). Conservative — both
+ * conditions must positively hold, anything else is unsafe:
+ *
+ *   - the cell's storage is the process-global persistent singleton
+ *     (`getCellStorage`). Ephemeral storage is request/connection-
+ *     scoped (gqlCell / fragmentCell / `storage: getEphemeralCellStorage`),
+ *     so its values are per-viewer by construction; a custom adapter's
+ *     scope is unknowable.
+ *   - the cell's partition cannot derive from request scope: absent or
+ *     a fixed record (`VIEWER_INDEPENDENT_PARTITION`). A partition
+ *     CALLBACK reads the request's session/cookies/headers without a
+ *     tracked read, so a per-viewer partition would be invisible to
+ *     the dep record. (Explicit `.with(args)` partitions are covered
+ *     by the registry's standing props contract: per-viewer variation
+ *     flows through tracked reads, never placement props.)
+ *
+ * An unregistered id (a cell the process no longer knows) is unsafe.
+ */
+export function _cellBroadcastSafe(cellId: string): boolean {
+  const cell = cellRegistry.get(cellId)
+  if (!cell) return false
+  if (cell.storage !== getCellStorage) return false
+  return (
+    (cell.partition as unknown as Record<symbol, boolean | undefined>)[
+      VIEWER_INDEPENDENT_PARTITION
+    ] === true
+  )
 }
 
 function registerCell<T>(handle: CellInterface<T>): CellInterface<T> {
