@@ -37,7 +37,11 @@ separate layer added on top, not a default.
 to opt a localCell into request-scoped storage (useful when you want
 a custom loader with side effects, like the cart loader that
 hydrates child cells). Or pass any `CellStorage` adapter for Redis,
-S3, etc.
+S3, etc. The optional ts methods (`readTs`/`stampTs`/`hasTs`/`maxTs`)
+let an adapter persist each row's invalidation timestamp — without
+them a restart folds the cell's history cold (over-fetch, never
+stale); see
+[`../internals/cell-internals.md`](../internals/cell-internals.md#the-invalidation-ts-rides-the-row).
 
 Use a cell when:
 

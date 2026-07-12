@@ -37,11 +37,27 @@ getServerNavigation()        ← bumps the invalidation registry with
   .reload({selector:           the partition-scoped selector
     buildCellSelector(          ("cell:<id>?<argsEncoded>",
       id, args)})               constraints as the query fragment)
+↓  (at bump COMMIT — inside `commitOne`, after the value landed)
+tsBridge.stamp(name, key, ts) ← persists the committed invalidation ts
+                               onto the stored row (`CellStorage.stampTs`),
+                               so row ts ≡ registry-entry ts — the
+                               eviction/restore contract's write half
+                               (see registry-internals.md)
 ```
 
 The whole pipeline runs inside a `runInvalidationTransaction`. A
 throw in `validate` or `write` discards the pending refreshSelector
 bumps — observers can't see a partial commit.
+
+**The ts stamp is commit-time, not write-time.** The bump's `ts` is
+minted by `commitOne` when the transaction flushes (minting earlier
+would let an entry land behind an already-taken `_currentTs()` cursor
+— the covered-record probe's race). So the row can't be stamped when
+`storage.write` runs; instead the registry stamps it through the ts
+bridge the moment the entry commits. Under `atomic()` the order is:
+overlay flush (values) → per-selector `commitOne` (entry + row stamp +
+delivery) — each row ends at exactly the ts of the entry that covers
+it, and a rolled-back batch stamps nothing.
 
 The emitted selector is **partition-scoped**: args are URL-encoded
 as `key1=value1&key2=value2` (keys sorted). Selector matching
@@ -529,6 +545,11 @@ export interface CellStorage {
   write(scope, cellId, partitionKey, value): void
   clear(scope?: string | "all"): void
   flush?(): Promise<void>
+  // Invalidation-ts persistence (optional — ts-unknown without them):
+  readTs?(scope, cellId, partitionKey): number | undefined
+  stampTs?(scope, cellId, partitionKey, ts): void // existing rows only
+  hasTs?(scope, cellId): boolean // restore fast-path guard
+  maxTs?(): number // seats the registry counter
 }
 ```
 
@@ -537,10 +558,49 @@ never awaits storage (only a cold loader does). Writes are sync at
 the API boundary; durability is a property of the adapter (in-memory
 adapters are instant; `JsonFileCellStorage` debounces to disk).
 
+### The invalidation ts rides the row
+
+Each row can carry the `ts` of the bump that committed it — stored in
+a map **parallel** to the values (the value read path stays a bare map
+chain), stamped by the invalidation registry at bump commit through
+the ts bridge `cell-write.ts` registers (`_setInvalidationTsBridge`).
+Contract points:
+
+- **`write` preserves any prior ts.** A value write without a stamp —
+  a loader seeding a cold slot, `hydrate`, the `atomic()` overlay
+  flush ahead of its commit — leaves the invalidation history alone;
+  only a committed bump moves it.
+- **`stampTs` never mints a phantom row** — it lands only where a
+  value slot (including an `invalidate()`d `undefined` slot) or a
+  prior ts exists. A bump whose partition has no stored row (an
+  ephemeral-routed write, a hand-fired selector) stays unbacked.
+- **Only the default persistent tier participates.** The bridge
+  requires `cell.storage === getCellStorage`; ephemeral rows die with
+  their connection and per-cell custom adapters are ts-unknown unless
+  they implement the optional methods.
+- **`maxTs()` seats the registry counter.** When a persistent adapter
+  becomes the singleton (`getCellStorage()` construction /
+  `setCellStorage`), `_raiseInvalidationTsFloor(maxTs())` starts the
+  bump counter above the persisted history — restored timestamps read
+  as past events below every live cursor, and every new bump
+  supersedes them.
+
+**Migration posture:** rows without a ts (legacy files, loader seeds,
+adapters without `stampTs`) keep working but are _ts-unknown_ — the
+registry treats them as unbacked: never evicted, and after a restart
+their history folds cold (cold re-record — over-fetch, never stale).
+The first post-upgrade write stamps the row forward into the backed
+contract.
+
+The restore half (query-time re-seeding, eviction, the entry cap)
+lives in
+[`registry-internals.md`](./registry-internals.md#persistence--eviction--restore-cell-entries).
+
 ### Scope bucketing
 
 ```
 scopes: Map<scope, Map<cellId, Map<partitionKey, value>>>
+ts:     Map<scope, Map<cellId, Map<partitionKey, invalidationTs>>>   // parallel — see above
 ```
 
 Per-scope storage isolates parallel Playwright workers (each scoped
@@ -554,24 +614,38 @@ and disappear when the process exits.
 
 ```json
 {
-  "demo.bumps": {
-    "<hash-of-empty-partition>": 5
+  "__parton": 2,
+  "cells": {
+    "demo.bumps": {
+      "<hash-of-empty-partition>": 5
+    },
+    "palette": {
+      "<hash-of-{sid:abc123}>": "dark",
+      "<hash-of-{sid:def456}>": "light"
+    }
   },
-  "palette": {
-    "<hash-of-{sid:abc123}>": "dark",
-    "<hash-of-{sid:def456}>": "light"
-  },
-  "product-notes": {
-    "<hash-of-{productId:42}>": "Notes for 42",
-    "<hash-of-{productId:99}>": "Notes for 99"
+  "ts": {
+    "demo.bumps": {
+      "<hash-of-empty-partition>": 417
+    },
+    "palette": {
+      "<hash-of-{sid:abc123}>": 902
+    }
   }
 }
 ```
 
-Top-level keys = cell ids. Inner keys =
+The `__parton` key marks the v2 envelope (reserved — not a valid cell
+id). `cells` keys = cell ids; inner keys =
 `hash(stableStringify(cell.partition(scope)))` — so an omitted
 `partition` (or a fixed `partition: {}`) collapses to one constant
-partition slot.
+partition slot. `ts` mirrors that keying with each row's persisted
+invalidation timestamp; rows can appear in `cells` without a `ts`
+entry (loader seeds, hydrates — ts-unknown) and, rarely, in `ts`
+without a value (`invalidate()`d rows, whose `undefined` value JSON
+drops). A legacy file — bare cells record, no `__parton` — loads
+with every row ts-unknown and migrates forward on its first stamped
+bump.
 
 ### Debounced flush
 
@@ -600,6 +674,11 @@ const redisStorage: CellStorage = {
 
 setCellStorage(redisStorage)
 ```
+
+A driver may also implement the optional ts methods
+(`readTs`/`stampTs`/`hasTs`/`maxTs`) to join the eviction/restore
+contract; without them its rows are ts-unknown (unbacked — never
+evicted, cold re-record after restart).
 
 Drivers that need async reads (Redis, KV) ship a sync-ish wrapper
 or a warm-cache step the runtime awaits at request entry — same

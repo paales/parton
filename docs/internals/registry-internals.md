@@ -283,6 +283,65 @@ Content changes and record removal are separate mechanisms:
   delete). For entries whose _placement_ is gone — the next render
   covering the id is a whole-tree pass that re-registers it.
 
+### Persistence / eviction / restore (cell entries)
+
+`cell:` entries are the one entry class with a durable twin: **the
+invalidation ts rides the stored cell row** (leases.md L2). Every
+committed bump stamps its `ts` onto the backing row (`commitOne` →
+the ts bridge `cell-write.ts` registers via
+`_setInvalidationTsBridge`; storage side: `CellStorage.stampTs`, see
+[`cell-internals.md`](./cell-internals.md#the-invalidation-ts-rides-the-row)),
+so `row ts ≡ entry ts` holds by construction. That makes a hot entry
+a **cache over storage** — evictable and restorable, lossless:
+
+- **Restore is query-time, before the ts read.** In
+  `_queryCompiledMatchingTs`, a `cell:` label's probe keys that lack a
+  live entry are checked against storage
+  (`hasAny` → per-key `readTs`) and re-seeded from the row's persisted
+  ts (`seedRestoredEntry` — no bump delivery, no re-stamp) _before_
+  the query reads. The seam sits inside the one read every consumer
+  takes — the fp fold on the **fp-skip path included**, whose body
+  never runs — so no fold can ever observe ts=0 for state with a
+  persisted history (the stale-match hazard that made eviction
+  forbidden). The bridge address translation is exact: the entry key
+  `stableStringify(constraints)` hashes to the row's partition key,
+  because a write's selector encoding round-trips its partition args
+  losslessly under `stableStringify`.
+- **Over-cap surfaces fold the evicted floor.** A surface past
+  `PROBE_SUBSET_CAP` can't enumerate candidate keys, so its queries
+  fold `max(result, evictedFloorByName[name])` — the max ts ever
+  evicted under the name, maintained at evict time. Never below a
+  lost entry's ts → over-fetch, never stale (those rare watchers
+  refetch once per sweep that touches their cell).
+- **Eviction is verified, never assumed.** `_evictInvalidationEntry`
+  refuses unless the entry is `cell:`-named AND
+  `bridge.readTs(name, key) === entry.ts` — a ts-unknown row (legacy
+  file, loader seed, adapter without `stampTs`), a lagging row, or no
+  row at all is _unbacked_ and exempt (the loss rule: eviction of
+  unrestorable state is forbidden). Wake-index subscriptions are a
+  separate structure and are untouched; a later bump re-creates the
+  entry via `commitOne` and delivers normally.
+- **The bounded-cardinality sweep** (`maybeSweepEntries`, run from
+  `commitOne` only — never from a restore, so a query's own seeds
+  can't be swept mid-read) triggers past `DEFAULT_ENTRY_CAP = 65_536`
+  live entries (the pool audit's pulse-scale ceiling; override via
+  `_setInvalidationEntryCap`) and evicts verified-backed entries in
+  insertion order down to cap − ⅛cap. No recency bookkeeping —
+  restore makes any eviction order lossless. A mostly-unbacked
+  population over the cap backs off and retries after growth instead
+  of rescanning per bump.
+- **Restart is the same mechanism.** A fresh process restores entries
+  from rows on first query — fp folds are byte-identical to the
+  never-restarted process (`cell-ts-persistence.rsc.test.ts` proves
+  it). When the persistent storage singleton comes live, its `maxTs()`
+  seats the counter (`_raiseInvalidationTsFloor`) so restored
+  timestamps sit below every cursor a live connection can anchor
+  (they must read as PAST events — never surface in a catch-up
+  window or the parity oracle's since-scan) and every new bump
+  supersedes them. Non-cell entries (tags, app selectors) remain
+  process-memory only: gone on restart, cold re-record — over-fetch,
+  never stale.
+
 ## LRU bound
 
 The variant store is bounded by **spec topology** — finitely many

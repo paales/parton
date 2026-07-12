@@ -35,9 +35,80 @@ import { stableStringify } from "../lib/stable-stringify.ts"
 import { getRegisteredMatchPatterns } from "../lib/partial.tsx"
 import { buildTimeScope } from "../lib/time.ts"
 import { createSessionReadSurface } from "./session.ts"
+import { getCellStorage, type CellStorage } from "./cell-storage.ts"
 import { _recordCellWrite, getRequest, getScope, parseCookies } from "./context.ts"
-import { buildCellSelector } from "./invalidation-registry.ts"
+import { _setInvalidationTsBridge, buildCellSelector } from "./invalidation-registry.ts"
 import { getServerNavigation } from "./server-navigation.ts"
+
+// ─── The registry ↔ cell-storage ts bridge ────────────────────────────
+//
+// The invalidation registry persists `cell:` entry timestamps with the
+// stored rows (stamp at bump commit) and restores evicted / restarted
+// entries from them (re-seed on query miss) — see the eviction/restore
+// contract in invalidation-registry.ts. This module supplies the
+// address translation: selector name → cell id, canonical constraints
+// key → storage partition key. The two encodings agree by
+// construction: a write's selector is `buildCellSelector(id, args)`,
+// whose parsed constraints round-trip the partition args losslessly
+// under `stableStringify`, so `hash(constraintsKey)` IS the row's
+// partition key (`hash(stableStringify(args))`). Args outside the
+// selector-codable value space (undefined members, Dates, …) produce
+// diverging keys — those rows simply stay ts-unknown (unbacked:
+// never evicted, cold re-record after restart).
+//
+// Only the DEFAULT persistent tier participates (`cell.storage ===
+// getCellStorage`): ephemeral rows die with their connection, and a
+// custom per-cell adapter's lifetime is the app's business. Adapters
+// without the optional ts methods degrade the same way — unbacked.
+
+const CELL_NAME_PREFIX_LEN = "cell:".length
+const cellIdByName = new Map<string, string>()
+
+function bridgeStorageFor(name: string): CellStorage | null {
+  let cellId = cellIdByName.get(name)
+  if (cellId === undefined) {
+    cellId = name.slice(CELL_NAME_PREFIX_LEN)
+    cellIdByName.set(name, cellId)
+  }
+  const cell = getCellById(cellId)
+  if (!cell || cell.storage !== getCellStorage) return null
+  return getCellStorage()
+}
+
+/** `hash(constraintsKey)` memo — probe keys recur every fold; the
+ *  bounded cap just guards pathological key churn. */
+const partitionKeyByConstraintsKey = new Map<string, string>()
+const PARTITION_KEY_MEMO_MAX = 8192
+
+function partitionKeyOf(constraintsKey: string): string {
+  let pk = partitionKeyByConstraintsKey.get(constraintsKey)
+  if (pk === undefined) {
+    if (partitionKeyByConstraintsKey.size >= PARTITION_KEY_MEMO_MAX) {
+      partitionKeyByConstraintsKey.clear()
+    }
+    pk = hash(constraintsKey)
+    partitionKeyByConstraintsKey.set(constraintsKey, pk)
+  }
+  return pk
+}
+
+_setInvalidationTsBridge({
+  hasAny(name) {
+    const storage = bridgeStorageFor(name)
+    if (!storage) return false
+    return storage.hasTs?.(getScope(), cellIdByName.get(name)!) ?? false
+  },
+  readTs(name, constraintsKey) {
+    const storage = bridgeStorageFor(name)
+    if (!storage) return undefined
+    return storage.readTs?.(getScope(), cellIdByName.get(name)!, partitionKeyOf(constraintsKey))
+  },
+  stamp(name, constraintsKey, ts) {
+    const storage = bridgeStorageFor(name)
+    if (!storage) return
+    storage.stampTs?.(getScope(), cellIdByName.get(name)!, partitionKeyOf(constraintsKey), ts)
+  },
+})
 
 function searchParamsToRecord(sp: URLSearchParams): Record<string, string> {
   const out: Record<string, string> = {}

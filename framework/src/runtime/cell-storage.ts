@@ -36,6 +36,7 @@ import {
 } from "node:fs"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
+import { _raiseInvalidationTsFloor } from "./invalidation-registry.ts"
 import { _getRequestEphemeralStorage } from "./context.ts"
 
 export type CellPartitionKey = string
@@ -63,6 +64,36 @@ export interface CellStorage {
   /** Force any pending in-memory writes to durable storage. No-op
    *  for in-memory adapters. */
   flush?(): Promise<void>
+
+  // ── Invalidation-timestamp persistence (optional) ──────────────────
+  // The invalidation registry's entries (one bump `ts` per
+  // (name, constraints) pair) are process memory; persisting the ts
+  // WITH the row is what makes a hot registry entry a cache over
+  // storage — evictable and restorable without a returning watcher's
+  // fp fold ever matching stale cache. Adapters that omit these
+  // methods still work: their rows are ts-unknown, so the registry
+  // treats them as unbacked (never evicted, cold re-record after a
+  // restart — over-fetch, never stale).
+
+  /** The persisted invalidation ts for a row, `undefined` when the row
+   *  is absent or was last stamped by a pre-ts version / a loader seed. */
+  readTs?(scope: string, cellId: string, partitionKey: CellPartitionKey): number | undefined
+  /** Stamp the committed invalidation ts onto an EXISTING row. Called
+   *  by the registry at bump commit time (after the value write landed),
+   *  so the row's ts always equals the registry entry that covers it.
+   *  MUST no-op when neither a value slot nor a prior ts exists at the
+   *  partition — a stamp never mints a phantom row. */
+  stampTs?(scope: string, cellId: string, partitionKey: CellPartitionKey, ts: number): void
+  /** Whether ANY row of `cellId` carries a persisted ts in `scope` —
+   *  the restore path's cheap negative guard (a cell that was never
+   *  stamped skips per-partition probing entirely). */
+  hasTs?(scope: string, cellId: string): boolean
+  /** The maximum persisted ts across all rows — consumed once when the
+   *  adapter becomes the persistent singleton, to seat the registry's
+   *  monotonic counter ABOVE the persisted history (restored
+   *  timestamps must never surface inside a live connection's
+   *  catch-up window). */
+  maxTs?(): number
 }
 
 // ─── In-memory adapter ────────────────────────────────────────────────
@@ -73,6 +104,10 @@ export interface CellStorage {
  */
 export class MemoryCellStorage implements CellStorage {
   #scopes = new Map<string, Map<string, Map<string, unknown>>>()
+  /** Invalidation ts per row, parallel to `#scopes` so the value read
+   *  path stays a bare map chain (no envelope unwrap on the render
+   *  hot path). A row missing here is ts-unknown (unbacked). */
+  #ts = new Map<string, Map<string, Map<string, number>>>()
 
   read(scope: string, cellId: string, partitionKey: string): unknown {
     return this.#scopes.get(scope)?.get(cellId)?.get(partitionKey)
@@ -89,32 +124,95 @@ export class MemoryCellStorage implements CellStorage {
       partMap = new Map()
       cellMap.set(cellId, partMap)
     }
+    // A prior ts (if any) is preserved: a value write without a stamp
+    // (loader seed over a cold slot, `hydrate`, the atomic overlay
+    // flush ahead of its commit) leaves the invalidation history
+    // where it was; only `stampTs` — driven by a committed bump —
+    // moves it.
     partMap.set(partitionKey, value)
   }
 
   clear(scope?: string | "all"): void {
     if (scope === undefined || scope === "all") {
       this.#scopes.clear()
+      this.#ts.clear()
       return
     }
     this.#scopes.delete(scope)
+    this.#ts.delete(scope)
+  }
+
+  readTs(scope: string, cellId: string, partitionKey: string): number | undefined {
+    return this.#ts.get(scope)?.get(cellId)?.get(partitionKey)
+  }
+
+  stampTs(scope: string, cellId: string, partitionKey: string, ts: number): void {
+    let tsCellMap = this.#ts.get(scope)?.get(cellId)
+    // Never mint a phantom row: stamp only where a value slot exists
+    // (including an `invalidate()`d slot holding `undefined`) or a
+    // prior ts survives (an invalidate-only row reloaded from disk,
+    // whose undefined value slot JSON dropped).
+    if (!tsCellMap?.has(partitionKey)) {
+      const hasValueSlot = this.#scopes.get(scope)?.get(cellId)?.has(partitionKey) ?? false
+      if (!hasValueSlot) return
+    }
+    if (!tsCellMap) {
+      let perScope = this.#ts.get(scope)
+      if (!perScope) {
+        perScope = new Map()
+        this.#ts.set(scope, perScope)
+      }
+      tsCellMap = new Map()
+      perScope.set(cellId, tsCellMap)
+    }
+    tsCellMap.set(partitionKey, ts)
+  }
+
+  hasTs(scope: string, cellId: string): boolean {
+    const tsCellMap = this.#ts.get(scope)?.get(cellId)
+    return tsCellMap !== undefined && tsCellMap.size > 0
+  }
+
+  maxTs(): number {
+    let max = 0
+    for (const perScope of this.#ts.values()) {
+      for (const tsCellMap of perScope.values()) {
+        for (const ts of tsCellMap.values()) if (ts > max) max = ts
+      }
+    }
+    return max
   }
 
   /** Internal — snapshot the default scope for disk serialization. */
-  _snapshot(scope: string): Record<string, Record<string, unknown>> | null {
+  _snapshot(scope: string): {
+    cells: Record<string, Record<string, unknown>>
+    ts: Record<string, Record<string, number>>
+  } | null {
     const cellMap = this.#scopes.get(scope)
-    if (!cellMap || cellMap.size === 0) return null
-    const out: Record<string, Record<string, unknown>> = {}
-    for (const [cellId, partMap] of cellMap) {
+    const tsMap = this.#ts.get(scope)
+    if ((!cellMap || cellMap.size === 0) && (!tsMap || tsMap.size === 0)) return null
+    const cells: Record<string, Record<string, unknown>> = {}
+    for (const [cellId, partMap] of cellMap ?? []) {
       const partRec: Record<string, unknown> = {}
       for (const [partKey, value] of partMap) partRec[partKey] = value
-      out[cellId] = partRec
+      cells[cellId] = partRec
     }
-    return out
+    const ts: Record<string, Record<string, number>> = {}
+    for (const [cellId, partTs] of tsMap ?? []) {
+      const partRec: Record<string, number> = {}
+      for (const [partKey, t] of partTs) partRec[partKey] = t
+      ts[cellId] = partRec
+    }
+    return { cells, ts }
   }
 
-  /** Internal — seed from a disk snapshot. */
-  _hydrate(scope: string, snapshot: Record<string, Record<string, unknown>>): void {
+  /** Internal — seed from a disk snapshot. Omitted `ts` (legacy files)
+   *  hydrates every row as ts-unknown. */
+  _hydrate(
+    scope: string,
+    snapshot: Record<string, Record<string, unknown>>,
+    tsSnapshot?: Record<string, Record<string, number>>,
+  ): void {
     const cellMap = new Map<string, Map<string, unknown>>()
     for (const [cellId, partRec] of Object.entries(snapshot)) {
       const partMap = new Map<string, unknown>()
@@ -122,6 +220,17 @@ export class MemoryCellStorage implements CellStorage {
       cellMap.set(cellId, partMap)
     }
     this.#scopes.set(scope, cellMap)
+    if (tsSnapshot) {
+      const tsCellMap = new Map<string, Map<string, number>>()
+      for (const [cellId, partRec] of Object.entries(tsSnapshot)) {
+        const partMap = new Map<string, number>()
+        for (const [partKey, t] of Object.entries(partRec)) {
+          if (typeof t === "number") partMap.set(partKey, t)
+        }
+        tsCellMap.set(cellId, partMap)
+      }
+      this.#ts.set(scope, tsCellMap)
+    }
   }
 }
 
@@ -130,20 +239,34 @@ export class MemoryCellStorage implements CellStorage {
 const DEFAULT_SCOPE = "default"
 const FLUSH_DEBOUNCE_MS = 100
 
+/** Disk-format version marker. Its presence as a top-level key
+ *  distinguishes the enveloped shape from a legacy file whose top
+ *  level is the bare cells record. Reserved — not a valid cell id. */
+const DISK_FORMAT_KEY = "__parton"
+const DISK_FORMAT_VERSION = 2
+
+interface CellsDiskFileV2 {
+  [DISK_FORMAT_KEY]: number
+  cells: Record<string, Record<string, unknown>>
+  ts: Record<string, Record<string, number>>
+}
+
 /**
  * JSON file storage. The default scope writes through to disk;
  * non-default scopes (Playwright workers) stay in memory only so
  * test runs don't pollute the on-disk store.
  *
- * Disk shape:
+ * Disk shape (v2 — the `__parton` key marks the envelope):
  *
  *   {
- *     "<cellId>": {
- *       "<partitionKeyHash>": <jsonValue>,
- *       …
- *     },
- *     …
+ *     "__parton": 2,
+ *     "cells": { "<cellId>": { "<partitionKeyHash>": <jsonValue> } },
+ *     "ts":    { "<cellId>": { "<partitionKeyHash>": <invalidationTs> } }
  *   }
+ *
+ * A legacy file (bare `{ "<cellId>": {…} }`, no `__parton` key) loads
+ * with every row ts-unknown; the first committed bump per row stamps
+ * it forward into the v2 shape.
  *
  * Loaded eagerly on first instantiation via `loadSync` so the first
  * request can read its cells without an async warm-up step.
@@ -188,6 +311,23 @@ export class JsonFileCellStorage implements CellStorage {
     }
   }
 
+  readTs(scope: string, cellId: string, partitionKey: string): number | undefined {
+    return this.#memory.readTs(scope, cellId, partitionKey)
+  }
+
+  stampTs(scope: string, cellId: string, partitionKey: string, ts: number): void {
+    this.#memory.stampTs(scope, cellId, partitionKey, ts)
+    if (scope === DEFAULT_SCOPE) this.#scheduleFlush()
+  }
+
+  hasTs(scope: string, cellId: string): boolean {
+    return this.#memory.hasTs(scope, cellId)
+  }
+
+  maxTs(): number {
+    return this.#memory.maxTs()
+  }
+
   async flush(): Promise<void> {
     if (this.#flushTimer) {
       clearTimeout(this.#flushTimer)
@@ -203,11 +343,28 @@ export class JsonFileCellStorage implements CellStorage {
     if (!existsSync(this.path)) return
     try {
       const text = fsReadFileSync(this.path, "utf8")
-      const parsed = JSON.parse(text) as Record<string, Record<string, unknown>>
-      this.#memory._hydrate(DEFAULT_SCOPE, parsed)
+      const parsed = JSON.parse(text) as Record<string, unknown>
+      if (parsed && typeof parsed === "object" && DISK_FORMAT_KEY in parsed) {
+        const file = parsed as unknown as CellsDiskFileV2
+        this.#memory._hydrate(DEFAULT_SCOPE, file.cells ?? {}, file.ts ?? {})
+      } else {
+        // Legacy bare-cells file — every row hydrates ts-unknown
+        // (unbacked: never evicted, cold re-record after restart).
+        this.#memory._hydrate(DEFAULT_SCOPE, parsed as Record<string, Record<string, unknown>>)
+      }
     } catch {
       // Malformed file — treat as empty. Author can delete or fix.
     }
+  }
+
+  #serialize(): string {
+    const snapshot = this.#memory._snapshot(DEFAULT_SCOPE)
+    const file: CellsDiskFileV2 = {
+      [DISK_FORMAT_KEY]: DISK_FORMAT_VERSION,
+      cells: snapshot?.cells ?? {},
+      ts: snapshot?.ts ?? {},
+    }
+    return JSON.stringify(file, null, 2) + "\n"
   }
 
   #scheduleFlush(): void {
@@ -231,11 +388,11 @@ export class JsonFileCellStorage implements CellStorage {
     this.#writing = true
     this.#pending = false
     try {
-      const snapshot = this.#memory._snapshot(DEFAULT_SCOPE) ?? {}
+      const text = this.#serialize()
       await mkdir(dirname(this.path), { recursive: true })
       const rand = Math.random().toString(36).slice(2, 10)
       const tmp = `${this.path}.tmp-${process.pid}-${Date.now()}-${rand}`
-      await writeFile(tmp, JSON.stringify(snapshot, null, 2) + "\n", "utf8")
+      await writeFile(tmp, text, "utf8")
       await rename(tmp, this.path)
     } finally {
       this.#writing = false
@@ -250,8 +407,7 @@ export class JsonFileCellStorage implements CellStorage {
     if (!this.#pending) return
     this.#pending = false
     try {
-      const snapshot = this.#memory._snapshot(DEFAULT_SCOPE) ?? {}
-      fsWriteFileSync(this.path, JSON.stringify(snapshot, null, 2) + "\n", "utf8")
+      fsWriteFileSync(this.path, this.#serialize(), "utf8")
     } catch {
       // Best-effort.
     }
@@ -287,13 +443,21 @@ let _instance: CellStorage | null = null
  * Test/advanced callers can swap the backend via `setCellStorage()`.
  */
 export function getCellStorage(): CellStorage {
-  if (!_instance) _instance = new JsonFileCellStorage(defaultCellsPath())
+  if (!_instance) {
+    _instance = new JsonFileCellStorage(defaultCellsPath())
+    // Seat the invalidation registry's monotonic counter ABOVE the
+    // persisted history: restored row timestamps must compare as PAST
+    // events (below every live connection's catch-up cursor), and new
+    // bumps must supersede every restored one.
+    _raiseInvalidationTsFloor(_instance.maxTs?.() ?? 0)
+  }
   return _instance
 }
 
 /** Replace the persistent singleton storage. */
 export function setCellStorage(backend: CellStorage): void {
   _instance = backend
+  _raiseInvalidationTsFloor(backend.maxTs?.() ?? 0)
 }
 
 /** Reset to the default-resolved JsonFileCellStorage. Test cleanup helper. */

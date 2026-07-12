@@ -95,6 +95,109 @@ let nextTs = 1
  *  mirroring the partition-key identity). One entry per key: a newer
  *  same-key bump overwrites `ts` in place. */
 const byName = new Map<string, Map<string, InvalidationEntry>>()
+/** Live entry count across every name — the sweep trigger's input,
+ *  maintained incrementally (insert / restore / evict / clear). */
+let entryCount = 0
+
+// ─── The cell-row ts bridge (persistence of cell-backed entries) ──────
+//
+// `cell:` entries are the one entry class with a durable twin: every
+// committed bump stamps its `ts` onto the stored cell row (via the
+// bridge, registered by `cell-write.ts`), and a query that misses a
+// `cell:` entry re-seeds it from the row BEFORE reading — so hot
+// entries are a cache over storage: evictable, restorable, lossless.
+// A fold can never observe ts=0 for state with a persisted history,
+// which is the loss rule's requirement for evicting anything at all.
+// Non-cell entries (tags, app selectors) have no durable twin; they
+// are unbacked — never evicted, gone on restart (cold re-record).
+
+/** The persistence seam between the registry and cell storage. Keyed
+ *  by the entry address the registry already uses: `name` is the
+ *  `cell:<id>` selector name, `constraintsKey` is
+ *  `stableStringify(constraints)` (whose hash IS the storage
+ *  partition key — the selector encoding round-trips partition args
+ *  losslessly under `stableStringify`). */
+export interface InvalidationTsBridge {
+  /** Cheap negative guard: whether the cell behind `name` has ANY
+   *  ts-stamped row in the caller's scope. */
+  hasAny(name: string): boolean
+  /** The persisted ts of the row at `constraintsKey`, `undefined` when
+   *  the row is absent or ts-unknown. */
+  readTs(name: string, constraintsKey: string): number | undefined
+  /** Stamp a committed bump's ts onto the backing row (no-op when no
+   *  row exists — a bump without storage stays unbacked). */
+  stamp(name: string, constraintsKey: string, ts: number): void
+}
+
+let tsBridge: InvalidationTsBridge | null = null
+
+/** Register the cell-row persistence bridge. Framework-internal —
+ *  called once at module init by `cell-write.ts`. */
+export function _setInvalidationTsBridge(bridge: InvalidationTsBridge | null): void {
+  tsBridge = bridge
+}
+
+const CELL_NAME_PREFIX = "cell:"
+
+/**
+ * Seat the monotonic bump counter at or above `ts` — called when a
+ * persistent storage adapter (carrying stamped rows from an earlier
+ * process) becomes live. Restored timestamps must read as PAST events:
+ * below every cursor a live connection could anchor, superseded by
+ * every future bump. Raising the floor before any entry is restored
+ * makes both hold by construction.
+ */
+export function _raiseInvalidationTsFloor(ts: number): void {
+  if (ts >= nextTs) nextTs = ts + 1
+}
+
+/** Seed a restored entry from its persisted row ts. No bump delivery
+ *  (nothing changed — the entry is re-materializing), no stamp (the
+ *  row already carries the ts). */
+function seedRestoredEntry(name: string, constraintsKey: string, ts: number): void {
+  let constraints: Record<string, unknown>
+  try {
+    constraints = JSON.parse(constraintsKey) as Record<string, unknown>
+  } catch {
+    return // Unparseable key — leave unrestored (fold treats as unbacked).
+  }
+  let perName = byName.get(name)
+  if (!perName) {
+    perName = new Map()
+    byName.set(name, perName)
+  }
+  if (perName.has(constraintsKey)) return
+  perName.set(constraintsKey, { name, constraints, ts })
+  entryCount++
+  // Backstop only — the storage-singleton floor raise runs first in
+  // every supported order (the bridge consults the singleton before
+  // any restore can hit).
+  _raiseInvalidationTsFloor(ts)
+}
+
+/**
+ * Restore pass for one `cell:` label ahead of a query's ts read: every
+ * probe key without a live entry is checked against storage and
+ * re-seeded from the row's persisted ts. Runs BEFORE the read so no
+ * consumer — the fp fold on the fp-skip path included — can observe a
+ * missing entry for persisted history. For over-cap surfaces
+ * (`probes === null`, enumeration impossible) the per-name evicted
+ * floor stands in: folding `max(result, floor)` can never fall below
+ * a lost entry's ts — over-fetch, never stale.
+ */
+function restoreCellEntries(name: string, probes: readonly string[]): void {
+  if (!tsBridge!.hasAny(name)) return
+  const perName = byName.get(name)
+  for (const key of probes) {
+    if (perName?.has(key)) continue
+    const ts = tsBridge!.readTs(name, key)
+    if (ts !== undefined) seedRestoredEntry(name, key, ts)
+  }
+}
+
+/** Max evicted ts per name — the un-enumerable-surface fallback above.
+ *  O(names with evictions); reset with the registry. */
+const evictedFloorByName = new Map<string, number>()
 
 interface InvalidationTransaction {
   pending: ParsedSelector[]
@@ -233,8 +336,104 @@ function commitOne(parsed: ParsedSelector): void {
     existing.ts = ts
   } else {
     perName.set(key, { name: parsed.name, constraints: parsed.constraints, ts })
+    entryCount++
+  }
+  // Persist the committed ts with the cell row (when one backs this
+  // selector) — the write path's half of the eviction/restore
+  // contract: row ts ≡ entry ts, so evicting the entry loses nothing.
+  // Stamping at COMMIT time (not at storage-write time) is what keeps
+  // an atomic batch coherent: the overlay flushes values first, then
+  // each selector's single committed ts lands on its row.
+  if (tsBridge !== null && parsed.name.startsWith(CELL_NAME_PREFIX)) {
+    tsBridge.stamp(parsed.name, key, ts)
   }
   deliverBump(parsed.name, key, parsed.constraints)
+  maybeSweepEntries()
+}
+
+// ─── Eviction (backed entries only) ───────────────────────────────────
+//
+// With the ts riding the row, a hot `cell:` entry is a cache over
+// storage — dropping it is cache shrink, not loss: the next query that
+// could match it restores the identical ts from the row (the restore
+// pass above), so folds are indistinguishable across an evict/restore
+// cycle. The loss rule gates the whole thing: an entry WITHOUT a
+// backing row at the same ts is not restorable and MUST NOT be
+// evicted — restorability is verified at evict time, never assumed.
+// Wake-index subscriptions are untouched (a separate structure keyed
+// the same way); a future bump re-creates the entry via `commitOne`
+// and delivers as usual.
+
+/** Default cap on live registry entries. The pool audit measured
+ *  pulse-style cells at up to ~65k entries (one per partition under
+ *  one name); the cap sits at that scale so normal worlds never sweep
+ *  while a leak or an unbounded-partition cell gets trimmed back to
+ *  its storage-backed floor. */
+const DEFAULT_ENTRY_CAP = 65_536
+let entryCap = DEFAULT_ENTRY_CAP
+/** Growth backoff after a sweep that could not reach its target
+ *  (mostly-unbacked population): don't rescan until the count grows
+ *  past this. */
+let sweepRetryAt = 0
+
+/** Test/tuning: override the entry cap. `null` restores the default. */
+export function _setInvalidationEntryCap(cap: number | null): void {
+  entryCap = cap ?? DEFAULT_ENTRY_CAP
+  sweepRetryAt = 0
+}
+
+/**
+ * Evict one entry, verifying restorability first: the entry must be a
+ * `cell:` entry whose backing row carries EXACTLY the entry's ts (a
+ * row stamped by an older bump, a ts-unknown legacy/loader row, or no
+ * row at all all refuse — evicting any of those would lose "when did
+ * this last change"). Returns whether the entry was evicted.
+ */
+export function _evictInvalidationEntry(name: string, constraintsKey: string): boolean {
+  const perName = byName.get(name)
+  const entry = perName?.get(constraintsKey)
+  if (!entry) return false
+  if (tsBridge === null || !name.startsWith(CELL_NAME_PREFIX)) return false
+  if (tsBridge.readTs(name, constraintsKey) !== entry.ts) return false
+  perName!.delete(constraintsKey)
+  if (perName!.size === 0) byName.delete(name)
+  entryCount--
+  const floor = evictedFloorByName.get(name)
+  if (floor === undefined || entry.ts > floor) evictedFloorByName.set(name, entry.ts)
+  return true
+}
+
+/**
+ * Bounded-cardinality sweep: when the live entry count exceeds the
+ * cap, evict verified-backed entries (insertion order — no recency
+ * bookkeeping; correctness doesn't need it, the restore pass makes
+ * any eviction order lossless) down to a low watermark (cap − ⅛cap,
+ * so a population hovering at the cap doesn't rescan per insert).
+ * Unbacked entries are exempt from the cap by the loss rule — a
+ * mostly-unbacked population over the cap backs off and retries after
+ * growth instead of rescanning on every bump.
+ *
+ * Runs from `commitOne` only — never from a restore — so a query's
+ * restore pass can't have its own seeds swept out from under its
+ * read.
+ */
+function maybeSweepEntries(): void {
+  if (entryCount <= entryCap || entryCount < sweepRetryAt) return
+  if (tsBridge === null) return
+  const target = entryCap - (entryCap >> 3)
+  outer: for (const [name, perName] of byName) {
+    if (!name.startsWith(CELL_NAME_PREFIX)) continue
+    for (const [key, entry] of perName) {
+      if (entryCount <= target) break outer
+      if (tsBridge.readTs(name, key) !== entry.ts) continue
+      perName.delete(key)
+      entryCount--
+      const floor = evictedFloorByName.get(name)
+      if (floor === undefined || entry.ts > floor) evictedFloorByName.set(name, entry.ts)
+    }
+    if (perName.size === 0) byName.delete(name)
+  }
+  sweepRetryAt = entryCount > target ? entryCount + (entryCap >> 6) + 1 : 0
 }
 
 // ─── The inverted wake index (bump → subscribed connections) ──────────
@@ -763,6 +962,20 @@ export function _queryCompiledMatchingTs(
 ): number {
   let max = 0
   for (const label of labels) {
+    // Restore evicted/not-yet-restored `cell:` entries from their
+    // stored rows BEFORE reading — the seam that makes eviction and
+    // process restart invisible to every ts consumer (the fp-skip
+    // fold included, whose body never runs). Over-cap surfaces can't
+    // enumerate candidate keys; their queries fold the per-name
+    // evicted floor instead (≥ any lost ts — over-fetch, never stale).
+    if (tsBridge !== null && label.startsWith(CELL_NAME_PREFIX)) {
+      if (query.probes !== null) {
+        restoreCellEntries(label, query.probes)
+      } else {
+        const floor = evictedFloorByName.get(label)
+        if (floor !== undefined && floor > max) max = floor
+      }
+    }
     const perName = byName.get(label)
     if (!perName) continue
     const probes = query.probes
@@ -818,10 +1031,16 @@ export function _registryStats(): { entries: number; nextTs: number; byName: num
   return { entries, nextTs, byName: byName.size }
 }
 
-/** Test-only: wipe all entries and reset `ts`. */
+/** Test-only: wipe all entries and reset `ts`. Storage-stamped rows
+ *  survive (they belong to the storage layer) — a follow-up query
+ *  restores them, which is exactly the process-restart simulation the
+ *  restart-equivalence tests lean on. */
 export function _clearInvalidationRegistry(): void {
   byName.clear()
   nextTs = 1
+  entryCount = 0
+  sweepRetryAt = 0
+  evictedFloorByName.clear()
   mintEpoch()
 }
 

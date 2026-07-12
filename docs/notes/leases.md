@@ -71,9 +71,10 @@ contracts make it airtight:
 - **The invalidation timestamp rides the stored row.** Evicting a
   registry entry must not lose "when did this last change", or a
   returning watcher's fp fold could match stale cache. Persist the
-  version/ts with the cell value and restore is lossless. (Until
-  then, eviction must force a cold re-record — the framework's
-  standing bias: over-fetch, never stale.)
+  version/ts with the cell value and restore is lossless. (Shipped —
+  L2 below. Rows without a ts keep the fallback posture: cold
+  re-record — the framework's standing bias: over-fetch, never
+  stale.)
 - **The loss rule** (learned from the client pool-cap livelock): any
   cap on state another layer credits ships its loss report on day
   one. Server-side the durable tier is authoritative so most
@@ -155,7 +156,25 @@ broadcast lanes — the W3 demo.
   in the D1 entry. That scheduler is the timing half of the lease
   primitive above.
 
-- **L2 — ts rides the row.** Persist version/ts with cell values;
-  make hot registry entries and cell copies evictable + restorable.
+- **L2 — ts rides the row. Landed 2026-07-13.** Every committed cell
+  bump stamps its ts onto the stored row (`commitOne` → the ts bridge;
+  `CellStorage.readTs/stampTs/hasTs/maxTs`), and the registry query
+  restores a missing `cell:` entry from the row BEFORE reading — so
+  hot registry entries are caches over storage: evictable
+  (`_evictInvalidationEntry`, restorability verified at evict time —
+  unbacked entries refuse, the loss rule) and restorable with
+  byte-identical fp folds. Restart equivalence proven in
+  `cell-ts-persistence.rsc.test.ts`: a fresh registry over the same
+  storage folds the SAME ts, and `maxTs()` seats the counter above
+  the persisted history so restored stamps read as past events. A
+  bounded sweep (cap 65_536 — the pool audit's pulse ceiling) trims
+  backed entries; over-cap (un-enumerable) surfaces fold a per-name
+  evicted floor — over-fetch, never stale. Ts-unknown rows (legacy
+  files, loader seeds, custom adapters) stay unbacked: never evicted,
+  cold re-record on restart. Contracts:
+  [`registry-internals.md`](../internals/registry-internals.md#persistence--eviction--restore-cell-entries),
+  [`cell-internals.md`](../internals/cell-internals.md#the-invalidation-ts-rides-the-row).
+  Hot cell VALUE copies were already storage-backed (storage IS the
+  canonical tier); route snapshot buckets remain the open pool.
 - **L3 — broadcast** (the wake index's W3) and the reducer-form cell
   write. Separate notes when scheduled.
