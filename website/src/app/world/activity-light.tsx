@@ -10,7 +10,7 @@
  * green (occasional) → blue (busy) → white (hot).
  */
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type CSSProperties } from "react"
 
 const WINDOW_MS = 10_000
 const history = new Map<string, number[]>()
@@ -41,10 +41,13 @@ export function ActivityLight({ ck, stamp }: { ck: string; stamp?: unknown }) {
     const n = recordArrival(ck)
     setPulse((p) => ({ tone: n >= 5 ? "white" : n >= 2 ? "blue" : "green", seq: p.seq + 1 }))
   }, [ck, stamp])
+  // The span is identity-stable across pulses: alternating --flash
+  // between two identical keyframe names restarts the compositor-driven
+  // glow animation in place — no remount, no per-arrival DOM churn.
   return (
     <span
-      key={pulse.seq}
       className={`chunk__light chunk__light--${pulse.tone}`}
+      style={{ "--flash": pulse.seq % 2 ? "light-flash-b" : "light-flash-a" } as CSSProperties}
       data-testid={`light-${ck}`}
       aria-hidden
     />

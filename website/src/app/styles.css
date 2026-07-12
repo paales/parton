@@ -144,11 +144,38 @@ body {
   background: rgb(255 255 255 / 0.08);
 }
 
-.chunk__light--green,
-.chunk__light--blue,
-.chunk__light--white,
-.chunk__light--red {
-  animation: light-flash 0.9s ease-out 1 both;
+/* The glow is pre-painted: a radial-gradient pseudo-element (solid
+   core over the dot, halo falling off like an 8px-blur / 2px-spread
+   box-shadow). A flash animates ONLY `opacity` — a compositor
+   property — so hundreds of concurrent flashes cost the main thread
+   nothing per frame: no style recalc, no paint records. */
+.chunk__light::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, currentColor 43%, transparent);
+  opacity: 0;
+}
+
+.chunk__light--green::after,
+.chunk__light--blue::after,
+.chunk__light--white::after,
+.chunk__light--red::after {
+  /* Tone-bearing lights only (skeleton lights never flash): keep the
+     glow's tiny 28px layer alive between flashes instead of
+     re-layerizing on every arrival. */
+  will-change: opacity;
+  /* Longhands, not the `animation:` shorthand — Lightning CSS folds a
+     name-less shorthand plus a var() animation-name into
+     `animation: none`, dropping the duration. Alternating names is
+     the restart signal: the client toggles --flash per arrival,
+     retriggering the animation on a live span without remounting it. */
+  animation-name: var(--flash, light-flash-a);
+  animation-duration: 0.9s;
+  animation-timing-function: ease-out;
+  animation-iteration-count: 1;
+  animation-fill-mode: both;
 }
 
 .chunk__light--red {
@@ -167,14 +194,23 @@ body {
   color: var(--light-white);
 }
 
-@keyframes light-flash {
-  0% {
-    background: currentColor;
-    box-shadow: 0 0 8px 2px currentColor;
+@keyframes light-flash-a {
+  from {
+    opacity: 1;
   }
-  100% {
-    background: rgb(255 255 255 / 0.08);
-    box-shadow: none;
+  to {
+    opacity: 0;
+  }
+}
+
+/* Identical twin of light-flash-a — exists only so alternating the
+   animation-name restarts the flash. */
+@keyframes light-flash-b {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
   }
 }
 
