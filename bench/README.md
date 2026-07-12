@@ -136,7 +136,7 @@ Which to use:
 | **scaling** (headline) | N ∈ {10, 50, 100, 500, 1000}          | M=1, D=2                      | warm-tick µs vs world size — the O(tree) tax curve                                                                                       |
 | **dashboard**          | M ∈ {1, 10, 50, 200}                  | N=200, D=2                    | cost per tick as change-density rises; each tick bumps ALL M cells so one segment carries M changes and the fixed overhead amortizes     |
 | **depth**              | D ∈ {1, 4, 16}                        | N=100, M=1                    | descendant-fold cost of proving a deep subtree unchanged                                                                                 |
-| **pulse**              | bump history ∈ {512, 20k}             | N=M=512, D=2, one shared cell | invalidation-registry query cost under ticker history — the two rows must cost the same                                                  |
+| **pulse**              | bump history ∈ {512, 20k}             | N=M=512, D=2, one shared cell | invalidation-registry query cost under write history — the two rows must cost the same                                                   |
 | **soak**               | N ∈ {100, 1000, 5000} × M ∈ {0, N/10} | 3 partons/connection          | per-HELD-CONNECTION cost: steady-state heap/RSS, idle bump CPU, per-wake tick CPU — see [soak](#soak--what-a-held-live-connection-costs) |
 
 The fixture is `buildDashboardPage({ partons: N, liveCells: M, depth: D })`
@@ -148,17 +148,18 @@ not user work.
 
 The **pulse** category flips the fixture's cell topology
 (`sharedPulseCell: true`): all 512 live leaves read partitions
-`{part: i}` of ONE shared module cell — the website world-pulse shape
-(`world.pulse` partitioned per chunk coordinate), where every leaf's
-fold queries the SAME selector name in the invalidation registry.
-Both rows pre-fire ticker bumps (`soakBumps`) before the request's
-first render so every partition is populated; they differ only in
-history length — one bump per partition (`P=512`) vs ~39 per
-partition (`+20k`, a few minutes of 512 tickers at 0.1–5s each). The
-pair is the registry-compaction gate: the registry stores one entry
-per (name, constraints) pair, so bump history must not change fold
-cost — if `+20k` costs more than `P=512`, registry queries are
-scaling with bump count instead of partition cardinality.
+`{part: i}` of ONE shared module cell — one cell partitioned per
+placement, the shape the website world's per-chunk anchor cell takes —
+where every leaf's fold queries the SAME selector name in the
+invalidation registry. Both rows pre-fire synthetic bumps
+(`soakBumps`) before the request's first render so every partition is
+populated; they differ only in history length — one bump per
+partition (`P=512`) vs ~39 per partition (`+20k`, a few minutes of
+512 high-frequency writers at 0.1–5s each). The pair is the
+registry-compaction gate: the registry stores one entry per (name,
+constraints) pair, so bump history must not change fold cost — if
+`+20k` costs more than `P=512`, registry queries are scaling with
+bump count instead of partition cardinality.
 
 ## soak — what a held live connection costs
 
@@ -446,12 +447,14 @@ synthetic per-connection pages, this one drives the REAL website world
 through the scenario that first exposed the wake-filter pathology: load
 at the origin, scroll to the top edge, dwell, scroll to the top-left
 corner, stop. The tour leaves hundreds of chunk/quad snapshots in the
-route bucket and hundreds of pulse tickers bumping at 0.1–5s each; the
-server's idle CPU afterwards is the direct price of the wake path
-over that snapshot × partition × bump-rate product — today the wake
-index's commit-time delivery (the tour's parked chunks record
-silently and wake nothing); previously the per-bump relevance filter
-this bench caught saturating.
+route bucket; the world's pulse is DERIVED (write-once anchor + render
+clock + a declared `expires()` beat at 0.1–5s per chunk — see
+`website/src/app/world/pulse.ts`), so the server's idle CPU afterwards
+is the direct price of the expiry arm re-laning the VISIBLE chunks at
+their declared cadence over that snapshot set — parked chunks are
+skipped at the arm; previously the per-bump relevance filter this
+bench caught saturating (replaced by the wake index's commit-time
+delivery).
 
 Three phases, each the server tree's %CPU (per-second `ps` samples,
 last-10s average):
@@ -460,9 +463,9 @@ last-10s average):
 - **cornerIdle** — idle at the top-left corner after the tour. **The
   number.** It must settle near the baseline; a saturated core (~100%)
   means the server spends its budget re-deciding NOT to render.
-- **afterClose** — zero clients, tickers still firing: attribution.
-  Connection-driven burn drops away; the remainder is the tickers' own
-  write cost.
+- **afterClose** — zero clients: the lease-by-derivation floor. With no
+  connection there is no expiry arm, no beats, no producers — this must
+  sit at the process idle floor (~0%).
 
 `--viewport=3840x2160` scales the visible set; `--query=k=v&...`
 appends a query string to the page URL (e.g. `--query=chunk=128`

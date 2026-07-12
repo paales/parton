@@ -121,5 +121,122 @@
       "baseline": 127.2,
       "cornerIdle": 41.3
     }
+  },
+  {
+    "sha": "5f2c32a",
+    "date": "2026-07-12T12:09:44.690Z",
+    "node": "v24.11.1",
+    "viewport": "2560x1440",
+    "serverPct": {
+      "baseline": 2.9,
+      "cornerIdle": 2.2,
+      "afterClose": 0.1
+    },
+    "headlessBrowserPct": {
+      "baseline": 106.7,
+      "cornerIdle": 45.9
+    },
+    "note": "L1 derivation, pre-coalescing"
+  },
+  {
+    "sha": "5f2c32a",
+    "date": "2026-07-12T12:11:45.156Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 79.9,
+      "cornerIdle": 102.2,
+      "afterClose": 0
+    },
+    "headlessBrowserPct": {
+      "baseline": 499.8,
+      "cornerIdle": 494.1
+    },
+    "note": "L1 derivation, pre-coalescing (every beat its own wake)"
+  },
+  {
+    "sha": "5f2c32a",
+    "date": "2026-07-12T12:16:47.914Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 50.5,
+      "cornerIdle": 57,
+      "afterClose": 0
+    },
+    "headlessBrowserPct": {
+      "baseline": 495.8,
+      "cornerIdle": 256.2
+    },
+    "note": "L1 derivation + 25ms expiry coalescing"
+  },
+  {
+    "sha": "5f2c32a",
+    "date": "2026-07-12T12:25:31.957Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 77.5,
+      "cornerIdle": 104.4,
+      "afterClose": 37.9
+    },
+    "headlessBrowserPct": {
+      "baseline": 507.8,
+      "cornerIdle": 412.2
+    },
+    "note": "ticker world (pre-L1) re-measured same-day for A/B"
+  },
+  {
+    "sha": "5f2c32a",
+    "date": "2026-07-12T12:29:02.646Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 76.2,
+      "cornerIdle": 103.3,
+      "afterClose": 35
+    },
+    "headlessBrowserPct": {
+      "baseline": 500.4,
+      "cornerIdle": 423.4
+    },
+    "note": "ticker world (pre-L1) re-measured same-day for A/B"
+  },
+  {
+    "sha": "5f2c32a",
+    "date": "2026-07-12T12:31:35.430Z",
+    "node": "v24.11.1",
+    "viewport": "3840x2160",
+    "query": "chunk=128",
+    "serverPct": {
+      "baseline": 50.1,
+      "cornerIdle": 105.9,
+      "afterClose": 0
+    },
+    "headlessBrowserPct": {
+      "baseline": 484.2,
+      "cornerIdle": 478.1
+    },
+    "note": "L1 final tree \u2014 corner saturates at density in both worlds (57-106% across runs); see leases.md L1 finding"
+  },
+  {
+    "sha": "5f2c32a",
+    "date": "2026-07-12T12:33:27.861Z",
+    "node": "v24.11.1",
+    "viewport": "2560x1440",
+    "serverPct": {
+      "baseline": 2.7,
+      "cornerIdle": 3.6,
+      "afterClose": 0.9
+    },
+    "headlessBrowserPct": {
+      "baseline": 78.6,
+      "cornerIdle": 50.4
+    },
+    "note": "L1 final tree"
   }
 ]

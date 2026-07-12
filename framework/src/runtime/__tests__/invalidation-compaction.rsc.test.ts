@@ -6,8 +6,8 @@
  * These tests prove the compaction is lossless for the only read the
  * framework performs — the MAX matching `ts` (`queryMatchingTs`) — and
  * that storage stays bounded by partition cardinality under sustained
- * ticker load (the website world-pulse shape: many bumps, one selector
- * name, bounded partitions).
+ * high-frequency writes (many bumps, one selector name, bounded
+ * partitions).
  */
 
 import { afterEach, describe, expect, it } from "vitest"

@@ -1979,6 +1979,7 @@ function createSpecComponent<V>(
           writeFingerprint={cacheWriteFingerprint}
           options={opts.cache}
           varyResult={varyResult}
+          wakeHints={self.wakeHints}
         >
           {body}
         </Cache>

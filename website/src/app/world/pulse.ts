@@ -2,61 +2,73 @@ import { localCell, type LocalCell } from "@parton/framework"
 import type { WorldGeometry } from "./constants.ts"
 
 /**
- * The world's pulse — one counter cell PER GEOMETRY, partitioned per
- * chunk coordinate. Server-owned state: it keeps counting whether or
- * not any client has the chunk's content in view, which is exactly
- * what a returning (re-culled-in) chunk demonstrates by showing the
- * caught-up value. Each geometry gets its own cell id
- * (`geo.pulseCellId`) so a 128px chunk's {cx,cy} partition never
- * collides with the 512 default's.
+ * The world's pulse — DERIVED, never ticked. One anchor cell PER
+ * GEOMETRY (`geo.pulseCellId`, so a 128px chunk's {cx,cy} partition
+ * never collides with the 512 default's), partitioned per chunk
+ * coordinate. The row stores the epoch ms at which the partition was
+ * first rendered — written ONCE, by the loader on the cold read; no
+ * other write ever lands on this cell. The value a chunk shows is
+ * computed in its body at render time (`time().now - anchor`), so it
+ * is correct whenever the body runs — a re-culled-in chunk shows the
+ * caught-up value by construction, with no producer keeping it warm.
  *
- * Per-chunk background ticker: increments the chunk's pulse partition
- * at random intervals. Each chunk draws a BASE rate from its
- * coordinates (deterministic spatial variety — some neighborhoods are
- * hot, some sleepy) and jitters every tick, clamped to 0.1–5s, so the
- * network lights' frequency colors mean something. Tickers start on a
- * chunk's first content render and are LRU-capped per geometry
- * (`geo.tickerCap` — density-scaled): past the cap the oldest ticker
- * dies (its chain checks membership), so a public instance can't
- * accumulate unbounded timers.
+ * Cadence is DECLARED, not driven: each chunk render calls
+ * `expires(nextBeat(cx, cy, now))` and the segment driver's expiry arm
+ * re-lanes the visible chunks on their boundaries, skipping parked
+ * ones. Zero clients ⇒ zero timers ⇒ zero server work — the
+ * lease-by-derivation shape (docs/notes/leases.md, L1).
+ *
+ * The beat grid: each chunk draws a BASE period from its coordinates
+ * (deterministic spatial variety — some neighborhoods are hot, some
+ * sleepy); beat k sits at `k·base` plus a jitter hashed PURELY from
+ * (coords, k) — lively but reproducible within a render (the tracking
+ * invariant: no `Math.random` in a body), consecutive gaps spanning
+ * 0.5–1.5× base, clamped to the 0.1–5s band. The network lights'
+ * frequency colors keep meaning something.
  */
 export interface ChunkPulse {
+  /** The anchor cell — `resolve({cx, cy})` reads (and on first render
+   *  writes) the partition's first-render epoch. */
   cell: LocalCell<number>
-  ensureTicker(cx: number, cy: number): void
+  /** The next beat boundary strictly after `now` for chunk (cx, cy) —
+   *  what the body passes to `expires()`. Pure. */
+  nextBeat(cx: number, cy: number, now: number): number
+}
+
+/** Deterministic unit-interval hash of (cx, cy, k) — the pure stand-in
+ *  for per-beat random jitter. */
+function beatJitter(cx: number, cy: number, k: number): number {
+  let h = (Math.imul(cx, 374761393) + Math.imul(cy, 668265263) + Math.imul(k, 1274126177)) | 0
+  h = Math.imul(h ^ (h >>> 13), 1103515245)
+  h ^= h >>> 16
+  return (h >>> 0) / 4294967296
+}
+
+/** Coordinate-derived base period, 400–4400ms. */
+function beatBase(cx: number, cy: number): number {
+  return 400 + ((((cx * 7 + cy * 13) % 9) + 9) % 9) * 500
+}
+
+function nextBeat(cx: number, cy: number, now: number): number {
+  const base = beatBase(cx, cy)
+  // Beat k sits at k·base + jitter·base/2. Jitter < base/2 keeps the
+  // sequence strictly increasing, so the boundary after `now` is the
+  // current grid slot's beat if still ahead, else the next slot's.
+  const beatAt = (k: number): number => (k + beatJitter(cx, cy, k) * 0.5) * base
+  const k = Math.floor(now / base)
+  const beat = beatAt(k) > now ? beatAt(k) : beatAt(k + 1)
+  return Math.min(Math.max(beat, now + 100), now + 5_000)
 }
 
 export function definePulse(geo: WorldGeometry): ChunkPulse {
-  const cell = localCell({ id: geo.pulseCellId, shape: "number", initial: 0 })
-
-  // Survives HMR module replacement: a reloaded module reuses the same
-  // set, so running chains stay owned and chunks don't double-tick.
-  const tickers = ((globalThis as Record<string, unknown>)[`__worldPulseTickers${geo.suffix}`] ??=
-    new Set<string>()) as Set<string>
-
-  const ensureTicker = (cx: number, cy: number): void => {
-    const key = `${cx},${cy}`
-    if (tickers.has(key)) return
-    if (tickers.size >= geo.tickerCap) {
-      const oldest = tickers.values().next().value
-      if (oldest !== undefined) tickers.delete(oldest)
-    }
-    tickers.add(key)
-
-    const base = 400 + ((((cx * 7 + cy * 13) % 9) + 9) % 9) * 500
-    const started = Date.now()
-    const schedule = (): void => {
-      const jitter = 0.5 + Math.random()
-      const delay = Math.min(5_000, Math.max(100, base * jitter))
-      setTimeout(() => {
-        if (!tickers.has(key)) return
-        // The value is milliseconds-alive since this server boot first
-        // loaded the chunk — time-shaped, not an opaque count, and fresh
-        // each run rather than resuming a persisted number.
-        void cell.set(Date.now() - started, { partition: { cx, cy } }).then(schedule, schedule)
-      }, delay)
-    }
-    void cell.set(0, { partition: { cx, cy } }).then(schedule, schedule)
-  }
-
-  return { cell, ensureTicker }
+  const cell = localCell({
+    id: geo.pulseCellId,
+    shape: "number",
+    initial: 0,
+    // The write-once anchor: a cold read at a partition stores its
+    // first-render epoch. The loader's storage write fires no
+    // invalidation — nothing depends on the row before it exists.
+    load: async () => Date.now(),
+  })
+  return { cell, nextBeat }
 }

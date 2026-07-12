@@ -41,9 +41,10 @@ const sharedInternals = (
 /** Wake/TTL hints written by the `expires()` / `staleUntil()` hooks. A
  *  live box: render-body writes land AFTER the boundary registered the
  *  snapshot, so wake consumers (the segment driver's expiry arm, the
- *  fp-skip TTL gate) read through the box at arm/decision time rather
- *  than at registration. Never part of the fingerprint — folding a
- *  wall-clock timestamp would shift the fp every millisecond. */
+ *  fp-skip TTL gate, the byte-cache's entry clamp) read through the
+ *  box at arm/decision time rather than at registration. Never part of
+ *  the fingerprint — folding a wall-clock timestamp would shift the fp
+ *  every millisecond. */
 export interface WakeHints {
   expiresAt?: number
   staleUntil?: number

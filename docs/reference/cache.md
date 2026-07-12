@@ -70,9 +70,14 @@ async function HotProductRender({ slug }: { slug: string } & RenderArgs) {
 }
 ```
 
-There's no useful configuration where the two TTLs differ — the
-cache short-circuits the re-execution that `expires()` would
-trigger, so keep them aligned.
+The two align by construction: the entry's fresh window is clamped
+to the body's declared boundary at store time —
+`min(now + maxAge, expiresAt)` — so bytes are never replayed past
+the render's own freshness declaration (the byte-cache counterpart
+of fp-skip's TTL gate). A declared `staleUntil()` clamps the
+stale-while-revalidate window the same way; `expires()` alone closes
+it (an expired declaration is a hard miss). `maxAge` is the bound
+for entries whose render declared nothing.
 
 ## `time()` helpers
 
@@ -106,7 +111,8 @@ prior snapshot, empty pre-render fold) therefore misses into a fresh
 render rather than serving bytes keyed under different read values,
 and per-value entries coexist: the cold path over-fetches, never
 serves stale. Wake hints (`expires()` / `staleUntil()`) never enter
-the key, so a per-millisecond boundary never shifts it.
+the key, so a per-millisecond boundary never shifts it — they clamp
+the entry's LIFETIME instead (see above).
 
 ## Composition with inner partials
 
@@ -174,8 +180,10 @@ Three axes:
 2. **Tracked-input change.** A page nav that changes a tracked
    read's value (or a match param) produces a different cache key.
    The old entry stays in the store but isn't queried.
-3. **TTL elapsing.** Past `maxAge` (no swr) or `maxAge + swr`, the
-   entry is treated as a miss; next render is fresh.
+3. **TTL elapsing.** Past the entry's fresh window (`maxAge` clamped
+   to a declared `expires()`) plus any stale window (swr clamped to a
+   declared `staleUntil()`), the entry is treated as a miss; next
+   render is fresh.
 
 ## Live updates
 

@@ -54,17 +54,11 @@ export const CHUNK_SIZES = [512, 256, 128] as const
 export type ChunkPx = (typeof CHUNK_SIZES)[number]
 export const DEFAULT_CHUNK_PX: ChunkPx = 512
 
-/** Per-geometry pulse-ticker cap (LRU past it). Scales with chunk
- *  density so the stress geometries actually exercise the load a
- *  dense viewport implies (a 4K viewport shows ~600 128px chunks)
- *  instead of hiding it behind the 512 default's cap. */
-const TICKER_CAPS: Record<ChunkPx, number> = { 512: 512, 256: 1024, 128: 4096 }
-
 /**
  * One chunk-size geometry — every number and identifier the spec
  * chain, pulse layer, and warm projector derive from the chunk size.
  * The default (512) geometry keeps the historical unsuffixed ids
- * (`world-chunk`, `quad-tile-<size>`, `world.pulse`), so its wire and
+ * (`world-chunk`, `quad-tile-<size>`, `world.pulse.started`), so its wire and
  * catalog are byte-for-byte what a bare URL always served; the others
  * suffix everything with `-<chunkPx>` — the spec catalog is one flat
  * namespace, so every spec of a chain needs a distinct id.
@@ -83,11 +77,10 @@ export interface WorldGeometry {
   suffix: string
   /** The chunk spec's catalog id (`world-chunk`, `world-chunk-128`). */
   chunkSpecId: string
-  /** The pulse cell's id — distinct per geometry so partitions never
-   *  collide across chunk sizes. */
+  /** The pulse ANCHOR cell's id — the row stores a chunk partition's
+   *  first-render epoch (see ./pulse.ts). Distinct per geometry so
+   *  partitions never collide across chunk sizes. */
   pulseCellId: string
-  /** Pulse-ticker LRU cap for this geometry's density. */
-  tickerCap: number
   /** A chunk's plane-coordinate box origin. */
   chunkOrigin(c: number): number
   /**
@@ -127,8 +120,10 @@ export function worldGeometry(chunkPx: ChunkPx): WorldGeometry {
     quadSizes,
     suffix,
     chunkSpecId: `world-chunk${suffix}`,
-    pulseCellId: `world.pulse${suffix ? `.${chunkPx}` : ""}`,
-    tickerCap: TICKER_CAPS[chunkPx],
+    // `.started` names the anchor semantics (the row is an epoch, not
+    // a counter) — a fresh id, so rows persisted under the retired
+    // counter shape are never misread as anchors.
+    pulseCellId: `world.pulse.started${suffix ? `.${chunkPx}` : ""}`,
     chunkOrigin: (c) => CENTER_PX + c * chunkPx,
     quadMaterializeMargin: (size) => 2 * chunkPx + chunkPx * Math.log2(size / quadLeafPx),
   }

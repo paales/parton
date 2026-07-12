@@ -28,6 +28,7 @@ import { createFromReadableStream, renderToReadableStream } from "./flight-runti
 import { spliceHoles, stripHoles, type HoleRef, type SpliceMeta } from "./flight-graph.ts"
 import { hash } from "./hash.ts"
 import { stableStringify } from "./stable-stringify.ts"
+import type { WakeHints } from "./current-parton.ts"
 import { partialFromSnapshot } from "./partial.tsx"
 import { ParentContext, type PartialCtx } from "./partial-context.ts"
 import { getScope } from "../runtime/context.ts"
@@ -52,6 +53,12 @@ interface Entry {
   holes: StoredHole[]
   /** Renumber/dedup facts the splice needs without rebuffering. */
   meta: SpliceMeta
+  /** Fresh/stale windows: the `maxAge` / `staleWhileRevalidate`
+   *  timestamps CLAMPED to the body's declared `expires()` /
+   *  `staleUntil()` boundaries at store time — the byte-cache
+   *  counterpart of fp-skip's TTL gate. A body that declares its
+   *  output stops being fresh at T never has its bytes replayed past
+   *  T; `maxAge` only bounds how long an undeclared entry lingers. */
   expiresAt: number
   staleUntil: number
 }
@@ -246,6 +253,11 @@ interface CacheProps {
    *  `expiresAt` / `staleUntil` reserved keys, which the framework
    *  strips before feeding fp and cache lookups). */
   varyResult: unknown
+  /** The render's live wake-hint box — `expires()` / `staleUntil()`
+   *  write it while the body runs. Read at STORE time (the body has
+   *  settled by then, so the hints are final) to clamp the entry's
+   *  fresh/stale windows; never part of the key. */
+  wakeHints?: WakeHints
   children: ReactNode
 }
 
@@ -255,6 +267,7 @@ export async function Cache({
   writeFingerprint,
   options,
   varyResult,
+  wakeHints,
   children,
 }: CacheProps): Promise<ReactNode> {
   // Capture the cached parton's context synchronously here (the `<Cache>`
@@ -262,7 +275,16 @@ export async function Cache({
   // the parton's child context). The isolated body renders are seeded with
   // it so their partons thread correctly.
   const bodyParent = getServerContext(ParentContext)
-  return cacheImpl(id, fingerprint, writeFingerprint, options, varyResult, children, bodyParent)
+  return cacheImpl(
+    id,
+    fingerprint,
+    writeFingerprint,
+    options,
+    varyResult,
+    wakeHints,
+    children,
+    bodyParent,
+  )
 }
 
 async function cacheImpl(
@@ -271,6 +293,7 @@ async function cacheImpl(
   writeFingerprint: () => string,
   options: CacheOptions,
   varyResult: unknown,
+  wakeHints: WakeHints | undefined,
   children: ReactNode,
   bodyParent: PartialCtx,
 ): Promise<ReactNode> {
@@ -291,7 +314,7 @@ async function cacheImpl(
   if (existing && (existing.expiresAt > now || existing.staleUntil > now)) {
     if (existing.expiresAt <= now && !refreshing.has(key)) {
       refreshing.add(key)
-      void refreshEntry(storeKeyOf, children, options, bodyParent)
+      void refreshEntry(storeKeyOf, children, options, wakeHints, bodyParent)
         .catch((err) => console.error(`[cache] SWR refresh failed for ${key}:`, err))
         .finally(() => refreshing.delete(key))
     }
@@ -301,7 +324,7 @@ async function cacheImpl(
   // ── Miss path ──
   let pending = inFlightMiss.get(baseKey)
   if (!pending) {
-    pending = renderMissAndStore(storeKeyOf, children, options, bodyParent).finally(() =>
+    pending = renderMissAndStore(storeKeyOf, children, options, wakeHints, bodyParent).finally(() =>
       inFlightMiss.delete(baseKey),
     )
     inFlightMiss.set(baseKey, pending)
@@ -314,6 +337,7 @@ async function renderMissAndStore(
   storeKeyOf: () => string,
   children: ReactNode,
   options: CacheOptions,
+  wakeHints: WakeHints | undefined,
   bodyParent: PartialCtx,
 ): Promise<{ liveTree: ReactNode }> {
   const { store } = state()
@@ -331,14 +355,7 @@ async function renderMissAndStore(
     const { bytes, holes, meta } = stripHoles(rawBytes)
     await store.set(
       storeKeyOf(),
-      freshEntry(
-        bytes,
-        enrichHoles(holes),
-        meta,
-        options.maxAge,
-        options.staleWhileRevalidate,
-        Date.now(),
-      ),
+      freshEntry(bytes, enrichHoles(holes), meta, options, wakeHints, Date.now()),
     )
   })()
   storagePromise.catch((err) => {
@@ -356,6 +373,7 @@ async function refreshEntry(
   storeKeyOf: () => string,
   children: ReactNode,
   options: CacheOptions,
+  wakeHints: WakeHints | undefined,
   bodyParent: PartialCtx,
 ): Promise<void> {
   const { store } = state()
@@ -365,27 +383,31 @@ async function refreshEntry(
   const { bytes, holes, meta } = stripHoles(rawBytes)
   await store.set(
     storeKeyOf(),
-    freshEntry(
-      bytes,
-      enrichHoles(holes),
-      meta,
-      options.maxAge,
-      options.staleWhileRevalidate,
-      Date.now(),
-    ),
+    freshEntry(bytes, enrichHoles(holes), meta, options, wakeHints, Date.now()),
   )
 }
 
+/** Entry timestamps: the option-derived windows clamped to the body's
+ *  declared wake-hint boundaries. `expires()` alone (no `staleUntil()`)
+ *  clamps BOTH windows to the boundary — an expired declaration is a
+ *  hard miss, never stale-servable, because the SWR refresh re-encodes
+ *  the same settled body output rather than re-running the parton. An
+ *  infinite hint (`time().never`) is a no-op under `Math.min`. */
 function freshEntry(
   bytes: Uint8Array,
   holes: StoredHole[],
   meta: SpliceMeta,
-  maxAge: number | undefined,
-  swr: number | undefined,
+  options: CacheOptions,
+  hints: WakeHints | undefined,
   now: number,
 ): Entry {
-  const expiresAt = maxAge != null ? now + maxAge * 1000 : Number.POSITIVE_INFINITY
-  const staleUntil = swr != null && maxAge != null ? expiresAt + swr * 1000 : expiresAt
+  const { maxAge, staleWhileRevalidate: swr } = options
+  let expiresAt = maxAge != null ? now + maxAge * 1000 : Number.POSITIVE_INFINITY
+  let staleUntil = swr != null && maxAge != null ? expiresAt + swr * 1000 : expiresAt
+  const declaredExpires = hints?.expiresAt
+  const declaredStale = hints?.staleUntil ?? declaredExpires
+  if (declaredExpires !== undefined) expiresAt = Math.min(expiresAt, declaredExpires)
+  if (declaredStale !== undefined) staleUntil = Math.min(staleUntil, declaredStale)
   return { bytes, holes, meta, expiresAt, staleUntil }
 }
 

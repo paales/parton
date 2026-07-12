@@ -156,6 +156,15 @@ export function _setKeepaliveMs(ms?: number): void {
   KEEPALIVE_MS = ms ?? DEFAULT_KEEPALIVE_MS
 }
 
+/** The expiry arm's tick resolution (ms). `expires()` deadlines round
+ *  UP to this absolute-epoch grid before arming, so boundaries due
+ *  within one slot share a single wake (the wake loop renders every
+ *  past-due parton). Bounds the arm's wake rate at 1000/grid per
+ *  connection no matter how many independent cadences the route
+ *  declares; a boundary is serviced at most one slot late. See the
+ *  quantization note in `waitForSegmentWake`. */
+const EXPIRY_COALESCE_MS = 25
+
 /**
  * Max delivery seqs in flight past the client's cumulative ack before
  * the driver stops OPENING lanes (dirty ids coalesce; the latest state
@@ -2567,8 +2576,21 @@ interface SegmentWakeOptions {
 async function waitForSegmentWake(options?: SegmentWakeOptions): Promise<SegmentWake> {
   const keepaliveDeadline = options?.deadline ?? Date.now() + KEEPALIVE_MS
   const expiresAtDelay = computeNextExpiresAtDelay(options?.excludeExpiryIds, options?.session)
+  // The expiry arm's tick resolution: the deadline rounds UP to the
+  // next EXPIRY_COALESCE_MS grid point (an absolute epoch grid, so
+  // every connection's arms align), and one wake then services every
+  // boundary due within the slot — the wake loop already renders ALL
+  // past-due partons, so batching is a latency trade, not a semantic
+  // one: a boundary fires at most one slot late. Without it, hundreds
+  // of desynchronized per-parton cadences (the world at ?chunk=128 on
+  // a 4K viewport: ~540 beats at 0.1–5s) make every beat its own
+  // wake, and each wake re-derives the arm (an O(route snapshots)
+  // scan) — the wake OVERHEAD, not the lanes, saturates the core.
   const expiresAtDeadline =
-    expiresAtDelay !== null ? Date.now() + Math.max(0, expiresAtDelay) : null
+    expiresAtDelay !== null
+      ? Math.ceil((Date.now() + Math.max(0, expiresAtDelay)) / EXPIRY_COALESCE_MS) *
+        EXPIRY_COALESCE_MS
+      : null
   // Entry latches — a signal that landed while the driver was busy
   // (or, for bumps, was recorded silently for a parked carrier) is
   // consumed here instead of parking past it.

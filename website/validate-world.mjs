@@ -533,10 +533,11 @@ try {
   }
 
   // ── 5. Steady state: parked chunks quiet on the wire, no red mount-flashes ──
-  // Hundreds of chunks were visited and scrolled past; their tickers
-  // keep writing server-side, but only the ~dozen chunks at the current
-  // position may lane. And at rest, a red flash means something
-  // REMOUNTED without cause.
+  // Hundreds of chunks were visited and scrolled past; their snapshots
+  // still carry declared beat boundaries, but the expiry arm skips
+  // parked partons — only the ~dozen chunks at the current position may
+  // lane. And at rest, a red flash means something REMOUNTED without
+  // cause.
   await page.evaluate(() => {
     window.__redFlashes = 0
     const mo = new MutationObserver((muts) => {

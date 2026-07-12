@@ -119,6 +119,14 @@ any selector-routing logic that could replace it.
 
    - Expiry arm — the earliest `expires()` boundary among the
      route's snapshots (read through `effectiveExpiresAt`) elapses.
+     The deadline rounds UP to an absolute 25ms grid
+     (`EXPIRY_COALESCE_MS`) before arming, and the wake services
+     EVERY past-due parton — so hundreds of independent per-parton
+     cadences (the world's per-chunk beats at `?chunk=128`) share
+     grid-aligned wakes instead of each beat paying its own wake +
+     arm re-derivation (an O(route snapshots) scan per wake — the
+     overhead that saturated a core at density, not the lanes). A
+     boundary is serviced at most one slot late.
    - Visibility arm (lane driver only) — a channel envelope's
      `visible` frame lands on the connection session, naming flipped
      parton ids ([`channel.md`](./channel.md)). The same listener-set
@@ -997,20 +1005,20 @@ Two separate concepts:
 
 - **`cache: { maxAge: N }`** (or eventually `cache: true`)
   declares that the rendered Flight bytes should be stored and
-  replayed on hit. Distinct on-disk/in-memory footprint; cache
-  hits skip Render entirely. Today's TTL comes from `maxAge`;
-  long-term the boolean form will draw TTL from the `expires()`
-  boundary.
+  replayed on hit. Distinct on-disk/in-memory footprint; a hit
+  replays stored bytes (the body still runs — only its output is
+  short-circuited).
 
-The two are independent. Most partons declare one or the other,
-not both. The streaming-demo's `LiveTick` uses `expires()`
-without `cache`; the magento product-list uses `cache: { maxAge }`
-without `expires()`. Where both are useful (a cached product card
-that occasionally refreshes), use whichever TTL matches your
-re-execution policy — but a "different TTL between cache and
-`expires()`" combination has no useful interpretation (the cache
-short-circuits the re-execution that `expires()` would have
-triggered).
+The two compose: an entry's fresh/stale windows are CLAMPED to the
+boundaries the body declared (`freshEntry` reads the render's
+wake-hint box at store time), so declaring both never conflicts —
+bytes are never replayed past the body's own freshness declaration,
+and `maxAge` bounds entries whose render declared nothing. The
+streaming-demo's `LiveTick` uses `expires()` without `cache`; the
+magento product-list uses `cache: { maxAge }` without `expires()`;
+the website world's chunks use both — a derived per-chunk beat
+(`expires()`) over a byte-cached body that predictive warming fills
+(see `docs/internals/cache-internals.md` §Stale-while-revalidate).
 
 ## GraphQL `@defer` (incremental delivery)
 

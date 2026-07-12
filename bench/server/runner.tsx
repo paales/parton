@@ -103,11 +103,11 @@ export interface RunOptions {
    *  fixed per-tick overhead is shared across M re-renders). */
   bumpMode?: "single" | "all"
   /** Historical `refreshSelector` bumps fired (round-robin across the
-   *  live selectors) BEFORE the cold render — a server whose tickers
-   *  have been running long before this request lands. The website's
-   *  world pulse produces ~100–5000 bumps/s across up to 512 partitions
-   *  of one selector name; the registry must answer fold queries at the
-   *  same cost regardless of how many bumps preceded the request. */
+   *  live selectors) BEFORE the cold render — a server whose writers
+   *  have been running long before this request lands (hundreds of
+   *  bumps/s across hundreds of partitions of one selector name); the
+   *  registry must answer fold queries at the same cost regardless of
+   *  how many bumps preceded the request. */
   soakBumps?: number
 }
 
@@ -332,16 +332,16 @@ export const DEPTH_SWEEP: ScenarioSpec[] = [1, 4, 16].map((d) => ({
   params: { partons: 100, liveCells: 1, depth: d },
 }))
 
-/** Pulse soak (registry compaction): the website world-pulse shape —
- *  P live leaves reading partitions of ONE shared cell, so every leaf's
- *  fold queries the SAME selector name (`cell:bench.pulse`). Both rows
- *  start with every partition populated (soak ≥ P); they differ ONLY in
- *  how much ticker history preceded the request — one bump per
- *  partition vs ~39 (a few minutes of the website's 512 tickers at
- *  0.1–5s each). The pair is the invalidation-registry gate: warm
- *  ticks must cost the same in both rows — registry queries bounded by
- *  partition cardinality, never by how long the server has been
- *  ticking. */
+/** Pulse soak (registry compaction): one shared cell partitioned per
+ *  placement — P live leaves reading partitions of ONE module cell, so
+ *  every leaf's fold queries the SAME selector name
+ *  (`cell:bench.pulse`). Both rows start with every partition
+ *  populated (soak ≥ P); they differ ONLY in how much write history
+ *  preceded the request — one bump per partition vs ~39 (a few
+ *  minutes of 512 high-frequency writers at 0.1–5s each). The pair is
+ *  the invalidation-registry gate: warm ticks must cost the same in
+ *  both rows — registry queries bounded by partition cardinality,
+ *  never by how long the server has been ticking. */
 export const PULSE_SWEEP: ScenarioSpec[] = [
   {
     name: "pulse/P=512",

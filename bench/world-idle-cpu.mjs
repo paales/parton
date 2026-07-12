@@ -4,14 +4,16 @@
  *
  * The scenario that motivated it: load the world, scroll to the top
  * edge, dwell, scroll to the top-left corner, and stop. Every chunk
- * the tour rendered left a snapshot in the route bucket and started a
- * pulse ticker, so the server's idle CPU after the tour is the direct
- * price of the wake path under a realistically large snapshot ×
- * partition × bump-rate product. Today that path is the inverted wake
- * index's commit-time delivery — the tour's parked chunks record
- * silently and wake nothing — where the per-wake relevance filter it
- * replaced re-scanned every snapshot per bump per connection (the
- * saturation this bench caught).
+ * the tour rendered left a snapshot in the route bucket, so the
+ * server's idle CPU after the tour is the direct price of the wake
+ * path under a realistically large snapshot × cadence product. The
+ * world's pulse is DERIVED (anchor + render clock + a declared
+ * `expires()` beat — see website/src/app/world/pulse.ts): the only
+ * standing work is the segment driver's expiry arm re-laning the
+ * VISIBLE chunks at their declared cadence; parked chunks are skipped
+ * at the arm. The per-wake relevance filter this bench first caught
+ * saturating was replaced by the inverted wake index's commit-time
+ * delivery.
  *
  * Run: `yarn build:website && node bench/world-idle-cpu.mjs`
  *   [--viewport=2560x1440]   viewport (default 1440p; try 3840x2160)
@@ -25,15 +27,16 @@
  * (sampled per second via ps, last-10s average):
  *
  *   1. baseline    — page idle at the ORIGIN, right after boot. Small
- *                    snapshot set, few tickers: the healthy floor.
+ *                    snapshot set, few visible beats: the healthy floor.
  *   2. cornerIdle  — page idle at the TOP-LEFT CORNER after the tour.
  *                    THE number: it must settle near the baseline. A
  *                    saturated core here (~100%) is the wake-filter
  *                    pathology — the server spending its entire budget
  *                    re-deciding NOT to render.
- *   3. afterClose  — zero clients, tickers still firing. Attribution:
- *                    connection-driven burn drops away; what remains
- *                    is the tickers' own write cost.
+ *   3. afterClose  — zero clients. The lease-by-derivation floor: no
+ *                    connection means no expiry arm, no beats, no
+ *                    producers — this must sit at the process idle
+ *                    floor (~0%).
  *
  * The browser column is the Playwright-launched HEADLESS Chromium
  * tree (software compositor — its paint share overstates a real GPU;
@@ -161,8 +164,8 @@ console.log("page booted at origin")
 const baseline = await sampleWindow("baseline (page idle at origin)", 12)
 
 // Stepped scroll: mimics a human wheel/drag so intermediate chunks render
-// (an instant scrollTo would skip the snapshot/ticker accumulation that
-// makes the corner state expensive).
+// (an instant scrollTo would skip the snapshot accumulation that makes
+// the corner state expensive).
 const steppedScroll = async (dx, dy, steps, stepMs) => {
   for (let i = 0; i < steps; i++) {
     await page.$eval(scroller, (el, d) => el.scrollBy(d.dx, d.dy), { dx, dy })

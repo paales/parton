@@ -47,14 +47,14 @@ beginning with `$` is escaped on the wire as `$$…`, so a price string
 like `"$5.00"` is never mistaken for a reference (this is why the
 rewrite can't be a regex over the text).
 
-- **Hole detection.** A hole root is a row whose *top-level* element is
+- **Hole detection.** A hole root is a row whose _top-level_ element is
   the wrapper chain — `<Activity>` / `<Suspense>` (both `$…`-ref-typed)
   descending through single-element children — down to a
   `PartialErrorBoundary` (the element carrying `partialId`). In the
   cached body every such `partialId` is an inner hole; the cached spec's
-  own boundary sits *outside* the `<Cache>` wrap. The descent stops at
+  own boundary sits _outside_ the `<Cache>` wrap. The descent stops at
   content (a string-typed HTML element, or a multi-child array), so a
-  content row that merely *inlines* a synchronous parton among its
+  content row that merely _inlines_ a synchronous parton among its
   children isn't mis-stripped — that parton freezes as cached content.
   Dynamic holes fetch, hence suspend, hence always outline, so this
   never costs a real hole.
@@ -63,10 +63,10 @@ rewrite can't be a regex over the text).
   the frozen hole content — are dropped, so the stored payload never
   carries content the splice will replace.
 - **Renumber + dedup.** Each spliced hole's rows are renumbered into
-  an interleaved id lane above the scaffold's `maxId` — hole *i* of
-  *H* maps a fresh internal id *n* to `maxId + 1 + n*H + i`, so each
-  hole owns one residue class mod *H* and lanes stay disjoint for any
-  *n* (a deep render that emits large internal ids can't overrun an
+  an interleaved id lane above the scaffold's `maxId` — hole _i_ of
+  _H_ maps a fresh internal id _n_ to `maxId + 1 + n*H + i`, so each
+  hole owns one residue class mod _H_ and lanes stay disjoint for any
+  _n_ (a deep render that emits large internal ids can't overrun an
   adjacent hole's range). Rows the scaffold already declares (client-module `I`
   rows, `$S` symbol rows — matched by data string) are dropped and the
   fresh refs routed to the scaffold's id, so splicing doesn't grow the
@@ -90,10 +90,11 @@ interface Entry {
   bytes: Uint8Array // stripped scaffolding (holes are placeholders)
   holes: StoredHole[] // inner partons to splice live, in document order
   meta: SpliceMeta // { maxId, shared } — renumber/dedup facts
-  expiresAt: number
-  staleUntil: number
+  expiresAt: number // option window clamped to the body's expires()
+  staleUntil: number // option window clamped to the body's staleUntil()
 }
-interface StoredHole {       // HoleRef + the registry snapshot
+interface StoredHole {
+  // HoleRef + the registry snapshot
   rowId: string // the seam id the parent `$L`s
   partialId: string
   snapshot: PartialSnapshot // parentPath/frameChain drive the fresh render
@@ -150,13 +151,27 @@ key input fails loudly instead of recursing forever.
 ```
 
 `Entry` carries `expiresAt` (now + maxAge*1000; `+Infinity` when no
-`maxAge`) and `staleUntil` (expiresAt + swr*1000). On hit:
+`maxAge`) and `staleUntil` (expiresAt + swr*1000), each CLAMPED to
+the boundary the body's `expires()` / `staleUntil()` hooks declared
+during the render (`freshEntry` reads the parton's live wake-hint box
+at store time, after the body settled) — the byte-cache counterpart
+of fp-skip's TTL gate. `expires()` alone clamps both windows: an
+expired declaration is a hard miss, never stale-servable, because the
+SWR refresh re-encodes the same settled body output rather than
+re-running the parton. On hit:
 
 - `expiresAt > now` — fresh hit. Serve.
 - `staleUntil > now` — stale-but-servable. Serve, kick off async
   refresh. The refresh runs in `refreshing: Set<string>` to dedupe
   thundering herds.
 - Past both — miss.
+
+The clamp is what makes derived time-shaped bodies (a value computed
+from a persisted anchor + the render clock, cadence declared with
+`expires()` — the website world's pulse) safe to byte-cache: their
+key never moves (no write ever bumps the cell), so without the clamp
+a `maxAge` window would replay stale derived bytes while the expiry
+arm dutifully re-ran the body.
 
 ## Miss path
 

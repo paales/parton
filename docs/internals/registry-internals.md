@@ -215,10 +215,12 @@ Content changes and record removal are separate mechanisms:
   `ts` subsumes the older for every possible query. Storage is
   bounded by live (name × constraint-tuple) cardinality, never by
   bump count — a ticker bumping one partition every 100ms holds one
-  entry no matter how long the server has been up. The website's
-  `world.pulse` (up to 512 partitions under one selector name,
-  bumping every 0.1–5s) is the motivating shape; the bench's
-  `pulse/*` scenarios gate it. The bump counter (`_currentTs`)
+  entry no matter how long the server has been up. The motivating
+  shape was the website's world pulse in its retired ticker form
+  (hundreds of partitions under one selector name, bumping every
+  0.1–5s; the pulse is DERIVED now — anchor + `expires()` cadence,
+  no bumps — see `docs/notes/leases.md`); the bench's `pulse/*`
+  scenarios gate it. The bump counter (`_currentTs`)
   advances monotonically per bump, independent of what's stored.
 
   The query itself is KEYED, not scanned. Because the per-name map is
@@ -234,8 +236,9 @@ Content changes and record removal are separate mechanisms:
   per label, whichever exact strategy touches fewer entries: the
   probes or the linear `matchesConstraints` scan (also the fallback
   for surfaces past `PROBE_SUBSET_CAP` keys, where the product would
-  explode). A partition-heavy name (`world.pulse`'s 512 entries) is
-  therefore a handful of map hits per query, not a scan. Compiled
+  explode). A partition-heavy name (hundreds of entries under one
+  selector) is therefore a handful of map hits per query, not a
+  scan. Compiled
   surfaces are memoized per snapshot (`_compileSurfaceQuery`, WeakMap
   in `segment-relevance.ts`), shared by the fp fold, the reservation
   scan, and the wake-index registration.
