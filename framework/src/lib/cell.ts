@@ -27,7 +27,10 @@
  *
  * Writing: `cell.with(args).set(value)` writes storage at the bound
  * partition AND fires `refreshSelector("cell:<id>?<args>")` so only
- * placements bound to the same args refetch.
+ * placements bound to the same args refetch. `cell.update(updater)`
+ * (and `cell.with(args).update(updater)`) is the reducer form — next
+ * derives from current in one synchronous section, so concurrent
+ * writers compose instead of clobbering. Server-side only.
  *
  * See `docs/reference/cells.md` for the user-facing surface.
  */
@@ -36,6 +39,7 @@ import {
   __cellWrite as _cellWriteAction,
   __scopedCellWrite as _scopedCellWriteAction,
 } from "../runtime/cell-actions.ts"
+import { buildCellPartitionScope, updateOneCell } from "../runtime/cell-write.ts"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { getCurrentParton } from "./current-parton.ts"
 import { buildCellSelector, runInvalidationTransaction } from "../runtime/invalidation-registry.ts"
@@ -180,6 +184,32 @@ export interface CellInterface<T, A extends CellArgs = CellArgs> {
    * useful for cross-context mutations.
    */
   set(value: T, opts?: { partition?: CellArgs }): Promise<void>
+  /**
+   * Reducer-form mutation: read the current stored value, apply
+   * `updater(current) => next`, write the result through set's full
+   * pipeline (shape validation of the result, `write`
+   * canonicalisation, partition-scoped invalidation, `atomic()`
+   * batching). The read→updater→write section is synchronous, so
+   * concurrent updates on the same (cell, partition) COMPOSE — both
+   * increments land — where read-modify-write around `set` would
+   * clobber. Reach for it whenever `next` derives from `current`
+   * (counters, map merges); keep `set` for values you already hold.
+   *
+   * SERVER-SIDE ONLY: an updater is a function, which Flight cannot
+   * serialize client→server — call `update` inside a `"use server"`
+   * function; the composed result reaches clients on the action's
+   * response render like any other server-authoritative value.
+   * Updaters must be sync (an async updater throws — it would reopen
+   * the read→write gap).
+   *
+   * The partition derives like set's: `opts.partition` when given,
+   * otherwise the cell's own `partition` callback against the current
+   * request. Value-keyed cells (`keyOf`) have no derivable partition
+   * before the read — bind it explicitly: `cell.with(key).update(fn)`.
+   * A cold loader-backed slot is warmed (loader run, result seeded)
+   * before the updater applies.
+   */
+  update(updater: (current: T) => T, opts?: { partition?: CellArgs }): Promise<void>
   /** Synchronous server-side read of the stored value. The partition
    *  is `args` when given, otherwise derived from
    *  `cell.partition(currentRequest)`. Returns `defaultValue` on miss.
@@ -231,9 +261,11 @@ export interface BoundCell<T> {
   /** Write the new value at this bound partition. Fires
    *  `refreshSelector("cell:<id>?<args>")`. */
   set(value: T): Promise<void>
-  /** Functional update: read current value, apply updater, write back.
-   *  Reads via the cell's loader/storage; applies updater synchronously;
-   *  writes result. */
+  /** Reducer-form mutation at this bound partition — read current
+   *  value (warming a cold loader first), apply `updater(current) =>
+   *  next` synchronously, write back through set's full pipeline.
+   *  Concurrent updates compose; see `CellInterface.update`. Server-
+   *  side only (updaters don't cross Flight). */
   update(updater: (current: T) => T): Promise<void>
   /** Reset storage to the cell's `defaultValue` and fire partition-
    *  scoped invalidation. Use when the entity logically no longer
@@ -638,7 +670,7 @@ function buildCellPartitionScopeFromRequest(): CellPartitionScope {
 
 /**
  * Resolve the stored value at a partition, running the loader on miss.
- * Used by the schema/prop resolution path and by `BoundCell.update`.
+ * Used by the schema/prop resolution path.
  *
  * Behavior:
  *   - Storage hit → return validated value.
@@ -670,6 +702,70 @@ export async function resolveCellValue<T>(cell: CellInterface<T>, args: CellArgs
   return cell.defaultValue
 }
 
+// ─── Reducer-form update ──────────────────────────────────────────────
+
+/**
+ * The implementation behind `CellInterface.update` and
+ * `BoundCell.update`. Derives the partition (explicit args → the
+ * cell's own `partition` callback against the caller's request — same
+ * priority as set's write path, minus `keyOf`: a value-keyed cell's
+ * identity lives in the value, which an update can't know before the
+ * read, so it must be bound explicitly), warms a cold loader-backed
+ * slot, then runs the SYNCHRONOUS read→updater→write section
+ * (`updateOneCell` — see the serialization invariant in
+ * `runtime/cell-write.ts`).
+ *
+ * Wrapped in `runInvalidationTransaction` like every set path: inside
+ * an `atomic()` the wrapper is a pass-through, so the update reads the
+ * transaction overlay, its write buffers with the batch, and a throw
+ * (the updater's own, or shape validation of its result) rolls the
+ * whole batch back.
+ */
+async function updateCell<T>(
+  cell: CellInterface<T>,
+  updater: (current: T) => T,
+  explicitArgs?: CellArgs,
+): Promise<void> {
+  let args: CellArgs
+  if (explicitArgs !== undefined) {
+    args = explicitArgs
+  } else if (cell.keyOf) {
+    throw new Error(
+      `cell-update: cell "${cell.id}" is value-keyed (keyOf) — its partition lives in the ` +
+        `value, which update can't derive before reading it. Bind the identity explicitly: ` +
+        `cell.with(key).update(updater).`,
+    )
+  } else {
+    args = cell.partition(buildCellPartitionScope())
+  }
+  await runInvalidationTransaction(async () => {
+    await warmColdSlot(cell, args)
+    updateOneCell(cell as CellInterface<unknown>, args, updater as (current: unknown) => unknown)
+  })
+}
+
+/**
+ * Run the cell's loader for a still-cold slot so the synchronous
+ * read-modify-write that follows composes over the loaded value, not
+ * `defaultValue`. Mirrors `resolveCellValue`'s loader branch
+ * (validate → `write` canonicalisation → storage, no signal) with one
+ * addition: the slot is re-checked after the await and seeded ONLY if
+ * still cold — a write that landed while the loader ran is a commit,
+ * and the loader's snapshot must never clobber it.
+ */
+async function warmColdSlot<T>(cell: CellInterface<T>, args: CellArgs): Promise<void> {
+  if (!cell.load) return
+  const partitionKey = hash(stableStringify(args))
+  const c = cell as CellInterface<unknown>
+  if (cellStorageForArgs(c, args).read(getScope(), cell.id, partitionKey) !== undefined) return
+  const loaded = await cell.load(args)
+  const storage = cellStorageForArgs(c, args)
+  if (storage.read(getScope(), cell.id, partitionKey) !== undefined) return
+  const validated = cell.validate(loaded)
+  const stored = cell.write ? cell.write(validated) : validated
+  storage.write(getScope(), cell.id, partitionKey, stored)
+}
+
 // ─── BoundCell construction ───────────────────────────────────────────
 
 /** Construct a bound cell from a Cell handle + args. The bound view
@@ -685,9 +781,7 @@ function buildBoundCell<T>(cell: CellInterface<T>, args: CellArgs): BoundCell<T>
       await _scopedCellWriteAction(cellId, args, value)
     },
     async update(updater: (current: T) => T): Promise<void> {
-      const current = await resolveCellValue(cell, args)
-      const next = updater(current)
-      await _scopedCellWriteAction(cellId, args, next)
+      await updateCell(cell, updater, args)
     },
     async clear(): Promise<void> {
       // Reset to defaultValue — semantic: "this entity is gone, use
@@ -837,6 +931,7 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     resolve: (args?: CellArgs) => resolveInBody(handle, args),
     set: bindSetter(opts.id) as CellInterface<T>["set"],
+    update: (updater, opts2) => updateCell(handle, updater, opts2?.partition),
     peek: buildPeek(opts.id, storage, validate, opts.initial, partitionFn),
     validate,
     write: opts.write,
@@ -919,6 +1014,7 @@ export function buildEphemeralCell<T>(
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     resolve: (args?: CellArgs) => resolveInBody(handle, args),
     set: bindSetter(id) as CellInterface<T>["set"],
+    update: (updater, opts) => updateCell(handle, updater, opts?.partition),
     peek: buildPeek(id, getEphemeralCellStorage, validate, initial, constantPartition),
     validate,
     write,
@@ -1044,6 +1140,7 @@ export function finalizeScopedCell<T>(
     with: (args: CellArgs): BoundCell<T> => buildBoundCell(handle, args),
     resolve: (args?: CellArgs) => resolveInBody(handle, args),
     set: bindSetter(id) as CellInterface<T>["set"],
+    update: (updater, opts) => updateCell(handle, updater, opts?.partition),
     peek: buildPeek(id, getCellStorage, validate, descriptor.defaultValue, constantPartition),
     validate,
     write: descriptor.write,

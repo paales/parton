@@ -59,3 +59,35 @@ test("each viewer sees the other viewer's cursor, not its own", async ({ page })
 
   await page2.close()
 })
+
+test("simultaneous movers compose — neither tab's cursor drops", async ({ page }) => {
+  await page.goto("/cursors")
+  await waitForPageInteractive(page)
+  await ready(page)
+
+  const page2 = await page.context().newPage()
+  await page2.goto("/cursors")
+  await waitForPageInteractive(page2)
+  await ready(page2)
+
+  // Both tabs move AT THE SAME TIME, repeatedly — concurrent
+  // `moveCursor` calls merging into the one shared map partition. The
+  // merge is a `cell.update`, so same-tick writers compose: each
+  // reducer sees the other's freshly-written entry. A last-write-wins
+  // read-modify-write here could interleave on the final burst and
+  // drop one tab's entry permanently (no later move restores it).
+  for (let i = 0; i < 5; i++) {
+    await Promise.all([moveInArea(page, 0.2 + i * 0.1, 0.3), moveInArea(page2, 0.8 - i * 0.1, 0.6)])
+  }
+
+  // After the bursts settle, each tab must still see exactly the OTHER
+  // tab's cursor — nobody's entry was lost to a concurrent merge.
+  await expect(page.locator('[data-testid="remote-cursor"]')).toHaveCount(1, {
+    timeout: 15000,
+  })
+  await expect(page2.locator('[data-testid="remote-cursor"]')).toHaveCount(1, {
+    timeout: 15000,
+  })
+
+  await page2.close()
+})

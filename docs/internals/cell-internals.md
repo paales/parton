@@ -12,7 +12,12 @@ A cell write — whether from server-side `cellHandle.set(v)`, the
 client's per-call `resolvedCell.set(v)` server-action ref, or a
 batched `useCell(cell).set(v)` — flows through one shared
 implementation: `writeOneCell(cellId, value, partitionOverride?)`
-in `framework/src/runtime/cell-actions.ts`.
+in `framework/src/runtime/cell-write.ts`. The pipeline lives outside
+`cell-actions.ts` because that module is `"use server"` (its exports
+must all be async server references) while the pipeline's entry
+points are deliberately **synchronous** — see "The serialization
+invariant" below; `cell-actions.ts` is the thin Flight-callable
+wrapper layer over it.
 
 ```
 validate(value)             ← throws on shape mismatch (defends against
@@ -51,8 +56,8 @@ priority order: an explicit `partitionOverride.partition` (the
 `.with(args).set` path) → the cell's `keyOf(value)` if present (value-keyed
 fragment cells: the identity lives in the value, so `cell.set(value)`
 needs no restated args) → `cell.partition(scope)` (request-derived). `keyOf` is
-set by `fragmentCell` from its `key` option and runs against the validated
-+ `write`-transformed value.
+set by `fragmentCell` from its `key` option and runs against the
+validated and `write`-transformed value.
 
 **Deferred-commit accounting.** `_recordCellWrite(cell.deferred === true)`
 increments a per-request `{total, deferred}` tally on the context store.
@@ -85,6 +90,66 @@ partition-scoped selector WITHOUT touching storage — used by
 `BoundCell.invalidate()` to force matching placements to re-resolve
 (re-run the loader if storage is empty).
 
+There is deliberately no `__cellUpdate` action: an updater is a
+function, which Flight cannot serialize client→server. `update` is a
+plain server-side method (below) that clients reach through app-level
+`"use server"` functions.
+
+## Update pipeline — reducer-form writes
+
+`cell.update(updater, opts?)` / `cell.with(args).update(updater)` run
+through `updateCell` in `lib/cell.ts`:
+
+```
+derive partition            ← opts.partition / bound args → the cell's
+                              `partition(scope)` against the caller's
+                              request (same priority as writeOneCell,
+                              minus keyOf — a value-keyed cell's
+                              identity lives in the value, which the
+                              update can't know before the read, so
+                              module-form update throws for keyOf cells)
+↓  (inside runInvalidationTransaction — pass-through under atomic())
+warmColdSlot                ← async: run the loader for a still-cold
+                              slot, then RE-CHECK and seed only if
+                              STILL cold — a write that landed during
+                              the await is a commit the loader's
+                              snapshot must never clobber
+↓
+updateOneCell               ← cell-write.ts — the SYNCHRONOUS section:
+  read current                 storage read (validate; invalid stored
+  next = updater(current)      state degrades to defaultValue), apply
+  writeOneCell(id, next,       the updater (a thenable result throws),
+    {partition: args})         then set's ENTIRE downstream path —
+                               validate → write → storage →
+                               deferred tally → partition-scoped bump
+```
+
+**The serialization invariant.** In-process concurrency control for
+cell writes is the event loop itself: storage reads/writes are sync,
+and the whole read→updater→write section runs without an `await`, so
+no concurrent write can interleave into the gap — two overlapping
+`update` calls on the same (cell, partition) compose (100 concurrent
+increments land exactly 100; `cell-update.rsc.test.tsx` proves it).
+There is no separate lock; what would break the invariant is adding an
+`await` inside `updateOneCell` (or before `writeOneCell`'s storage
+write). Async work (the cold loader) is hoisted OUT of the section,
+with the still-cold re-check making it clobber-safe. Cross-process
+writers are outside this contract (sticky sessions are the accepted
+constraint).
+
+Under `atomic()` the section reads and writes the transaction overlay
+(`_txView` via `cellStorageForArgs`), so an update composes over
+earlier buffered writes in the same batch and rolls back with it on
+throw.
+
+The client-side optimistic layer is untouched by updates:
+`latestSentByCell` only tracks values sent through the client batcher
+(`useCell(cell).set`), and an update never rides it — the composed
+result reaches the client on the action's response render as ordinary
+server-authoritative state. Structural prediction around an
+update-based action is `useOptimistic`, per
+[`../notes/replicated-state.md`](../notes/replicated-state.md).
+
 ## Fragment auto-hydration
 
 `fragmentCell(doc, {key})` self-registers in a module-scope
@@ -94,7 +159,7 @@ registry). `runQuery(client, doc, vars)` runs the query then calls
 
 1. `spreadSitesOf(doc)` walks the document AST once (cached per doc via a
    `WeakMap`), collecting every fragment spread as `{path, fragName,
-   deferred}` — `path` uses result aliases, `deferred` flags an `@defer`
+deferred}` — `path` uses result aliases, `deferred` flags an `@defer`
    directive on the spread.
 2. For each non-deferred spread whose `fragName` has a registered cell,
    `collectAtPath(result, path)` gathers the node(s) at that path
@@ -162,7 +227,7 @@ Two storage tiers, accessed via different module functions:
   other tabs' connections. `gqlCell` + `fragmentCell` always use
   this; `localCell` can opt in via `storage: getEphemeralCellStorage`.
 
-The cell handle carries `storage: () => CellStorage` — a *getter*,
+The cell handle carries `storage: () => CellStorage` — a _getter_,
 not a cached reference. Module-init runs outside any request, so a
 cached ephemeral reference would lock to the wrong storage forever.
 The getter pattern lets `localCell` use a stable singleton (where
@@ -183,7 +248,7 @@ so they always get the per-request storage.
 
 ### Empty-session safety guard
 
-A partition is *unresolved* when any of its values is the empty
+A partition is _unresolved_ when any of its values is the empty
 string — the sentinel `session.id` returns for an anonymous request
 with no `__frame_sid` cookie (see `createSessionReadSurface`). A
 persistent cell partitioned on `{sid: session.id}` would otherwise
@@ -199,7 +264,7 @@ write and a later read in the SAME request still cohere. A resolved
 `session.id` is unchanged — it routes to the cell's persistent,
 per-user partition. Already-ephemeral cells are unaffected.
 
-When the guard routes a *persistent* cell to ephemeral, it emits a
+When the guard routes a _persistent_ cell to ephemeral, it emits a
 dev-only, once-per-cell-id `console.warn` (gated on
 `import.meta.env.DEV`): the cell's state won't persist, and the fix is
 to establish a session (`ensureSessionId()`) before the cell resolves.
@@ -222,7 +287,7 @@ spec wrapper pipeline". The cell-specific parts:
   `boundArgsMerged`, and folds `cellId × partitionKey × value` into
   the `|schema=` fp term.
 - **Constraint surface** — `effectiveConstraints = matchParams ∪
-  boundArgsMerged`, passed to `queryMatchingTs(labels, surface)` →
+boundArgsMerged`, passed to `queryMatchingTs(labels, surface)` →
   the `|inv=` fold. Matching is type-aware: non-string partition
   values (number, boolean, null) match type-exactly, so `{uid:123}`
   and `{uid:"123"}` stay distinct — mirroring the partition key
@@ -255,9 +320,9 @@ The props phase is top-level only. Cells nested inside object props
 are NOT auto-resolved — pass them as top-level props if you want
 framework tracking.
 
-### Why `set` on the resolved cell isn't a bound *client* function
+### Why `set` on the resolved cell isn't a bound _client_ function
 
-The natural shape would be: `resolvedCell.set` is a bound *client*
+The natural shape would be: `resolvedCell.set` is a bound _client_
 function ref that calls the batcher (`_cellSetBatched.bind(null,
 id)`). Flight rejects this:
 
@@ -281,27 +346,27 @@ exposing `useCell` plus the queue + flush internals.
 ### State
 
 ```ts
-let queue: QueuedWrite[] = []          // pending writes since last flush
-let flushScheduled = false              // microtask is pending
-let inflight = false                    // a __cellWriteBatch POST is in flight
+let queue: QueuedWrite[] = [] // pending writes since last flush
+let flushScheduled = false // microtask is pending
+let inflight = false // a __cellWriteBatch POST is in flight
 
-const latestSentByCell = new Map<string, unknown>()  // optimistic value per cell-id
-const pendingByCell    = new Map<string, number>()    // queued + in-flight count
-const cellVersion      = new Map<string, number>()    // per-cell-id monotonic counter
-const subscribers      = new Set<() => void>()        // useCell subscriptions
+const latestSentByCell = new Map<string, unknown>() // optimistic value per cell-id
+const pendingByCell = new Map<string, number>() // queued + in-flight count
+const cellVersion = new Map<string, number>() // per-cell-id monotonic counter
+const subscribers = new Set<() => void>() // useCell subscriptions
 ```
 
 ### `enqueue(cellId, value, opts)` — the entry point
 
 ```ts
 function enqueue(id, value, opts): Promise<void> {
-  incrementPending(id, value)           // bumps pendingByCell[id] AND
-                                        // sets latestSentByCell[id] = value,
-                                        // then bumps cellVersion[id] and
-                                        // notifies subscribers
+  incrementPending(id, value) // bumps pendingByCell[id] AND
+  // sets latestSentByCell[id] = value,
+  // then bumps cellVersion[id] and
+  // notifies subscribers
   return new Promise((resolve, reject) => {
-    queue.push({id, value, partition: opts, resolve, reject})
-    if (inflight || flushScheduled) return  // a batch will pick this up
+    queue.push({ id, value, partition: opts, resolve, reject })
+    if (inflight || flushScheduled) return // a batch will pick this up
     flushScheduled = true
     queueMicrotask(flushQueue)
   })
@@ -375,7 +440,7 @@ Mechanism:
   THIS cell's version changes — other cells' activity doesn't
   trigger spurious renders.
 - Inside the component body: `const value = latestSentByCell.has(id)
-  ? latestSentByCell.get(id) : cell.value`. Computed fresh on each
+? latestSentByCell.get(id) : cell.value`. Computed fresh on each
   render against the current map state.
 
 The "reconcile moment" is the render where the last pending write

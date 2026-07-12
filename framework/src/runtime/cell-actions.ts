@@ -1,14 +1,17 @@
 "use server"
 
 /**
- * Cell-write server action.
+ * Cell-write server actions — the Flight-callable entry points over
+ * the write pipeline in `cell-write.ts` (a `"use server"` module may
+ * only export async server references, so the sync pipeline lives
+ * next door and these wrappers stay thin).
  *
  * One generic action: `__cellWrite(cellId, value, partition?)`. Each
  * `CellInterface<T>` exposes `.set` as a `Function.prototype.bind`-bound
  * reference (`__cellWrite.bind(null, id)`), so author code calls
  * `palette.set("dark")` and the framework routes by the bound id.
  *
- * Resolution path:
+ * Resolution path (see `writeOneCell` in cell-write.ts):
  *
  *   1. Look up the cell by id in the cell registry. Unknown id →
  *      throw; the registry is populated as a side-effect of
@@ -19,8 +22,8 @@
  *      - Explicit `partition` argument wins (used for cross-context
  *        mutations: action fired from /cart updating notes for a
  *        product not in the URL).
- *      - Otherwise run `cell.vary` against a `CellPartitionScope` built
- *        from the current request. `params` is populated from any
+ *      - Otherwise run `cell.partition` against a `CellPartitionScope`
+ *        built from the current request. `params` is populated from any
  *        registered URLPattern that matches the request URL — same
  *        derivation pass `partial.tsx` does for spec match.
  *   4. Write storage at `(getScope(), cellId, partitionKey)`.
@@ -29,70 +32,17 @@
  *      includes matching args see fp shift on the next render. Args
  *      are URL-encoded as the query-string fragment; bare
  *      `cell:<id>` is emitted only when args are empty.
+ *
+ * There is no `__cellUpdate` action: an updater is a function, which
+ * Flight cannot serialize client→server. `cell.update(updater)` is a
+ * server-side surface (plain method on the handle / bound cell) —
+ * clients reach it through app-level `"use server"` functions.
  */
 
-import { cellStorageForArgs, getCellById, type CellPartitionScope } from "../lib/cell.ts"
-import { hash } from "../lib/hash.ts"
-import { stableStringify } from "../lib/stable-stringify.ts"
-import { getRegisteredMatchPatterns } from "../lib/partial.tsx"
-import { buildTimeScope } from "../lib/time.ts"
-import { createSessionReadSurface } from "./session.ts"
-import { _recordCellWrite, getRequest, getScope, parseCookies } from "./context.ts"
+import { writeOneCell } from "./cell-write.ts"
 import { buildCellSelector, runInvalidationTransaction } from "./invalidation-registry.ts"
 import { getServerNavigation } from "./server-navigation.ts"
 import { _getCellWriteDelay } from "./cell-write-delay.ts"
-
-function searchParamsToRecord(sp: URLSearchParams): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [k, v] of sp) out[k] = v
-  return out
-}
-
-function headersToRecord(h: Headers): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [k, v] of h) out[k.toLowerCase()] = v
-  return out
-}
-
-/**
- * Walk every registered URLPattern, exec against `url`, merge each
- * matching pattern's named param groups. Last-wins on key collision.
- * Same idea as `extractNamedParams` in partial.tsx — but here we
- * don't know which spec's pattern to use (action context, no
- * parton render bound), so we union across all matches.
- */
-function deriveParamsForActionRequest(url: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const pattern of getRegisteredMatchPatterns()) {
-    const result = pattern.exec(url)
-    if (!result) continue
-    const groups = { ...result.pathname.groups, ...result.search.groups }
-    for (const [k, v] of Object.entries(groups)) {
-      if (typeof v !== "string") continue
-      if (/^\d+$/.test(k)) continue
-      out[k] = v
-    }
-  }
-  return out
-}
-
-/** Build a `CellPartitionScope` from the current request context. Used
- *  inside the write action when no explicit partition override was
- *  supplied. */
-function buildCellPartitionScope(): CellPartitionScope {
-  const request = getRequest()
-  const url = new URL(request.url)
-  return {
-    url,
-    pathname: url.pathname,
-    search: searchParamsToRecord(url.searchParams),
-    cookies: parseCookies(request),
-    headers: headersToRecord(request.headers),
-    params: deriveParamsForActionRequest(request.url),
-    session: createSessionReadSurface(),
-    time: buildTimeScope(),
-  }
-}
 
 /**
  * Internal cell-write entry point. Client code obtains a bound
@@ -176,56 +126,6 @@ export async function __cellWriteBatch(
   await runInvalidationTransaction(async () => {
     for (const u of updates) writeOneCell(u.id, u.value, u.partition)
   })
-}
-
-// `buildCellSelector` (+ `encodeArgsForSelector`) live in
-// invalidation-registry.ts so the inline-cell fp dep can be the exact
-// same partition-scoped string this write fires.
-
-/** Shared write implementation. Caller is responsible for wrapping in
- *  a `runInvalidationTransaction` so the resulting `refreshSelector`
- *  bumps participate in atomic commit/rollback.
- *
- *  Pipeline per write: validate (throws on shape mismatch) → write
- *  (server's final-say canonicalisation; opt-in via the cell's
- *  `write` option) → storage → `refreshSelector` (partition-scoped).
- *  Both validate and write run inside the transaction, so a throw
- *  rolls back the whole batch.
- *
- *  Selector emission is partition-scoped: if args are available (via
- *  `partitionOverride.partition` or `cell.partition(scope)`), the emitted
- *  selector carries them as constraints (`cell:<id>?key=value`).
- *  Only partons whose effective constraint surface includes the same
- *  args match — other placements of the same cell at different
- *  partitions don't refetch. */
-function writeOneCell(
-  cellId: string,
-  value: unknown,
-  partitionOverride: { partition?: Record<string, unknown> } | undefined,
-): void {
-  const cell = getCellById(cellId)
-  if (!cell) throw new Error(`cell-write: unknown cell id "${cellId}"`)
-  const validated = cell.validate(value)
-  const stored = cell.write ? cell.write(validated) : validated
-  let args: Record<string, unknown>
-  if (partitionOverride?.partition) {
-    args = partitionOverride.partition
-  } else if (cell.keyOf) {
-    // Value-keyed cell (fragment cells): the partition lives in the
-    // value itself. `cell.set(value)` routes to `keyOf(value)`'s
-    // partition without the caller restating the identity in `.with()`.
-    args = cell.keyOf(stored)
-  } else {
-    const scope = buildCellPartitionScope()
-    args = cell.partition(scope)
-  }
-  const partitionKey = hash(stableStringify(args))
-  cellStorageForArgs(cell, args).write(getScope(), cellId, partitionKey, stored)
-  // Count the write for the deferred-commit decision. A write to a
-  // `deferred` cell lets the action response skip its re-render — the
-  // open streaming connection carries the new value instead.
-  _recordCellWrite(cell.deferred === true)
-  getServerNavigation().reload({ selector: buildCellSelector(cellId, args) })
 }
 
 /**

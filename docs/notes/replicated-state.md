@@ -7,7 +7,7 @@
 > recognising that cells already cover the typed-value lane. Latest
 > pass: 2026-07-02 — terminology refreshed for the read-is-the-
 > dependency model (`vary`/`schema` are gone; a body's tracked reads
-> are its request surface). The doc describes the *current* model
+> are its request surface). The doc describes the _current_ model
 > (cells + `useOptimistic` + in-body `reload()`) and a small set
 > of genuinely open questions.
 >
@@ -66,12 +66,12 @@ per-field `authority: …` declaration. Same discipline as
 [`cms.text(name)`](../reference/cms.md): name the role, the
 framework owns the cascade.
 
-| Mode | Where it lives | API surface | Example |
-|---|---|---|---|
-| **server-only** | the Render body — tracked request reads + async loaders | normal parton render | price, inventory, permissions |
-| **server-with-cell** | server-authoritative typed value, partition-keyed | `localCell` / `gqlCell` resolved in-body (`cell.resolve()`, inline `localCell`, or a `BoundCell` prop) + `useCell` on the client (optimistic-aware value, batched `set`, `input()` bindings) | counter, draft text, drawer-open state, anything keyed by partition |
-| **server-with-optimistic-shape** | server-authoritative + client structural prediction | React-native `useOptimistic` (single-shot) | add-to-cart (line disappears optimistically; totals/taxes from server), drag-reorder |
-| **client-only** | React memory | plain `useState` | hover, focus, drag-position-during-drag |
+| Mode                             | Where it lives                                          | API surface                                                                                                                                                                                                                                                                                  | Example                                                                              |
+| -------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **server-only**                  | the Render body — tracked request reads + async loaders | normal parton render                                                                                                                                                                                                                                                                         | price, inventory, permissions                                                        |
+| **server-with-cell**             | server-authoritative typed value, partition-keyed       | `localCell` / `gqlCell` resolved in-body (`cell.resolve()`, inline `localCell`, or a `BoundCell` prop) + `useCell` on the client (optimistic-aware value, batched `set`, `input()` bindings); `cell.update(updater)` server-side when next derives from current — concurrent writers compose | counter, draft text, drawer-open state, anything keyed by partition                  |
+| **server-with-optimistic-shape** | server-authoritative + client structural prediction     | React-native `useOptimistic` (single-shot)                                                                                                                                                                                                                                                   | add-to-cart (line disappears optimistically; totals/taxes from server), drag-reorder |
+| **client-only**                  | React memory                                            | plain `useState`                                                                                                                                                                                                                                                                             | hover, focus, drag-position-during-drag                                              |
 
 Cells are the answer for the typed-value lane: pick a cell when the
 state is one named value whose authority lives on the server but
@@ -164,7 +164,7 @@ until a concrete in-tree use case lands.
 // Server
 const Cart = parton(
   async function CartRender() {
-    const cartId = cookie("cart_id")   // tracked read — the read IS the dependency
+    const cartId = cookie("cart_id") // tracked read — the read IS the dependency
     const cart = await loadCart(cartId)
     return <CartClient initial={cart.items} />
   },
@@ -172,13 +172,13 @@ const Cart = parton(
 )
 
 // Client
-"use client"
+;("use client")
 function CartClient({ initial }: { initial: CartItem[] }) {
   const [items, addOptimistic] = useOptimistic(initial, (state, op) =>
-    op.kind === "remove" ? state.filter(i => i.id !== op.id) : state
+    op.kind === "remove" ? state.filter((i) => i.id !== op.id) : state,
   )
 
-  return items.map(item => (
+  return items.map((item) => (
     <CartLine
       key={item.id}
       item={item}
@@ -215,15 +215,28 @@ the action's in-body `reload({ selector: "cart" })` lands.
 
 1. **Action result shape.** Is the framework-owned per-callsite
    result slot worth building, and at what surface? `{ success,
-   error, value }` is the natural envelope, but the migration cost
+error, value }` is the natural envelope, but the migration cost
    is non-trivial and no in-tree caller forces the decision yet.
 2. **Failure-mode propagation.** A single-action throw already
    rolls back the action's queued bumps via the transaction. What's
    not pinned: per-cell granularity inside a batch (today the whole
    batch rolls back; a partial-commit semantic may be wanted later),
-   and how the caller learns *which* part failed when the action
+   and how the caller learns _which_ part failed when the action
    throws. Both questions become urgent the day a multi-cell batch
    ships with mixed-validity semantics.
+
+   _Resolved (the conflict half):_ concurrent-writer conflict
+   semantics for the typed-value lane are first-class now —
+   `cell.update(updater)` runs the reducer inside the write path's
+   synchronous section, so overlapping writes on one (cell,
+   partition) compose instead of clobbering, and an update inside
+   `atomic()` reads the overlay and rolls back with the batch. See
+   [`../reference/cells.md`](../reference/cells.md) § "Composed
+   write" and
+   [`../internals/cell-internals.md`](../internals/cell-internals.md)
+   § "Update pipeline". Cells stay last-write-wins only where that IS
+   the intent (`set` — you already hold the whole next value).
+
 3. **Cross-tab consistency.** Optimistic state lives in React
    memory and dies on reload. Cells' `latestSentByCell` map has
    the same property. Tracked separately in

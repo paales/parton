@@ -8,15 +8,15 @@ fans the write back out to every parton that read it — via
 
 Three constructors today, each backed by a different storage tier:
 
-| Constructor | Storage | Loader | Use case |
-|---|---|---|---|
-| `localCell({...})` | **Persistent** — disk-backed (`cms/data/cells.json`). Survives process restart. | Optional. | User preferences, editor toggles, form drafts. State you actually want to keep. |
-| `gqlCellBuilder({client, graphql})` → `q.query(\`query …\`)` | **Ephemeral, request-scoped** — fresh in-memory storage per request, discarded on request finish. | Always (typed GraphQL query). | Upstream-loaded entity reads — cart, product details, user data. |
-| `q.fragment(\`fragment …\`, {key?})` | **Ephemeral, request-scoped** — same as gqlCell. | Never. | Identity-keyed sub-entities populated by auto-hydration (a query that composes the fragment) or value-keyed `.set()`. |
+| Constructor                                                  | Storage                                                                                           | Loader                        | Use case                                                                                                              |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `localCell({...})`                                           | **Persistent** — disk-backed (`cms/data/cells.json`). Survives process restart.                   | Optional.                     | User preferences, editor toggles, form drafts. State you actually want to keep.                                       |
+| `gqlCellBuilder({client, graphql})` → `q.query(\`query …\`)` | **Ephemeral, request-scoped** — fresh in-memory storage per request, discarded on request finish. | Always (typed GraphQL query). | Upstream-loaded entity reads — cart, product details, user data.                                                      |
+| `q.fragment(\`fragment …\`, {key?})`                         | **Ephemeral, request-scoped** — same as gqlCell.                                                  | Never.                        | Identity-keyed sub-entities populated by auto-hydration (a query that composes the fragment) or value-keyed `.set()`. |
 
 `gqlCellBuilder` mirrors the gql.tada `graphql()` tag — bind the client +
-tag once, then `q.query(\`…\`)` / `q.fragment(\`…\`)` build cells from
-strings (the raw `graphql()` call stays hidden). `gqlCell(client, doc)` is
+tag once, then `q.query(\`…\`)`/`q.fragment(\`…\`)`build cells from
+strings (the raw`graphql()`call stays hidden).`gqlCell(client, doc)` is
 the lower-level doc-mode form. All auto-derive the wire id from the
 operation/fragment name.
 
@@ -71,7 +71,7 @@ sources:
   JSX prop. For placement-derived partitioning (cart line by item
   id).
 
-Both can compose: a cell with `partition` *and* `.with()` ends up
+Both can compose: a cell with `partition` _and_ `.with()` ends up
 with merged args. The partition's output forms the base; `.with()`
 overlays.
 
@@ -110,7 +110,7 @@ partition (`await cartLineCell.resolve({ uid })`).
 > disk slot, so the framework routes an unresolved (`sid:""`) partition
 > to per-request ephemeral storage instead — state stays per-visitor
 > but does NOT persist across requests (dev logs a one-time warning).
-> To get per-user *persistence* for anonymous visitors, mint the
+> To get per-user _persistence_ for anonymous visitors, mint the
 > session before the cell resolves by calling `ensureSessionId()` in
 > your render (see `e2e-testing/src/app/pages/forms-demo.tsx`).
 
@@ -157,9 +157,7 @@ const cartItemCell = localCell({
 
 // Parent renders many lines, each bound to a specific itemId:
 function CartRender({ cart }) {
-  return cart.value.itemIds.map((uid) => (
-    <CartLine key={uid} item={cartItemCell.with({ uid })} />
-  ))
+  return cart.value.itemIds.map((uid) => <CartLine key={uid} item={cartItemCell.with({ uid })} />)
 }
 
 // Child reads the bound cell from its prop bag:
@@ -206,24 +204,28 @@ const cartItemCell = localCell({
 const cardName = localCell({
   id: "card-name",
   shape: "string",
-  partition: {},   // fixed record — one single slot (same as omitting)
+  partition: {}, // fixed record — one single slot (same as omitting)
   initial: "",
   // server-side canonicalisation: every write runs through this
-  write: (raw) => raw.toUpperCase().replace(/[^A-Z ]/g, "").slice(0, 26),
+  write: (raw) =>
+    raw
+      .toUpperCase()
+      .replace(/[^A-Z ]/g, "")
+      .slice(0, 26),
 })
 ```
 
 ### Options
 
-| Option | Notes |
-|---|---|
-| `id` | Wire identifier. Required. |
-| `shape` | Runtime shape. `"string"` / `"number"` / `"boolean"` / `"opaque"` / `{enum: [...] as const}`. `"opaque"` accepts any value without validation — author owns the TS type. |
-| `initial` | Default value when storage is empty and no loader is configured. |
+| Option      | Notes                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`        | Wire identifier. Required.                                                                                                                                                                                                                                                                                                                                                              |
+| `shape`     | Runtime shape. `"string"` / `"number"` / `"boolean"` / `"opaque"` / `{enum: [...] as const}`. `"opaque"` accepts any value without validation — author owns the TS type.                                                                                                                                                                                                                |
+| `initial`   | Default value when storage is empty and no loader is configured.                                                                                                                                                                                                                                                                                                                        |
 | `partition` | Optional. A fixed `CellArgs` record, or a sync callback `(scope: CellPartitionScope) => CellArgs` for request-derived partitions. Output hashes into the partition key; a callback re-runs in a server function's request too, so a per-session cell resolves at the caller's partition there. Omit for one single slot (`{}`) — or for a cell whose args come entirely from `.with()`. |
-| `load` | Optional async `(args) => T`. Runs on cold-start (storage miss) — result is validated, written to storage, then returned. Storage stays the source of truth thereafter. |
-| `write` | Optional `(T) => T`. Server-side canonicalisation. Runs after `validate` and before storage on every write. |
-| `deferred` | Optional `boolean`. When set, a write to this cell makes the action POST return **no re-render** — the new value propagates only over the open streaming connection. See [Deferred (stream-only) writes](#deferred-stream-only-writes). |
+| `load`      | Optional async `(args) => T`. Runs on cold-start (storage miss) — result is validated, written to storage, then returned. Storage stays the source of truth thereafter.                                                                                                                                                                                                                 |
+| `write`     | Optional `(T) => T`. Server-side canonicalisation. Runs after `validate` and before storage on every write.                                                                                                                                                                                                                                                                             |
+| `deferred`  | Optional `boolean`. When set, a write to this cell makes the action POST return **no re-render** — the new value propagates only over the open streaming connection. See [Deferred (stream-only) writes](#deferred-stream-only-writes).                                                                                                                                                 |
 
 ### Inline form — `localCell(key, opts)`
 
@@ -262,12 +264,12 @@ export const heroCell = pokemon.query(`
   query PokemonHero($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) { id name }
   }
-`)                                     // wire id auto-derives → "pokemon-hero"
+`) // wire id auto-derives → "pokemon-hero"
 
 // Namespaced ids for a second backend:
 const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
 export const productsCell = magento.query(`query Products($pageSize: Int!) {…}`)
-                                          // wire id → "magento.products"
+// wire id → "magento.products"
 ```
 
 The **wire id auto-derives from the operation name** (kebab-cased,
@@ -292,8 +294,8 @@ const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
 
 export const cartItemCell = magento.fragment(
   `fragment CartLine on CartItemInterface { uid quantity product { sku } }`,
-  { key: (d) => ({ uid: d.uid }) },   // CartItemInterface has no `id`
-)                                      // wire id → "magento.cart-line"
+  { key: (d) => ({ uid: d.uid }) }, // CartItemInterface has no `id`
+) // wire id → "magento.cart-line"
 ```
 
 A **query composes a fragment by passing its cell** — never the raw doc:
@@ -301,15 +303,15 @@ A **query composes a fragment by passing its cell** — never the raw doc:
 ```ts
 export const cartCell = magento.query(
   `query Cart($cartId: String!) { cart(cart_id: $cartId) { items { uid ...CartLine } … } }`,
-  [cartItemCell],   // the CELL; q.query extracts its .fragment for composition
+  [cartItemCell], // the CELL; q.query extracts its .fragment for composition
 )
 ```
 
-| Option | Notes |
-|---|---|
-| `key` | Identity extractor `(data) => CellArgs`. **Defaults to `(d) => ({ id: d.id })`** when the fragment selects `id`; the cell throws at construction if no `id` is selected and no `key` is given. The same key drives `.with(...)` placement AND value-keyed `.set(value)`. (`data` is typed via the standalone `fragmentCell(graphql(...), {key})`; `any` in the `q.fragment` string form.) |
-| `id` | Override the auto-derived id. |
-| `initial` | Value before any hydration (default `null`). |
+| Option    | Notes                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`     | Identity extractor `(data) => CellArgs`. **Defaults to `(d) => ({ id: d.id })`** when the fragment selects `id`; the cell throws at construction if no `id` is selected and no `key` is given. The same key drives `.with(...)` placement AND value-keyed `.set(value)`. (`data` is typed via the standalone `fragmentCell(graphql(...), {key})`; `any` in the `q.fragment` string form.) |
+| `id`      | Override the auto-derived id.                                                                                                                                                                                                                                                                                                                                                             |
+| `initial` | Value before any hydration (default `null`).                                                                                                                                                                                                                                                                                                                                              |
 
 Three ways a fragment cell gets populated:
 
@@ -342,7 +344,7 @@ is no manual `.with({ uid })` re-keying:
 // The host parton resolves the cart cell in its body and forwards each
 // per-line BoundCell:
 async function MagentoCartRender(_: RenderArgs) {
-  const cartId = cookie("cart_id") ?? ""             // tracked read
+  const cartId = cookie("cart_id") ?? "" // tracked read
   const cart = await cartCell.resolve({ cartId })
   // cart.value.cart.items is BoundCell<…>[] — forward directly:
   return cart.value?.cart.items.map((line) => <CartLine item={line} />)
@@ -355,7 +357,8 @@ non-fragment objects like `prices`) is untouched. `CellValue<typeof
 cartCell>` surfaces that whole value type for the Render prop, so you
 never restate it. Because the rewritten value isn't the raw result,
 **mutations refresh such a cell with `.invalidate()`** (re-run the loader
-+ rewrite), not `.set(raw)`.
+
+- rewrite), not `.set(raw)`.
 
 ### Auto-hydration via `runQuery`
 
@@ -365,7 +368,7 @@ auto-hydration by running its query through `runQuery`:
 ```ts
 load: async ({ cartId }) => {
   const data = await runQuery(client, CartWithItemsQuery, { cartId })
-  return cartAggregate(data.cart)   // per-line cells already hydrated
+  return cartAggregate(data.cart) // per-line cells already hydrated
 }
 ```
 
@@ -373,16 +376,18 @@ load: async ({ cartId }) => {
 
 `cellHandle.with(args)` returns a `BoundCell<T>` carrying:
 
-| Method | Behaviour |
-|---|---|
-| `set(value)` | Write storage at this partition, fire `cell:<id>?<args>`. |
-| `update(updater)` | Read current value (running loader on miss), apply `updater(current) => next`, write back. |
-| `clear()` | Reset storage to `defaultValue`, fire partition-scoped invalidation. |
-| `invalidate()` | Fire `cell:<id>?<args>` WITHOUT touching storage. Forces matching placements to re-resolve. |
-| `hydrate(value)` | Sync write to storage with NO signal. Used by parent loaders to populate child cells on cold load. |
+| Method            | Behaviour                                                                                                                                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `set(value)`      | Write storage at this partition, fire `cell:<id>?<args>`.                                                                                                                                                                        |
+| `update(updater)` | Reducer-form write: read the current value (warming a cold loader first), apply `updater(current) => next` in one synchronous section, write back through set's full pipeline. Concurrent updates **compose**. Server-side only. |
+| `clear()`         | Reset storage to `defaultValue`, fire partition-scoped invalidation.                                                                                                                                                             |
+| `invalidate()`    | Fire `cell:<id>?<args>` WITHOUT touching storage. Forces matching placements to re-resolve.                                                                                                                                      |
+| `hydrate(value)`  | Sync write to storage with NO signal. Used by parent loaders to populate child cells on cold load.                                                                                                                               |
 
-`set` / `update` / `clear` / `invalidate` are server-action refs —
-Flight-serializable, callable from client components.
+`set` / `clear` / `invalidate` are server-action refs —
+Flight-serializable, callable from client components. `update` is NOT:
+an updater is a function, which Flight can't carry client→server —
+call it inside a `"use server"` function.
 
 The cell-write path emits **partition-scoped selectors**:
 `cell:<id>?<key>=<value>&<key>=<value>`. Only partons whose effective
@@ -448,7 +453,7 @@ trigger the loader. Useful inside server functions.
 
 ```ts
 const showAdvanced = palette.peek() === "dark"
-const draft = notesCell.peek({ productId })   // explicit partition
+const draft = notesCell.peek({ productId }) // explicit partition
 ```
 
 Parton-scoped cells (the inline `localCell(key, …)` form) partition
@@ -512,6 +517,54 @@ async function updateLineQty(uid: string, qty: number) {
 The selector `cell:cart-item?uid=<uid>` fires; only the matching
 `<CartLine item={cartItemCell.with({uid})}>` placement refetches.
 
+### Composed write — `cell.update(updater)`
+
+`set` replaces; `update` derives. When the next value is a function of
+the current one — a counter, a map merge, a list append — a
+read-modify-write around `set` loses intent under concurrency: two
+writers both read, both compute, the second write clobbers the first
+(two increments land as one; two cursor merges drop an entry).
+`update` closes the gap: the updater `(current: T) => T` runs
+server-side against the current stored value inside the write path's
+**synchronous section** — no await between the read and the write, so
+overlapping updates on the same (cell, partition) serialize on the
+event loop and _compose_.
+
+```ts
+"use server"
+import { cursorsCell } from "./cursors-state.ts"
+
+export async function moveCursor(uid: string, x: number, y: number): Promise<void> {
+  await cursorsCell.update((current) => ({ ...current, [uid]: { x, y, ts: Date.now() } }))
+}
+```
+
+The result runs through set's entire downstream path: shape
+validation, the cell's `write` canonicalisation, the partition-scoped
+`cell:<id>?<partition>` bump, and `atomic()` (an update inside a
+transaction reads the overlay, joins the batch, rolls back on throw).
+The partition derives like set's — `opts.partition` when given
+(`cell.update(fn, { partition })`), the bound args on
+`cell.with(args).update(fn)`, otherwise the cell's own `partition`
+callback against the caller's request. A cold loader-backed slot is
+warmed (loader run, result seeded) before the updater applies.
+
+Rules:
+
+- **Server-side only.** An updater is a function — Flight can't carry
+  it client→server, so `update` lives in `"use server"` functions and
+  Render bodies. The client learns the composed result from the
+  action's response render, like any server-authoritative value.
+- **Updaters are sync.** An async updater throws — the await would
+  reopen the read→write gap the synchronous section exists to close.
+- **Value-keyed cells bind first.** A `keyOf` cell's identity lives in
+  the value, which update can't know before reading — module-form
+  `update` throws; use `cell.with(key).update(fn)`.
+- **Pick by derivation, not preference.** If you already hold the full
+  next value (a form commit, a mutation response), `set` is right —
+  last-write-wins IS the intent. Reach for `update` exactly when
+  `next` reads `current`.
+
 ### Transactional multi-write — `atomic(fn)`
 
 Writes live in plain `"use server"` functions that import cells and
@@ -572,7 +625,7 @@ export const cartCell = localCell({
   storage: getEphemeralCellStorage,
   load: async ({ cartId }) => {
     const data = await runQuery(client, CartWithItemsQuery, { cartId })
-    return cartAggregate(data.cart)   // per-line cells already hydrated
+    return cartAggregate(data.cart) // per-line cells already hydrated
   },
 })
 ```
@@ -604,7 +657,7 @@ costs a render and a reconcile per keystroke.
 export const cursor = localCell({
   id: "cursor",
   shape: "opaque",
-  partition: {},                    // global — one shared partition
+  partition: {}, // global — one shared partition
   initial: { x: 0, y: 0 } as { x: number; y: number },
   deferred: true,
 })
@@ -636,7 +689,7 @@ Constraints and edges:
 - **Mixed batches still render.** If one action writes both a deferred
   and a non-deferred cell, the response renders normally — the
   non-deferred cell needs the POST commit. `deferred` only suppresses
-  the render when *every* write in the request was deferred.
+  the render when _every_ write in the request was deferred.
 - **No POST-time reconciliation.** The writer's own view updates from
   local state (e.g. pointer events) or via the stream a beat later, not
   from the POST. Don't bind a control to a deferred cell's
@@ -648,10 +701,11 @@ Constraints and edges:
   state is a live-updates feature.
 
 **Multiplayer presence (every viewer's cursor).** The single-value
-example above reacts to *one* shared cursor. To show *all* viewers'
+example above reacts to _one_ shared cursor. To show _all_ viewers'
 cursors, hold the whole set in **one map cell keyed by viewer id** —
-`Record<viewerId, {x, y, …}>` — and merge your own entry on write
-(read-modify-write in the action). A map, not one partition per viewer,
+`Record<viewerId, {x, y, …}>` — and merge your own entry via
+`cursorsCell.update(...)` in the action, so same-tick movers compose
+instead of dropping each other's entries. A map, not one partition per viewer,
 because cells are point-read by partition and the set of partitions
 isn't enumerable, so a viewer can't "read every cursor partition." Each
 viewer writes its key; every viewer renders the whole map off the
@@ -705,15 +759,15 @@ for the client-side batcher, optimistic value tracking, and the
 
 ## Examples table
 
-| What | Pattern |
-|---|---|
-| Featured product banner (admin-set) | `localCell({partition: {}, ...})` |
-| User palette / locale | `localCell({partition: ({session}) => ({sid: session.id}), ...})` |
-| Cart contents (per session) | `localCell({partition: ({cookies}) => ({cartId: cookies.cart_id}), ...})` |
-| Per cart-line | `cartItemCell.with({uid})` — placement-bound |
-| GraphQL-loaded product | `magento.query(\`query Product($sku){...}\`).with({sku})` |
-| Per-line entity, auto-hydrated + value-keyed set | `magento.fragment(\`fragment Line on …\`, {key: d => ({uid: d.uid})})` |
-| Add-to-cart form draft per product | `localCell({partition: ({session, params}) => ({sid, productId}), ...})` |
+| What                                             | Pattern                                                                   |
+| ------------------------------------------------ | ------------------------------------------------------------------------- |
+| Featured product banner (admin-set)              | `localCell({partition: {}, ...})`                                         |
+| User palette / locale                            | `localCell({partition: ({session}) => ({sid: session.id}), ...})`         |
+| Cart contents (per session)                      | `localCell({partition: ({cookies}) => ({cartId: cookies.cart_id}), ...})` |
+| Per cart-line                                    | `cartItemCell.with({uid})` — placement-bound                              |
+| GraphQL-loaded product                           | `magento.query(\`query Product($sku){...}\`).with({sku})`                 |
+| Per-line entity, auto-hydrated + value-keyed set | `magento.fragment(\`fragment Line on …\`, {key: d => ({uid: d.uid})})`    |
+| Add-to-cart form draft per product               | `localCell({partition: ({session, params}) => ({sid, productId}), ...})`  |
 
 What's NOT a cell:
 
@@ -724,7 +778,7 @@ What's NOT a cell:
 ## Composition with existing primitives
 
 - **tracked reads** — a parton's request dimensions are its tracked
-  hook reads (fp surface). Cells keep a *declared* `partition`
+  hook reads (fp surface). Cells keep a _declared_ `partition`
   callback — a partition must be re-derivable OUTSIDE a render (a
   server function's write resolves the partition against the caller's
   request), so it can't be an in-body read. Its role differs too: it
@@ -743,7 +797,7 @@ What's NOT a cell:
   resolution path, partition-scoped selector encoding.
 - [`../notes/cells-as-resolvers.md`](../notes/cells-as-resolvers.md)
   — the design conversation behind this surface; resolved questions
-  + open ones.
+  - open ones.
 - [`../notes/cell-dimensionality.md`](../notes/cell-dimensionality.md)
   — separate axis: inheritance walks within a single cell's storage
   (translations, draft/published, time/history). Deferred.
