@@ -151,6 +151,149 @@ describe("substituteNested — descend through unchanged wrappers", () => {
   })
 })
 
+// ─── Memoization (see "substituteNested memoization" in partial-cache.ts) ──
+
+/** A hand-built Flight-shaped lazy: pending until `resolve()` flips the
+ *  payload to fulfilled. Mirrors the `$$typeof`/`_payload`/`_init`
+ *  shape `unwrapLazy` reads. */
+function makeLazy() {
+  const payload: { _status: number; _result?: ReactNode; promise: Promise<void> } = {
+    _status: 0,
+    promise: Promise.resolve(),
+  }
+  const node = {
+    $$typeof: Symbol.for("react.lazy"),
+    _payload: payload,
+    _init: (p: typeof payload) => {
+      if (p._status === 1) return p._result
+      throw p.promise
+    },
+  } as unknown as ReactNode
+  return {
+    node,
+    resolve(value: ReactNode) {
+      payload._status = 1
+      payload._result = value
+    },
+  }
+}
+
+describe("substituteNested — memoization", () => {
+  it("returns the identical element on a re-walk with an unchanged cache", () => {
+    // inner's substitution BUILDS a new element (outer's children
+    // change), so without the memo every walk would produce a fresh
+    // clone — identity across walks is the memo hit.
+    const outer = wrapper("outer", "", <section>{placeholder("inner", "")}</section>)
+    const cache = makeCache([
+      ["outer", "", outer],
+      ["inner", "", wrapper("inner", "", <div data-testid="inner-fresh" />)],
+    ])
+
+    const out1 = substituteNested(outer, cache, "outer|")
+    const out2 = substituteNested(outer, cache, "outer|")
+    expect(out1, "substitution should have rebuilt the outer wrapper").not.toBe(outer)
+    expect(out2, "unchanged cache must return the memoized element").toBe(out1)
+  })
+
+  it("a slot overwrite invalidates exactly the dirty path — clean siblings stay identical", () => {
+    // a's entry itself substitutes a nested placeholder, so its
+    // sub-walk builds a new element (memoized). Overwriting b must
+    // rebuild outer and b's branch while a's branch returns the
+    // IDENTICAL memoized element (React bails out on it).
+    const aEntry = wrapper("a", "", <div>{placeholder("a2", "")}</div>)
+    const outer = wrapper("outer", "", [placeholder("a", ""), placeholder("b", "")])
+    const cache = makeCache([
+      ["outer", "", outer],
+      ["a", "", aEntry],
+      ["a2", "", wrapper("a2", "", <div data-testid="a2-content" />)],
+      ["b", "", wrapper("b", "", <div data-testid="b-v1" />)],
+    ])
+
+    const out1 = substituteNested(outer, cache, "outer|") as ReactElementWithChildren
+    cache.get("b")!.set("", wrapper("b", "", <div data-testid="b-v2" />))
+    const out2 = substituteNested(outer, cache, "outer|") as ReactElementWithChildren
+
+    expect(out2, "dirty commit must rebuild the touched spine").not.toBe(out1)
+    const [a1, b1] = out1.props.children as ReactNode[]
+    const [a2, b2] = out2.props.children as ReactNode[]
+    expect(a2, "clean sibling branch must be the identical memoized element").toBe(a1)
+    expect(b2).not.toBe(b1)
+    expect(html(out2)).toContain('data-testid="b-v2"')
+    expect(html(out2)).toContain('data-testid="a2-content"')
+  })
+
+  it("never memoizes a walk that saw a pending lazy — at any nesting level", () => {
+    // The lazy sits inside a NESTED wrapper so both the nested and the
+    // outer wrapper walks see it; neither may memoize (a lazy resolves
+    // WITHOUT a cache write, so no dep could ever invalidate them).
+    const lazy = makeLazy()
+    const mid = wrapper("mid", "", lazy.node)
+    const outer = wrapper("outer", "", <section>{mid}</section>)
+    const cache = makeCache([
+      ["outer", "", outer],
+      ["mid", "", mid],
+      ["inner", "", wrapper("inner", "", <div data-testid="inner-fresh" />)],
+    ])
+
+    const out1 = substituteNested(outer, cache, "outer|")
+    expect(out1, "pending lazy leaves the tree untouched").toBe(outer)
+    lazy.resolve(<div>{placeholder("inner", "")}</div>)
+    const out2 = substituteNested(outer, cache, "outer|")
+    expect(out2, "a memoized pending walk would return the stale tree forever").not.toBe(outer)
+    expect(html(out2)).toContain('data-testid="inner-fresh"')
+  })
+
+  it("an unrelated matchKey variant write does not invalidate; the referenced one does", () => {
+    const outer = wrapper("outer", "", <section>{placeholder("list", "mkB")}</section>)
+    const cache = makeCache([
+      ["outer", "", outer],
+      ["list", "mkB", wrapper("list", "mkB", <div data-testid="list-b1" />)],
+    ])
+
+    const out1 = substituteNested(outer, cache, "outer|")
+    // Write a DIFFERENT variant of the same id — not a dep of this walk.
+    cache.get("list")!.set("mkC", wrapper("list", "mkC", <div data-testid="list-c" />))
+    const out2 = substituteNested(outer, cache, "outer|")
+    expect(out2, "unread variant write must not invalidate the memo").toBe(out1)
+    // Now the variant the walk actually read.
+    cache.get("list")!.set("mkB", wrapper("list", "mkB", <div data-testid="list-b2" />))
+    const out3 = substituteNested(outer, cache, "outer|")
+    expect(out3).not.toBe(out1)
+    expect(html(out3)).toContain('data-testid="list-b2"')
+  })
+
+  it("a slot delete invalidates — the placeholder resurfaces", () => {
+    const outer = wrapper("outer", "", <section>{placeholder("gone", "")}</section>)
+    const cache = makeCache([
+      ["outer", "", outer],
+      ["gone", "", wrapper("gone", "", <div data-testid="gone-content" />)],
+    ])
+
+    expect(html(substituteNested(outer, cache, "outer|"))).toContain('data-testid="gone-content"')
+    cache.get("gone")!.delete("")
+    const out = substituteNested(outer, cache, "outer|")
+    const markup = html(out)
+    expect(markup, "deleted slot must not serve stale memoized content").not.toContain(
+      'data-testid="gone-content"',
+    )
+    expect(markup).toContain('data-partial-id="gone"')
+  })
+
+  it("a miss recorded as a dep invalidates when the slot later fills", () => {
+    const outer = wrapper("outer", "", <section>{placeholder("late", "")}</section>)
+    const cache = makeCache([["outer", "", outer]])
+
+    const out1 = substituteNested(outer, cache, "outer|")
+    expect(html(out1)).toContain('data-partial-id="late"')
+    cache.set("late", new Map([["", wrapper("late", "", <div data-testid="late-content" />)]]))
+    const out2 = substituteNested(outer, cache, "outer|")
+    expect(out2).not.toBe(out1)
+    expect(html(out2)).toContain('data-testid="late-content"')
+  })
+})
+
+type ReactElementWithChildren = React.ReactElement<{ children?: ReactNode }>
+
 describe("harvestPartialIds", () => {
   it("collects wrapper and placeholder (id, matchKey) pairs, including nested ones", () => {
     const tree = (

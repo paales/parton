@@ -233,6 +233,13 @@ export function harvestPartialIds(node: ReactNode, out: Map<string, Set<string>>
  * the same PartialBoundary can share an id but differ on matchKey
  * (hidden Activity sibling for a parked variant), and the inner one
  * must still resolve when the outer references the same id.
+ *
+ * Wrapper-rooted sub-walks are MEMOIZED — see `substituteWrapper`.
+ * The walk runs on every template re-render (once per lane flush
+ * quantum under streaming), and without the memo it re-traverses the
+ * full cached-wrapper spine each commit only to rebuild identical
+ * output; the memo turns an all-clean walk into O(deps) map reads and
+ * a dirty commit into a rebuild of just the dirty id's spine path.
  */
 export function substituteNested(node: ReactNode, cache: PartialCache, skipKey: string): ReactNode {
   if (node == null || typeof node === "boolean") return node
@@ -256,7 +263,16 @@ export function substituteNested(node: ReactNode, cache: PartialCache, skipKey: 
   // node in place so React's native Suspense resolves them later.
   const unwrapped = unwrapLazy(node)
   if (unwrapped !== node) {
-    if (unwrapped == null || unwrapped === LAZY_PENDING) return node
+    if (unwrapped === LAZY_PENDING) {
+      // A pending lazy resolves WITHOUT a cache write, so no dep can
+      // witness it — poison every enclosing wrapper memo (the walk
+      // after resolution descends further and can produce different
+      // output). Fulfilled/errored lazies are terminal states and need
+      // no poison: they unwrap to the same value forever.
+      if (_substituteRecorder) _substituteRecorder.sawPending = true
+      return node
+    }
+    if (unwrapped == null) return node
     return substituteNested(unwrapped as ReactNode, cache, skipKey)
   }
 
@@ -283,11 +299,132 @@ export function substituteNested(node: ReactNode, cache: PartialCache, skipKey: 
     const mk = getPlaceholderMatchKey(node) ?? ""
     const key = `${id ?? ""}|${mk}`
     if (id && key !== skipKey) {
-      const fresh = cacheLookup(cache, id, mk)
+      const fresh = substituteLookup(cache, id, mk)
       return fresh ? substituteNested(fresh, cache, key) : node
     }
   }
 
+  if (isPartialWrapper(node)) return substituteWrapper(node, cache, skipKey)
+
+  return substituteIntoChildren(node, cache, skipKey)
+}
+
+// ─── substituteNested memoization ───────────────────────────────────
+//
+// `substituteNested` is pure over (node, cacheLookup results, skipKey),
+// modulo Flight lazy state:
+//
+//   - Element structure and props are immutable after creation; the
+//     only mutation a cached subtree ever sees is a lazy's payload
+//     settling. Fulfilled and errored payloads are terminal, so a walk
+//     that saw NO pending lazy unwraps identically forever.
+//   - Every other input the walk reads is a `cacheLookup` — recorded,
+//     per walked wrapper, as (id, matchKey) → the exact node the
+//     lookup returned. A memo is valid iff every recorded lookup
+//     still returns the identical node. Identity — not a write
+//     counter — is the real signal: it also invalidates on deletes
+//     (`pruneToLive`, pool-cap eviction, `_destroyId`) that no store
+//     hook would see, and a re-store of the SAME node (a progressive
+//     re-walk of one payload) correctly keeps memos valid.
+//
+// Memo points are partial WRAPPERS (the cache's unit): entries live in
+// a WeakMap keyed by the wrapper element, sub-keyed by skipKey (the
+// same wrapper walks under its own key when substituted from cache and
+// under the enclosing walk's key when reached inline with an unchanged
+// slot). Entries die with their wrapper — a slot overwrite drops the
+// old element and its memo together; no explicit invalidation needed.
+//
+// A hit returns the previous walk's RESULT element unchanged, which is
+// exactly what the unmemoized walk returns when nothing changed — so
+// React's bail-out behavior is untouched; the memo only removes the
+// traversal that discovered "nothing changed".
+
+interface SubstituteDep {
+  id: string
+  mk: string
+  /** What `cacheLookup(id, mk)` returned when the walk ran (undefined
+   *  for a miss — a later fill must invalidate too). */
+  value: ReactNode | undefined
+}
+
+interface SubstituteMemoEntry {
+  result: ReactNode
+  deps: Map<string, SubstituteDep>
+}
+
+const _substituteMemo = new WeakMap<object, Map<string, SubstituteMemoEntry>>()
+
+/** Dep recorder for the wrapper memo currently being built. Wrapper
+ *  walks nest; each pushes its own recorder and folds its deps into
+ *  the parent's on completion (and on a hit, folds the hit entry's
+ *  deps), so ancestors carry their subtrees' deps transitively. */
+interface SubstituteRecorder {
+  deps: Map<string, SubstituteDep>
+  sawPending: boolean
+}
+
+let _substituteRecorder: SubstituteRecorder | null = null
+
+/** `cacheLookup`, recorded into the active wrapper memo's dep set.
+ *  Every lookup `substituteNested` makes goes through here. */
+function substituteLookup(cache: PartialCache, id: string, mk: string): ReactNode | undefined {
+  const value = cacheLookup(cache, id, mk)
+  _substituteRecorder?.deps.set(`${id}|${mk}`, { id, mk, value })
+  return value
+}
+
+function substituteMemoValid(entry: SubstituteMemoEntry, cache: PartialCache): boolean {
+  for (const dep of entry.deps.values()) {
+    if (cacheLookup(cache, dep.id, dep.mk) !== dep.value) return false
+  }
+  return true
+}
+
+/** The wrapper-node arm of `substituteNested`, memoized per
+ *  (wrapper element, skipKey). See the block comment above. */
+function substituteWrapper(node: ReactElement, cache: PartialCache, skipKey: string): ReactNode {
+  const bySkip = _substituteMemo.get(node)
+  const entry = bySkip?.get(skipKey)
+  const parent = _substituteRecorder
+  if (entry && substituteMemoValid(entry, cache)) {
+    if (parent) for (const [k, d] of entry.deps) parent.deps.set(k, d)
+    return entry.result
+  }
+  const rec: SubstituteRecorder = { deps: new Map(), sawPending: false }
+  _substituteRecorder = rec
+  let result: ReactNode
+  try {
+    result = substituteWrapperUncached(node, cache, skipKey)
+  } finally {
+    _substituteRecorder = parent
+  }
+  if (rec.sawPending) {
+    // NEVER memoize a walk that saw a pending lazy — it resolves
+    // without a cache write, so no dep would ever invalidate the
+    // entry. Any stale entry under this key is already invalid
+    // (that's why we walked); drop it rather than re-validate it
+    // every commit.
+    bySkip?.delete(skipKey)
+  } else {
+    let m = _substituteMemo.get(node)
+    if (!m) {
+      m = new Map()
+      _substituteMemo.set(node, m)
+    }
+    m.set(skipKey, { result, deps: rec.deps })
+  }
+  if (parent) {
+    for (const [k, d] of rec.deps) parent.deps.set(k, d)
+    if (rec.sawPending) parent.sawPending = true
+  }
+  return result
+}
+
+function substituteWrapperUncached(
+  node: ReactElement,
+  cache: PartialCache,
+  skipKey: string,
+): ReactNode {
   // Partial-shape wrapper: if there's a fresh cache entry for the
   // same (id, matchKey) variant, use it. If the cache entry is the
   // same wrapper we're looking at (i.e. the wrapper itself wasn't
@@ -297,20 +434,25 @@ export function substituteNested(node: ReactNode, cache: PartialCache, skipKey: 
   // lands a fresh entry but the surrounding ancestor wrappers keep
   // their old children references — so the new content never reaches
   // the rendered tree.
-  if (isPartialWrapper(node)) {
-    const id = getPartialId(node)
-    const mk = getPartialMatchKey(node) ?? ""
-    const key = `${id ?? ""}|${mk}`
-    if (id && key !== skipKey) {
-      const fresh = cacheLookup(cache, id, mk)
-      if (fresh && fresh !== node) {
-        return substituteNested(fresh, cache, key)
-      }
-      // Wrapper unchanged — keep descending so nested partials whose
-      // cache entries DID change still get substituted.
+  const id = getPartialId(node)
+  const mk = getPartialMatchKey(node) ?? ""
+  const key = `${id ?? ""}|${mk}`
+  if (id && key !== skipKey) {
+    const fresh = substituteLookup(cache, id, mk)
+    if (fresh && fresh !== node) {
+      return substituteNested(fresh, cache, key)
     }
+    // Wrapper unchanged — keep descending so nested partials whose
+    // cache entries DID change still get substituted.
   }
+  return substituteIntoChildren(node, cache, skipKey)
+}
 
+function substituteIntoChildren(
+  node: ReactElement,
+  cache: PartialCache,
+  skipKey: string,
+): ReactNode {
   const children = (node.props as any).children
   if (children == null) return node
   const newChildren = substituteNested(children, cache, skipKey)
