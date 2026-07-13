@@ -36,6 +36,7 @@ import {
   _channelIsDegraded,
   _channelNavAvailable,
   _channelNavigate,
+  _channelNavInFlightCovering,
   _channelNavPoint,
   _channelNavPrefersStreaming,
   _channelNavPrefersTransition,
@@ -490,7 +491,9 @@ async function main() {
                 return
               }
               const nav = delivery.nav
-              _commitPartonLaneProgressive(lane.partonId, node)
+              // A streaming-preferred forced lane services a user fire —
+              // its first commit is exempt from the lane flush quantum.
+              _commitPartonLaneProgressive(lane.partonId, node, { urgent: true })
               consumed = true
               _laneDeliveryCommitted(lane.partonId)
               if (nav !== undefined) _channelFrameLaneCommitted(nav)
@@ -533,8 +536,13 @@ async function main() {
               // The body is STILL STREAMING — a one-shot walk would stop
               // at the first pending Flight row and cache nothing. The
               // progressive commit walks what has resolved and re-walks
-              // as the remaining rows land.
-              _commitPartonLaneProgressive(lane.partonId, node)
+              // as the remaining rows land. The first commit is urgent
+              // when a user fire awaits it (a frame nav opening this
+              // producer); the token re-walks ride the flush quantum
+              // either way.
+              _commitPartonLaneProgressive(lane.partonId, node, {
+                urgent: nav !== undefined || _channelNavInFlightCovering(delivery.asOf),
+              })
               consumed = true
               _laneDeliveryCommitted(lane.partonId)
               if (nav !== undefined) _channelFrameLaneCommitted(nav)
@@ -570,7 +578,13 @@ async function main() {
               return
             }
             const nav = delivery.nav
-            _commitPartonLane(node, fp, lane.partonId)
+            // Urgent (immediate notify) when a user fire awaits this
+            // content — a frame nav's lane, an unsettled covering
+            // statement; steady-state streaming lanes coalesce their
+            // template re-render per animation frame instead.
+            _commitPartonLane(node, fp, lane.partonId, {
+              urgent: nav !== undefined || _channelNavInFlightCovering(delivery.asOf),
+            })
             // COMMIT is the recording moment — the cache walk above is
             // synchronous, so the subtree is the page's state now. The
             // transport advances its contiguous watermark and acks.

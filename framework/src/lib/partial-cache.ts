@@ -20,6 +20,7 @@ import {
   cacheStore,
   getCurrentPagePartials,
   notifyLaneCommit,
+  notifyLaneCommitCoalesced,
   type PartialCache,
   registerClientPartial,
   touchClientPartial,
@@ -393,6 +394,13 @@ export function unwrapLazy(node: unknown): unknown {
 export interface LazyWalkStats {
   pending: number
   thenables?: PromiseLike<unknown>[]
+  /** The walk stored content into a cache slot that held NOTHING — a
+   *  skeleton's first fill (a flip-in's content, a fresh instance).
+   *  Lane commits read this to exempt the notify from the flush
+   *  quantum: first content is paint-blocking (the user is looking at
+   *  the skeleton it replaces), while a refresh of content already
+   *  showing can always wait for the frame. */
+  firstFill?: boolean
 }
 
 /**
@@ -461,7 +469,8 @@ export function cacheFromStreamingChildren(
       const mk = getPartialMatchKey(node) ?? ""
       if (seen) addSeen(seen, id, mk)
       touchClientPartial(id)
-      cacheStore(cache, id, mk, node)
+      const replacing = cacheStore(cache, id, mk, node)
+      if (!replacing && stats) stats.firstFill = true
       // A content store for a parton whose mounted content has been
       // parked since its bytes were minted is a RETURNING render —
       // the fp moved while parked, so the parked fiber must be
@@ -560,11 +569,22 @@ export function treeHasPendingLazy(node: ReactNode): boolean {
  * fully-delivered payload (the lane body closed at its `muxend`), so
  * the walk sees resolved content; a placeholder root (the lane's
  * parton fp-skipped server-side) walks to a no-op.
+ *
+ * The notify rides the lane flush quantum by default (one template
+ * re-render per animation frame — see `notifyLaneCommitCoalesced`);
+ * two classes notify immediately instead: `urgent` commits — lanes
+ * servicing an in-flight user statement — and FIRST FILLS (the walk
+ * stored content into an empty slot: a flip-in's body replacing the
+ * skeleton the user is looking at, a fresh instance's first bytes).
+ * Either way the cache walk, live-tree fold and fp updates run NOW:
+ * acks and loss reports key off those, so the quantum never shifts
+ * anything observable server-side.
  */
 export function _commitPartonLane(
   node: ReactNode,
   fpUpdates: FpUpdatesPayload | null,
   partonId?: string,
+  opts?: { urgent?: boolean },
 ): void {
   // A full-body commit supersedes any in-flight progressive re-walks
   // for the same parton — a late re-walk of an older body must never
@@ -573,7 +593,8 @@ export function _commitPartonLane(
     _laneCommitGeneration.set(partonId, (_laneCommitGeneration.get(partonId) ?? 0) + 1)
   }
   const seen = new Map<string, Set<string>>()
-  cacheFromStreamingChildren(node, getCurrentPagePartials(), seen)
+  const stats: LazyWalkStats = { pending: 0 }
+  cacheFromStreamingChildren(node, getCurrentPagePartials(), seen, stats)
   // The committed subtree is part of the DISPLAYED tree the moment the
   // notify's transition re-renders the template — its ids join the
   // pool-cap eviction exemption (`_liveTreeIds`), which payload commits
@@ -582,7 +603,8 @@ export function _commitPartonLane(
   // content a sibling lane just delivered.
   _addLiveTreeIds(seen.keys())
   if (fpUpdates) _applyFpUpdates(fpUpdates)
-  notifyLaneCommit()
+  if (opts?.urgent === true || stats.firstFill === true) notifyLaneCommit()
+  else notifyLaneCommitCoalesced()
 }
 
 /** Per-parton lane commit generation — the supersede guard for the
@@ -602,10 +624,22 @@ const _laneCommitGeneration = new Map<string, number>()
  * overwritten by an older body's late re-walk). Lane walks always run
  * outside React's render lifecycle — the same class of walk
  * `_commitPartonLane` already does at drain, repeated per resolve.
+ *
+ * Only the FIRST walk's notify honors `urgent` (the initial content of
+ * a lane servicing a user statement); the resolve-time re-walks are
+ * streaming arrival — producer tokens, late rows — and ride the lane
+ * flush quantum unless they surface a FIRST FILL (a late-resolving row
+ * carrying a slot's first content — paint-blocking, same as the
+ * one-shot commit's exemption).
  */
-export function _commitPartonLaneProgressive(partonId: string, node: ReactNode): void {
+export function _commitPartonLaneProgressive(
+  partonId: string,
+  node: ReactNode,
+  opts?: { urgent?: boolean },
+): void {
   const generation = (_laneCommitGeneration.get(partonId) ?? 0) + 1
   _laneCommitGeneration.set(partonId, generation)
+  let firstWalk = true
   const walk = (): void => {
     if (_laneCommitGeneration.get(partonId) !== generation) return
     const stats: LazyWalkStats = { pending: 0, thenables: [] }
@@ -614,7 +648,9 @@ export function _commitPartonLaneProgressive(partonId: string, node: ReactNode):
     // Same live-tree fold as `_commitPartonLane` — each progressive
     // re-walk may surface newly-resolved ids.
     _addLiveTreeIds(seen.keys())
-    notifyLaneCommit()
+    if ((firstWalk && opts?.urgent === true) || stats.firstFill === true) notifyLaneCommit()
+    else notifyLaneCommitCoalesced()
+    firstWalk = false
     const thenables = stats.thenables ?? []
     if (stats.pending > 0 && thenables.length > 0) {
       void Promise.allSettled(thenables.map((t) => Promise.resolve(t))).then(walk)

@@ -917,6 +917,23 @@ export function _channelNavPrefersStreaming(asOf: number): boolean {
   return bestSeq >= 0 && streaming
 }
 
+/** True when an UNSETTLED navigation/refetch fire covers `asOf` — the
+ *  delivery is (part of) the content servicing an in-flight user
+ *  statement, window or frame scope. The merge layer's lane commits
+ *  consult this for the flush-quantum exemption: interactive content
+ *  notifies immediately, while steady-state streaming lanes (no fire
+ *  awaiting them) coalesce per animation frame. Reads the pending
+ *  records, so a settled fire's later lanes batch again. */
+export function _channelNavInFlightCovering(asOf: number): boolean {
+  for (const record of pendingNavRecords) {
+    if (!record.settled && record.navSeq <= asOf) return true
+  }
+  for (const record of pendingFrameNavRecords) {
+    if (!record.settled && record.seq <= asOf) return true
+  }
+  return false
+}
+
 /** True when a covering commit should land as a TRANSITION (atomic
  *  swap) rather than a progressive `setPayloadRaw`. The NEWEST unsettled
  *  navigation at or below `asOf` decides: that statement is what the

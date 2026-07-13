@@ -50,7 +50,7 @@ import {
   getCurrentPagePartials,
   getTemplate,
   getTemplateRoute,
-  notifyLaneCommit,
+  notifyLaneCommitCoalesced,
   pruneToLive,
   setTemplate,
   subscribeLaneCommits,
@@ -126,6 +126,7 @@ let _walkComplete = false
  * progressively (the RemoteFrame routes). Superseded payloads are
  * skipped — walking a stale payload would overwrite newer cache
  * entries, the same hazard the `_walkedChildren` guard exists for.
+ * The nudge is streaming arrival, so it rides the lane flush quantum.
  */
 function scheduleRewalkOnResolve(
   children: ReactNode,
@@ -134,7 +135,7 @@ function scheduleRewalkOnResolve(
   if (thenables.length === 0) return
   void Promise.allSettled(thenables.map((t) => Promise.resolve(t))).then(() => {
     if (_walkedChildren !== children || _walkComplete) return
-    notifyLaneCommit()
+    notifyLaneCommitCoalesced()
   })
 }
 

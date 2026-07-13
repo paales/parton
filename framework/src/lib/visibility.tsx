@@ -85,10 +85,14 @@ const POST_FLUSH_BATCH = 256
 
 /** The subset of `FragmentInstance` (React 19.3) this module uses. The
  *  installed react-dom exposes these; `@types/react` may not type a
- *  Fragment `ref` yet, so we shape it locally and cast at the ref site. */
+ *  Fragment `ref` yet, so we shape it locally and cast at the ref site.
+ *  `observeUsing` is duck-typed in react-dom — it only ever calls
+ *  `observer.observe(child)` / `observer.unobserve(child)` (on attach,
+ *  detach, and newly committed fragment children) — so it takes the
+ *  {@link SlotObserver} facade over the shared native observer. */
 interface FragmentInstance {
-  observeUsing(observer: IntersectionObserver): void
-  unobserveUsing(observer: IntersectionObserver): void
+  observeUsing(observer: SlotObserver): void
+  unobserveUsing(observer: SlotObserver): void
   getClientRects(): DOMRect[]
 }
 
@@ -351,7 +355,9 @@ registerChannelProducer(visibilityProducer)
  *  transport hooks — `_resetChannelClient` clears the producer and
  *  establishment-listener registries this module joined at import.
  *  Both re-registrations are idempotent (same references, Set-backed
- *  registries). */
+ *  registries). Also drains the shared-observer pool: a pooled native
+ *  observer minted under one test's `IntersectionObserver` stub must
+ *  not serve the next test's slots. */
 export function _resetVisibilityController(): void {
   inView.clear()
   everReported.clear()
@@ -361,8 +367,129 @@ export function _resetVisibilityController(): void {
   measurementWaiters = []
   fullSyncPending = false
   sweepScheduled = false
+  for (const shared of _sharedObservers.values()) shared.io.disconnect()
+  _sharedObservers.clear()
   registerChannelProducer(visibilityProducer)
   onChannelEstablished(armEstablishmentSync)
+}
+
+// ─── Shared IntersectionObserver pool ─────────────────────────────────
+//
+// ONE native IntersectionObserver per rootMargin config (the root is
+// always the viewport), shared by every slot that observes with that
+// runway. Per-instance observers don't scale: the browser recomputes
+// each observer's intersections independently on every layout-dirtied
+// frame, so a dense cullable field (hundreds of mounted pairs) pays
+// hundreds of native `computeIntersections` passes per frame where one
+// pass over the same elements would do. The pool keeps the per-slot
+// semantics intact — each slot subscribes a handler for exactly the
+// elements React attaches through its facade, and the shared callback
+// routes each native batch to the owning handlers, one call per slot
+// per batch (the same shape a per-instance callback delivered).
+
+/** What a slot hands to `FragmentInstance.observeUsing` — the facade
+ *  over the shared native observer. Object identity is the attach
+ *  handle React tracks in `_observers`, so each slot keeps ONE facade
+ *  for its whole effect lifetime. */
+interface SlotObserver {
+  observe(el: Element): void
+  unobserve(el: Element): void
+  /** Release the slot's subscriptions and its pool reference. */
+  disconnect(): void
+}
+
+type SlotEntryHandler = (entries: IntersectionObserverEntry[]) => void
+
+interface SharedObserver {
+  io: IntersectionObserver
+  /** element → the slot handlers subscribed to it. Normally one; an
+   *  outer transparent cullable can share host children with a nested
+   *  one (no host element of its own between them). */
+  subs: Map<Element, Set<SlotEntryHandler>>
+  /** Live facades — the pool reference count. */
+  handles: number
+}
+
+const _sharedObservers = new Map<string, SharedObserver>()
+
+function acquireSlotObserver(rootMargin: string, onEntries: SlotEntryHandler): SlotObserver {
+  let shared = _sharedObservers.get(rootMargin)
+  if (!shared) {
+    const subs = new Map<Element, Set<SlotEntryHandler>>()
+    const io = new IntersectionObserver(
+      (entries) => {
+        // Route each entry to its element's subscribers, batched per
+        // handler so a slot sees one callback per native batch — the
+        // per-slot aggregate logic is unchanged from the per-instance
+        // observer it replaces.
+        const perHandler = new Map<SlotEntryHandler, IntersectionObserverEntry[]>()
+        for (const entry of entries) {
+          const handlers = subs.get(entry.target)
+          if (!handlers) continue
+          for (const handler of handlers) {
+            let batch = perHandler.get(handler)
+            if (!batch) perHandler.set(handler, (batch = []))
+            batch.push(entry)
+          }
+        }
+        for (const [handler, batch] of perHandler) handler(batch)
+      },
+      { rootMargin },
+    )
+    shared = { io, subs, handles: 0 }
+    _sharedObservers.set(rootMargin, shared)
+  }
+  const pool = shared
+  pool.handles += 1
+  /** Elements THIS facade attached — released wholesale on disconnect. */
+  const own = new Set<Element>()
+  let disconnected = false
+  const drop = (el: Element): void => {
+    const handlers = pool.subs.get(el)
+    if (!handlers || !handlers.delete(onEntries)) return
+    if (handlers.size === 0) {
+      pool.subs.delete(el)
+      pool.io.unobserve(el)
+    }
+  }
+  return {
+    observe(el: Element): void {
+      if (disconnected) return
+      own.add(el)
+      let handlers = pool.subs.get(el)
+      if (!handlers) {
+        pool.subs.set(el, (handlers = new Set([onEntries])))
+        pool.io.observe(el)
+        return
+      }
+      if (handlers.has(onEntries)) return
+      handlers.add(onEntries)
+      // The element is already tracked, so a plain `observe` is a
+      // native no-op and fires NO initial entry for the new
+      // subscriber. Cycle it: the re-observe's initial callback
+      // carries current geometry to every subscriber — the new one
+      // gets its first measurement, the existing ones an idempotent
+      // re-report (same state, no delta).
+      pool.io.unobserve(el)
+      pool.io.observe(el)
+    },
+    unobserve(el: Element): void {
+      if (disconnected) return
+      own.delete(el)
+      drop(el)
+    },
+    disconnect(): void {
+      if (disconnected) return
+      disconnected = true
+      for (const el of own) drop(el)
+      own.clear()
+      pool.handles -= 1
+      if (pool.handles === 0) {
+        pool.io.disconnect()
+        _sharedObservers.delete(rootMargin)
+      }
+    },
+  }
 }
 
 // ─── Boundary observer ────────────────────────────────────────────────
@@ -453,27 +580,26 @@ export function VisibilityObserver({
     // An IO callback batch contains only the nodes whose intersection
     // CHANGED — with many observed children (a fragment of chunk
     // subtrees), one leaving node must not read as "the whole parton
-    // left". Track per-node state and report the aggregate.
+    // left". Track per-node state and report the aggregate. The native
+    // observer is SHARED per rootMargin (see the pool above); this
+    // slot's facade subscribes exactly the elements React attaches.
     const nodeState = new Map<Element, boolean>()
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) nodeState.set(e.target, e.isIntersecting)
-        for (const el of [...nodeState.keys()]) {
-          if (!el.isConnected) nodeState.delete(el)
-        }
-        // Zero connected nodes is UNMEASURABLE, not "out" — the parton
-        // is mid-swap (a flip lane replacing its body disconnects the
-        // old nodes before the new ones report). Reporting "out" here
-        // starts a flip loop: out → cull lane → placeholder commits →
-        // intersects → "in" → content lane → swap → transient empty →
-        // "out" → … at rAF rate, remounting the subtree every cycle.
-        // Stay silent; the new nodes' initial callback (placement
-        // attach or the empty-observer sweep) carries real evidence.
-        if (nodeState.size === 0) return
-        reportVisible(id, [...nodeState.values()].some(Boolean))
-      },
-      { rootMargin },
-    )
+    const io = acquireSlotObserver(rootMargin, (entries) => {
+      for (const e of entries) nodeState.set(e.target, e.isIntersecting)
+      for (const el of [...nodeState.keys()]) {
+        if (!el.isConnected) nodeState.delete(el)
+      }
+      // Zero connected nodes is UNMEASURABLE, not "out" — the parton
+      // is mid-swap (a flip lane replacing its body disconnects the
+      // old nodes before the new ones report). Reporting "out" here
+      // starts a flip loop: out → cull lane → placeholder commits →
+      // intersects → "in" → content lane → swap → transient empty →
+      // "out" → … at rAF rate, remounting the subtree every cycle.
+      // Stay silent; the new nodes' initial callback (placement
+      // attach or the empty-observer sweep) carries real evidence.
+      if (nodeState.size === 0) return
+      reportVisible(id, [...nodeState.values()].some(Boolean))
+    })
     inst.observeUsing(io)
     // Late-materializing content: if the fragment had no host children
     // when `observeUsing` ran (dehydrated nested boundaries, unresolved

@@ -333,6 +333,22 @@ any selector-routing logic that could replace it.
    also the moment the delivery seq the emission carried is RECORDED
    — the channel transport acks the contiguous commit watermark
    upstream ([`channel.md`](./channel.md) §Delivery is evidenced).
+   The NOTIFY rides the lane flush quantum: streaming lanes coalesce
+   their template re-render to one per animation frame
+   (`notifyLaneCommitCoalesced` — at density the lane rate outruns
+   the paint rate, and per-lane re-renders burn CPU on states no
+   frame shows; a timer backstop races the frame callback, since a
+   page with no frame flow would otherwise never render lane
+   content), while two classes notify immediately: a lane servicing
+   an in-flight user statement (`delivery.nav`, or an unsettled
+   navigation record covering its as-of —
+   `_channelNavInFlightCovering`), and a FIRST FILL — the walk stored
+   content into an empty cache slot (a flip-in's body replacing the
+   skeleton the user is looking at), which is paint-blocking where a
+   refresh of already-showing content never is. The walk, fp updates,
+   live-tree fold, and the seq recording all stay at decode time, so
+   acks and loss reports are untouched by the quantum; only the
+   re-render defers, bounded by the backstop.
 
 **Covering renders anchor coverage BEFORE they begin (the cursor
 discipline).** Every whole-tree segment on a held connection — the
@@ -356,6 +372,28 @@ points on the registry timeline). Covered by
 `covering-cursor.rsc.test.tsx` and the convergence fuzzer
 ([`docs/notes/convergence-fuzzing.md`](../notes/convergence-fuzzing.md)
 finding F1).
+
+**Renders describe ONE visibility moment (the pin discipline).** Every
+lane iteration and every covering segment on a held connection
+(navigation, reconcile) runs under a visibility set PINNED at its
+render start — the lane probe's pin / `_runWithPinnedVisible`
+(`runtime/context.ts`) present a session handle whose `visible` is the
+captured set, and the drain promote's parked check reads the same pin.
+The reason is the trailer flush: `computeWarmFps` re-reads the
+connection state, so a `visible` statement landing between a row's
+render and the stream's flush would retag the emitted fp with a state
+the row does not carry — and an out-flip ships no covering lane, so
+the aliased heal would stand as the connection's last word,
+permanently mis-tagging the client's holding (fuzz finding F6's
+flush-alias member). The pinned render, its fp-skip verdict, its flush
+recompute, and its drain promote all describe the same set; the
+statement that landed mid-render gets its own resolution (an in-flip
+lanes, and a wake on an open lane re-captures at the dirty re-render).
+The initial whole-tree segment is deliberately unpinned — PartialRoot
+installs the cached override during that render, which a nested store
+would strand; its exposure is bounded by the flip resolution and the
+reconcile. Covered by `drop-report-heal.rsc.test.tsx` and the fuzzer
+(finding F6).
 
 Relevance false-negatives (a dependency the label/constraint surface
 doesn't capture) degrade to a MISSED update on the lane path, where

@@ -70,12 +70,15 @@ export function cacheLookup(
   return cache.get(id)?.get(matchKey)
 }
 
+/** Store a wrapper into its `(id, matchKey)` slot. Returns whether the
+ *  slot already held content — `false` is a FIRST FILL (the commit
+ *  walk's paint-blocking signal, see `LazyWalkStats.firstFill`). */
 export function cacheStore(
   cache: PartialCache,
   id: string,
   matchKey: string,
   node: ReactNode,
-): void {
+): boolean {
   let inner = cache.get(id)
   if (!inner) {
     inner = new Map()
@@ -99,6 +102,7 @@ export function cacheStore(
   if (replacing) {
     _currentPageFingerprints.get(id)?.delete(matchKey)
   }
+  return replacing
 }
 
 /**
@@ -508,8 +512,74 @@ export function subscribeLaneCommits(cb: () => void): () => void {
   }
 }
 
+/** The pending coalesced notify, or `null`. One slot: the cache is the
+ *  single source the notified re-render reads, so one flush covers
+ *  every commit that landed before it — nothing per-commit to queue. */
+let _pendingLaneNotify: { cancel: () => void } | null = null
+
+/**
+ * Notify subscribers NOW — the immediate form, for commits servicing
+ * an in-flight user statement (a frame navigation's lane, a covering
+ * refetch): interactive content must never wait out the flush quantum.
+ * A pending coalesced flush is cancelled rather than left to run — the
+ * template re-render this notify triggers reads the cache's CURRENT
+ * state, so it covers everything the pending flush would have.
+ */
 export function notifyLaneCommit(): void {
+  if (_pendingLaneNotify !== null) {
+    _pendingLaneNotify.cancel()
+    _pendingLaneNotify = null
+  }
   for (const cb of [..._laneCommitSubscribers]) cb()
+}
+
+/** Liveness bound on the coalesced notify. rAF alignment is an
+ *  optimization, not a signal a frame will ever come: a page that
+ *  produces no frames — an occluded background tab (which can still
+ *  report `visibilityState: "visible"` in headless runs), a hidden
+ *  page — stalls rAF indefinitely, and lane content would never reach
+ *  the tree. The timer races the frame callback; whichever fires
+ *  first runs the notify and cancels the other. At a flowing 60Hz the
+ *  rAF always wins (≤16.7ms), so the backstop only ever fires where
+ *  there is no paint to align with. */
+const LANE_NOTIFY_BACKSTOP_MS = 50
+
+/**
+ * Notify subscribers on the next animation frame — the lane flush
+ * quantum for STREAMING traffic (live pulse lanes, producer token
+ * re-walks, resolve-time payload re-walks). At density the lane rate
+ * outruns the display: each notify's template re-render + React commit
+ * costs milliseconds, and per-lane notifies burn CPU on states no
+ * frame will ever paint. Coalescing to one flush per frame bounds the
+ * commit rate at the paint rate; the cache walks stay synchronous at
+ * decode time (per-parton ordering, ack timing and loss reports are
+ * all recorded there — the quantum only defers the RE-RENDER), and the
+ * `LANE_NOTIFY_BACKSTOP_MS` timer bounds the deferral on pages with no
+ * frame flow. No rAF at all (non-visual test environments) falls
+ * through to the immediate notify.
+ */
+export function notifyLaneCommitCoalesced(): void {
+  if (_pendingLaneNotify !== null) return
+  if (typeof requestAnimationFrame !== "function") {
+    notifyLaneCommit()
+    return
+  }
+  let rafId: number
+  let timerId: ReturnType<typeof setTimeout>
+  const fire = (): void => {
+    _pendingLaneNotify = null
+    cancelAnimationFrame(rafId)
+    clearTimeout(timerId)
+    for (const cb of [..._laneCommitSubscribers]) cb()
+  }
+  rafId = requestAnimationFrame(fire)
+  timerId = setTimeout(fire, LANE_NOTIFY_BACKSTOP_MS)
+  _pendingLaneNotify = {
+    cancel: () => {
+      cancelAnimationFrame(rafId)
+      clearTimeout(timerId)
+    },
+  }
 }
 
 // ─── Live catch-up anchor ─────────────────────────────────────────
