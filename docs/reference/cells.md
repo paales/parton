@@ -221,21 +221,22 @@ const cardName = localCell({
 
 ### Options
 
-| Option      | Notes                                                                                                                                                                                                                                                                                                                                                                                   |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`        | Wire identifier. Required.                                                                                                                                                                                                                                                                                                                                                              |
-| `shape`     | Runtime shape. `"string"` / `"number"` / `"boolean"` / `"opaque"` / `{enum: [...] as const}`. `"opaque"` accepts any value without validation — author owns the TS type.                                                                                                                                                                                                                |
-| `initial`   | Default value when storage is empty and no loader is configured.                                                                                                                                                                                                                                                                                                                        |
-| `partition` | Optional. A fixed `CellArgs` record, or a sync callback `(scope: CellPartitionScope) => CellArgs` for request-derived partitions. Output hashes into the partition key; a callback re-runs in a server function's request too, so a per-session cell resolves at the caller's partition there. Omit for one single slot (`{}`) — or for a cell whose args come entirely from `.with()`. |
-| `load`      | Optional async `(args) => T`. Runs on cold-start (storage miss) — result is validated, written to storage, then returned. Storage stays the source of truth thereafter.                                                                                                                                                                                                                 |
-| `write`     | Optional `(T) => T`. Server-side canonicalisation. Runs after `validate` and before storage on every write.                                                                                                                                                                                                                                                                             |
-| `deferred`  | Optional `boolean`. When set, a write to this cell makes the action POST return **no re-render** — the new value propagates only over the open streaming connection. See [Deferred (stream-only) writes](#deferred-stream-only-writes).                                                                                                                                                 |
+| Option       | Notes                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`         | Wire identifier. Required.                                                                                                                                                                                                                                                                                                                                                                                 |
+| `shape`      | Runtime shape. `"string"` / `"number"` / `"boolean"` / `"opaque"` / `{enum: [...] as const}`. `"opaque"` accepts any value without validation — author owns the TS type.                                                                                                                                                                                                                                   |
+| `initial`    | Default value when storage is empty and no loader is configured.                                                                                                                                                                                                                                                                                                                                           |
+| `partition`  | Optional. A fixed `CellArgs` record, or a sync callback `(scope: CellPartitionScope) => CellArgs` for request-derived partitions. Output hashes into the partition key; a callback re-runs in a server function's request too, so a per-session cell resolves at the caller's partition there. Omit for one single slot (`{}`) — or for a cell whose args come entirely from `.with()`.                    |
+| `load`       | Optional async `(args) => T`. Runs on cold-start (storage miss) — result is validated, written to storage, then returned. Storage stays the source of truth thereafter.                                                                                                                                                                                                                                    |
+| `write`      | Optional `(T) => T`. Server-side canonicalisation. Runs after `validate` and before storage on every write.                                                                                                                                                                                                                                                                                                |
+| `writeGuard` | Optional sync predicate `(scope: CellPartitionScope, args: CellArgs) => boolean` — who may write this cell. Runs at the write choke point against the CALLER's request scope plus the write's resolved partition args; `false` throws `CellWriteDenied` before anything commits. Omitted ⇒ any caller that can name the cell id may write it. See [Write authorization](#write-authorization--writeguard). |
+| `deferred`   | Optional `boolean`. When set, a write to this cell makes the action POST return **no re-render** — the new value propagates only over the open streaming connection. See [Deferred (stream-only) writes](#deferred-stream-only-writes).                                                                                                                                                                    |
 
 ### Inline form — `localCell(key, opts)`
 
 Called inside a parton's Render, `localCell("notes", { shape, initial,
-partition?, load?, write? })` declares a cell owned by the calling
-parton and resolves it in one step — it returns
+partition?, load?, write?, writeGuard? })` declares a cell owned by the
+calling parton and resolves it in one step — it returns
 `Promise<ResolvedCell<T>>`, not a handle. The wire id is
 `<partonId>/<key>`; storage is the persistent tier (parton state like
 form drafts is usually worth keeping). `partition` takes the same
@@ -611,6 +612,77 @@ wiring — cells module, server function, client form — is
 `atomic` nests: an inner `atomic` inside an already-active
 transaction joins it, so composed write helpers batch into the outer
 commit.
+
+### Write authorization — `writeGuard`
+
+Any client can invoke the cell-write actions on any cell it can name,
+so _who may write this cell_ is a property of the cell itself:
+`writeGuard` on the definition, not per-action boilerplate.
+
+```ts
+export const guardedNote = localCell({
+  id: "guarded.note",
+  shape: "string",
+  initial: "",
+  // Only callers carrying the owner cookie may write:
+  writeGuard: ({ cookies }) => cookies.note_owner === "1",
+})
+
+export const profileBio = localCell({
+  id: "profile.bio",
+  shape: "string",
+  initial: "",
+  partition: ({ session }) => ({ sid: session.id }),
+  // Pin a partitioned cell to its owner — the guard's second argument
+  // is the write's RESOLVED partition args, so a cross-partition write
+  // (`.with({sid: someoneElse}).set(...)`) is denied even though the
+  // caller is a valid session:
+  writeGuard: ({ session }, args) => args.sid === session.id,
+})
+```
+
+The contract:
+
+- **Evaluated in request scope.** The guard is a sync, pure predicate
+  over the CALLER's `CellPartitionScope` — the same scope a
+  `partition` callback sees (`session`, `cookies`, `headers`, `url`,
+  `params`, `time`) — plus the write's resolved partition args. It
+  reads the scope object, never the tracked hooks, so guard inputs
+  fold into **no parton's fingerprint** (writes aren't renders).
+- **One declaration, every path.** Enforcement lives at the write
+  choke point (`writeOneCell` / the `update` CAS section), so the
+  client's `.set` action POST, the write batcher, a server function's
+  own `.set`/`update`, and `atomic()` batches all pass through it —
+  including app-author server code writing on its own initiative:
+  the guard is on the cell, not the transport.
+- **Deny = typed throw, nothing commits.** A `false` verdict throws
+  `CellWriteDenied` (exported from the barrel; carries `cellId`)
+  BEFORE the storage write — no value lands, no invalidation fires,
+  and inside `atomic()` the throw rolls the whole batch back. On the
+  client the `.set` promise simply rejects (production redacts server
+  error messages), so denial UI is whatever the author renders for
+  the rejection; the page and every other parton stay live.
+- **The default is open.** No guard ⇒ today's behavior: any caller
+  that can name the cell id may write it. This is a deliberate,
+  honest default for a research framework — opt cells in per cell.
+- **Writes only.** The guard does not run for reads (read-side
+  authorization is existence: gate the parton's `match` on an
+  identity cell and unauthorized content never renders), nor for the
+  framework populating storage on the cell's own behalf — loader
+  seeds and `hydrate` are not caller writes.
+
+The worked example is
+`e2e-testing/src/app/pages/guarded-note{-state.ts,-actions.ts,.tsx}` —
+a note cell writable only with the owner cookie, claim/release
+actions flipping the credential, and a spec proving the rejection and
+the sane degradation (`e2e/guarded-note.spec.ts`).
+
+**Rate limiting is a guard concern, not a primitive.** The guard
+already receives the request context, and nothing requires it to be
+stateless — a limiter is just a stateful guard (count writes per
+`session.id` in module scope, return `false` over budget). The
+framework deliberately ships no limiter machinery; if a real caller
+needs one, it starts life as a `writeGuard`.
 
 ### Hydration in parent loaders — auto vs. manual
 

@@ -42,6 +42,7 @@ const ROUTES = [
   "/streaming-demo",
   "/cursors",
   "/forms-demo",
+  "/guarded-note",
   "/chat-notes",
   "/remote-frame-demo",
   "/remote-frame-crossorigin-demo",

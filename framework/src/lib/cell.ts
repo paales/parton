@@ -226,6 +226,13 @@ export interface CellInterface<T, A extends CellArgs = CellArgs> {
   validate(value: unknown): T
   /** Internal — server-side write-pipeline transform. */
   write?(value: T): T
+  /** Write authorization — who may write this cell. Evaluated at the
+   *  write choke point against the CALLER's request scope (the same
+   *  `CellPartitionScope` the `partition` callback sees) plus the
+   *  write's resolved partition args; `false` throws
+   *  `CellWriteDenied` before anything commits. Absent ⇒ writable by
+   *  any caller that can name the cell id. See `LocalCellOpts.writeGuard`. */
+  readonly writeGuard?: (scope: CellPartitionScope, args: CellArgs) => boolean
   /** When set, a write to this cell does NOT make the action POST
    *  carry a re-render: the response root is omitted and the new value
    *  propagates only via the already-open streaming connection (the
@@ -298,6 +305,24 @@ export interface ResolvedCell<T> {
   readonly value: T
   readonly partition?: CellArgs
   set(value: T, opts?: { partition?: CellArgs }): Promise<void>
+}
+
+/**
+ * Thrown when a cell's `writeGuard` denies a write. Fires at the write
+ * choke point (`assertCellWritable` in `runtime/cell-write.ts`), BEFORE
+ * the value reaches storage — a denied write commits nothing and bumps
+ * nothing, and inside `atomic()` the throw rolls the whole batch back.
+ * Server-side type: over Flight a client's `.set` promise simply
+ * rejects (production redacts the message), so denial UI is whatever
+ * the author renders for the rejection.
+ */
+export class CellWriteDenied extends Error {
+  readonly cellId: string
+  constructor(cellId: string) {
+    super(`cell "${cellId}": write denied by the cell's writeGuard`)
+    this.name = "CellWriteDenied"
+    this.cellId = cellId
+  }
 }
 
 /**
@@ -839,6 +864,22 @@ export interface LocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S>> {
   /** Server-side write-pipeline transform. Runs after `validate` and
    *  before storage on every write. */
   write?: (value: T) => T
+  /** Write authorization — who may write this cell. A sync predicate
+   *  over the CALLER's request scope (the same `CellPartitionScope`
+   *  the `partition` callback sees — session, cookies, headers, URL)
+   *  plus the write's resolved partition args, so a partitioned cell
+   *  can pin writes to their owner:
+   *
+   *      writeGuard: ({ session }, args) => args.sid === session.id
+   *
+   *  Enforced at the write choke point, so EVERY path passes through
+   *  it — the client `.set` action POST, a server function's `.set`,
+   *  `update`, the write batcher, `atomic()` batches. `false` throws
+   *  `CellWriteDenied` before the storage write: nothing commits, no
+   *  invalidation fires, and inside `atomic()` the whole batch rolls
+   *  back. Omitted ⇒ today's open default: any caller that can name
+   *  the cell id may write it. */
+  writeGuard?: (scope: CellPartitionScope, args: CellArgs) => boolean
   /** Optional storage adapter. Defaults to the persistent disk-backed
    *  singleton (`getCellStorage`). Pass `getEphemeralCellStorage` to
    *  opt into request-scoped in-memory storage (for cells whose data
@@ -885,6 +926,9 @@ export interface InlineLocalCellOpts<S extends CellShapeSpec, T = ValueOfShape<S
   partition?: CellArgs | ((scope: CellPartitionScope) => CellArgs)
   write?: (value: T) => T
   load?: (args: CellArgs) => Promise<T>
+  /** Write authorization — same contract as the module form's
+   *  `writeGuard` (see `LocalCellOpts.writeGuard`). */
+  writeGuard?: (scope: CellPartitionScope, args: CellArgs) => boolean
 }
 
 /**
@@ -935,6 +979,7 @@ export function localCell<S extends CellShapeSpec, T = ValueOfShape<S>>(
     peek: buildPeek(opts.id, storage, validate, opts.initial, partitionFn),
     validate,
     write: opts.write,
+    writeGuard: opts.writeGuard,
     deferred: opts.deferred,
   }
   return registerCell(handle)
@@ -967,6 +1012,7 @@ async function resolveInlineLocalCell<S extends CellShapeSpec, T = ValueOfShape<
     defaultValue: opts.initial,
     partitionFn: undefined,
     write: opts.write,
+    writeGuard: opts.writeGuard,
     load: opts.load,
     validate: makeValidator<T>(id, shape),
   }
@@ -1100,6 +1146,7 @@ export interface ScopedCellDescriptor<T> {
   readonly defaultValue: T
   readonly partitionFn?: (partonVary: never) => CellArgs
   readonly write?: (value: T) => T
+  readonly writeGuard?: (scope: CellPartitionScope, args: CellArgs) => boolean
   readonly load?: (args: CellArgs) => Promise<T>
   readonly validate: (value: unknown) => T
 }
@@ -1144,6 +1191,7 @@ export function finalizeScopedCell<T>(
     peek: buildPeek(id, getCellStorage, validate, descriptor.defaultValue, constantPartition),
     validate,
     write: descriptor.write,
+    writeGuard: descriptor.writeGuard,
   }
   cellRegistry.set(id, handle as CellInterface<unknown>)
   return handle

@@ -66,6 +66,7 @@ export {
 export {
   atomic,
   localCell,
+  CellWriteDenied,
   buildResolvedCell,
   computeCellPartitionKey,
   finalizeScopedCell,

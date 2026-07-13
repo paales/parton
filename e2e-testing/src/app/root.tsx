@@ -29,6 +29,7 @@ import { LanesDemoPage } from "./pages/lanes-demo.tsx"
 import { DeferredDemoPage } from "./pages/deferred-demo.tsx"
 import { CursorsPage } from "./pages/cursors.tsx"
 import { FormsDemoPage } from "./pages/forms-demo.tsx"
+import { GuardedNotePage } from "./pages/guarded-note.tsx"
 import { FramesDemoPage } from "./pages/frames-demo.tsx"
 import { ChatNotesPage } from "./pages/chat-notes.tsx"
 import { DocsPage } from "./pages/docs.tsx"
@@ -85,6 +86,7 @@ export function Root() {
             <DeferredDemoPage />
             <CursorsPage />
             <FormsDemoPage />
+            <GuardedNotePage />
             <FramesDemoPage />
             <ChatNotesPage />
             <DocsPage />

@@ -26,6 +26,14 @@ validate(value)             ← throws on shape mismatch (defends against
 write(validated)             ← optional cell-declared canonicalisation
                               (server's final say on stored shape)
 ↓
+assertCellWritable(cell,     ← write authorization: the cell's optional
+                   args)       `writeGuard(scope, args)` runs against the
+                               caller's request scope + the resolved
+                               partition args; false throws the typed
+                               `CellWriteDenied` — nothing commits, no
+                               bump fires (see reference/cells.md
+                               § Write authorization)
+↓
 storage.write(scope, id,     ← writes to the active scope's bucket
               partKey, v)
 ↓
@@ -74,6 +82,18 @@ fragment cells: the identity lives in the value, so `cell.set(value)`
 needs no restated args) → `cell.partition(scope)` (request-derived). `keyOf` is
 set by `fragmentCell` from its `key` option and runs against the
 validated and `write`-transformed value.
+
+**Write authorization sits inside the synchronous section.** The guard
+is a sync predicate by design — `assertCellWritable` runs in
+`writeOneCell` right before the storage write (and, on a versioned
+adapter, at the top of `updateOneCell`'s CAS branch, which commits
+inside `casUpdateRow` and bypasses `writeOneCell`), so authorization is
+part of the same pre-commit region as shape validation and never adds
+an `await` the serialization invariant forbids. The guard builds its
+own `CellPartitionScope` (`buildCellPartitionScope`) and never touches
+the parton self-context, so its reads cannot land on any rendering
+read-set (`cell-write-guard.rsc.test.tsx` proves the fp stays put when
+a guard input changes).
 
 **Deferred-commit accounting.** `_recordCellWrite(cell.deferred === true)`
 increments a per-request `{total, deferred}` tally on the context store.
@@ -583,14 +603,14 @@ adapters are instant; `JsonFileCellStorage` debounces to disk;
 
 ### The adapter matrix
 
-| | `MemoryCellStorage` | `JsonFileCellStorage` (default) | `SqliteCellStorage` (`runtime/cell-storage-sqlite.ts`) |
-|---|---|---|---|
-| Granularity | per-key map | **whole-snapshot file** — every flush rewrites the entire store from THIS process's memory | per-key row `(scope, cellId, partitionKey)` |
-| Durability | none (tests, ephemeral tier) | debounced ~100 ms; SIGKILL inside the window drops the tail | committed to the WAL when `write()` returns — survives SIGKILL (proven by `cell-storage-sqlite-contention.test.ts`); `synchronous=NORMAL`, so OS crash / power loss can drop the un-checkpointed tail |
-| Multi-process | n/a | **unsafe** — last flusher wins the file, silently reverting the other process's keys (harness scenario D) | safe: per-key write ordering from SQLite's write lock; independent handles read committed rows immediately |
-| `update(fn)` | event-loop serialization | event-loop serialization | event-loop serialization + store-level CAS (`readVersioned`/`writeIfVersion`) |
-| ts contract | full | full | full (ts as a column) |
-| Wiring | `setCellStorage(new MemoryCellStorage())` | default | `setCellStorage(new SqliteCellStorage(path))` — deep import; NOT in the barrel (native module: only apps that opt in carry better-sqlite3) |
+|               | `MemoryCellStorage`                       | `JsonFileCellStorage` (default)                                                                           | `SqliteCellStorage` (`runtime/cell-storage-sqlite.ts`)                                                                                                                                                |
+| ------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Granularity   | per-key map                               | **whole-snapshot file** — every flush rewrites the entire store from THIS process's memory                | per-key row `(scope, cellId, partitionKey)`                                                                                                                                                           |
+| Durability    | none (tests, ephemeral tier)              | debounced ~100 ms; SIGKILL inside the window drops the tail                                               | committed to the WAL when `write()` returns — survives SIGKILL (proven by `cell-storage-sqlite-contention.test.ts`); `synchronous=NORMAL`, so OS crash / power loss can drop the un-checkpointed tail |
+| Multi-process | n/a                                       | **unsafe** — last flusher wins the file, silently reverting the other process's keys (harness scenario D) | safe: per-key write ordering from SQLite's write lock; independent handles read committed rows immediately                                                                                            |
+| `update(fn)`  | event-loop serialization                  | event-loop serialization                                                                                  | event-loop serialization + store-level CAS (`readVersioned`/`writeIfVersion`)                                                                                                                         |
+| ts contract   | full                                      | full                                                                                                      | full (ts as a column)                                                                                                                                                                                 |
+| Wiring        | `setCellStorage(new MemoryCellStorage())` | default                                                                                                   | `setCellStorage(new SqliteCellStorage(path))` — deep import; NOT in the barrel (native module: only apps that opt in carry better-sqlite3)                                                            |
 
 Scope routing is identical across the persistent adapters: only the
 `default` scope persists; test scopes (`x-test-scope`) live in

@@ -47,6 +47,7 @@
 
 import {
   cellStorageForArgs,
+  CellWriteDenied,
   getCellById,
   type CellArgs,
   type CellInterface,
@@ -187,6 +188,26 @@ export function buildCellPartitionScope(): CellPartitionScope {
   }
 }
 
+/**
+ * Write authorization — the guard gate every mutation passes through
+ * before its value can commit. A cell's `writeGuard` (declared on the
+ * cell definition) runs against the CALLER's request scope — the same
+ * `CellPartitionScope` its `partition` callback sees, so session /
+ * cookies / headers are in and the rendering read-set is untouched —
+ * plus the write's resolved partition args, so a guard can pin a
+ * partitioned cell to its owner (`({session}, args) => args.sid ===
+ * session.id`). Deny throws `CellWriteDenied` BEFORE the storage
+ * write: nothing commits, no bump fires, and inside `atomic()` the
+ * throw rolls the whole batch back. The guard is sync by design — it
+ * sits inside the synchronous pre-commit section the serialization
+ * invariant protects (module header). No guard ⇒ writable by any
+ * caller that can name the cell id.
+ */
+function assertCellWritable(cell: CellInterface<unknown>, args: CellArgs): void {
+  if (!cell.writeGuard) return
+  if (!cell.writeGuard(buildCellPartitionScope(), args)) throw new CellWriteDenied(cell.id)
+}
+
 /** Shared write implementation. Caller is responsible for wrapping in
  *  a `runInvalidationTransaction` so the resulting `refreshSelector`
  *  bumps participate in atomic commit/rollback.
@@ -224,6 +245,7 @@ export function writeOneCell(
     const scope = buildCellPartitionScope()
     args = cell.partition(scope)
   }
+  assertCellWritable(cell, args)
   const partitionKey = hash(stableStringify(args))
   // Storage commit first, bump second — the publish-after-commit
   // ordering (module header): the doorbell must never ring before the
@@ -307,6 +329,9 @@ export function updateOneCell(
   const storage = cellStorageForArgs(cell, args)
   const scope = getScope()
   if (storage.readVersioned && storage.writeIfVersion) {
+    // The CAS path commits inside `casUpdateRow`, bypassing
+    // `writeOneCell` — authorize before it can.
+    assertCellWritable(cell, args)
     casUpdateRow(storage as VersionedCellStore, scope, cell.id, partitionKey, (rawStored) => {
       const current = coerceStored(cell, rawStored)
       const next = updater(current)
