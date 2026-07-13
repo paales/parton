@@ -80,11 +80,24 @@ export async function withLiveDrive(
     })
     const renderOnce = () =>
       wrapStreamWithFpTrailer(renderServerToFlight(page()), _captureCommitHandle())
-    const drive = driveSegmentedResponse(controller, renderOnce).then(() => {
-      try {
-        controller.close()
-      } catch {}
-    })
+    const drive = driveSegmentedResponse(controller, renderOnce).then(
+      () => {
+        try {
+          controller.close()
+        } catch {}
+      },
+      (err) => {
+        // Surface a drive-loop failure (e.g. a wake-parity throw) on
+        // the stream — production's createSegmentedResponse errors its
+        // controller the same way; swallowing it here would leave the
+        // reader waiting forever and mask the real error behind a
+        // consumer-side timeout.
+        try {
+          controller.error(err)
+        } catch {}
+        throw err
+      },
+    )
     let connectionId: string | null = null
     const entries: Array<{ tag: string; body: string }> = []
     const iter = splitSegments(response, undefined, (tag, body) => {

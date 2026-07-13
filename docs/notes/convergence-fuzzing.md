@@ -22,9 +22,12 @@ Status: **v1 shipped** — `framework/src/test/fuzz-harness.ts` (runner,
 model, oracle, shrinker), `framework/src/test/fuzz-wire.ts` (Flight
 extraction), `framework/src/lib/__tests__/fuzz-fixture.tsx` (the
 fixture app), `framework/src/lib/__tests__/fuzz-convergence.rsc.test.tsx`
-(the CI budget + env knobs). Findings from the first long runs are at
-the bottom — the v1 harness found two real framework bug classes on
-its first day.
+(the CI budget + env knobs). The findings ledger is at the bottom —
+the v1 harness found two real framework bug classes on its first day,
+and fixing them exposed three more the old classifier had lumped in.
+F1–F5 are FIXED; F6 (the optimistic-mirror drop-report race) is OPEN.
+Every seed runs as an ordinary case: the CI budget is fully clean and
+any failure there is a new finding.
 
 ## The action alphabet
 
@@ -129,14 +132,20 @@ causality with a SENTINEL parton — a cell reader whose bump (a real
 3. A window containing ONLY the sentinel event proves the wake found
    nothing else pending. Quiesced.
 
-One deterministic wrinkle (finding #1 below): a covering whole-tree
-segment can arrive WITHOUT the current tick's stamp — the navigation
-consume cleared the bump from the pending set at segment drain while
-the lazily-rendered segment read the sentinel's row before the bump
-committed. The settle re-states the bump with a fresh tick, keyed on
-the segment's own arrival (never a timer), and counts the occurrence
-(`sentinelRebumps`) as the bug-class signature. A 20s watchdog exists
-as pure failure detection (a hang is a finding, not a wait).
+One deterministic wrinkle: only a sentinel LANE terminates a settle
+window — a covering whole-tree segment never does, even one carrying
+the current tick's stamp. A segment is a navigation/refetch consume,
+and scheduled work legitimately TRAILS it: the statement's forced
+lanes start only after the region reopens, and a bump landing
+mid-render stays pending (the driver's coverage cursor anchors before
+the render begins — the F1 fix) with its lane following the segment.
+The settle re-states the bump with a fresh tick on every segment
+arrival (keyed on the segment itself, never a timer) and counts the
+occurrence (`sentinelRebumps`) as a diagnostic; the fresh tick's lane
+is the sound terminator, because the wake that lanes it drains the one
+pending set and every earlier-announced lane serializes ahead of it.
+A 20s watchdog exists as pure failure detection (a hang is a finding,
+not a wait).
 
 ### The oracle render and the comparison
 
@@ -206,13 +215,12 @@ the connection.
 
 ```bash
 # CI budget — deterministic, part of `yarn test` (rsc tier):
-#   25 sequences × 20 actions, seeds 1..25. Seeds reproducing the
-#   KNOWN findings below are pinned as expected failures (exact
-#   signature asserted) — green today, red when a fix lands.
+#   25 sequences × 20 actions, seeds 1..25. Every sequence must
+#   converge — zero mismatches of any class is the gate; any failure
+#   shrinks to a locally-minimal repro in the assertion message.
 PARTON_WAKE_PARITY=1 yarn test:rsc fuzz-convergence
 
-# Long local run (known finding classes tallied, only NEW classes
-# fail):
+# Long local run — same gate, bigger budget:
 PARTON_WAKE_PARITY=1 FUZZ_BUDGET=500 yarn test:rsc fuzz-convergence
 
 # Knobs: FUZZ_BUDGET (sequences), FUZZ_LEN (actions/sequence),
@@ -242,67 +250,176 @@ PARTON_WAKE_PARITY=1 FUZZ_BUDGET=500 yarn test:rsc fuzz-convergence
   extension, because the deterministic harness is the ratchet that
   keeps it fixed.
 
-## Findings — first long runs (v1)
+## Findings ledger (v1)
 
-Runs (all with `PARTON_WAKE_PARITY=1`, zero parity trips, zero
-harness failures): 500 × 20 actions (4.6s — 435 clean / 51 F1 /
+First long runs (all with `PARTON_WAKE_PARITY=1`, zero parity trips,
+zero harness failures): 500 × 20 actions (4.6s — 435 clean / 51 F1 /
 14 F2), 3000 × 20 (24s — 2613 / 328 / 59), 1000 × 50 from a distinct
-seed range (17s — 780 / 132 / 88). **4500 sequences, ~110k actions,
-two real bug classes, zero unclassified failures.** Both classes are
-pinned as expected-failure seeds in the CI test (`XFAIL` — seeds 9,
-18 → F1; seed 10 → F2), so the suite stays green now and goes red
-the moment a fix lands (delete the entry + this section's finding).
+seed range (17s — 780 / 132 / 88). The old stamp-based classifier
+lumped every staleness shape into "F1"; fixing the cursor revealed
+that tally spanned FIVE distinct roots (F1, F4, F5, the parity-oracle
+hold, and F6). Post-fix runs: 3000 × 20 → 2980 clean / 20 findings,
+1000 × 50 → 993 clean / 7 — **every remaining finding is the one OPEN
+family (F6), ~0.6% of sequences; zero watchdogs, zero parity trips,
+zero harness failures.** The formerly-pinned seeds (9, 18 → F1;
+10 → F2) run as ordinary cases and the CI budget (seeds 1–25) is
+fully clean.
 
-- **F1 — real bug: the covering-segment missed-update window.**
-  `handleNavigation` (`segmented-response.ts` ~2177) — and the same
-  pattern at the frame-nav uncovered fallback (~2277) and the
-  scheduled reconcile (~2481) — advances the wake cursor to
-  `_currentTs()` and clears the subscription's pending set AFTER the
-  covering segment drains, but the vendored Flight server renders
-  lazily: a write that commits while the segment streams, after its
-  reader's row already rendered, is marked covered while its effect
-  is in neither the segment nor any lane. The client shows the stale
-  value until an unrelated later bump or the 30s reconcile. The
-  wake-parity assert cannot see it — the bump is cleared, so no wake
-  happens at all. Minimal repro (3 actions):
-  `[navigate "/beta?q=y", write cellB=1, write cellB=2]` → the
-  cell's reader displays `b=1` at quiescence while the cold render
-  shows `b=2`. The sentinel-swallow diagnostic (`sentinelRebumps`)
-  fires on the same window. Direction of a fix: anchor the cursor at
-  the ts current BEFORE the covering render begins — the discipline
-  segment 0's `lastTs` and the catch-up anchor already follow — so a
-  mid-render write stays pending and the next drain lanes it
-  (over-delivery at worst: if the segment did carry the late rows,
-  the lane fp-skips).
+- **F1 — FIXED: the covering-segment missed-update window
+  (staleness).** `handleNavigation` (`segmented-response.ts`) — and
+  the same pattern at the frame-nav uncovered fallback and the
+  scheduled reconcile — advanced the wake cursor to `_currentTs()`
+  and cleared the subscription's whole pending set AFTER the covering
+  segment drained, but the vendored Flight server renders lazily: a
+  write that committed while the segment streamed, after its reader's
+  row already rendered, was marked covered while its effect was in
+  neither the segment nor any lane (stale until an unrelated bump or
+  the 30s reconcile; invisible to the wake-parity assert — the bump
+  was cleared, so no wake happened at all). Minimal repro:
+  `[navigate "/beta?q=y", write cellB=1, write cellB=2]` → reader
+  showed `b=1`, cold render `b=2`. **Fix:** all three covering-render
+  sites anchor coverage BEFORE the render begins — `since` advances
+  to the pre-render `coverTs` and only the deliveries pending at that
+  point are cleared; a mid-render delivery stays pending and lanes on
+  the reopened region, fp-skipping to a zero-byte confirm when the
+  segment did carry the late rows (over-delivery, never stale). The
+  same discipline segment 0's `lastTs` and the catch-up anchor always
+  followed — see `docs/internals/streaming.md` §the cursor
+  discipline. Deterministic regression (both halves — the window
+  delivers; the double delivery fp-skips):
+  `framework/src/lib/__tests__/covering-cursor.rsc.test.tsx`.
 
-- **F2 — real bug (over-fetch class): parked-variant fp retag.**
-  The fp-trailer's whole-stream flush recompute ships heals for
-  MATCH-MISSED snapshots, recomputed under the request state that
-  parked them. Minimal repro: attach at `/alpha?q=x` (match-gated
-  `fz-gated` renders, warm fp W), navigate to `/alpha` — the
-  covering segment emits gated as a parked keepalive hole AND its
-  trailer ships `{fz-gated: {from: W, to: W'}}` where W′ folds the
-  /alpha reads (`q=null` — a state gated's own match gate forbids;
-  its body never rendered there). The client's `_applyFpUpdates`
-  retags its parked q=x content with the foreign-state fp W′,
-  permanently (holes never restate fps). Consequences: the parked
-  variant's manifest token can never match a real render again —
-  every manifest-path re-match re-renders (defeating exactly the
-  parked-variant fp-skip that keepalive parking exists for) — and
-  client/mirror fp bookkeeping drifts. NOT a staleness bug: the
-  tracking invariant means an fp collision implies byte-equal
-  content, so a wrong confirm cannot occur; the cost is over-fetch
-  and polluted `OVERRIDE_SET_CAP` slots. Direction of a fix: the
-  flush recompute should skip snapshots whose match gate did not
-  pass this request (they didn't render; there is no drift to heal).
+- **F2 — FIXED: parked-variant fp retag (over-fetch class).** The
+  fp-trailer's flush recompute shipped heals for MATCH-MISSED
+  snapshots, recomputed under the request state that parked them
+  (attach at `/alpha?q=x`, navigate `/alpha` → the trailer shipped
+  `{fz-gated: {from: W, to: W'}}` with W′ folding `q=null` — a state
+  gated's own gate forbids; its body never rendered there), retagging
+  the client's parked variant with a never-rendered state's fp —
+  permanently defeating its manifest fp-skip (not staleness: the
+  tracking invariant keeps wrong confirms impossible; the cost was
+  over-fetch + polluted `OVERRIDE_SET_CAP` slots). **Fix:**
+  `computeWarmFps` (`fp-trailer.ts`) evaluates each snapshot's match
+  gate under the flush request; a gate-failed snapshot gets NO warm
+  fp (nothing rendered — there is no drift to heal) and contributes
+  the live fold's `nomatch` form to its ancestors (mirroring
+  `descendantContribution`, so ancestor folds recompute to what the
+  next live render actually emits).
 
-- **Minor client-lib wart: `splitAtFpTrailer` hangs on a
-  pre-classification tear.** A lane body errored before any byte
-  classifies (a navigation tear racing the lane's first frame)
-  rejects the trailer promise but never closes/errors `mainStream` —
-  a consumer awaiting the body (the browser's lane decode included)
-  hangs instead of rejecting. In the browser the leak is bounded (the
-  covering segment replaces the content; the pending decode is
-  abandoned), but "a torn lane's decode always settles" does not hold
-  on this path. The harness works around it by racing body reads
-  against the trailer's rejection.
+- **F3 — FIXED: `splitAtFpTrailer` hung on a pre-classification
+  tear.** A lane body that errored before any byte classified (a
+  navigation tear racing the lane's first frame) rejected the trailer
+  promise but never closed/errored `mainStream` — a consumer awaiting
+  the body (the browser's lane decode included) hung instead of
+  rejecting. **Fix:** the pre-classification error path errors the
+  body controller too (`fp-trailer-split.ts`), so "a torn decode
+  always settles" holds on every path; the trailer promise
+  self-observes its rejection so body-only consumers don't produce
+  unhandled-rejection reports. Regression tests in
+  `framework/src/lib/__tests__/lanes-split.test.ts`; the harness's
+  torn-race workaround is gone (a bare body read is safe).
+
+- **F4 — FIXED: acked-slot desync on a stated flip (staleness, found
+  by the post-F1 runs).** The old stamp-based long-run classifier had
+  bundled this class into the F1 tally; fixing F1 exposed it. Minimal
+  repro (seed 245):
+  `[flip out fz-cull-b, flip in (stated cached tokens), navigate
+"/beta?q=y", settle, navigate "/alpha?q=x"]` → cull-b confirmed at
+  q=x while the client's slot holds q=y. Two cooperating facts:
+  `applyReportedCached` (the flip statement's mirror replace,
+  `segmented-response.ts`) replaced `ackedFps` but NOT the acked SLOT
+  index (`ackedSlots`) — desyncing the layers its own doc says it
+  replaces wholesale — and cold fps COLLIDE across route buckets (a
+  first-in-bucket render's dep-less cold fp is byte-identical across
+  request states), so the later /beta delivery's ack fold saw its fp
+  already in the stale slot, skipped the slot eviction, and stranded
+  the flip's stated q=x warm fp in `ackedFps`, where the return
+  navigation's verdict confirmed it against a client slot that now
+  holds q=y. **Fix:** `applyReportedCached` replaces the acked slot
+  index alongside `ackedFps`, so the next delivery's fold evicts the
+  stated fps exactly as the client's slot overwrite did.
+
+- **F5 — FIXED: the whole-route promote claims match-missed
+  snapshots (staleness via a superseded navigation).** Minimal repro
+  (seed 1030): `[navigate "/alpha?q=y", navigate "/alpha", settle,
+navigate "/alpha?q=y"]` → `fz-gated` confirmed at the ATTACH state
+  (q=x) on the return. The superseded first navigation's ABORTED
+  render registered gated's q=y-form `emittedFp` (bytes that never
+  reached the client — the client consumed the empty superseded
+  segment as a processed drop), and the /alpha covering segment's
+  whole-route `promoteSnapshotsToCachedOverride` walk then claimed
+  that fp as a client holding even though gated MATCH-MISSED /alpha
+  (it emitted only a parked keepalive hole). The return navigation's
+  candidate hit the over-claimed fp and fp-skipped to a phantom
+  confirm. **Fix:** the promote applies the F2 discipline — a
+  snapshot whose match gate fails the current request didn't render
+  here, so nothing about it is claimed (its real fps entered the
+  mirror when it actually shipped); framed snapshots keep promoting
+  (their gate reads the frame URL — the conservative direction).
+
+- **Parity-oracle hold (exposed by the F1 cursor discipline).** With
+  `since` anchored before a covering render, the wake-parity assert's
+  bump-side re-derivation includes bumps the covering segment
+  legitimately consumed for then-PARKED ids; when such an id's
+  cull-gated ancestor flips back in within the same drain window, its
+  catch-up rides the ancestor's flip lane — never a lane of its own —
+  and the assert (whose `covered` holds applied only to the expiry
+  side) threw a false violation (surfacing as the watchdog class,
+  seeds 127/855: the in-process drive's controller was never errored
+  on a drive-loop throw, so the wire just went silent — `live-drive`
+  now surfaces drive rejections as stream errors, matching
+  production). **Fix:** `_assertWakeParity` applies the `covered`
+  holds to both sides, and the drain's `covered` adds the
+  ancestor-lane hold (an open or this-wake-touched ancestor's lane
+  re-renders the id inside its subtree). No staleness existed in any
+  ordering — the delivery path was correct; the oracle was
+  over-strict.
+
+- **F6 — OPEN: the optimistic mirror outruns the client's drop
+  reports (the e7dd068 residue).** ~0.5% of sequences at the CI
+  action mix (fp-only bookkeeping drift AND bounded staleness
+  shapes; representative shrunk repros: seed 1381
+  `[flip out cull-b, flip in cull-b+cull-a, flip in cull-b, flip
+wrap, flip cull-b]` — fp-only; seed 1016
+  `[write a=1, write b=2, flip out b+a, flip in b, write b=3,
+refetch fz-shared]` — stamp). Mechanism: a lane that drains onto
+  the wire is promoted into the optimistic mirror at drain; when the
+  client's as-of guard then drops it (a navigation/refetch statement
+  advanced its navigation point while the lane was in flight), the
+  drop report — even flushed promptly — cannot beat the covering
+  segment that renders synchronously AT the consume, so that render's
+  fp-skip verdict can confirm the dropped delivery's phantom; the
+  later `ack.dropped` eviction removes the tokens but re-lanes
+  nothing, so a wrongly-confirmed copy stands until an unrelated bump
+  or the 30s reconcile. This is the accepted residue of the e7dd068
+  design (client-reported drops instead of the inferred nav-consume
+  prune — the inference killed fp-skip across navigation entirely).
+  Direction: on an `ack.dropped` eviction, re-queue the dropped
+  delivery's UNPARKED ids for a fresh lane (the shape `evicted`
+  already uses) — converts the race into one extra lane after the
+  report, and the drop report is the real signal. A second, smaller
+  member of the family: a whole-stream flush heal can alias
+  post-render drift (a visibility flip or bump landing between a
+  row's render and the stream's flush retags the emitted fp with a
+  state the row does not carry) — same "describe the render, not the
+  flush moment" discipline, applied to `computeWarmFps`' drifting
+  inputs.
+
+- **Harness finding (fixed alongside F1): a covering segment is not
+  a quiescence proof.** The settle protocol formerly terminated a
+  window on ANY event carrying the current sentinel stamp — but a
+  covering segment that absorbs the bump can have scheduled work
+  TRAILING it (a refetch statement's forced lanes start only after
+  the region reopens; a mid-render delivery's lane follows the
+  segment), so terminating on it dropped trailing lanes from the
+  model and mis-reported the server. Only a sentinel LANE terminates
+  now (§Quiescence).
+
+- **Harness finding: an ANNOUNCED torn lane must consume PROCESSED.**
+  The model's torn-lane path dropped the body without consuming its
+  queued delivery seq; a lane that announced EARLY (a window-force
+  lane's root-ready seq entry, a producer's `muxlive`) and was then
+  torn by a navigation left a permanent gap that wedged the
+  contiguous watermark (surfacing as a rare settle watchdog). The
+  real client consumes exactly this case as PROCESSED with a drop
+  report (`_laneDeliveryDroppedStale`); the model now mirrors it.

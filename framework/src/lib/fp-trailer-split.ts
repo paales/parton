@@ -132,7 +132,20 @@ export function splitAtFpTrailer(source: ReadableStream<Uint8Array>): SplitResul
     },
   })
   const trailerPromise: Promise<Record<string, string> | null> = (async () => {
-    const first = await iter.next()
+    let first: IteratorResult<Segment>
+    try {
+      first = await iter.next()
+    } catch (err) {
+      // The source errored BEFORE any byte classified (a navigation
+      // tear racing a lane's first frame). "A torn decode always
+      // settles" must hold here too: error the body stream so a
+      // consumer awaiting it rejects alongside this promise instead of
+      // hanging on a stream nothing closes.
+      try {
+        bodyController.error(err instanceof Error ? err : new Error(String(err)))
+      } catch {}
+      throw err
+    }
     if (first.done || first.value.kind !== "payload") {
       bodyController.close()
       return null
@@ -166,6 +179,12 @@ export function splitAtFpTrailer(source: ReadableStream<Uint8Array>): SplitResul
       return null
     }
   })()
+  // The trailer is optional metadata — a consumer that only reads the
+  // body must not produce an unhandled-rejection report when a tear
+  // rejects both halves (the body read already surfaces the error).
+  // Self-observing marks the rejection handled; an `await trailer`
+  // still rejects.
+  trailerPromise.catch(() => {})
   return { mainStream, trailer: trailerPromise }
 }
 

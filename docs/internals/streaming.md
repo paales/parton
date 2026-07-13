@@ -334,6 +334,29 @@ any selector-routing logic that could replace it.
    — the channel transport acks the contiguous commit watermark
    upstream ([`channel.md`](./channel.md) §Delivery is evidenced).
 
+**Covering renders anchor coverage BEFORE they begin (the cursor
+discipline).** Every whole-tree segment on a held connection — the
+navigation consume, the scheduled reconcile, the frame-nav uncovered
+fallback — advances the connection's wake cursor (`since`) to a
+timestamp captured before its render started, and clears from the
+pending set only the deliveries that were pending at that point
+(`coverTs` / `coveredPending` in `handleNavigation`,
+`segmented-response.ts`). The reason is Flight's laziness: rows render
+as the stream is pulled, so a write committing while the segment
+streams — after its reader's row already rendered — is in neither the
+segment nor any lane. Deliveries that were pending when the render
+began are provably covered (they committed before any row rendered);
+anything landing mid-render stays pending and lanes on the reopened
+region. When the segment DID carry a late-committing write (the row
+rendered after the commit), the kept delivery re-lanes once and
+fp-skips against the segment's promoted fp — over-delivery at a
+zero-byte confirm, never staleness. Segment 0's `lastTs` and the
+attach catch-up anchor follow the same discipline (both are pre-render
+points on the registry timeline). Covered by
+`covering-cursor.rsc.test.tsx` and the convergence fuzzer
+([`docs/notes/convergence-fuzzing.md`](../notes/convergence-fuzzing.md)
+finding F1).
+
 Relevance false-negatives (a dependency the label/constraint surface
 doesn't capture) degrade to a MISSED update on the lane path, where
 the old whole-tree path degraded to a wasted re-render. The scheduled

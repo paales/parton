@@ -164,17 +164,24 @@ export interface SequenceResult {
   failure: string | null
   finalUrl: string
   visible: string[]
-  /** Times a settle round had to RE-STATE its sentinel bump because a
+  /** Times a settle round RE-STATED its sentinel bump because a
    *  covering whole-tree segment arrived without the bump's stamp —
-   *  the signature of the missed-update window in the navigation
-   *  consume (the wake cursor advances past a bump whose effect the
-   *  lazily-rendered segment does not carry). Diagnostic, not a
-   *  failure: the ORACLE reports the missed content when a real
-   *  write's update is swallowed by the same window. */
+   *  the bump landed mid-render, after the lazily-rendered segment
+   *  already read the sentinel's row. The driver's coverage cursor
+   *  anchors BEFORE the covering render begins, so such a bump stays
+   *  pending and its lane follows the segment; the re-bump just keeps
+   *  the settle terminator simple (one current tick to watch for).
+   *  Diagnostic: a segment swallowing a bump WITHOUT a follow-up lane
+   *  would surface as an oracle mismatch, not here. */
   sentinelRebumps: number
 }
 
-const WATCHDOG_MS = 20_000
+/** Pure failure detection (a hang is a finding, not a wait). The env
+ *  override exists for long local runs: shrinking a watchdog-class
+ *  failure re-runs the sequence up to 200 times, each paying the full
+ *  deadline — `FUZZ_WATCHDOG_MS=4000` keeps such shrinks tractable
+ *  without loosening CI (where the default's headroom absorbs load). */
+const WATCHDOG_MS = Number(process.env.FUZZ_WATCHDOG_MS ?? 20_000)
 const MAX_SETTLE_ROUNDS = 60
 const ACK_EVERY = 16
 
@@ -341,28 +348,31 @@ export async function runSequence(
               let fpMap: Record<string, { from: string; to: string }> | null = null
               try {
                 const { mainStream, trailer } = splitAtFpTrailer(lane.body)
-                // A lane body that errors BEFORE any byte classifies (a
-                // navigation tear racing the lane's first frame) rejects
-                // the trailer promise but leaves `mainStream` open —
-                // splitAtFpTrailer never closes the body controller on
-                // that path — so a bare body read would hang forever.
-                // Race the read against the trailer's REJECTION (its
-                // resolution only ever follows the body's clean end).
-                const torn = new Promise<never>((_, reject) => {
-                  trailer.then(
-                    () => {},
-                    (err: unknown) => reject(err instanceof Error ? err : new Error(String(err))),
-                  )
-                })
-                bodyText = await watchdog(
-                  Promise.race([new Response(mainStream).text(), torn]),
-                  "lane body",
-                )
+                // "A torn decode always settles": a lane body that errors
+                // at ANY point — even before a byte classifies (a
+                // navigation tear racing the lane's first frame) — errors
+                // `mainStream` alongside rejecting the trailer, so a bare
+                // body read is safe; a hang here is a finding (the
+                // watchdog is pure failure detection).
+                bodyText = await watchdog(new Response(mainStream).text(), "lane body")
                 fpMap = (await trailer) as Record<string, { from: string; to: string }> | null
               } catch (err) {
                 if (err instanceof Error && err.message.includes("fuzz watchdog")) throw err
                 // Torn lane (navigation tear, cancelled render) — the
-                // client's decode rejects and nothing commits.
+                // client's decode rejects and nothing commits. An
+                // ANNOUNCED torn body (its `seq` entry preceded the
+                // tear — an early-announcing forced lane, a producer)
+                // consumes PROCESSED with a drop report, exactly the
+                // client's `_laneDeliveryDroppedStale`: a permanent seq
+                // gap would wedge the contiguous watermark forever.
+                drainEntries()
+                const tq = laneSeqs.get(lane.partonId)
+                if (tq !== undefined && tq.length > 0) {
+                  const torn = tq.shift()!
+                  seenSeqs.add(torn.seq)
+                  pendingDropped.push(torn.seq)
+                  advanceWatermark()
+                }
                 continue
               }
               drainEntries()
@@ -451,7 +461,13 @@ export async function runSequence(
         const maybeAck = async (force: boolean): Promise<void> => {
           advanceWatermark()
           if (watermark <= lastAcked) return
-          if (!force && watermark - lastAcked < ACK_EVERY) return
+          // An as-of drop report flushes PROMPTLY — the client's
+          // `_reportAsOfDrop` schedules a channel flush rather than
+          // waiting for the next passenger, because the server's
+          // optimistic mirror holds the dropped delivery's promotions
+          // until the report evicts them.
+          const dropPending = pendingDropped.some((s) => s <= watermark)
+          if (!force && !dropPending && watermark - lastAcked < ACK_EVERY) return
           const dropped = pendingDropped.filter((s) => s <= watermark)
           const kept = pendingDropped.filter((s) => s > watermark)
           pendingDropped.length = 0
@@ -464,8 +480,9 @@ export async function runSequence(
           await postEnvelope(frames)
         }
 
-        /** Apply one wire event; returns true when it is the sentinel
-         *  lane for `tick` (the settle window terminator). */
+        /** Apply one wire event; returns true when it committed with
+         *  the sentinel's `tick` stamp. Only a LANE carrying it
+         *  terminates a settle window — see `settle`. */
         const applyEvent = async (ev: WireEvent, tick: number | null): Promise<boolean> => {
           debug?.(
             `event ${ev.kind}${ev.kind === "lane" ? `:${ev.id}` : ""} seq=${ev.seq} asof=${ev.asof} ` +
@@ -487,12 +504,6 @@ export async function runSequence(
             applyFpUpdates(ev.fpUpdates)
           }
           await maybeAck(false)
-          // The settle terminator: the sentinel's tick stamp arriving on
-          // ANY committed event — its own lane, or a whole-tree segment
-          // whose covering render absorbed the bump (a pending
-          // navigation consumes ahead of the pending set, and the
-          // navigation segment re-renders the sentinel with the bumped
-          // tick already folded in).
           return (
             committable &&
             tick !== null &&
@@ -526,27 +537,27 @@ export async function runSequence(
             let sawOther = false
             while (true) {
               const ev = await nextEvent()
-              const isSentinel = await applyEvent(ev, tick)
-              if (isSentinel) break
+              const hasCurrentStamp = await applyEvent(ev, tick)
+              // Only a sentinel LANE terminates the window: the wake
+              // that lanes it drained the one pending set, and every
+              // lane announced before the bump serializes ahead of it.
+              if (hasCurrentStamp && ev.kind === "lane") break
               sawOther = true
-              // A whole-tree segment arriving WITHOUT the current
-              // sentinel stamp is a covering render that raced the bump:
-              // the navigation consume advances the wake cursor and
-              // clears the pending set at segment DRAIN, but the lazy
-              // Flight render read the sentinel's row earlier — the bump
-              // is now covered-on-paper, carried nowhere. Re-state it
-              // with a fresh tick (deterministic — triggered by the
-              // segment's own arrival, never a timer) so the settle can
-              // terminate; the swallow is recorded, and any REAL write
-              // swallowed by the same window surfaces as an oracle
-              // mismatch.
-              if (
-                ev.kind === "segment" &&
-                ev.ex.stamps.get(fixture.sentinelId) !== fixture.sentinelStampFor(tick)
-              ) {
+              // A whole-tree SEGMENT never terminates — even one
+              // carrying the current stamp. It is a covering render (a
+              // navigation/refetch consume), and scheduled work can
+              // TRAIL it: the statement's forced lanes start only after
+              // the region reopens, and a bump landing mid-render stays
+              // pending (the coverage cursor anchors before the render
+              // begins) with its lane following. Re-state the bump with
+              // a fresh tick (deterministic — triggered by the
+              // segment's own arrival, never a timer) so the loop
+              // watches exactly one current tick; counted as a
+              // diagnostic.
+              if (ev.kind === "segment") {
                 tick = ++sentinelTick
                 result.sentinelRebumps++
-                debug?.(`settle re-bump tick=${tick} (covering segment without current stamp)`)
+                debug?.(`settle re-bump tick=${tick} (covering segment)`)
                 await fixture.bumpSentinel(scope, currentUrl, tick)
               }
             }

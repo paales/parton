@@ -18,7 +18,12 @@ import {
   TAG_NEXT_SEGMENT,
   TAG_SEGMENT_SETTLED,
 } from "../fp-trailer-marker.ts"
-import { type DemuxedLane, type Segment, splitSegments } from "../fp-trailer-split.ts"
+import {
+  type DemuxedLane,
+  type Segment,
+  splitAtFpTrailer,
+  splitSegments,
+} from "../fp-trailer-split.ts"
 import { muxEndFrame, muxFrame } from "../parton-mux.ts"
 
 const encoder = new TextEncoder()
@@ -342,6 +347,36 @@ describe("splitSegments — lanes segments", () => {
         await reader.read()
       })(),
     ).rejects.toThrow()
+  })
+
+  it("splitAtFpTrailer settles BOTH halves when the source errors before classification", async () => {
+    // A lane body torn before any byte classifies (a navigation tear
+    // racing the lane's first frame): "a torn decode always settles"
+    // must hold on this path too — the trailer promise rejects AND the
+    // body stream errors, so a consumer awaiting either rejects
+    // instead of hanging on a stream nothing closes.
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("torn before classification"))
+      },
+    })
+    const { mainStream, trailer } = splitAtFpTrailer(source)
+    await expect(new Response(mainStream).text()).rejects.toThrow("torn before classification")
+    await expect(trailer).rejects.toThrow("torn before classification")
+  })
+
+  it("splitAtFpTrailer settles both halves on a tear mid-marker-prefix", async () => {
+    // The tear lands after a bare `\xFF` (an incomplete marker header)
+    // — still pre-classification; both halves must settle.
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0xff]))
+        controller.error(new Error("torn mid-prefix"))
+      },
+    })
+    const { mainStream, trailer } = splitAtFpTrailer(source)
+    await expect(new Response(mainStream).text()).rejects.toThrow("torn mid-prefix")
+    await expect(trailer).rejects.toThrow("torn mid-prefix")
   })
 
   it("payload segments still parse untouched around a lanes region", async () => {

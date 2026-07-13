@@ -332,5 +332,35 @@
       "baseline": 495.8,
       "cornerIdle": 500
     }
+  },
+  {
+    "sha": "614100a",
+    "date": "2026-07-13T00:13:13.705Z",
+    "node": "v24.11.1",
+    "viewport": "2560x1440",
+    "serverPct": {
+      "baseline": 3.7,
+      "cornerIdle": 2.6,
+      "afterClose": 0.6
+    },
+    "headlessBrowserPct": {
+      "baseline": 37.1,
+      "cornerIdle": 31.4
+    }
+  },
+  {
+    "sha": "614100a",
+    "date": "2026-07-13T00:15:36.784Z",
+    "node": "v24.11.1",
+    "viewport": "2560x1440",
+    "serverPct": {
+      "baseline": 3.3,
+      "cornerIdle": 4,
+      "afterClose": 0.6
+    },
+    "headlessBrowserPct": {
+      "baseline": 37.2,
+      "cornerIdle": 33.4
+    }
   }
 ]

@@ -520,17 +520,20 @@ export function _wakeParityCheckEnabled(): boolean {
  * equivalence. `delivered` ids whose snapshot vanished drop at
  * escalation on both sides.
  *
- * The expiry side's expected set is every snapshot whose declared
- * boundary elapsed (`expiresAt <= now`) and is not otherwise COVERED —
- * `covered(id)` states the legitimate non-delivery holds: the id is
- * still armed in the wheel (fires at most one slot late), its lane is
- * open (the in-flight render is the service; its drain re-arms the
- * wheel), it is deferred behind the unacked delivery window (the
- * freeing ack's drain lanes it), or this wake's flip/cookie worklist
- * already carries it. What remains must be in the delivered set —
- * a due boundary absent from both the wheel and the pending set is a
- * lost deadline, exactly the under-delivery the oracle exists to
- * catch.
+ * `covered(id)` states the legitimate non-delivery holds, applied to
+ * BOTH sides' expected sets: the id is still armed in the wheel
+ * (fires at most one slot late), its lane — or a flipped-in/open
+ * ANCESTOR's lane, which re-renders the id inside its subtree — is
+ * the in-flight service, it is deferred behind the unacked delivery
+ * window (the freeing ack's drain lanes it), or this wake's
+ * flip/cookie worklist already carries it. The bump side needs the
+ * holds because the coverage cursor anchors BEFORE a covering render
+ * begins (the F1 cursor discipline): a bump the covering segment
+ * consumed for a then-parked id re-derives as expected while that id's
+ * catch-up legitimately rides its flipping-in ancestor's lane, never a
+ * lane of its own. What remains must be in the delivered set —
+ * an expected id absent from every hold and from the pending set is a
+ * lost update, exactly the under-delivery the oracle exists to catch.
  */
 export function _assertWakeParity(
   snapshots: ReadonlyMap<string, PartialSnapshot>,
@@ -544,7 +547,9 @@ export function _assertWakeParity(
     covered: (id: string) => boolean
   },
 ): void {
-  const expected = _routeMatchingBumpIds(snapshots, sinceTs).filter((id) => !isParked(id))
+  const expected = _routeMatchingBumpIds(snapshots, sinceTs).filter(
+    (id) => !isParked(id) && !(expiry?.covered(id) ?? false),
+  )
   if (expiry !== undefined) {
     const due: string[] = []
     for (const [id, snap] of snapshots) {

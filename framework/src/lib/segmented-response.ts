@@ -49,7 +49,6 @@ import {
   setRequest,
 } from "../runtime/context.ts"
 import {
-  _clearWakeSubscriptionPending,
   _currentTs,
   _pendingInvalidationSelectors,
   _registryEpoch,
@@ -124,6 +123,7 @@ import {
   _wakeParityCheckEnabled,
   type RouteWakeSubscription,
 } from "./segment-relevance.ts"
+import { getSpecById } from "./spec-catalog.ts"
 import { _getWarmProjector, type WarmCandidate } from "./warm-projection.ts"
 
 /**
@@ -534,7 +534,7 @@ export async function driveSegmentedResponse(
     // as the delivery's holdings record — what this segment carried
     // becomes acked evidence when the client commits it.
     const tokens: Array<readonly [string, string, string]> = []
-    promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) => tokens.push([id, mk, fp]))
+    promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) => tokens.push([id, mk, fp]), session)
     // PartialRoot installed the override during this render; link it to
     // the session so the channel endpoint can evict client-reported drops.
     linkOverrideToSession(session)
@@ -1663,7 +1663,7 @@ async function driveLaneStream(
         // O(route) churn for entries the drain didn't touch. The same
         // walk records the delivery's holdings — one pass, no second
         // walk per drain.
-        promoteSnapshotsToCachedOverride(id, (tid, mk, fp) => carried.push([tid, mk, fp]))
+        promoteSnapshotsToCachedOverride(id, (tid, mk, fp) => carried.push([tid, mk, fp]), session)
         // The flush's warm heals fold in NOW, after the slots exist: the
         // `to` fp joins the slot holding its `from` (dropping when the
         // slot fp-skipped away), then rides this delivery's holdings so
@@ -1941,7 +1941,7 @@ async function driveLaneStream(
     if (!enqueue(settledMarker)) return false
     if (session !== null) session.firstDeliverySettledAt ??= Date.now()
     const tokens: Array<readonly [string, string, string]> = []
-    promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) => tokens.push([id, mk, fp]))
+    promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) => tokens.push([id, mk, fp]), session)
     if (session !== null && deliverySeq !== null) {
       _recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq)
     }
@@ -2074,7 +2074,7 @@ async function driveLaneStream(
     if (!enqueue(settledMarker)) return "closed"
     if (session !== null) session.firstDeliverySettledAt ??= Date.now()
     const tokens: Array<readonly [string, string, string]> = []
-    promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) => tokens.push([id, mk, fp]))
+    promoteSnapshotsToCachedOverride(undefined, (id, mk, fp) => tokens.push([id, mk, fp]), session)
     if (session !== null && deliverySeq !== null) {
       _recordDelivery(session, deliverySeq, tokens, consumedSeq)
     }
@@ -2131,6 +2131,18 @@ async function driveLaneStream(
       return ids
     }
     const forceLabels = new Set<string>()
+    // Coverage anchors for the covering segment — captured immediately
+    // BEFORE each render begins (the segment-0 `lastTs` discipline):
+    // Flight renders lazily, so a write committing mid-stream after
+    // its reader's row already rendered is NOT in the segment. Only
+    // what was on the timeline / in the pending set when the render
+    // started is provably covered; anything landing during the render
+    // stays pending and lanes after the reopen (if the segment did
+    // carry a late row, that lane fp-skips to a confirmation —
+    // over-delivery, never stale). A superseded chain re-captures per
+    // attempt; the last completed render's anchors stand.
+    let coverTs = _currentTs()
+    let coveredPending: string[] = []
     try {
       while (true) {
         const nav = takeConnectionNavigation(session)
@@ -2165,6 +2177,8 @@ async function driveLaneStream(
         if (forceLabels.size > 0 || unfulfilledForces.length > 0) {
           _setFoldExclusionIds(resolveForcedIds(forceLabels, unfulfilledForces))
         }
+        coverTs = _currentTs()
+        coveredPending = [...subscription.sub.pending]
         const outcome = await emitNavSegment()
         if (outcome === "closed") return false
         if (outcome === "superseded") continue
@@ -2175,12 +2189,14 @@ async function driveLaneStream(
       _setFoldExclusionIds(null)
     }
     lastFullSegmentAt = Date.now()
-    since = _currentTs()
-    // The navigation segment was a whole-tree render of the NEW route
-    // as of now — everything delivered so far is covered (exactly what
-    // the cursor advance says), and the subscription re-registers
-    // against the new route's snapshots before the region reopens.
-    _clearWakeSubscriptionPending(subscription.sub)
+    // The navigation segment was a whole-tree render of the new route
+    // AS OF ITS RENDER START — the cursor advances to the pre-render
+    // anchor and only the deliveries pending at that point are marked
+    // covered. A delivery that landed mid-render stays in the pending
+    // set and lanes on the reopened region; the subscription
+    // re-registers against the new route's snapshots before then.
+    since = coverTs
+    for (const id of coveredPending) subscription.sub.pending.delete(id)
     _syncRouteWakeSubscription(subscription, _readSnapshotsForRoute(scope, routeKey), since)
     // Follow the connection to its new URL's slot space (releases the
     // old key; the old route's slots drop with their last subscriber).
@@ -2273,11 +2289,15 @@ async function driveLaneStream(
     // before this statement's own lanes open.
     if (uncovered) {
       await tearLanesForNavigation()
+      // Coverage anchors BEFORE the render begins (the cursor
+      // discipline — see handleNavigation): a delivery landing while
+      // the segment streams is not provably in it and stays pending.
+      const coverTs = _currentTs()
+      const coveredPending = [...subscription.sub.pending]
       if (!(await emitReconcileSegment())) return false
       lastFullSegmentAt = Date.now()
-      since = _currentTs()
-      // Whole-tree coverage, same as the scheduled reconcile.
-      _clearWakeSubscriptionPending(subscription.sub)
+      since = coverTs
+      for (const id of coveredPending) subscription.sub.pending.delete(id)
       _syncRouteWakeSubscription(subscription, _readSnapshotsForRoute(scope, routeKey), since)
     }
     if (spawn.length > 0) {
@@ -2477,13 +2497,19 @@ async function driveLaneStream(
       lanes.size === 0 &&
       !deliveryWindowExceeded()
     ) {
+      // Coverage anchors BEFORE the render begins (the cursor
+      // discipline — see handleNavigation): the reconcile covers what
+      // was on the timeline / pending at its render start; a delivery
+      // landing mid-stream stays pending and lanes on this same wake's
+      // drain below (fp-skipping when the segment did carry it).
+      const coverTs = _currentTs()
+      const coveredPending = [...subscription.sub.pending]
       if (!(await emitReconcileSegment())) break
       lastFullSegmentAt = Date.now()
-      since = _currentTs()
-      // The whole-tree reconcile covered everything delivered so far
-      // (the cursor advance's statement); its render may also have
-      // re-registered snapshots — re-cover them before the drain.
-      _clearWakeSubscriptionPending(subscription.sub)
+      since = coverTs
+      for (const id of coveredPending) subscription.sub.pending.delete(id)
+      // The reconcile's render may also have re-registered snapshots —
+      // re-cover them before the drain.
       _syncRouteWakeSubscription(subscription, _readSnapshotsForRoute(scope, routeKey), since)
     }
     const touched: string[] = []
@@ -2553,7 +2579,28 @@ async function driveLaneStream(
       }
       deferredFlips.delete(id)
       if (flip.cached !== undefined && override) {
-        applyReportedCached(id, flip.cached, override, session?.ackedFps)
+        applyReportedCached(id, flip.cached, override, session?.ackedFps, session?.ackedSlots)
+        // The statement testifies the client's holdings for the
+        // FLIPPED id only — its DESCENDANTS' optimistic entries are
+        // exactly as untrustworthy at flip time (the class the swap
+        // exists for): a lane that drained onto the wire and was torn
+        // client-side by a navigation consume was promoted here while
+        // its drop report is still in flight (acks are lazy), and the
+        // flip lane rendering the subtree next would fp-skip such a
+        // descendant to a confirm of bytes the client dropped. Strip
+        // the subtree's optimistic skip evidence; the ACKED layer —
+        // client-proven commits — remains the verdict's floor, so an
+        // unacked-but-committed descendant costs one over-render,
+        // never a phantom confirm. matchKeys stay: they drive parked
+        // variant-sibling emission, not skip verdicts.
+        const subtree = _readRouteDescendants(scope, routeKey).get(id)
+        if (subtree) {
+          for (const did of subtree) {
+            if (did === id) continue
+            override.fingerprints.delete(did)
+            override.slots.delete(did)
+          }
+        }
       }
       // A consumed in-flip makes any ANCESTOR's open lane stale
       // mid-flight: that lane's current render read a visible set
@@ -2610,17 +2657,29 @@ async function driveLaneStream(
         (id) => isParkedOnConnection(id, snapshots, session),
         {
           now: Date.now(),
-          // A due boundary is legitimately undelivered when it is still
+          // An expected id is legitimately undelivered when it is still
           // armed in the wheel (fires ≤ one slot late), its lane is
           // open (the in-flight render services it; the drain's sync
           // re-arms the wheel from the fresh snapshot), it is deferred
-          // behind the unacked window, or this wake's flip/cookie
-          // worklist already carries it.
-          covered: (id) =>
-            subscription.wheel.slotOf.has(id) ||
-            openLaneIds.has(id) ||
-            windowDirty.has(id) ||
-            touched.includes(id),
+          // behind the unacked window, this wake's flip/cookie
+          // worklist already carries it — or an ANCESTOR's lane is the
+          // in-flight/queued service (a flipped-in ancestor's lane
+          // re-renders the id inside its subtree; the covering-segment
+          // consume of a then-parked id's bump relies on exactly that
+          // catch-up).
+          covered: (id) => {
+            if (
+              subscription.wheel.slotOf.has(id) ||
+              openLaneIds.has(id) ||
+              windowDirty.has(id) ||
+              touched.includes(id)
+            ) {
+              return true
+            }
+            const parentPath = snapshots.get(id)?.parentPath
+            if (!parentPath) return false
+            return parentPath.some((a) => a !== id && (touched.includes(a) || openLaneIds.has(a)))
+          },
         },
       )
     }
@@ -2928,6 +2987,7 @@ function applyReportedCached(
     slots: Map<string, Map<string, Set<string>>>
   },
   ackedFps?: Map<string, Set<string>>,
+  ackedSlots?: Map<string, Map<string, Set<string>>>,
 ): void {
   const fps = new Set<string>()
   const mks = new Set<string>()
@@ -2954,7 +3014,15 @@ function applyReportedCached(
   override.slots.set(id, idSlots)
   // The stated tokens are client-attested holdings — the acked layer's
   // truth class — so they REPLACE its entry rather than clearing it.
+  // The acked SLOT index must follow: the ack fold's per-(id,matchKey)
+  // dedup keys on it, and a stale slot lets a later delivery whose fp
+  // VALUE the old slot already holds (cold fps collide across route
+  // buckets — a dep-less first-in-bucket fp is byte-identical across
+  // request states) skip the eviction of these stated fps, stranding
+  // a foreign-state fp in the acked layer where it can confirm a copy
+  // the client's slot has since overwritten.
   ackedFps?.set(id, new Set(fps))
+  ackedSlots?.set(id, new Map([...idSlots].map(([mk, slot]) => [mk, new Set(slot)])))
 }
 
 /**
@@ -3054,6 +3122,12 @@ export function promoteSnapshotsToCachedOverride(
   // in the SAME walk (no second pass per drain) — see
   // `_recordDelivery`.
   onToken?: (id: string, matchKey: string, fp: string) => void,
+  // The live connection's session — when provided, snapshots PARKED on
+  // this connection (own or ancestor cull gate outside the session's
+  // visible set) are not claimed: the render carried at most their
+  // culled pair/skeleton, never body bytes (see the promote's
+  // shipped-only discipline below).
+  session?: ConnectionSession | null,
 ): void {
   let request: Request
   let scope: string
@@ -3076,6 +3150,35 @@ export function promoteSnapshotsToCachedOverride(
     // content the client doesn't have (see `PartialSnapshot.warmed`).
     // The id's next real emission re-registers and promotes normally.
     if (snap.warmed) return
+    // A MATCH-MISSED snapshot didn't render on this request either —
+    // the segment carried at most its parked keepalive hole, never its
+    // body — so nothing about it may be claimed here (the F2
+    // discipline, applied to the promote). Its fps are already in the
+    // mirror from the render that actually shipped them; re-claiming
+    // is the over-claim channel that lets a SUPERSEDED navigation's
+    // aborted render leak: the abort left its never-shipped emittedFp
+    // in the registry, and a whole-route promote under a request that
+    // parks the id would tag the client with bytes it never received —
+    // a return navigation then fp-skips to a phantom confirm.
+    // Framed snapshots gate on their frame's URL, not the page's —
+    // evaluating the page request would be a different gate, so they
+    // keep promoting (the conservative, current-behavior direction).
+    if (
+      snap.framePath.length === 0 &&
+      getSpecById(snap.type)?.match?.evaluate(request).matched === false
+    ) {
+      return
+    }
+    // A PARKED snapshot is the cull-gate twin of the match-miss: the
+    // render carried its culled pair (or nothing, inside a culled
+    // ancestor), never its body. Its registry emittedFp can belong to
+    // a render whose bytes never shipped — a lane torn by a navigation
+    // consume registers its rows before the tear — so claiming it here
+    // would let the id's next lane fp-skip to a phantom confirm of
+    // content the client never received. Its real holdings entered the
+    // mirror when it actually shipped; the flip-in revalidation is its
+    // catch-up.
+    if (session != null && isParkedOnConnection(id, snapshots, session)) return
     promoteSlotFpToOverride(override, id, snap.matchKey, snap.emittedFp)
     onToken?.(id, snap.matchKey, snap.emittedFp)
   }

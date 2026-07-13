@@ -33,6 +33,7 @@ import {
   type PartialSnapshot,
 } from "./partial-registry.ts"
 import { computeRouteKey } from "./partial.tsx"
+import { getSpecById } from "./spec-catalog.ts"
 import { evalDepKeys } from "./server-hooks.ts"
 import {
   _consumePendingUrlUpdate,
@@ -108,6 +109,16 @@ function computeWarmFps(
     contribution: string
     selfRequest: Request
     depsKey: string
+    /** The spec's match gate verdict under THIS request. A gate-failed
+     *  snapshot's body never ran here — it is parked, not drifted — so
+     *  it gets no warm fp (no heal is shipped for it: healing would
+     *  retag the client's parked variant with a never-rendered state's
+     *  fp, permanently defeating its manifest skip) and contributes
+     *  the live fold's `nomatch` form to its ancestors (mirroring
+     *  `descendantContribution` in partial.tsx). Specs without a
+     *  catalog entry or without a gate count as passed — the
+     *  conservative, ship-the-heal direction. */
+    gatePassed: boolean
   }
   const sideById = new Map<string, SideData>()
   for (const [id, snap] of snapshots) {
@@ -124,6 +135,8 @@ function computeWarmFps(
       : parsedVaryInputs
     const selfRequest =
       snap.framePath.length > 0 ? resolveFrameRequest(snap.framePath, request) : request
+    const gate = snap.type ? getSpecById(snap.type)?.match : undefined
+    const gatePassed = gate === undefined ? true : gate.evaluate(selfRequest).matched
     const ts = queryMatchingTs(snap.labels ?? [], constraintSurface)
     const invKey = ts > 0 ? `|inv=${ts}` : ""
     // Tracked-read deps re-read at this request — mirrors the live
@@ -133,8 +146,16 @@ function computeWarmFps(
     // which is exactly the drift this trailer ships. Empty (additive) for
     // any spec that records no tracked reads.
     const depsKey = evalDepKeys(snap.deps, selfRequest)
-    const contribution = `${id}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}${invKey}${depsKey}`
-    sideById.set(id, { constraintSurface, contribution, selfRequest, depsKey })
+    // A gate-failed descendant contributes the SAME `nomatch` form the
+    // live fold uses (`descendantContribution`'s miss branch, with its
+    // varyKey-only invalidation surface) — any other form would make
+    // an ancestor's recomputed fold disagree with what the next live
+    // render computes, detecting phantom drift.
+    const nomatchTs = queryMatchingTs(snap.labels ?? [], parsedVaryInputs)
+    const contribution = gatePassed
+      ? `${id}:${snap.varyKey ?? ""}|${stableStringify(snap.props ?? null)}${invKey}${depsKey}`
+      : `${id}:nomatch${nomatchTs > 0 ? `|inv=${nomatchTs}` : ""}`
+    sideById.set(id, { constraintSurface, contribution, selfRequest, depsKey, gatePassed })
   }
 
   // Build the fold map in one pass. Each descendant contributes its
@@ -164,6 +185,10 @@ function computeWarmFps(
   for (const [id, snap] of snapshots) {
     if (!snap.emittedFp) continue
     const side = sideById.get(id)!
+    // Match-missed under this request: the snapshot is a PARKED
+    // variant, not a drifted one — no warm fp, no heal (see the
+    // SideData note above).
+    if (!side.gatePassed) continue
     warm.set(
       id,
       recomputeFpWithFold(
