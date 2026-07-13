@@ -85,6 +85,13 @@ export function cacheStore(
     cache.set(id, inner)
   }
   const replacing = inner.has(matchKey)
+  // A re-store of the IDENTICAL node is a re-walk of the same payload
+  // (a settlement re-walk over rows that were pending on the first
+  // pass), not new content — the slot's fingerprints still describe
+  // exactly what it holds, including a cold→warm trailer alias that
+  // may have landed between the walks. Only a store that CHANGES the
+  // slot's content invalidates its fp-set.
+  if (replacing && inner.get(matchKey) === node) return true
   inner.set(matchKey, node)
   // Overwriting a cache slot invalidates any fingerprint that
   // referred to the old content. Without this, fps from prior
@@ -97,8 +104,6 @@ export function cacheStore(
   // fingerprint set must shrink to "what the current slot
   // actually represents", which is exactly the fp that
   // `registerClientPartial` is about to write after this call.
-  // Cold→warm trailer adds for the same render still land
-  // additively after the walk completes.
   if (replacing) {
     _currentPageFingerprints.get(id)?.delete(matchKey)
   }
