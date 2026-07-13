@@ -298,6 +298,73 @@ body {
   background: rgb(88 166 255 / 0.3);
 }
 
+/* ── Embassy district — the paint-grant embed demo (embassy-district.tsx) ── */
+
+.chunk--embassy {
+  background: rgb(199 146 234 / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(199 146 234 / 0.18);
+}
+
+/* The building overlay sits above the chunks at plane coordinates,
+   like the auction layer: pointer events off on the layer (ground
+   between buildings still pans), back on for the card's content. */
+.embassy-layer {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* THE custom-property handshake: the host themes the embedded
+   vocabulary by setting `--parton-*` variables above the embed box —
+   they inherit straight through `parton-embed-box`'s containment
+   boundary, so the bulletin wears the WORLD's ink while its content
+   comes from /embassy/bulletin. validate-embassy.mjs asserts the
+   computed colors on the spliced tags. */
+.embassy-building {
+  left: calc(4 * var(--tile));
+  top: calc(4 * var(--tile));
+  right: calc(4 * var(--tile));
+  bottom: auto;
+  pointer-events: auto;
+  --parton-text-color: var(--ink);
+  --parton-text-muted-color: var(--ink-dim);
+  --parton-text-positive-color: var(--light-green);
+  --parton-heading-color: #c792ea;
+  --parton-divider-color: var(--grid-major);
+  --parton-gap-md: var(--tile);
+  --parton-gap-sm: calc(var(--tile) / 2);
+}
+
+.embassy-building .card__title {
+  color: #c792ea;
+}
+
+/* The host-defined box a paint grant renders inside: `contain: strict`
+   (framework-stamped) means content never sizes it — the HOST gives it
+   dimensions, per the grant contract. */
+.embassy-building parton-embed-box {
+  height: 512px;
+  margin-bottom: var(--tile);
+}
+
+.embassy-plaque {
+  border-top: 1px solid var(--grid-major);
+  padding-top: calc(var(--tile) / 2);
+}
+
+/* Standalone /embassy/bulletin — the SAME page browsed directly (an
+   embeddable page is an ordinary page). The page ships its own
+   VocabularyStyles standalone; this just keeps the raw document
+   readable. Reset inside the building, where the card owns layout. */
+parton-stack[data-testid="embassy-bulletin"] {
+  max-width: 28rem;
+  padding: calc(2 * var(--tile));
+}
+
+.embassy-building parton-stack[data-testid="embassy-bulletin"] {
+  max-width: none;
+  padding: 0;
+}
+
 /* ── Content cards — tile-aligned ── */
 
 .card {

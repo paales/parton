@@ -236,6 +236,23 @@ Under a grant:
   payload may REFERENCE. v1 grants are unsigned trust-the-network
   declarations, like the capability bag.
 
+**The worked example — the embassy district.** The website world
+(`website/src/app/world/embassy-*.tsx`) ships the forcing caller, one
+chunk west of the origin: an embassy building whose bulletin is
+`<RemoteFrame url="/embassy/bulletin" grant="paint">` — the app
+embedding one of its own pages. `/embassy/bulletin` is an ordinary
+page (the world page's match carves out `/embassy`, so the body
+carries the bulletin alone — the lean-embed-surface verdict), authored
+against the vocabulary plus one deliberate raw-HTML row: contraband
+that renders standalone but degrades at the border, captioned in-world
+by the building's plaque. The world themes the splice via `--parton-*`
+custom properties on `.embassy-building`. `website/validate-embassy.mjs`
+proves the exhibit end-to-end: standalone browsability, splice into
+the contained box, the custom-property handshake (the spliced heading
+wears a violet the standalone page doesn't), contraband dropped
+(dev-marker / prod-silent, structured log line in both), district tint,
+world hygiene.
+
 ## The vocabulary
 
 The framework-shipped, framework-vetted component set a
@@ -411,6 +428,11 @@ measured, not yet warranted.
   `--parton-*` custom properties) and a mixed page whose raw `<div>`
   and client component degrade in place (`paint-tier.spec.ts` also
   asserts zero non-image browser traffic to the remote origin).
+- **The embassy district** (website world, west of the origin) — the
+  in-world Paint-tier exhibit: a self-embed of `/embassy/bulletin`
+  under `grant="paint"`, world-themed, with a contraband row degraded
+  at the border. See the worked example above;
+  `website/validate-embassy.mjs` is its gate.
 - **`/embed-econ`** / **`/embed-econ-inline`** — the economics
   measurement surfaces.
 

@@ -105,6 +105,41 @@ export const inAuctionDistrict = (x: number, y: number): boolean =>
   y >= AUCTION_DISTRICT.y0 &&
   y < AUCTION_DISTRICT.y1
 
+/**
+ * The embassy district — the federation arc's demo thread
+ * (`docs/notes/remote-frame-arc.md`): a region whose building embeds
+ * an ordinary page published by this same app
+ * (`<RemoteFrame url="/embassy/bulletin" grant="paint">` — see
+ * `./embassy-district.tsx`), so the world demonstrates the Paint tier
+ * in-world: vocabulary-only splice, host-themed, contraband degraded
+ * at the border.
+ *
+ * A PLANE-coordinate box, so every geometry (`?chunk=`) shares the
+ * same visual region. Placed one chunk WEST of the origin — the
+ * auction district's mirror. Like the auction it renders HEALTHY,
+ * quiescent content: the embed is pull-only (a paint grant registers
+ * no snapshots, so nothing here ever lanes), and the bulletin rides
+ * the page parton's overlay layer, not the chunks. The standing
+ * validators' stops all land elsewhere (west stop at −3200..−1920,
+ * north stress column at −384..+896); the trajectories that transit
+ * the district (scroll-stress's longHaulReturn, the dense eastBurst's
+ * boot viewport edge) only see its chunks' TINT — ordinary chunks
+ * wearing a class, nothing throws and nothing beats.
+ */
+export const EMBASSY_DISTRICT = {
+  x0: CENTER_PX - 1536,
+  x1: CENTER_PX - 512,
+  y0: CENTER_PX - 512,
+  y1: CENTER_PX + 512,
+} as const
+
+/** Is the plane-coordinate box origin `(x, y)` inside the district? */
+export const inEmbassyDistrict = (x: number, y: number): boolean =>
+  x >= EMBASSY_DISTRICT.x0 &&
+  x < EMBASSY_DISTRICT.x1 &&
+  y >= EMBASSY_DISTRICT.y0 &&
+  y < EMBASSY_DISTRICT.y1
+
 /** The whitelisted chunk sizes. 512 is the default (and the only one
  *  a bare URL ever serves); 256/128 are density stress geometries. */
 export const CHUNK_SIZES = [512, 256, 128] as const

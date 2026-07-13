@@ -229,6 +229,18 @@ node website/validate-scroll-stress.mjs # ADVERSARIAL-SCROLL gate: drives the
                         # 1-2 known-transient shells that clear. Advisory in
                         # CI while the backtrack-hole residual is open.
                         # `yarn build:website` first.
+node website/validate-embassy.mjs # EMBASSY-DISTRICT gate: the world's
+                        # Paint-tier exhibit — /embassy/bulletin is
+                        # browsable standalone (contraband raw HTML
+                        # included), splices into the building's
+                        # contained embed box under grant="paint",
+                        # host --parton-* theming crosses the
+                        # containment boundary, the contraband row
+                        # does NOT paint (dev marker / prod silent +
+                        # the structured log line either way), district
+                        # tint, world hygiene. Run after any
+                        # embed / grant / vocabulary change:
+                        # `yarn build:website` first.
 ```
 
 `yarn test` and `yarn test:e2e` cover disjoint suites — **both must

@@ -6,6 +6,7 @@ import {
   CHUNK_FLIP_MARGIN_PX,
   FLAKY_DISTRICT,
   inAuctionDistrict,
+  inEmbassyDistrict,
   inFlakyDistrict,
   seedIntersects,
   type WorldGeometry,
@@ -50,12 +51,14 @@ export type ChunkComponent = (props: ChunkPos) => React.ReactNode | Promise<Reac
  * chunk that has never rendered good bytes shows the bounded error
  * card until a retry lands. See `docs/reference/errors.md`.
  *
- * The AUCTION DISTRICT only TINTS here: district chunks carry the
- * `chunk--auction` class so the region reads as a place, but the lot
- * cards themselves live on the page parton's overlay layer
- * (`<AuctionDistrict>` in ./auction-lot.tsx) — a lot's bid lane must
- * ride its own viewer-independent parton, decoupled from this chunk's
- * per-viewer cull gate and beat-cadence lanes.
+ * The AUCTION and EMBASSY DISTRICTS only TINT here: district chunks
+ * carry the `chunk--auction` / `chunk--embassy` class so the region
+ * reads as a place, but the content itself lives on the page parton's
+ * overlay layers (`<AuctionDistrict>` in ./auction-lot.tsx,
+ * `<EmbassyDistrict>` in ./embassy-district.tsx) — a lot's bid lane
+ * must ride its own viewer-independent parton, and the embassy's
+ * paint-grant embed belongs to the page render, both decoupled from
+ * this chunk's per-viewer cull gate and beat-cadence lanes.
  */
 export function defineWorldChunk(geo: WorldGeometry): ChunkComponent {
   const pulse = definePulse(geo)
@@ -80,7 +83,14 @@ export function defineWorldChunk(geo: WorldGeometry): ChunkComponent {
       expires(pulse.nextBeat(cx, cy, clock.now))
       const isDistrictCorner = flaky && gx === FLAKY_DISTRICT.x0 && gy === FLAKY_DISTRICT.y0
       const auction = inAuctionDistrict(gx, gy)
-      const modifier = flaky ? " chunk--flaky" : auction ? " chunk--auction" : ""
+      const embassy = inEmbassyDistrict(gx, gy)
+      const modifier = flaky
+        ? " chunk--flaky"
+        : auction
+          ? " chunk--auction"
+          : embassy
+            ? " chunk--embassy"
+            : ""
       return (
         <div className={`chunk${modifier}`} data-testid={`chunk-${cx},${cy}`} data-loaded>
           <span className="chunk__coord">
@@ -129,6 +139,7 @@ function OriginCard() {
       <p className="card__hint">WASD / drag / scroll</p>
       <p className="card__hint">flaky district: south-west ↙</p>
       <p className="card__hint">auction district: east →</p>
+      <p className="card__hint">embassy district: west ←</p>
     </div>
   )
 }
