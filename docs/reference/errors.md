@@ -39,6 +39,12 @@ recovery substrate. When a fresh render's body rejects:
    recovery has no separate "recovered" path, success is just the
    ordinary store. Repeated failure keeps the NEWEST good render up.
 
+The guard costs no streaming: a miss on an axis holding a
+last-known-good waits only for the parton's own loader to settle
+before releasing the tree — descendant Suspense streams as usual. (A
+descendant's throw is outside the loader contract either way; see the
+table above.)
+
 ## Retry / backoff
 
 An errored parton re-renders on a capped exponential backoff

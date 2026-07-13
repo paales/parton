@@ -634,19 +634,22 @@ async function cacheImpl(
   }
 
   if (lkg) {
-    // Buffered attempt: a last-known-good exists, so hold this
-    // response until the outcome is known — a failure then serves the
-    // good bytes instead of streaming an error card the client would
-    // have to live with. The latency cost is confined to exactly this
-    // path (miss + prior good render on the axis).
-    const result = await attempt.settled
-    if (result.failure !== undefined) {
-      const record = st.failures.get(axis) ?? recordFailure(st, axis, result.failure, wakeHints)
+    // Guarded attempt: a last-known-good exists, so hold this response
+    // until the LOADER settles — a failure then serves the good bytes
+    // instead of streaming an error card the client would have to live
+    // with. The gate is the parton's own body promise, not the stream
+    // drain: once the loader resolves, the tree is released and inner
+    // Suspense streams as usual (a descendant throw is outside the
+    // recovery contract and surfaces as the boundary card, exactly as
+    // on the no-LKG path).
+    const failure = await attempt.loaderFailure
+    if (failure !== undefined) {
+      const record = st.failures.get(axis) ?? recordFailure(st, axis, failure, wakeHints)
       armRetry(wakeHints, record.nextRetryAt)
       if (instigator) {
         emitPartonError({
           partonId: id,
-          error: result.failure,
+          error: failure,
           attempts: record.attempts,
           servedStale: true,
           retryAt: record.nextRetryAt,
@@ -695,6 +698,12 @@ interface Attempt {
   /** Decoded live tree — streams immediately (inner Suspense stays
    *  lazy), exactly like an uncached render. */
   liveTree: Promise<ReactNode>
+  /** The recovery decision, available as soon as the parton's OWN body
+   *  promise settles — before inner Suspense resolves, so a serve
+   *  gated on it still streams. Resolves to the loader's rejection
+   *  value on failure, `undefined` on a clean settle or a pass-through
+   *  outcome (sentinels, render cancellation). Never rejects. */
+  loaderFailure: Promise<unknown | undefined>
   /** Resolves once the body's stream fully settled and the store
    *  decision was made. Never rejects. */
   settled: Promise<AttemptResult>
@@ -762,7 +771,10 @@ function attemptRender(
   // client paints fallbacks while async work resolves — the cold
   // render streams exactly like an uncached one.
   const liveTree = createFromReadableStream<ReactNode>(userBranch)
-  return { liveTree, settled }
+  const loaderFailure = body.outcome.then((error) =>
+    error !== undefined && !isExpectedRenderError(error) ? error : undefined,
+  )
+  return { liveTree, loaderFailure, settled }
 }
 
 /**
