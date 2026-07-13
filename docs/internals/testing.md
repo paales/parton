@@ -35,8 +35,8 @@ Three mechanisms make that hold:
 entries: the e2e-testing app (port 5179) and the e2e-magento
 companion (port 5181, the cross-origin `<RemoteFrame>` remote). No
 manual `yarn dev:magento` terminal — the cross-origin specs always
-run. The magento readiness URL is a real remote endpoint
-(`/__remote/magento-greeting`), so the first parton compile happens
+run. The magento readiness URL is a real embeddable page
+(`/remote/magento-greeting`), so the first parton compile happens
 during boot, not inside a spec's timeout. The two ports live in
 single constants at the top of the config; the config sets
 `process.env.MAGENTO_REMOTE_ORIGIN` for the spawned dev servers (the

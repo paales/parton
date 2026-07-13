@@ -1,71 +1,96 @@
 /**
- * `<RemoteFrame>` — server-rendered frame from a remote endpoint.
+ * `<RemoteFrame>` — embed an ordinary page (the iframe model).
  *
- * Fetches Flight bytes from another endpoint (same-origin path or
- * cross-origin URL), streams them through the row-level rewriter,
- * decodes the result, and returns the tree as JSX. The outer Flight
- * encoder serializes the decoded subtree into the host's response,
- * so Suspense pacing inside the remote payload streams through to
- * the client.
+ * A `<RemoteFrame url>` pointed at a page URL — same-origin path or
+ * cross-origin URL — fetches that page as Flight (the `x-parton-render`
+ * header; the URL stays the page URL, no special route), slices the
+ * payload to the page's body content, and stitches the decoded subtree
+ * into the host's render. Like an iframe, minus the separate browsing
+ * context. Because the target is just a page, an app can embed itself.
  *
- * Both the cache and `<RemoteFrame>` are consumers of the same
- * `flight-rewrite` primitive — wire-level stitching is the
- * framework's foundational composition mechanism. The cache passes
- * `passthroughRewriter`; `<RemoteFrame>` passes `moduleRefRewriter`
- * for cross-origin paths so the host's browser can resolve module
- * references back to the remote's origin.
+ * Producer contract: the embed-depth header makes the target's
+ * `PartialRoot` skip the page shell (PageUrlProvider + PartialsClient —
+ * the host document already runs both) and wrap the app tree in the
+ * explicit slice marker (`EMBED_BODY_TAG`). Consumer contract:
+ * `pageEmbedRewriter` unwraps the marker and the document singletons,
+ * and strips head/title/meta/link + hint rows so embedded metadata
+ * can't hijack the host's head. See `lib/page-embed.ts`.
  *
- * The snapshot trailer arrives at the END of the remote's stream, so
- * registration would normally land after the host's commit fired
- * (registration is in a `.then` microtask after the trailer Promise
- * resolves). To avoid that race, RemoteFrame calls
- * `deferCommitUntil(registrationPromise)` — the host's stream
- * wrappers (`wrapStreamWithFpTrailer` etc.) `Promise.allSettled` the
- * pending defers before firing commit, so the route-hint write for
- * every nested addressable partial lands before the response goes
- * out. Streaming is preserved end-to-end.
+ * Identity: every placement mints a namespace (`embedNamespaceFor` —
+ * host parent path × page location × occurrence) and sends it as the
+ * embed-ns header; the producer folds it into every effective parton
+ * id it registers and serializes. Duplicate embeds of one page and a
+ * page embedding ITSELF therefore carry distinct, hydration-stable
+ * ids end-to-end.
+ *
+ * The response is segmented Flight (the same wire the browser client
+ * reads), split with `splitSegments`: the first segment's body is the
+ * Flight payload; its trailer map carries a `snapshots` entry that
+ * registers every parton the embedded page rendered into the HOST's
+ * registry — stamped `source: { kind: "page", … }` so a selector-
+ * targeted refetch routes back as `?partials=<id>` at the embedded
+ * URL (`_pageEmbedRefetch`). Registration rides `deferCommitUntil`,
+ * so the host's commit waits for the trailer.
+ *
+ * Recursion terminates on the depth header with an inert marker
+ * element, never a throw: a thrown rejection's containment is
+ * timing-dependent (an already-rejected lazy throws synchronously
+ * into the enclosing task row and surfaces at the nearest OUTER
+ * boundary), so position-stable termination requires a value.
  *
  * Place inside a Suspense boundary if the remote may be slow:
  *
  *   <Suspense fallback={<Spinner />}>
- *     <RemoteFrame url="/__remote/payment-form" />
+ *     <RemoteFrame url="/pricing-widget" />
  *   </Suspense>
  */
 
 import type { ReactNode } from "react"
 import { createFromReadableStream } from "./flight-runtime.ts"
 import {
+  composeRewriters,
   moduleRefRewriter,
-  passthroughRewriter,
   rewriteFlightStream,
   type RowRewriter,
 } from "./flight-rewrite.ts"
-import type { PartialCtx } from "./partial-context.ts"
-import { deferCommitUntil, registerPartial, type PartialSnapshot } from "./partial-registry.ts"
-import { splitStreamAtSnapshotTrailer } from "./snapshot-trailer.ts"
+import { splitSegments } from "./fp-trailer-split.ts"
+import {
+  EMBED_DEPTH_HEADER,
+  EMBED_LIMIT_ATTR,
+  EMBED_NS_HEADER,
+  MAX_EMBED_DEPTH,
+  embedDepthOf,
+  embedNamespaceFor,
+  embedNamespaceOf,
+  pageEmbedRewriter,
+} from "./page-embed.ts"
+import { ParentContext } from "./partial-context.ts"
+import { deferCommitUntil, registerPartial, type PageSnapshotSource } from "./partial-registry.ts"
+import { getPartialState } from "./partial-request-state.ts"
+import { getServerContext } from "./server-context.ts"
+import { TAG_SNAPSHOTS, deserializeSnapshot, type SerializedSnapshot } from "./snapshot-trailer.ts"
 import { getRequest } from "../runtime/context.ts"
+import { HEADER_RSC_RENDER } from "../runtime/request.tsx"
 import { CAPABILITY_HEADER, encodeCapability, type Capability } from "../runtime/capability.ts"
 
 export interface RemoteFrameProps {
-  /** Absolute URL or same-origin path of the remote Flight endpoint. */
+  /** Page URL to embed. Absolute URL (cross-origin) or same-origin
+   *  path; relative paths resolve against the current request's URL. */
   url: string
-  /** Host-declared scope the remote can read. Flat record of
+  /** Host-declared scope the embedded render can read. Flat record of
    *  JSON-serializable values; serialized as the
-   *  `x-parton-capability` header. The remote endpoint reads it
-   *  into an ALS context and exposes via `getCapability()` to
-   *  rendering specs. The remote sees ONLY what's declared
-   *  here — the host's cookies don't leak (the fetch is
-   *  `credentials: "omit"`). */
+   *  `x-parton-capability` header and decoded into `getCapability()`
+   *  scope on the embed-flagged page render. The embedded page sees
+   *  ONLY what's declared here — the host's cookies don't cross (the
+   *  fetch is `credentials: "omit"`, even same-origin). */
   capability?: Capability
-  /** Namespace prefix to apply to every id and label registered
-   *  from this remote's snapshot trailer. `magento` turns the
-   *  remote's `stocks` spec into a `magento:stocks` entry in the
-   *  host's registry; selectors like `nav.reload({selector:
-   *  "magento:stocks"})` then match without colliding with a local
-   *  `stocks` spec or another remote's `stocks`. The original (bare)
-   *  remote id lives on `snap.source.remoteId` so refetch routing
-   *  can rebuild the right `/__remote/<id>` URL. The CLI's generated
-   *  bindings pass this automatically using the install name. */
+  /** Human namespace for this embed's refetch labels — the typed
+   *  bindings' install name (`magento` turns the embedded page's
+   *  `stocks` label into `magento:stocks` in the host's registry, so
+   *  host-side selectors are self-describing and collision-free
+   *  across remotes). Also prefixes the minted placement namespace
+   *  for debuggable registry ids. Identity does NOT depend on it —
+   *  the placement namespace disambiguates on its own. */
   namespace?: string
 }
 
@@ -99,121 +124,213 @@ function isAbsoluteUrl(url: string): boolean {
   return url.startsWith("http://") || url.startsWith("https://")
 }
 
-function applyNamespace(snap: PartialSnapshot, namespace: string | undefined): PartialSnapshot {
-  if (!namespace) return snap
-  return {
-    ...snap,
-    labels: snap.labels.map((l) => `${namespace}:${l}`),
-  }
-}
-
 export async function RemoteFrame({
   url,
   capability,
   namespace,
 }: RemoteFrameProps): Promise<ReactNode> {
   // Resolve `url` to an absolute form. `fetch` in the server runtime
-  // doesn't accept bare-path inputs — and we need the origin
-  // anyway to decide whether module-ref rewriting applies.
-  const wasRelative = !isAbsoluteUrl(url)
-  const absoluteUrl = wasRelative ? new URL(url, getRequest().url).href : url
+  // doesn't accept bare-path inputs — and the origin decides whether
+  // module-ref rewriting applies.
+  const hostRequest = getRequest()
+  const absoluteUrl = isAbsoluteUrl(url) ? url : new URL(url, hostRequest.url).href
+  const target = new URL(absoluteUrl)
 
-  const requestHeaders: Record<string, string> = {}
-  if (capability !== undefined) {
-    requestHeaders[CAPABILITY_HEADER] = encodeCapability(capability)
+  // Placement identity. The occurrence counter separates same-URL
+  // siblings under one parent parton; it lives on the per-request
+  // partial state, so a whole-page render assigns occurrences in tree
+  // order — deterministic across renders of the same page. The URL
+  // key is origin + pathname (no search), so a frame-driven embed
+  // (`?step=…`) keeps one identity while its content moves.
+  const hostParentPath = getServerContext(ParentContext).path
+  const urlKey = `${target.origin}${target.pathname}`
+  const state = getPartialState()
+  let occurrence = 0
+  if (state) {
+    const seq = (state.embedSeq ??= new Map<string, number>())
+    const key = `${hostParentPath.join("/")}|${urlKey}`
+    occurrence = seq.get(key) ?? 0
+    seq.set(key, occurrence + 1)
+  }
+  const ns = embedNamespaceFor({
+    namespace,
+    hostNs: embedNamespaceOf(hostRequest.headers),
+    hostParentPath,
+    urlKey,
+    occurrence,
+  })
+
+  return embedPage({
+    url: absoluteUrl,
+    ns,
+    namespace,
+    capability,
+    depth: embedDepthOf(hostRequest.headers) + 1,
+  })
+}
+
+/**
+ * Focused re-embed for a page-sourced snapshot — the refetch half of
+ * the page-embed contract. `partialFromSnapshot` (partial.tsx) calls
+ * this when a selector-targeted refetch resolves to a snapshot whose
+ * `source.kind === "page"`: the ordinary protocol, `?partials=<id>`
+ * at the embedded URL, with the ORIGINAL placement namespace and
+ * capability replayed off the stamp (never re-derived — the refetch
+ * runs outside the placement's tree position).
+ */
+export function _pageEmbedRefetch(id: string, source: PageSnapshotSource): ReactNode {
+  return <EmbedRefetch id={id} source={source} />
+}
+
+async function EmbedRefetch({
+  id,
+  source,
+}: {
+  id: string
+  source: PageSnapshotSource
+}): Promise<ReactNode> {
+  return embedPage({
+    url: source.url,
+    ns: source.ns,
+    namespace: source.namespace,
+    capability: source.capability as Capability | undefined,
+    depth: embedDepthOf(getRequest().headers) + 1,
+    partials: id,
+  })
+}
+
+async function embedPage(args: {
+  url: string
+  ns: string
+  namespace?: string
+  capability?: Capability
+  depth: number
+  /** Focused refetch target — appended as `?partials=<id>` so the
+   *  producer renders just that parton from its own registry. */
+  partials?: string
+}): Promise<ReactNode> {
+  // Recursion guard — see the module doc. A marker, never a throw.
+  if (args.depth > MAX_EMBED_DEPTH) {
+    return <div hidden {...{ [EMBED_LIMIT_ATTR]: args.url }} />
+  }
+  const hostRequest = getRequest()
+  const fetchUrl = new URL(args.url)
+  if (args.partials !== undefined) fetchUrl.searchParams.set("partials", args.partials)
+
+  const requestHeaders: Record<string, string> = {
+    [HEADER_RSC_RENDER]: "1",
+    [EMBED_DEPTH_HEADER]: String(args.depth),
+    [EMBED_NS_HEADER]: args.ns,
+  }
+  if (args.capability !== undefined) {
+    requestHeaders[CAPABILITY_HEADER] = encodeCapability(args.capability)
   }
   // Requests spawned on behalf of a scoped request inherit its scope:
   // the test harness partitions process-wide server state per
-  // `x-test-scope` (see `runtime/context.ts` — `deriveScope`), and a
-  // remote render is part of the host request's work. Without the
-  // forward, every remote render lands in the shared default bucket —
-  // parallel workers then contend on (and must wholesale-clear) each
-  // other's remote caches.
-  const hostScopeHeader = getRequest().headers.get("x-test-scope")
+  // `x-test-scope` (see `runtime/context.ts` — `deriveScope`), and an
+  // embedded render is part of the host request's work. Without the
+  // forward, every embed lands in the shared default bucket — parallel
+  // workers then contend on each other's producer-side registries.
+  const hostScopeHeader = hostRequest.headers.get("x-test-scope")
   if (hostScopeHeader) requestHeaders["x-test-scope"] = hostScopeHeader
 
-  const sourceOrigin = new URL(absoluteUrl).origin
-  // Only stamp `source` when the remote is genuinely on a different
-  // origin from the host. For same-origin remotes the host already
-  // has the spec in its catalog — the existing local Component path
-  // in `partialFromSnapshot` handles refetch correctly and is
-  // strictly faster than round-tripping through a fresh
-  // `<RemoteFrame>` fetch.
-  const hostOrigin = (() => {
-    try {
-      return new URL(getRequest().url).origin
-    } catch {
-      return ""
-    }
-  })()
-  const isCrossOrigin = sourceOrigin !== hostOrigin && hostOrigin !== ""
-
-  const response = await fetch(absoluteUrl, {
+  const response = await fetch(fetchUrl.href, {
     headers: requestHeaders,
     credentials: "omit",
   })
   if (!response.ok || !response.body) {
-    throw new Error(`RemoteFrame: fetch failed for ${absoluteUrl} (status ${response.status})`)
+    throw new Error(
+      `RemoteFrame: page fetch failed for ${fetchUrl.href} (status ${response.status})`,
+    )
   }
-  const split = splitStreamAtSnapshotTrailer(response.body)
 
-  // Snapshot registration runs in this RemoteFrame's ALS scope (the
-  // host's request registry). `.then` captures the current async
-  // context, so the registration calls land in the host's
-  // `pendingWrites` + canonical store + hint table.
-  //
-  // Without the defer below, the trailer Promise can resolve AFTER
-  // the host's outer stream has flushed and committed — the
-  // registration writes get applied but the route-hint table has
-  // already been finalised, so cache-mode lookups miss. The defer
-  // makes the host's commit wait for this Promise via the
-  // stream-wrapping helpers' `Promise.allSettled` pass.
-  const registration = split.trailer.then((snapshots) => {
-    if (!snapshots) return
-    for (const [bareId, snap] of Object.entries(snapshots)) {
-      const id = namespace ? `${namespace}:${bareId}` : bareId
-      const namespaced = applyNamespace(snap, namespace)
-      const stamped: PartialSnapshot = isCrossOrigin
-        ? {
-            ...namespaced,
-            source: {
-              kind: "remote",
-              origin: sourceOrigin,
-              capability: capability as Record<string, unknown> | undefined,
-              remoteId: bareId,
-            },
-          }
-        : namespaced
-      registerPartial(id, stamped)
+  // First segment only: an embed GET renders one segment and closes.
+  // The splitter strips every `\xFF` trailer entry out of the body
+  // stream (Flight decoders never see them) and resolves them as a
+  // tag → bytes map.
+  const iter = splitSegments(response.body)[Symbol.asyncIterator]()
+  const first = await iter.next()
+  if (first.done || first.value.kind !== "payload") {
+    throw new Error(`RemoteFrame: empty page response for ${fetchUrl.href}`)
+  }
+  const segment = first.value
+
+  // Register the snapshots the embedded page shipped, then release the
+  // connection (an embedded page holding a live connection would
+  // otherwise park it open). Runs in this frame's ALS scope — the
+  // HOST's request registry — and rides the commit-defer contract:
+  // the host's stream wrappers await this before commit, so the
+  // route-hint write for every embedded parton lands before the
+  // response goes out and selector refetch never hits a registry miss.
+  const registration = segment.trailers.then((trailers) => {
+    const bytes = trailers.get(TAG_SNAPSHOTS)
+    if (bytes) {
+      try {
+        const raw = JSON.parse(new TextDecoder().decode(bytes)) as Record<
+          string,
+          SerializedSnapshot
+        >
+        const source: PageSnapshotSource = {
+          kind: "page",
+          url: args.url,
+          ns: args.ns,
+          ...(args.namespace !== undefined ? { namespace: args.namespace } : {}),
+          ...(args.capability !== undefined
+            ? { capability: args.capability as Record<string, unknown> }
+            : {}),
+        }
+        for (const [id, ser] of Object.entries(raw)) {
+          const snap = deserializeSnapshot(ser)
+          registerPartial(id, {
+            ...snap,
+            labels: args.namespace ? snap.labels.map((l) => `${args.namespace}:${l}`) : snap.labels,
+            source,
+          })
+        }
+      } catch {
+        // Malformed trailer — skip registration, keep the render.
+      }
     }
+    void iter.return?.()
   })
+  registration.catch(() => {})
   deferCommitUntil(registration)
 
-  // Module-ref rewriting policy auto-derives from URL shape:
-  // - Same-origin (relative `url`): host's bundle already knows the
-  //   modules; no rewrite needed.
-  // - Cross-origin (absolute `url`): rewrite relative module paths
-  //   to absolute URLs at the remote origin so the host's browser
-  //   can dynamically import them.
-  const pipeline: RowRewriter = wasRelative
-    ? passthroughRewriter
-    : moduleRefRewriter(defaultModuleRewrite(sourceOrigin))
+  // Module-ref rewriting auto-derives from the origin pair: the host's
+  // bundle owns same-origin modules; a cross-origin payload's relative
+  // module paths are rewritten to absolute URLs at the remote origin
+  // so the host browser can dynamically import them.
+  const sameOrigin = (() => {
+    try {
+      return new URL(hostRequest.url).origin === fetchUrl.origin
+    } catch {
+      return false
+    }
+  })()
+  const pipeline: RowRewriter = sameOrigin
+    ? pageEmbedRewriter
+    : composeRewriters(pageEmbedRewriter, moduleRefRewriter(defaultModuleRewrite(fetchUrl.origin)))
 
-  const rewrittenStream = rewriteFlightStream(split.mainStream, pipeline)
-  return await createFromReadableStream<ReactNode>(rewrittenStream)
+  // A page payload's root row is the entry contract `{ root, … }`
+  // (the same shape every app entry renders for the browser client);
+  // the embedded tree hangs off `root`.
+  const payload = await createFromReadableStream<{ root: ReactNode }>(
+    rewriteFlightStream(segment.body, pipeline),
+  )
+  return payload.root
 }
 
 /**
- * Typed binding factory for a remote spec.
+ * Typed binding factory for an embeddable page.
  *
- * The CLI's `parton add` command generates files that call this
- * with the remote origin + selector baked in, producing a typed
- * component the host imports and renders directly:
+ * The CLI's `parton add` command generates files that call this with
+ * the remote origin + page path baked in, producing a typed component
+ * the host imports and renders directly:
  *
  *     // generated bindings (src/remote/magento/index.ts)
  *     export const MagentoPaymentSummary = remote<PaymentCap>({
  *       origin: "http://localhost:5181",
- *       selector: "magento-payment-summary",
+ *       path: "/remote/magento-payment-summary",
  *       namespace: "magento",
  *     })
  *
@@ -222,33 +339,32 @@ export async function RemoteFrame({
  *       capability={{ cart_id: "...", currency: "EUR", total: 127.45 }}
  *     />
  *
- * The capability shape is enforced at compile time — the host
- * cannot pass a value that doesn't match what the remote spec
- * declared. The `namespace` is the CLI's install name; the host's
- * registry stores ids as `<namespace>:<selector>`, so two remotes
- * with overlapping selectors don't collide.
+ * The capability shape is enforced at compile time — the host cannot
+ * pass a value that doesn't match what the remote page declared. The
+ * `namespace` is the CLI's install name; it prefixes the embedded
+ * page's refetch labels in the host registry (`magento:stocks`), so
+ * host-side selectors stay collision-free across remotes.
  */
 export function remote<Cap = void>(opts: {
   origin: string
-  selector: string
+  path: string
   namespace?: string
 }): (
   props: {
-    /** Optional URL search params appended to the remote's endpoint
-     *  URL. Useful when the remote spec varies on its own
-     *  `?step=…` etc. and the host wants to drive that variant from
-     *  a wrapper parton's `vary`. */
+    /** Optional URL search params appended to the embedded page URL.
+     *  Useful when the page varies on its own `?step=…` etc. and the
+     *  host drives that variant from a wrapper parton's tracked
+     *  reads. */
     searchParams?: Record<string, string>
   } & (Cap extends void ? { capability?: never } : { capability: Cap }),
 ) => Promise<ReactNode> {
-  const baseUrl = `${opts.origin}/__remote/${encodeURIComponent(opts.selector)}`
   return async function RemoteBinding(props) {
-    const url =
-      props.searchParams && Object.keys(props.searchParams).length > 0
-        ? `${baseUrl}?${new URLSearchParams(props.searchParams).toString()}`
-        : baseUrl
+    const url = new URL(opts.path, opts.origin)
+    if (props.searchParams) {
+      for (const [k, v] of Object.entries(props.searchParams)) url.searchParams.set(k, v)
+    }
     return await RemoteFrame({
-      url,
+      url: url.href,
       capability: (props as { capability?: Capability }).capability,
       namespace: opts.namespace,
     })

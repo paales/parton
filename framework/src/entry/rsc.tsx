@@ -29,7 +29,7 @@ import {
   loadServerAction,
   renderToReadableStream,
 } from "@vitejs/plugin-rsc/rsc"
-import type { ComponentType, ReactNode } from "react"
+import { Fragment, type ComponentType, type ReactNode } from "react"
 import type { ReactFormState } from "react-dom/client"
 import {
   ATTACH_ENDPOINT,
@@ -54,12 +54,24 @@ import {
   wrapStreamWithCommitOnly,
   wrapStreamWithFpTrailer,
 } from "../lib/fp-trailer.ts"
+import { embedDepthOf, embedNamespaceOf } from "../lib/page-embed.ts"
+import { computeRouteKey, partialFromSnapshot } from "../lib/partial.tsx"
+import {
+  _readSnapshotsForRoute,
+  enterRequestRegistry,
+  lookupPartial,
+  type PartialSnapshot,
+} from "../lib/partial-registry.ts"
+import { runWithPartialState } from "../lib/partial-request-state.ts"
 import { _reserveActionConsequences, createSegmentedResponse } from "../lib/segmented-response.ts"
+import { wrapStreamWithSnapshotTrailer } from "../lib/snapshot-trailer.ts"
 import { warmCmsCache } from "../runtime/cms-runtime.ts"
+import { CAPABILITY_HEADER, decodeCapability, runWithCapability } from "../runtime/capability.ts"
 import {
   _actionSuppressesCommit,
   _captureCommitHandle,
   getFrameworkControl,
+  getScope,
   runWithRequestAsync,
 } from "../runtime/context.ts"
 import { reportServerRenderError } from "../runtime/errors.ts"
@@ -83,10 +95,13 @@ export interface RscHandlerConfig {
    *  endpoints). A returned Response short-circuits the pipeline;
    *  `null` / `undefined` falls through to the RSC/SSR render. */
   fetch?: (request: Request) => Promise<Response | null | undefined> | Response | null | undefined
-  /** Expose the app's addressable partons at `/__remote/*` for
-   *  cross-origin `<RemoteFrame>` consumers. `name` identifies the app
-   *  in the manifest; `typesPath` (absolute) is served at
-   *  `/__remote/types.d.ts`. Omit to serve no remote endpoints. */
+  /** Serve the static remote metadata endpoints —
+   *  `/__remote/manifest.json` (the embeddable-page inventory the
+   *  `parton add` CLI reads) and `/__remote/types.d.ts` (capability
+   *  types) — plus CORS preflight. Embedding itself needs NO config:
+   *  every page is fetchable as Flight via the embed headers. `name`
+   *  identifies the app in the manifest; `typesPath` (absolute) is
+   *  served at `/__remote/types.d.ts`. Omit to serve no metadata. */
   remote?: { name: string; typesPath?: string }
   /** Extra per-scope app state to clear on the DEV-only
    *  `/__test/clear-caches` endpoint, alongside the framework's own
@@ -100,13 +115,11 @@ export function createRscHandler(config: RscHandlerConfig): {
 } {
   const { Root, notFound: NotFound } = config
 
-  /** Shared remote-endpoint dispatch — OPTIONS, /__remote/manifest.json,
-   *  /__remote/types.d.ts, /__remote/<selector>. */
+  /** Static remote-metadata dispatch — OPTIONS,
+   *  /__remote/manifest.json, /__remote/types.d.ts. */
   const remoteHandler = config.remote
     ? createRemoteHandler({
         name: config.remote.name,
-        renderToFlightStream: (element) =>
-          renderToReadableStream(element, { onError: onRscRenderError }),
         typesPath: config.remote.typesPath,
       })
     : null
@@ -290,10 +303,125 @@ export function createRscHandler(config: RscHandlerConfig): {
     })
   }
 
+  /**
+   * A page fetched as Flight — a `<RemoteFrame>` embed hop (or any
+   * header-marked Flight GET of a page). Two shapes on one response
+   * contract (segmented Flight + the `snapshots` trailer entry, read
+   * by the consumer's `splitSegments` trailer map):
+   *
+   *  - Whole page (the embed's cold render / re-render): the ordinary
+   *    `<Root/>` render — `PartialRoot` sees the embed-depth header
+   *    and emits the slice marker instead of the page shell.
+   *  - Focused (`?partials=<id>` on an embed-flagged request — the
+   *    refetch protocol): reconstruct the target(s) from this app's
+   *    OWN registry, exactly like a lane render, so a host's
+   *    selector-targeted refetch re-renders one parton, not the page.
+   *    A registry miss falls back to the whole page — over-fetch,
+   *    never fail (the sliced payload still carries the target's
+   *    boundary).
+   *
+   * The capability header decodes into `getCapability()` scope for
+   * both shapes — an embedded render is an anonymous visitor plus
+   * exactly what the host declared (`credentials: "omit"` on the
+   * fetch keeps host cookies out even same-origin).
+   */
+  async function handleEmbedRender(
+    renderRequest: ReturnType<typeof parseRenderRequest>,
+  ): Promise<Response> {
+    const request = renderRequest.request
+    const capability = decodeCapability(request.headers.get(CAPABILITY_HEADER))
+    const commit = _captureCommitHandle()
+    const partialsParam =
+      embedDepthOf(request.headers) > 0 ? renderRequest.url.searchParams.get("partials") : null
+
+    let stream: ReadableStream<Uint8Array> | null = null
+    // The snapshots the trailer ships. Resolved at flush time, but
+    // NEVER through ALS-at-flush (fragile across stream runtimes —
+    // the same reason the fp-trailer captures scope + routeKey at
+    // wrap time): the focused path captures its own registry ctx; the
+    // whole-page path reads the committed route snapshots, which the
+    // render's eager-publish + commit have fully populated by flush.
+    let getSnapshots: () => Map<string, PartialSnapshot>
+    if (partialsParam) {
+      const ids = partialsParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+      // The focused render owns its registry context (no PartialRoot
+      // runs). `computeRouteKey` keys on the URL base, so the
+      // `?partials=` transport param can't shift the bucket — the
+      // lookup reads the snapshots the earlier embed render of this
+      // page committed.
+      const registry = enterRequestRegistry(computeRouteKey(request.url), "cache")
+      getSnapshots = () => registry.pendingWrites
+      const targets = ids.map((id) => [id, lookupPartial(id)] as const)
+      if (targets.length > 0 && targets.every(([, snap]) => snap !== undefined)) {
+        const root = targets.map(([id, snap]) => (
+          <Fragment key={id}>{partialFromSnapshot(id, snap!)}</Fragment>
+        ))
+        stream = runWithPartialState(
+          {
+            requestedIds: new Set(ids),
+            isPartialRefetch: true,
+            cachedFingerprints: new Map(),
+            cachedMatchKeys: new Map(),
+            ackedFingerprints: null,
+            explicitIds: new Set(ids),
+            seenIds: new Set(),
+          },
+          () =>
+            runWithCapability(capability, () =>
+              renderToReadableStream<RscPayload>({ root }, { onError: onRscRenderError }),
+            ),
+        )
+      }
+    }
+    if (stream === null) {
+      const scope = getScope()
+      const routeKey = computeRouteKey(request.url)
+      // The committed route set is a UNION across renders — including
+      // ids other placements of this same page minted under THEIR
+      // namespaces (same-origin embeds share the process store). The
+      // trailer must carry only THIS placement's partons: a foreign id
+      // shipped here would get re-stamped with this placement's
+      // namespace on the host, and its next refetch would replay the
+      // wrong namespace into the producer (a double-prefixed id the
+      // host's template can never match). Every id this render minted
+      // carries the inbound namespace, so the prefix IS the filter.
+      const ns = embedNamespaceOf(request.headers)
+      getSnapshots = () => {
+        const all = _readSnapshotsForRoute(scope, routeKey)
+        if (ns === null) return all
+        const own = new Map<string, PartialSnapshot>()
+        for (const [id, snap] of all) {
+          if (id.startsWith(`${ns}:`)) own.set(id, snap)
+        }
+        return own
+      }
+      stream = runWithCapability(capability, () =>
+        renderToReadableStream<RscPayload>({ root: <Root /> }, { onError: onRscRenderError }),
+      )
+    }
+    // Commit first (inner flush — drains the commit-defer list, so a
+    // NESTED embed's trailer registrations land before the outer
+    // flush reads the snapshot set), then append the snapshots entry
+    // the host registers from.
+    const wrapped = wrapStreamWithSnapshotTrailer(wrapStreamWithCommitOnly(stream, commit), () =>
+      getSnapshots(),
+    )
+    return new Response(wrapped, {
+      headers: { "content-type": "text/x-component;charset=utf-8" },
+    })
+  }
+
   async function handleRequest(
     renderRequest: ReturnType<typeof parseRenderRequest>,
   ): Promise<Response> {
     const request = renderRequest.request
+
+    if (renderRequest.isRsc && !renderRequest.isAction) {
+      return handleEmbedRender(renderRequest)
+    }
 
     let returnValue: RscPayload["returnValue"] | undefined
     let formState: ReactFormState | undefined

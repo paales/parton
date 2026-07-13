@@ -1,18 +1,25 @@
 import { clearCaches, expect, request, test, waitForPageInteractive } from "./fixtures"
 
 /**
- * /remote-frame-demo — `<RemoteFrame>` integration coverage.
+ * /remote-frame-demo — `<RemoteFrame>` integration coverage
+ * (same-origin page embeds: this app embedding its own `/remote/*`
+ * pages).
  *
  * Covers:
- *  - Host chrome paints before any remote arrives.
- *  - Multiple remotes stream into the page in parallel (slower
- *    ones don't gate faster ones).
- *  - A `"use client"` component inside a remote spec hydrates and
+ *  - Host chrome paints before any embed arrives.
+ *  - Multiple embeds stream into the page in parallel (slower ones
+ *    don't gate faster ones).
+ *  - A `"use client"` component inside an embedded page hydrates and
  *    is interactive in the host's browser.
- *  - A remote spec with `cache: { maxAge }` returns from cache on
- *    the second fetch.
- *  - Selector-based refetch updates the affected remote's content.
+ *  - An embedded parton with `cache: { maxAge }` replays the
+ *    producer-side byte cache on the second embed fetch.
+ *  - Selector-based refetch updates the affected embed's content
+ *    (routed back through `?partials=` at the embedded URL).
  */
+
+/** Embed-shaped page GET: the RSC-render header returns Flight, the
+ *  depth header marks the render as an embed hop. */
+const EMBED_HEADERS = { "x-parton-render": "1", "x-parton-embed-depth": "1" }
 
 test.beforeEach(async ({ baseURL }) => {
   await clearCaches(baseURL)
@@ -84,32 +91,35 @@ test("client component inside a remote spec hydrates and is interactive", async 
   await expect(counter).toHaveText(/clicked 2/)
 })
 
-test("cached remote spec: second direct fetch replays the stored render", async ({ request }) => {
+test("cached embedded parton: second embed fetch replays the stored render", async ({
+  baseURL,
+}) => {
   // The spec renders an ISO timestamp AFTER its 500ms of awaited
   // work. A cache hit replays the stored Flight bytes, so the second
-  // fetch must carry the SAME timestamp — the direct signal the work
-  // didn't re-run (wall-clock comparisons only correlate with it).
+  // embed fetch of its page must carry the SAME timestamp — the
+  // direct signal the work didn't re-run.
   const iso = /\d{4}-\d{2}-\d{2}T[\d:.]+Z/
-  const coldBody = await (await request.get("/__remote/remote-cached")).text()
-  const coldStamp = coldBody.match(iso)?.[0]
-  expect(coldStamp, "cold render must carry a timestamp").toBeDefined()
+  const ctx = await request.newContext({ extraHTTPHeaders: EMBED_HEADERS })
+  try {
+    const coldBody = await (await ctx.get(`${baseURL}/remote/remote-cached`)).text()
+    const coldStamp = coldBody.match(iso)?.[0]
+    expect(coldStamp, "cold render must carry a timestamp").toBeDefined()
 
-  const warmBody = await (await request.get("/__remote/remote-cached")).text()
-  expect(warmBody.match(iso)?.[0], "warm fetch must replay the stored timestamp").toBe(coldStamp)
+    const warmBody = await (await ctx.get(`${baseURL}/remote/remote-cached`)).text()
+    expect(warmBody.match(iso)?.[0], "warm fetch must replay the stored timestamp").toBe(coldStamp)
+  } finally {
+    await ctx.dispose()
+  }
 })
 
 test("refresh button updates a remote frame's timestamp", async ({ page }) => {
-  // Validates the unified-addressing loop closed by the snapshot
-  // trailer (`snapshot-trailer.ts`): the remote endpoint ships
-  // PartialBoundary snapshots as a trailing JSON segment after
-  // its Flight bytes. The host's <RemoteFrame> parses the trailer
-  // and re-registers each snapshot in the host's request registry.
-  // `nav.reload({selector: "remote-fast"})` then finds the id and
-  // routes through the normal cache-mode refetch path — in same-
-  // origin v1 the refetch hits the host's local copy of the spec
-  // (the catalog has it). v2 cross-origin will need a
-  // `source: "remote:<origin>"` annotation to route refetches
-  // back to the remote endpoint.
+  // Validates the addressing loop closed by the snapshot trailer:
+  // the embedded page ships its PartialBoundary snapshots as a
+  // trailer entry; the host registers them with a
+  // `source: {kind: "page", url}` stamp. `nav.reload({selector:
+  // "remote-fast"})` resolves the embedded snapshot and the refetch
+  // re-embeds `/remote/remote-fast?partials=<id>` — the ordinary
+  // protocol at the embedded URL.
   await page.goto("/remote-frame-demo")
   await waitForPageInteractive(page)
   await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })
@@ -131,8 +141,8 @@ test("page navigation re-fetches all remote frames with fresh content", async ({
   await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })
   const firstText = await page.getByTestId("remote-fast").textContent()
 
-  // Full navigation re-runs the host's render which re-fetches the
-  // remote (the remote spec has no cache, so each fetch is fresh).
+  // Full navigation re-runs the host's render which re-embeds the
+  // page (the embedded spec has no cache, so each fetch is fresh).
   // Validates the end-to-end pipeline works across navigation.
   await page.goto("/remote-frame-demo?bust=" + Date.now())
   await page.waitForSelector('[data-testid="remote-fast"]', { timeout: 5000 })

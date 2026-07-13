@@ -1,10 +1,11 @@
 /**
- * Partons exposed by this app via `/__remote/<id>` so other
- * processes can embed them with `<RemoteFrame>`.
- *
- * Importing this module is what registers the partons in the spec
- * catalog. Without the import, the catalog lookup misses and the
- * remote endpoint returns 404. `root.tsx` triggers the import.
+ * Partons this app exposes as EMBEDDABLE PAGES — each spec carries a
+ * static-path `match` (`/remote/<selector>`), so other processes
+ * embed it with `<RemoteFrame url>` pointed at that ordinary page
+ * URL. The page is addressable, cacheable, and testable in a browser
+ * by itself; the manifest advertises the path to the `parton add`
+ * CLI. `root.tsx` mounts the specs (and triggers this module's
+ * import, which registers them in the spec catalog).
  */
 
 import { parton, getCapability, searchParam, type RenderArgs } from "@parton/framework"
@@ -33,14 +34,14 @@ export const MagentoGreeting = parton(
         </div>
         <div style={{ fontSize: "0.8em", opacity: 0.7, marginTop: "0.25rem" }}>
           This is a SEPARATE Node process. The host app at port 5173 fetched these Flight bytes from{" "}
-          <code>http://localhost:5181/__remote/magento-greeting</code>, rewrote any module
-          references to absolute URLs on this origin, decoded the result, and stitched it into its
-          outer response.
+          <code>http://localhost:5181/remote/magento-greeting</code> — an ordinary page of this app
+          — as Flight, sliced away the document chrome, and stitched the body content into its outer
+          response.
         </div>
       </div>
     )
   },
-  { selector: "magento-greeting" },
+  { selector: "magento-greeting", match: "/remote/magento-greeting" },
 )
 
 /** Demonstrates navigation within a RemoteFrame: this parton's
@@ -83,7 +84,7 @@ export const MagentoCheckoutStep = parton(
       </div>
     )
   },
-  { selector: "magento-checkout-step" },
+  { selector: "magento-checkout-step", match: "/remote/magento-checkout-step" },
 )
 
 /** A capability-aware parton — reads host-declared values via
@@ -125,24 +126,26 @@ export const MagentoPaymentSummary = parton(
       </div>
     )
   },
-  { selector: "magento-payment-summary", capabilityType: "PaymentCap" },
+  {
+    selector: "magento-payment-summary",
+    match: "/remote/magento-payment-summary",
+    capabilityType: "PaymentCap",
+  },
 )
 
 /** A second parton — exercise multiple cross-origin frames in
  *  parallel. Longer delay than the first to make ordering visible.
- *  Varies on `tick` so each render produces a fresh fingerprint
- *  (so the host's selector-targeted refetch produces visibly
- *  different content). The render embeds the tick as
- *  `data-tick=` so e2e tests can assert it strictly changes. */
+ *  Stamps a per-render `data-tick` so e2e tests can assert a
+ *  refetch produced a genuinely fresh render. */
 export const MagentoStockTicker = parton(
-  async function MagentoStockTickerRender({ tick }: { tick: number } & RenderArgs) {
+  async function MagentoStockTickerRender(_: RenderArgs) {
     await delay(700)
+    const tick = Date.now()
     const tickers = [
       { sym: "PTON", price: 42.17 + Math.random() * 4 },
       { sym: "RCMS", price: 187.5 + Math.random() * 10 },
       { sym: "FLGT", price: 91.04 + Math.random() * 5 },
     ]
-    void tick
     return (
       <div
         data-testid="magento-stocks"
@@ -172,7 +175,7 @@ export const MagentoStockTicker = parton(
       </div>
     )
   },
-  { selector: "magento-stocks" },
+  { selector: "magento-stocks", match: "/remote/magento-stocks" },
 )
 
 /** A nested addressable parton — rendered INSIDE another parton, so

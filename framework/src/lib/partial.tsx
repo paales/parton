@@ -36,8 +36,14 @@ import { PartialErrorBoundary, PartialErrorCard } from "./partial-error-boundary
 import { PageUrlProvider, PartialsClient } from "./partial-client.tsx"
 import { Cache } from "./cache.tsx"
 import type { CacheOptions } from "./cache-options.ts"
-import { RemoteFrame } from "./remote-frame.tsx"
-import type { Capability } from "../runtime/capability.ts"
+import { _pageEmbedRefetch } from "./remote-frame.tsx"
+import {
+  EMBED_BODY_TAG,
+  applyEmbedNamespace,
+  embedDepthOf,
+  embedNamespaceOf,
+  stripEmbedNamespace,
+} from "./page-embed.ts"
 import {
   committedDepsEvidence,
   effectiveExpiresAt,
@@ -1093,7 +1099,10 @@ export function deriveMatchKey(
   }
   const requestUrl = url ?? getRequest().url
   for (let i = parentPath.length - 1; i >= 0; i--) {
-    const ancestor = getSpecById(parentPath[i])
+    // Embed renders mint placement-prefixed effective ids; the catalog
+    // is keyed by bare spec ids, so strip the (framework-reserved)
+    // embed namespace before the lookup.
+    const ancestor = getSpecById(stripEmbedNamespace(parentPath[i]))
     if (!ancestor?.match) continue
     const ancestorParams = ancestor.match.extractParams(requestUrl)
     if (ancestorParams === null || Object.keys(ancestorParams).length === 0) continue
@@ -1381,10 +1390,23 @@ function createSpecComponent<V>(
         : undefined
     const effectiveInstanceId =
       instanceIdOverride ?? (autoInstanceKey ? `${spec.id}:${autoInstanceKey}` : undefined)
-    const { id, parsed } = effectiveIdForInstance(
+    const { id: mintedId, parsed } = effectiveIdForInstance(
       spec as InternalSpec<unknown>,
       effectiveInstanceId,
     )
+    // Placement-scoped embed namespace: an embed render (marked by the
+    // embed-ns request header — see `lib/page-embed.ts`) folds the
+    // host's placement namespace into every effective id it mints, so
+    // duplicate embeds of one page — and a page embedding ITSELF —
+    // carry distinct, hydration-stable ids on the wire and in every
+    // registry. Labels stay bare: they are class-level fan-out
+    // targets, and the producer's own invalidation selectors must
+    // keep matching them. Idempotent: a focused `?partials=` refetch
+    // passes stored (already-prefixed) ids through `__instanceId`
+    // while the descendants it spawns mint bare ids — both routes
+    // converge on the same prefixed identity.
+    const embedNs = embedNamespaceOf(getRequest().headers)
+    const id = embedNs !== null ? applyEmbedNamespace(embedNs, mintedId) : mintedId
     // Server-hooks called within this parton's render read its own
     // identity from the rendering task (`getCurrentParton`); `tag()` and
     // tracked reads (`cookie()`, `searchParam()`) accumulate into these
@@ -2302,27 +2324,16 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
     frameChain: snap.parentFrameChain,
   }
 
-  // Remote-sourced snapshot: route the refetch back to the
-  // remote endpoint via a fresh `<RemoteFrame>`. The remote
-  // re-renders, ships a new trailer with updated snapshots, and
-  // the host re-registers with the same `source` stamp + namespace
-  // — keeping future refetches routed correctly. The capability
-  // from the original placement is carried through so the remote
-  // sees the same scoped values it saw on the cold render.
-  //
-  // `id` may be namespaced (`magento:stocks`); the remote endpoint
-  // expects the bare spec id (`stocks`), which lives on
-  // `source.remoteId`. Apply the same namespace on the refetch so
-  // ids stay stable on the host side across re-renders.
-  if (snap.source?.kind === "remote") {
-    const namespace = id.includes(":") ? id.slice(0, id.indexOf(":")) : undefined
-    return (
-      <RemoteFrame
-        url={`${snap.source.origin}/__remote/${encodeURIComponent(snap.source.remoteId)}`}
-        capability={snap.source.capability as Capability | undefined}
-        namespace={namespace}
-      />
-    )
+  // Page-sourced snapshot: route the refetch back through the
+  // embedded page — the ordinary protocol, `?partials=<id>` at the
+  // embedded URL. The producer re-renders that parton from ITS
+  // registry, ships a fresh trailer, and the host re-registers with
+  // the same `source` stamp — keeping future refetches routed
+  // correctly. The placement namespace and capability replay off the
+  // stamp so the focused render mints the same prefixed ids and sees
+  // the same scoped values the whole-page embed did.
+  if (snap.source?.kind === "page") {
+    return _pageEmbedRefetch(id, snap.source)
   }
 
   // Try direct id lookup first — singleton specs register their
@@ -2433,6 +2444,16 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
     seenIds: new Set(),
   }
   enterPartialState(state)
+  // Embed render (`<RemoteFrame>` — the explicit embed-depth header
+  // marks it): the HOST document owns the page shell, so
+  // PageUrlProvider + PartialsClient must not ship inside the embed
+  // payload. Emit the slice marker around the app tree instead — the
+  // wire signal the host's row rewriter slices on. The app-authored
+  // <html>/<head>/<body> inside `children` are unwrapped/stripped
+  // host-side (see `lib/page-embed.ts`).
+  if (embedDepthOf(getRequest().headers) > 0) {
+    return React.createElement(EMBED_BODY_TAG, null, children)
+  }
   // Seed the page URL for descendant client components so
   // `useNavigation()` resolves it on the SSR paint (no browser
   // Navigation API yet) — making the hook isomorphic with zero

@@ -10,8 +10,16 @@ import { PokemonOverviewPage } from "./pages/pokemon.tsx"
 import { PokemonDetailPage } from "./pages/pokemon-detail.tsx"
 import { CacheDemoPage } from "./pages/cache-demo.tsx"
 import { CacheStreamingDemoPage } from "./pages/cache-streaming-demo.tsx"
-import { RemoteFrameDemoPage } from "./pages/remote-frame-demo.tsx"
+import { RemoteFrameDemoPage, RemoteHostedPages } from "./pages/remote-frame-demo.tsx"
 import { RemoteFrameCrossOriginDemoPage } from "./pages/remote-frame-crossorigin-demo.tsx"
+import {
+  EmbedDemoPage,
+  EmbedDuplicateDemoPage,
+  EmbedNestedDemoPage,
+  EmbedRefetchDemoPage,
+  EmbedSelfDemoPage,
+} from "./pages/embed-demo.tsx"
+import { EconItemPage, EmbedEconDemoPage, EmbedEconInlineDemoPage } from "./pages/embed-econ.tsx"
 import { CmsDemoPage } from "./pages/cms-demo.tsx"
 import { DeferDemoPage } from "./pages/defer-demo.tsx"
 import { SelectorDemoPage } from "./pages/selector-demo.tsx"
@@ -56,7 +64,16 @@ export function Root() {
             <CacheDemoPage />
             <CacheStreamingDemoPage />
             <RemoteFrameDemoPage />
+            <RemoteHostedPages />
             <RemoteFrameCrossOriginDemoPage />
+            <EmbedDemoPage />
+            <EmbedNestedDemoPage />
+            <EmbedSelfDemoPage />
+            <EmbedDuplicateDemoPage />
+            <EmbedRefetchDemoPage />
+            <EconItemPage />
+            <EmbedEconDemoPage />
+            <EmbedEconInlineDemoPage />
             <CmsDemoPage />
             <DeferDemoPage />
             <SelectorDemoPage />

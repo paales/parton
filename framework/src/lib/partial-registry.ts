@@ -123,14 +123,15 @@ export interface PartialSnapshot {
    *  local render; `partialFromSnapshot` looks up the spec
    *  Component in the local catalog and re-renders.
    *
-   *  `{ kind: "remote", origin, capability? }` — the snapshot was
-   *  registered by `<RemoteFrame>` from a remote endpoint's
-   *  trailer. `partialFromSnapshot` returns a fresh `<RemoteFrame>`
-   *  pointed at `<origin>/__remote/<id>` (carrying the original
-   *  capability), so refetch routes back to the remote rather
-   *  than rendering locally. Server-only field; not serialized
-   *  over the wire (the host stamps it when consuming a remote's
-   *  trailer). */
+   *  `{ kind: "page", url, ns, … }` — the snapshot was registered
+   *  by `<RemoteFrame>` from an embedded page's snapshot trailer.
+   *  `partialFromSnapshot` re-embeds `url` with `?partials=<id>`
+   *  (the ordinary protocol at the embedded URL), replaying the
+   *  placement namespace + capability off the stamp, so refetch
+   *  routes back through the embedded page rather than rendering
+   *  locally. Server-only field; not serialized over the wire —
+   *  each hop of a nested embed chain re-stamps with ITS fetch
+   *  URL, which is exactly the hop a refetch must retrace. */
   source?: SnapshotSource
   /** Registration sequence — a process-wide monotonic counter stamped
    *  by `registerPartial`. Canonical writes are freshness-guarded on
@@ -188,17 +189,22 @@ export function effectiveStaleUntil(snap: PartialSnapshot): number | undefined {
 }
 
 /** Per-snapshot origin annotation. See `PartialSnapshot.source`. */
-export type SnapshotSource = {
-  kind: "remote"
-  origin: string
+export type PageSnapshotSource = {
+  kind: "page"
+  /** Absolute URL of the embedded page this snapshot arrived from —
+   *  the refetch target (`?partials=<id>` is appended to it). */
+  url: string
+  /** Placement namespace the embed minted ids under. Replayed on the
+   *  refetch's embed-ns header so the focused render's descendants
+   *  mint the same prefixed ids the whole-page embed did. */
+  ns: string
+  /** Human namespace (typed bindings' install name) — replayed so the
+   *  refetched snapshot's labels re-register with the same prefix. */
+  namespace?: string
   capability?: Record<string, unknown>
-  /** Bare spec id at the remote endpoint. The host may register the
-   *  snapshot under a namespaced id (`magento:stocks`) for selector
-   *  hygiene + collision-avoidance, but the refetch URL needs the
-   *  remote's own id (`stocks`). Stored separately so
-   *  `partialFromSnapshot` can rebuild the right URL. */
-  remoteId: string
 }
+
+export type SnapshotSource = PageSnapshotSource
 
 const HINT_LRU_MAX = 10_000
 
@@ -263,7 +269,22 @@ function scopeStore(scope: string): ScopeStore {
 }
 
 function variantKeyOf(snap: PartialSnapshot): string {
-  const base = hash(stableStringify([snap.parentPath, snap.parentFrameChain]))
+  // The source stamp is part of the placement: a snapshot registered
+  // from an embedded page's trailer (the HOST's placement of the id)
+  // must store BESIDE the snapshot the producer's own render
+  // registered locally — same-origin embeds share this process-wide
+  // store, the ids are identical by design (the placement namespace),
+  // and without the discriminator whichever registered last would
+  // clobber the other. The producer's focused `?partials=` lookup
+  // resolves its route's hint to the LOCAL variant (no source);
+  // the host's routes hint at the sourced one.
+  const base = hash(
+    stableStringify([
+      snap.parentPath,
+      snap.parentFrameChain,
+      snap.source ? [snap.source.kind, snap.source.url, snap.source.ns] : null,
+    ]),
+  )
   return snap.culled ? culledKey(base) : base
 }
 

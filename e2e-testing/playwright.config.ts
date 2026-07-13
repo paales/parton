@@ -89,13 +89,13 @@ export default defineConfig({
       timeout: 60000,
     },
     {
-      // The e2e-magento companion app — hosts the remote partons the
+      // The e2e-magento companion app — hosts the embeddable pages the
       // cross-origin `<RemoteFrame>` specs (and /remote-frame-
-      // crossorigin-demo) fetch at `/__remote/<id>`. The readiness URL
-      // is a real remote endpoint rather than `/`, so the first parton
+      // crossorigin-demo) embed at `/remote/<id>`. The readiness URL
+      // is a real embeddable page rather than `/`, so the first parton
       // compile happens here instead of inside a spec's timeout.
       command: `yarn workspace @parton/e2e-magento dev --port ${MAGENTO_PORT}`,
-      url: `${MAGENTO_ORIGIN}/__remote/magento-greeting`,
+      url: `${MAGENTO_ORIGIN}/remote/magento-greeting`,
       reuseExistingServer: true,
       timeout: 120000,
     },

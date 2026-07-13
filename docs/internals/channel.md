@@ -12,7 +12,8 @@ kinds — the kind
 table is complete; the design rationale and roadmap live in
 [`../notes/channel-design.md`](../notes/channel-design.md). The only
 GETs are documents (SSR — the CDN-cacheable artifact) and
-`/__remote/*` (server-to-server); action POSTs stay the one discrete
+embed-flagged page fetches (server-to-server — see
+[`page-embed.md`](./page-embed.md)); action POSTs stay the one discrete
 `_.rsc` request. The downstream half — segments, lanes, markers — is
 [`streaming.md`](./streaming.md); the delivery-seq / ack / applied
 machinery that makes the channel EVIDENCED is §Delivery is evidenced

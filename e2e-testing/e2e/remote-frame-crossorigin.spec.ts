@@ -18,7 +18,7 @@ test.beforeEach(async ({ baseURL }) => {
 })
 
 test("host renders cross-origin magento-greeting", async ({ page }) => {
-  // Longer goto timeout — the first hit to /__remote/<id> on the
+  // Longer goto timeout — the first hit to a /remote/* page on the
   // magento dev server forces vite to compile the parton (cold
   // optimizeDeps); subsequent hits are fast.
   await page.goto("/remote-frame-crossorigin-demo", { timeout: 30000 })
@@ -36,25 +36,44 @@ test("host renders cross-origin magento-greeting", async ({ page }) => {
   await expect(page.getByTestId("magento-greeting")).toContainText("e2e-magento")
 })
 
-test("cross-origin remote endpoint returns Flight + snapshot trailer", async ({ request }) => {
-  const response = await request.get(`${REMOTE_ORIGIN}/__remote/magento-greeting`)
+test("an embed-flagged page GET returns Flight + the snapshots trailer", async ({ request }) => {
+  // The remote's embeddable unit is an ORDINARY page. Fetched with
+  // the embed headers it answers Flight (no HTML shell) and appends
+  // the snapshots trailer entry the host registers from.
+  const response = await request.get(`${REMOTE_ORIGIN}/remote/magento-greeting`, {
+    headers: { "x-parton-render": "1", "x-parton-embed-depth": "1" },
+  })
   expect(response.status()).toBe(200)
   expect(response.headers()["content-type"]).toMatch(/^text\/x-component/)
-  // CORS header for browser fetches.
-  expect(response.headers()["access-control-allow-origin"]).toBe("*")
 
-  // Buffer the response and look for the snapshot trailer marker.
   // Wire shape per `fp-trailer-marker.ts`: one UTF-8-invalid lead
   // byte (`\xFF`) followed by an ASCII bracketed header
   // (`[parton:snapshots:<length>]\n`) and a length-prefixed JSON
-  // body. We scan for the readable header prefix — finding it
-  // confirms the remote endpoint is emitting the snapshot trailer.
-  // `response.body()` resolves to a Node Buffer (a Uint8Array
-  // subclass), which TextDecoder accepts directly — no need to reach
-  // through `.buffer`, which types as `ArrayBufferLike` (possibly a
-  // SharedArrayBuffer) and breaks the `Uint8Array` ctor overload.
+  // body. Finding the readable header prefix confirms the page
+  // response carries the snapshot trailer.
   const text = new TextDecoder("utf-8", { fatal: false }).decode(await response.body())
   expect(text, "snapshot trailer marker must be present").toMatch(/\[parton:snapshots:\d+\]/)
+  // The embed render replies with the slice marker instead of the
+  // page shell (PartialRoot's embed branch).
+  expect(text).toContain("parton-embed-body")
+})
+
+test("the manifest advertises embeddable page paths", async ({ request }) => {
+  const response = await request.get(`${REMOTE_ORIGIN}/__remote/manifest.json`)
+  expect(response.status()).toBe(200)
+  // CORS stays on the static metadata endpoints (the CLI may fetch
+  // from anywhere).
+  expect(response.headers()["access-control-allow-origin"]).toBe("*")
+  const manifest = (await response.json()) as {
+    specs: Array<{ selector: string; path: string | null; capabilityType: string | null }>
+  }
+  const bySelector = new Map(manifest.specs.map((s) => [s.selector, s]))
+  expect(bySelector.get("magento-greeting")?.path).toBe("/remote/magento-greeting")
+  expect(bySelector.get("magento-payment-summary")?.path).toBe("/remote/magento-payment-summary")
+  expect(bySelector.get("magento-payment-summary")?.capabilityType).toBe("PaymentCap")
+  // The nested cart-summary has no page of its own — reached only via
+  // its parent page's trailer — so it advertises no path.
+  expect(bySelector.get("cart-summary")?.path).toBeNull()
 })
 
 test("capability-scoped remote reads host-declared values", async ({ page }) => {
@@ -71,29 +90,37 @@ test("capability-scoped remote reads host-declared values", async ({ page }) => 
 })
 
 test("selector refetch routes back to the cross-origin remote", async ({ page }) => {
-  // The `_.rsc?partials=` GET is retired: a selector-targeted refetch is
-  // now a `url` frame with a `?__force=` overlay stating the page URL,
-  // on the held channel (or the attach it triggers). Drive the page's
-  // own refresh button (`nav.reload({selector})`) and prove the refetch
-  // ROUTES through the channel — the dispatch's `__force` overlay names
-  // the remote's addressable id — and the stock ticker stays rendered.
+  // A selector-targeted refetch is a `url` frame with a `?__force=`
+  // overlay on the held channel; the host resolves the embedded
+  // snapshot, and its `source: {kind: "page"}` stamp re-embeds
+  // `/remote/magento-stocks?partials=<id>` on the REMOTE — the
+  // ordinary protocol at the embedded URL. Drive the page's refresh
+  // button and prove both halves: the dispatch names the label, and
+  // genuinely FRESH remote content lands (the per-render data-tick
+  // moves).
   await page.goto("/remote-frame-crossorigin-demo", { timeout: 30000 })
   const stocks = page.getByTestId("magento-stocks")
   await expect(stocks).toBeVisible({ timeout: 15000 })
+  const initialTick = await stocks.getAttribute("data-tick")
 
   const dispatches = recordPartialDispatches(page)
-  await page.getByTestId("rfd-refresh-magento-stocks").and(page.locator("[data-hydrated]")).click()
+  await page
+    .getByTestId("rfd-refresh-magento:magento-stocks")
+    .and(page.locator("[data-hydrated]"))
+    .click()
 
-  // The refetch routed as a selector-targeted dispatch on the channel
-  // (the `__force` overlay names the stocks selector), not a full-page
-  // nav — the wire signal that the refetch reached the host's refetch
-  // machinery for the remote's namespaced id.
   await expect
-    .poll(() => dispatches.filter((d) => d.partials?.includes("magento-stocks")).length, {
+    .poll(() => dispatches.filter((d) => d.partials?.includes("magento:magento-stocks")).length, {
       timeout: 10000,
     })
     .toBeGreaterThan(0)
-  await expect(stocks).toBeVisible()
+  // Fresh remote render arrived — the refetch crossed the origin
+  // boundary and came back.
+  await expect
+    .poll(async () => (await stocks.getAttribute("data-tick")) !== initialTick, {
+      timeout: 15000,
+    })
+    .toBe(true)
 })
 
 test("nested cross-origin partial is registered via the commit-defer trailer", async ({ page }) => {
@@ -112,24 +139,6 @@ test("nested cross-origin partial is registered via the commit-defer trailer", a
     timeout: 15000,
   })
   expect(await nested.getAttribute("data-tick")).toMatch(/^\d+$/)
-})
-
-test("namespacing prevents collisions: bare selector doesn't hit remote", async ({ request }) => {
-  // The remote's spec is registered locally as `magento:magento-stocks`.
-  // A refetch URL that targets the bare id `magento-stocks` (without
-  // the namespace prefix) must NOT route to the remote — the host's
-  // registry doesn't have anything under that key, so the request
-  // falls through to streaming-mode (a full Root render) rather than
-  // accidentally returning the remote's bytes.
-  await request.get("/remote-frame-crossorigin-demo")
-
-  const bare = await request.get("/remote-frame-crossorigin-demo_.rsc?partials=magento-stocks")
-  const body = await bare.text()
-  // No cache-mode marker → fell through to streaming-mode (full
-  // Root render), which is the correct behavior for an unknown
-  // selector. The bare id doesn't accidentally collide with the
-  // namespaced remote registration.
-  expect(body, "bare id must not resolve to the namespaced remote").not.toContain('"mode":"cache"')
 })
 
 test("frame navigation within a cross-origin RemoteFrame", async ({ page }) => {
@@ -159,11 +168,13 @@ test("frame navigation within a cross-origin RemoteFrame", async ({ page }) => {
 })
 
 test("remote without capability sees no host values", async ({ request }) => {
-  // Direct fetch with no x-parton-capability header — getCapability
-  // returns {} on the remote side, so the body falls back to defaults
-  // (cart_id=<missing>, USD, 0). Response is Flight bytes (JSON-ish),
-  // not HTML — angle brackets are raw, not entity-escaped.
-  const response = await request.get(`${REMOTE_ORIGIN}/__remote/magento-payment-summary`)
+  // Embed-flagged page GET with no x-parton-capability header —
+  // getCapability returns {} on the remote side, so the body falls
+  // back to defaults (cart_id=<missing>, USD, 0). Response is Flight
+  // bytes (JSON-ish), not HTML — angle brackets are raw.
+  const response = await request.get(`${REMOTE_ORIGIN}/remote/magento-payment-summary`, {
+    headers: { "x-parton-render": "1", "x-parton-embed-depth": "1" },
+  })
   expect(response.status()).toBe(200)
   const text = await response.text()
   expect(text).toContain("<missing>")

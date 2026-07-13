@@ -95,7 +95,10 @@ function buildIndexFile(name, origin, manifest) {
   lines.push("")
   lines.push(`import { remote } from "@parton/framework"`)
 
-  const typedSpecs = manifest.specs.filter((s) => s.capabilityType)
+  // Only specs advertising an embeddable page path get a binding —
+  // a `remote()` binding IS a page embed.
+  const pageSpecs = manifest.specs.filter((s) => s.path)
+  const typedSpecs = pageSpecs.filter((s) => s.capabilityType)
   if (typedSpecs.length > 0) {
     const typeNames = [...new Set(typedSpecs.map((s) => s.capabilityType))]
     lines.push(`import type { ${typeNames.join(", ")} } from "./types.ts"`)
@@ -111,14 +114,14 @@ function buildIndexFile(name, origin, manifest) {
   lines.push(`const NAMESPACE = ${JSON.stringify(name)}`)
   lines.push("")
 
-  for (const spec of manifest.specs) {
+  for (const spec of pageSpecs) {
     if (spec.capabilityType) {
       lines.push(`export const ${spec.exportName} = remote<${spec.capabilityType}>({`)
     } else {
       lines.push(`export const ${spec.exportName} = remote({`)
     }
     lines.push(`  origin: ORIGIN,`)
-    lines.push(`  selector: ${JSON.stringify(spec.selector)},`)
+    lines.push(`  path: ${JSON.stringify(spec.path)},`)
     lines.push(`  namespace: NAMESPACE,`)
     lines.push(`})`)
     lines.push("")

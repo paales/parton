@@ -40,10 +40,11 @@ statement's `?__force=` target, a frame navigation's subtrees (see
    `snap.type` for per-instance placements) and invoke it as a
    flat sibling with `__parent={path, frameChain}`,
    `__instanceId={id}` and the snapshot's captured props. A
-   remote-sourced snapshot (`snap.source.kind === "remote"`)
-   instead renders a fresh `<RemoteFrame>` at the remote's
-   `/__remote/<id>` endpoint, so the re-render routes back to the
-   origin that produced it.
+   page-sourced snapshot (`snap.source.kind === "page"` — registered
+   from an embedded page's trailer) instead re-embeds the embedded
+   page with `?partials=<id>`, so the re-render routes back through
+   the page that produced it (see
+   [`page-embed.md`](./page-embed.md)).
 3. The spec's wrapper re-runs the same pipeline (match, props cell
    resolution, fingerprint, skip / render). No ancestor execution.
 4. On commit, the routeKey's hint is merged — ids that didn't

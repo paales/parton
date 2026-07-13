@@ -142,6 +142,24 @@ export async function renderWithRequest(
     visible?: readonly string[]
   } & RenderOptions = {},
 ): Promise<{ stream: FlightBytes; cookies: string[] }> {
+  return renderPayloadWithRequest(url, node, options)
+}
+
+/**
+ * Like `renderWithRequest`, but the Flight payload is an arbitrary
+ * value rather than a bare element tree. Page-shaped fixtures use it
+ * to mimic an app entry's response contract (`{ root: <Root/> }`) so
+ * consumers of full-page payloads (`<RemoteFrame>` page embeds) can
+ * be exercised in-process.
+ */
+export async function renderPayloadWithRequest<T>(
+  url: string,
+  payload: T,
+  options: {
+    headers?: Record<string, string>
+    visible?: readonly string[]
+  } & RenderOptions = {},
+): Promise<{ stream: FlightBytes; cookies: string[] }> {
   const request = new Request(url, { headers: options.headers })
   // `runWithRequestAsync` expects an async fn; wrap the sync render
   // call so the ALS scope persists across the stream lifetime.
@@ -172,7 +190,10 @@ export async function renderWithRequest(
         ackedFps: new Map(),
       })
     }
-    const stream = renderServerToFlight(node, { signal: options.signal, onError: options.onError })
+    const stream = renderToReadableStream(payload, {
+      signal: options.signal,
+      onError: options.onError,
+    })
     const [forCaller, forDrain] = stream.tee()
     await new Response(forDrain).arrayBuffer()
     return forCaller

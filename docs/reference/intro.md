@@ -16,13 +16,13 @@ for the full framing.
 
 The public surface is five things:
 
-| | What it is | When you reach for it |
-|---|---|---|
-| `parton(R, opts)` | Addressable render unit. Optionally request-gated via `match`. | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all. |
-| `block(R, opts)` | Slot-placeable partial with a `schema` for CMS content. | Content blocks the CMS can place into slots or render directly as a singleton (storage row matches spec id). |
-| `cell` / `localCell` / `gqlCell` | Typed, identity-keyed slot of server-authoritative state; crosses Flight as `ResolvedCell<T>`. | Server-owned state a parton reads and clients mutate — cart, prefs, form drafts, GraphQL-loaded entities. |
-| `<Frame name initialUrl>` | Scope opener — extends the ambient frame chain so descendants see the frame-resolved request. | Any region whose URL is independent of the window URL. |
-| `<RemoteFrame url capability>` | Cross-process composition — embeds a parton hosted by a different process (same- or cross-origin). | Federated UI: payment forms hosted by a payment provider, marketing widgets from a CMS, etc. |
+|                                  | What it is                                                                                         | When you reach for it                                                                                        |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `parton(R, opts)`                | Addressable render unit. Optionally request-gated via `match`.                                     | Any subtree you want fingerprinted, cacheable, refetchable. The catch-all.                                   |
+| `block(R, opts)`                 | Slot-placeable partial with a `schema` for CMS content.                                            | Content blocks the CMS can place into slots or render directly as a singleton (storage row matches spec id). |
+| `cell` / `localCell` / `gqlCell` | Typed, identity-keyed slot of server-authoritative state; crosses Flight as `ResolvedCell<T>`.     | Server-owned state a parton reads and clients mutate — cart, prefs, form drafts, GraphQL-loaded entities.    |
+| `<Frame name initialUrl>`        | Scope opener — extends the ambient frame chain so descendants see the frame-resolved request.      | Any region whose URL is independent of the window URL.                                                       |
+| `<RemoteFrame url capability>`   | Cross-process composition — embeds a parton hosted by a different process (same- or cross-origin). | Federated UI: payment forms hosted by a payment provider, marketing widgets from a CMS, etc.                 |
 
 ```tsx
 const PokemonPage = parton(PokemonRender, "/pokemon/:id")
@@ -31,7 +31,7 @@ function PokemonRender({ id }: { id: string } & RenderArgs) {
   return <article>...{id}...</article>
 }
 
-<PokemonPage />
+;<PokemonPage />
 ```
 
 ## The mental model
@@ -44,7 +44,7 @@ one pipeline:
    existence. A miss parks the client's cached variants; only
    matching specs render.
 2. **Body reads.** Everything else the spec depends on, its `Render`
-   *reads*: request dimensions via tracked hooks (`searchParam()`,
+   _reads_: request dimensions via tracked hooks (`searchParam()`,
    `cookie()`, `header()`, …), data via cells
    (`cell.resolve()`, inline `localCell`, `.with()` prop binding),
    CMS content via a block's `schema({cms})`. The read IS the
@@ -85,13 +85,13 @@ register themselves the same way as top-level placements.
 
 ## What lives where
 
-| Folder | Role |
-|---|---|
-| `framework/src/lib/` | Framework primitives — `partial.tsx` (constructor + `PartialRoot`), `frame.tsx` (`<Frame>` scope opener), `cache.tsx`, `partial-registry.ts`. |
+| Folder                   | Role                                                                                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `framework/src/lib/`     | Framework primitives — `partial.tsx` (constructor + `PartialRoot`), `frame.tsx` (`<Frame>` scope opener), `cache.tsx`, `partial-registry.ts`.                                                     |
 | `framework/src/runtime/` | RSC plumbing — `context.ts` (request ALS only), `cms-runtime.ts`, `navigation-api.ts`, `session.ts`. (The `entry.{rsc,browser,ssr}.tsx` glue files live with the active app: `e2e-testing/src/`.) |
-| `cms/src/editor/` | CMS editor UI — three-pane shell. |
-| `e2e-testing/src/app/` | Example application — pages and blocks. |
-| `cms/data/` | CMS content store — `content.json` (committed), `draft.json` (gitignored). |
+| `cms/src/editor/`        | CMS editor UI — three-pane shell.                                                                                                                                                                 |
+| `e2e-testing/src/app/`   | Example application — pages and blocks.                                                                                                                                                           |
+| `cms/data/`              | CMS content store — `content.json` (committed), `draft.json` (gitignored).                                                                                                                        |
 
 ## Setting up an app
 
@@ -117,7 +117,8 @@ bootBrowser()
 `createRscHandler` accepts the app's knobs: `Root` (the html shell,
 placing `<PartialRoot>`), `notFound` (404 page body), `fetch` (a
 first-crack hook for app routes — return `undefined` to fall through),
-`remote` (opt-in `/__remote/*` hosting — see
+`remote` (opt-in remote-metadata endpoints — the manifest + types the
+`parton add` CLI reads; embedding itself needs no config — see
 [`remote-frame.md`](./remote-frame.md)), and `clearCaches` (extras on
 the DEV clear-caches endpoint). Everything else — the segmented
 response driver, fp-trailers, invalidation transactions, the live

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest"
 import {
+  TAG_SNAPSHOTS,
+  buildSnapshotTrailer,
   deserializeSnapshot,
-  parseSnapshotTrailer,
   serializeSnapshot,
   wrapStreamWithSnapshotTrailer,
+  type SerializedSnapshot,
 } from "../snapshot-trailer.ts"
-import { buildMarker } from "../fp-trailer-marker.ts"
+import { splitSegments } from "../fp-trailer-split.ts"
 import type { PartialSnapshot } from "../partial-registry.ts"
 
 const ENC = new TextEncoder()
@@ -20,22 +22,31 @@ function makeStream(s: string): ReadableStream<Uint8Array> {
 }
 
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-    total += value.byteLength
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+/** Consume a snapshot-trailer-wrapped stream the way `<RemoteFrame>`
+ *  does: `splitSegments`' first segment strips every `\xFF` entry out
+ *  of the body and resolves the trailer map. */
+async function consumeAsEmbed(stream: ReadableStream<Uint8Array>): Promise<{
+  body: string
+  snapshots: Record<string, SerializedSnapshot> | null
+}> {
+  const iter = splitSegments(stream)[Symbol.asyncIterator]()
+  const first = await iter.next()
+  if (first.done || first.value.kind !== "payload") throw new Error("no payload segment")
+  const body = await new Response(first.value.body).text()
+  const trailers = await first.value.trailers
+  const bytes = trailers.get(TAG_SNAPSHOTS)
+  if (!bytes) return { body, snapshots: null }
+  try {
+    return {
+      body,
+      snapshots: JSON.parse(new TextDecoder().decode(bytes)) as Record<string, SerializedSnapshot>,
+    }
+  } catch {
+    return { body, snapshots: null }
   }
-  const out = new Uint8Array(total)
-  let offset = 0
-  for (const c of chunks) {
-    out.set(c, offset)
-    offset += c.byteLength
-  }
-  return out
 }
 
 function makeSnapshot(overrides: Partial<PartialSnapshot> = {}): PartialSnapshot {
@@ -82,14 +93,18 @@ describe("serializeSnapshot / deserializeSnapshot", () => {
     expect(back.emittedFp).toBe("fp789")
   })
 
-  it("drops non-serializable fields", () => {
+  it("drops non-serializable and hop-local fields", () => {
     const orig = makeSnapshot({
       fallback: "would be JSX in real life",
       cache: { maxAge: 60 },
+      source: { kind: "page", url: "http://t/x", ns: "e~abc" },
     })
     const ser = serializeSnapshot(orig)
     expect("fallback" in ser).toBe(false)
     expect("cache" in ser).toBe(false)
+    // Each hop re-stamps `source` with ITS fetch URL — the wire form
+    // never carries the producer's own stamp.
+    expect("source" in ser).toBe(false)
   })
 
   it("omits absent optional fields from the serialized form", () => {
@@ -107,79 +122,33 @@ describe("serializeSnapshot / deserializeSnapshot", () => {
   })
 })
 
-describe("wrapStreamWithSnapshotTrailer + parseSnapshotTrailer", () => {
-  it("round-trips an empty trailer", async () => {
-    const source = makeStream('5:"hello"\n')
-    const wrapped = wrapStreamWithSnapshotTrailer(source, () => new Map())
-    const bytes = await readAll(wrapped)
-    const { flightBytes, snapshots } = parseSnapshotTrailer(bytes)
-    expect(new TextDecoder().decode(flightBytes)).toBe('5:"hello"\n')
+describe("wrapStreamWithSnapshotTrailer → splitSegments trailer map", () => {
+  it("round-trips an empty trailer; body bytes are untouched", async () => {
+    const wrapped = wrapStreamWithSnapshotTrailer(makeStream('5:"hello"\n'), () => new Map())
+    const { body, snapshots } = await consumeAsEmbed(wrapped)
+    expect(body).toBe('5:"hello"\n')
     expect(snapshots).toEqual({})
   })
 
   it("round-trips a trailer with snapshots", async () => {
     const sourceText = '0:{"v":"$L1"}\n1:"data"\n'
-    const source = makeStream(sourceText)
     const snap = makeSnapshot({
       type: "demo",
       labels: ["demo", "extra"],
       matchKey: "mk-abc",
       emittedFp: "fp-xyz",
     })
-    const wrapped = wrapStreamWithSnapshotTrailer(source, () => new Map([["demo", snap]]))
-    const bytes = await readAll(wrapped)
-    const { flightBytes, snapshots } = parseSnapshotTrailer(bytes)
-    expect(new TextDecoder().decode(flightBytes)).toBe(sourceText)
-    expect(snapshots).not.toBeNull()
-    expect(Object.keys(snapshots!)).toEqual(["demo"])
+    const wrapped = wrapStreamWithSnapshotTrailer(
+      makeStream(sourceText),
+      () => new Map([["demo", snap]]),
+    )
+    const { body, snapshots } = await consumeAsEmbed(wrapped)
+    expect(body).toBe(sourceText)
+    expect(Object.keys(snapshots ?? {})).toEqual(["demo"])
     expect(snapshots!.demo.type).toBe("demo")
     expect(snapshots!.demo.labels).toEqual(["demo", "extra"])
     expect(snapshots!.demo.matchKey).toBe("mk-abc")
     expect(snapshots!.demo.emittedFp).toBe("fp-xyz")
-  })
-
-  it("flight bytes split cleanly from the trailer at the \\xFF byte", async () => {
-    const source = makeStream("xyz\n")
-    const wrapped = wrapStreamWithSnapshotTrailer(source, () => new Map())
-    const bytes = await readAll(wrapped)
-    const { flightBytes, snapshots } = parseSnapshotTrailer(bytes)
-    // Flight bytes are 'xyz\n' (4 bytes). The marker starts at the
-    // first `\xFF` byte that follows.
-    expect(flightBytes.byteLength).toBe(4)
-    expect(new TextDecoder().decode(flightBytes)).toBe("xyz\n")
-    expect(snapshots).toEqual({})
-  })
-
-  it("returns null snapshots when input has no marker", () => {
-    const input = ENC.encode("just flight bytes, no trailer\n")
-    const { flightBytes, snapshots } = parseSnapshotTrailer(input)
-    expect(flightBytes).toBe(input)
-    expect(snapshots).toBeNull()
-  })
-
-  it("returns null snapshots when trailer length exceeds remaining bytes", () => {
-    // Lie about the body length in the marker header.
-    const flight = ENC.encode("flight\n")
-    const marker = buildMarker("snapshots", 99999)
-    const body = ENC.encode("ab") // only 2 bytes follow
-    const out = new Uint8Array(flight.length + marker.length + body.length)
-    out.set(flight, 0)
-    out.set(marker, flight.length)
-    out.set(body, flight.length + marker.length)
-    const { snapshots } = parseSnapshotTrailer(out)
-    expect(snapshots).toBeNull()
-  })
-
-  it("returns null snapshots on JSON parse failure", () => {
-    const flight = ENC.encode("flight\n")
-    const junk = ENC.encode("not json {{{")
-    const marker = buildMarker("snapshots", junk.length)
-    const out = new Uint8Array(flight.length + marker.length + junk.length)
-    out.set(flight, 0)
-    out.set(marker, flight.length)
-    out.set(junk, flight.length + marker.length)
-    const { snapshots } = parseSnapshotTrailer(out)
-    expect(snapshots).toBeNull()
   })
 
   it("handles multiple snapshots in one trailer", async () => {
@@ -192,8 +161,49 @@ describe("wrapStreamWithSnapshotTrailer + parseSnapshotTrailer", () => {
           ["c", makeSnapshot({ type: "c", labels: ["c"] })],
         ]),
     )
-    const { snapshots } = parseSnapshotTrailer(await readAll(wrapped))
+    const { snapshots } = await consumeAsEmbed(wrapped)
     expect(Object.keys(snapshots ?? {}).sort()).toEqual(["a", "b", "c"])
     expect(snapshots!.b.labels).toEqual(["b", "shared"])
+  })
+
+  it("trailer bytes never leak into the split body", async () => {
+    const wrapped = wrapStreamWithSnapshotTrailer(
+      makeStream("xyz\n"),
+      () => new Map([["a", makeSnapshot({ type: "a" })]]),
+    )
+    const bytes = await readAll(wrapped)
+    // Wire carries the marker…
+    expect(new TextDecoder("utf-8", { fatal: false }).decode(bytes)).toContain("[parton:snapshots:")
+    // …but the split body is exactly the Flight bytes.
+    const { body } = await consumeAsEmbed(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(bytes)
+          c.close()
+        },
+      }),
+    )
+    expect(body).toBe("xyz\n")
+  })
+
+  it("buildSnapshotTrailer bytes decode as one trailer entry even when chunk-split", async () => {
+    const trailer = buildSnapshotTrailer(new Map([["a", makeSnapshot({ type: "a" })]]))
+    const flight = ENC.encode("flight\n")
+    // Split the marker across two chunks (worst case for the
+    // splitter's accumulate-until-parseable loop).
+    const cut = flight.length + 8
+    const all = new Uint8Array(flight.length + trailer.length)
+    all.set(flight, 0)
+    all.set(trailer, flight.length)
+    const source = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(all.subarray(0, cut))
+        c.enqueue(all.subarray(cut))
+        c.close()
+      },
+    })
+    const { body, snapshots } = await consumeAsEmbed(source)
+    expect(body).toBe("flight\n")
+    expect(Object.keys(snapshots ?? {})).toEqual(["a"])
   })
 })

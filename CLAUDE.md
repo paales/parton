@@ -151,7 +151,7 @@ names (`@parton/<pkg>`), never relative paths.
 | `cms/` (`@parton/cms`) | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/`). Content store as data: `cms/data/content.json` (committed) + `draft.json` (gitignored). Public barrel exports `EditorShell`. |
 | `copies/` (`@parton/copies`) | Vendored shadcn UI primitives (`src/components/ui/`), ai-elements, shared hooks, the `cn` helper. `components.json` lives here — where new shadcn components are added. |
 | `e2e-testing/` (`@parton/e2e-testing`) | Example app (PokeAPI + GraphCommerce Magento backends) + Playwright specs in `e2e/`. `src/entry.{rsc,ssr,browser}.tsx` are thin delegations to `@parton/framework/entry/*`. `vite.config.ts` owns dev/build (its `environments.*.build.rollupOptions.input` map is what wires the three entries together). |
-| `e2e-magento/` (`@parton/e2e-magento`) | Companion app on port 5181 hosting remote partons at `/__remote/<id>` for cross-origin `<RemoteFrame>`. Run alongside via `yarn dev:magento`. |
+| `e2e-magento/` (`@parton/e2e-magento`) | Companion app on port 5181 publishing embeddable PAGES for cross-origin `<RemoteFrame>` (pages are the unit of federation; there is no special remote route). Run alongside via `yarn dev:magento`. |
 | `website/` (`@parton/website`) | The parton demo site (port 5183, `yarn dev:website`) — a Factorio-inspired infinite tile world: a quadtree of cullable quad-tile partons over 512px chunk partons, so the document is O(viewport + log world); the framework's story told in-world. |
 
 Load-bearing code: `framework/src/`, `cms/src/`, `copies/src/`,

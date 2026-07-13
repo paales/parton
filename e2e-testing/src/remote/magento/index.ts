@@ -11,32 +11,26 @@ import type { PaymentCap } from "./types.ts"
 const ORIGIN = process.env.MAGENTO_REMOTE_ORIGIN ?? "http://localhost:5181"
 const NAMESPACE = "magento"
 
-export const CartSummary = remote({
-  origin: ORIGIN,
-  selector: "cart-summary",
-  namespace: NAMESPACE,
-})
-
 export const MagentoCheckoutStep = remote({
   origin: ORIGIN,
-  selector: "magento-checkout-step",
+  path: "/remote/magento-checkout-step",
   namespace: NAMESPACE,
 })
 
 export const MagentoGreeting = remote({
   origin: ORIGIN,
-  selector: "magento-greeting",
+  path: "/remote/magento-greeting",
   namespace: NAMESPACE,
 })
 
 export const MagentoPaymentSummary = remote<PaymentCap>({
   origin: ORIGIN,
-  selector: "magento-payment-summary",
+  path: "/remote/magento-payment-summary",
   namespace: NAMESPACE,
 })
 
 export const MagentoStocks = remote({
   origin: ORIGIN,
-  selector: "magento-stocks",
+  path: "/remote/magento-stocks",
   namespace: NAMESPACE,
 })

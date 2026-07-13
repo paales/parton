@@ -50,6 +50,12 @@ export interface PartialRequestState {
    *  rendered. Multiple placements of the same keyless spec are
    *  allowed; this set is a `Set` but the values aren't unique. */
   seenIds: Set<string>
+  /** Per-request occurrence counters for `<RemoteFrame>` placements,
+   *  keyed by `hostParentPath|origin+pathname`. Two same-URL embeds
+   *  under one parent draw occurrences 0, 1, … in tree order, which
+   *  the placement-namespace derivation folds so their ids stay
+   *  distinct. Lazily created by the first RemoteFrame in a render. */
+  embedSeq?: Map<string, number>
 }
 
 const als = new AsyncLocalStorage<PartialRequestState>()

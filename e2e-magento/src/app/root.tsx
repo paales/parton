@@ -1,8 +1,28 @@
 import "./styles.css"
-// Side-effect import — registers the partons this app exposes as
-// `<RemoteFrame>` endpoints in the spec catalog.
-import "./remote-specs.tsx"
-import { PartialRoot } from "@parton/framework"
+import { PartialRoot, parton } from "@parton/framework"
+import {
+  MagentoCheckoutStep,
+  MagentoGreeting,
+  MagentoPaymentSummary,
+  MagentoStockTicker,
+} from "./remote-specs.tsx"
+
+/** The showcase landing content — gated to `/` so the embeddable
+ *  `/remote/*` pages carry only their own parton in the body. */
+const ShowcaseHome = parton(
+  function ShowcaseHomeRender() {
+    return (
+      <section>
+        <h1>e2e-magento</h1>
+        <p>
+          Companion app. The pages under <code>/remote/*</code> each host one parton — ordinary,
+          individually-browsable pages the host app embeds with <code>&lt;RemoteFrame&gt;</code>.
+        </p>
+      </section>
+    )
+  },
+  { match: "/" },
+)
 
 export function Root() {
   return (
@@ -15,10 +35,12 @@ export function Root() {
         </head>
         <body>
           <main>
-            <h1>e2e-magento</h1>
-            <p>
-              Empty showcase scaffold. Real Magento integration lands here as partials are added.
-            </p>
+            <ShowcaseHome />
+            {/* Embeddable pages — each spec's `match` is its page. */}
+            <MagentoGreeting />
+            <MagentoCheckoutStep />
+            <MagentoPaymentSummary />
+            <MagentoStockTicker />
           </main>
         </body>
       </html>

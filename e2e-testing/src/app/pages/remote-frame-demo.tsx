@@ -1,27 +1,25 @@
 /**
- * /remote-frame-demo — `<RemoteFrame>` validation surface.
+ * /remote-frame-demo — `<RemoteFrame>` validation surface (same-origin
+ * page embeds — this app embedding its own pages).
  *
  * Exercises:
  *
- * 1. Three remote frames embedded in one host page, fetched in
- *    parallel against `/__remote/<id>`. Each spec self-registers
- *    in the catalog so the route handler resolves them by id.
+ * 1. Five embeds in one host page, each pointed at an ordinary page
+ *    of THIS app (`/remote/<id>` — each spec's `match` is its page).
  *
- * 2. Different remote latencies (200ms, 600ms, 1000ms) demonstrate
- *    parallel streaming — the slowest doesn't block the fastest.
+ * 2. Different latencies (200ms, 600ms, 1000ms) demonstrate parallel
+ *    streaming — the slowest doesn't block the fastest.
  *
- * 3. A remote spec that renders a `"use client"` `<ClickCounter>` —
- *    validates client components inside a remote payload hydrate
- *    correctly in the host's browser.
+ * 3. An embedded page whose parton renders a `"use client"`
+ *    `<ClickCounter>` — validates client components inside an
+ *    embedded payload hydrate correctly in the host's browser.
  *
- * 4. A remote spec with `cache: { maxAge }` — second fetch hits the
- *    cache, returns immediately.
+ * 4. An embedded parton with `cache: { maxAge }` — the second embed
+ *    of its page replays the producer-side byte cache.
  *
- * 5. A refresh button driving `nav.reload({selector: "..."})` to
- *    re-fetch a remote frame. Same-origin v1: this round-trips
- *    through the host's local spec (same process). v2 cross-origin
- *    would need an explicit "this id is hosted at <origin>"
- *    annotation in the snapshot.
+ * 5. A refresh button driving `nav.reload({selector: "..."})` —
+ *    the snapshot's `source: {kind: "page", url}` stamp routes the
+ *    refetch back through `?partials=` at the embedded URL.
  */
 
 import { parton, RemoteFrame, type RenderArgs } from "@parton/framework"
@@ -33,7 +31,7 @@ import { RemoteRefreshButton } from "../components/remote-refresh-button.tsx"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// ─── Remote specs (auto-addressable at /__remote/<id>) ──────────────────
+// ─── Embeddable pages (each spec's `match` is its page) ─────────────────
 
 const RemoteFastGreeting = parton(
   async function RemoteFastGreetingRender(_: RenderArgs) {
@@ -54,7 +52,7 @@ const RemoteFastGreeting = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-fast" },
+  { selector: "remote-fast", match: "/remote/remote-fast" },
 )
 
 const RemoteMidGreeting = parton(
@@ -66,7 +64,7 @@ const RemoteMidGreeting = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-mid" },
+  { selector: "remote-mid", match: "/remote/remote-mid" },
 )
 
 const RemoteSlowGreeting = parton(
@@ -86,7 +84,7 @@ const RemoteSlowGreeting = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-slow" },
+  { selector: "remote-slow", match: "/remote/remote-slow" },
 )
 
 const RemoteCounter = parton(
@@ -106,7 +104,7 @@ const RemoteCounter = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-counter" },
+  { selector: "remote-counter", match: "/remote/remote-counter" },
 )
 
 const RemoteCachedGreeting = parton(
@@ -127,6 +125,7 @@ const RemoteCachedGreeting = parton(
   },
   {
     selector: "remote-cached",
+    match: "/remote/remote-cached",
     cache: { maxAge: 60 },
   },
 )
@@ -191,23 +190,23 @@ export const RemoteFrameDemoPage = parton(
         </div>
 
         <Suspense fallback={<RemoteFallback label="fast" testid="remote-fast" />}>
-          <RemoteFrame url="/__remote/remote-fast" />
+          <RemoteFrame url="/remote/remote-fast" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="mid" testid="remote-mid" />}>
-          <RemoteFrame url="/__remote/remote-mid" />
+          <RemoteFrame url="/remote/remote-mid" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="slow" testid="remote-slow" />}>
-          <RemoteFrame url="/__remote/remote-slow" />
+          <RemoteFrame url="/remote/remote-slow" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="counter" testid="remote-counter" />}>
-          <RemoteFrame url="/__remote/remote-counter" />
+          <RemoteFrame url="/remote/remote-counter" />
         </Suspense>
 
         <Suspense fallback={<RemoteFallback label="cached" testid="remote-cached" />}>
-          <RemoteFrame url="/__remote/remote-cached" />
+          <RemoteFrame url="/remote/remote-cached" />
         </Suspense>
 
         <footer className="mt-4 text-xs text-muted-foreground" data-testid="rfd-footer">
@@ -226,10 +225,17 @@ export const RemoteFrameDemoPage = parton(
   { match: "/remote-frame-demo" },
 )
 
-// Side-effect — these declarations must execute so the spec catalog
-// registers them and `/__remote/<id>` can look them up.
-void RemoteFastGreeting
-void RemoteMidGreeting
-void RemoteSlowGreeting
-void RemoteCounter
-void RemoteCachedGreeting
+/** The embeddable pages, mounted in the app Root — each renders only
+ *  when its own `/remote/<id>` URL is requested (directly in a
+ *  browser, or as Flight by an embed hop). */
+export function RemoteHostedPages() {
+  return (
+    <>
+      <RemoteFastGreeting />
+      <RemoteMidGreeting />
+      <RemoteSlowGreeting />
+      <RemoteCounter />
+      <RemoteCachedGreeting />
+    </>
+  )
+}
