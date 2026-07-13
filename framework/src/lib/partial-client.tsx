@@ -213,7 +213,11 @@ export function PartialsClient({ children }: PartialsClientProps) {
   // walk inside `cacheFromStreamingChildren` (the wrapper props carry
   // the fingerprint, so we don't have to wait for every
   // `<PartialErrorBoundary>` to commit). Each boundary's render still
-  // re-registers as a fallback — harmless, same value.
+  // re-registers as a fallback — gated on the content slot actually
+  // holding the wrapper (`registerClientPartial`'s advertise-honesty
+  // gate): a still-mounted fiber whose slots an eviction destroyed
+  // must not resurrect the advertised fp, or the next holdings
+  // statement claims bytes the client cannot restore.
   // Lane-commit re-render: this payload was already walked to
   // completion, and only the cache changed since. Re-render the
   // persisted template against the updated cache — re-walking the

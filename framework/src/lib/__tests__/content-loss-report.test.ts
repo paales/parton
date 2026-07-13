@@ -108,8 +108,8 @@ describe("loss reports ride the ack's evicted statement", () => {
     _channelEstablished("c1")
     const cache = getCurrentPagePartials()
     for (let i = 0; i < CLIENT_POOL_CAP + 3; i++) {
-      registerClientPartial(`pool-${i}`, "mk", `fp${i}`)
       cacheStore(cache, `pool-${i}`, "mk", `SUBTREE-${i}`)
+      registerClientPartial(`pool-${i}`, "mk", `fp${i}`)
     }
     // Off-screen losses have no urgency — nothing confirms the ghost
     // before the id's next flip-in or the reconcile — so the report
@@ -133,6 +133,7 @@ describe("loss reports ride the ack's evicted statement", () => {
 
   it("a cull-park eviction reports; an id that held nothing does not", async () => {
     _channelEstablished("c1")
+    cacheStore(getCurrentPagePartials(), "parked", "mk", "PARKED-SUBTREE")
     registerClientPartial("parked", "mk", "fp-parked")
     evictCulledContent("parked")
     evictCulledContent("never-held")
@@ -145,8 +146,12 @@ describe("loss reports ride the ack's evicted statement", () => {
 
   it("the payload prune reports full-id and per-variant drops", async () => {
     _channelEstablished("c1")
+    const cache = getCurrentPagePartials()
+    cacheStore(cache, "gone", "mk", "GONE-SUBTREE")
     registerClientPartial("gone", "mk", "fp-gone")
+    cacheStore(cache, "kept", "mk1", "KEPT-1")
     registerClientPartial("kept", "mk1", "fp-k1")
+    cacheStore(cache, "kept", "mk2", "KEPT-2")
     registerClientPartial("kept", "mk2", "fp-k2")
     pruneToLive(new Map([["kept", new Set(["mk1"])]]))
     scheduleChannelFlush()

@@ -28,6 +28,19 @@ beforeEach(() => {
   pruneToLive(new Map())
 })
 
+/** Store-then-register — the commit walk's order. Registration
+ *  requires a restorable content slot (the advertise-honesty gate);
+ *  the slot is filled ONCE per (id, mk) so repeated registrations
+ *  accumulate fps without `cacheStore`'s replace branch clearing the
+ *  set between them. */
+function reg(id: string, mk: string, fp: string): void {
+  const cache = getCurrentPagePartials()
+  if (cacheLookup(cache, id, mk) === undefined) {
+    cacheStore(cache, id, mk, `SUBTREE-${id}-${mk}`)
+  }
+  registerClientPartial(id, mk, fp)
+}
+
 function advertisedFps(id: string, mk: string): string[] {
   const prefix = `${id}:${mk}:`
   return getCachedPartialIds()
@@ -38,7 +51,7 @@ function advertisedFps(id: string, mk: string): string[] {
 describe("registerClientPartial — FP cap / eviction", () => {
   it("keeps up to FP_CAP_PER_VARIANT fps for one variant", () => {
     for (let i = 1; i <= FP_CAP_PER_VARIANT; i++) {
-      registerClientPartial("stage", "mk1", `fp${i}`)
+      reg("stage", "mk1", `fp${i}`)
     }
     expect(advertisedFps("stage", "mk1")).toEqual(
       Array.from({ length: FP_CAP_PER_VARIANT }, (_, i) => `fp${i + 1}`),
@@ -47,7 +60,7 @@ describe("registerClientPartial — FP cap / eviction", () => {
 
   it("evicts the OLDEST fp once the cap is exceeded", () => {
     for (let i = 1; i <= FP_CAP_PER_VARIANT + 2; i++) {
-      registerClientPartial("stage", "mk1", `fp${i}`)
+      reg("stage", "mk1", `fp${i}`)
     }
     const fps = advertisedFps("stage", "mk1")
     expect(fps).toHaveLength(FP_CAP_PER_VARIANT)
@@ -58,11 +71,11 @@ describe("registerClientPartial — FP cap / eviction", () => {
 
   it("re-registering an existing fp neither duplicates nor evicts", () => {
     for (let i = 1; i <= FP_CAP_PER_VARIANT; i++) {
-      registerClientPartial("stage", "mk1", `fp${i}`)
+      reg("stage", "mk1", `fp${i}`)
     }
     // The set is full. Re-adding a member is a no-op — nothing may be
     // evicted for a value that's already tracked.
-    registerClientPartial("stage", "mk1", "fp1")
+    reg("stage", "mk1", "fp1")
     expect(advertisedFps("stage", "mk1")).toEqual(
       Array.from({ length: FP_CAP_PER_VARIANT }, (_, i) => `fp${i + 1}`),
     )
@@ -70,8 +83,8 @@ describe("registerClientPartial — FP cap / eviction", () => {
 
   it("caps per (id, matchKey) — variants do not share a budget", () => {
     for (let i = 1; i <= FP_CAP_PER_VARIANT + 1; i++) {
-      registerClientPartial("page", "mkA", `a${i}`)
-      registerClientPartial("page", "mkB", `b${i}`)
+      reg("page", "mkA", `a${i}`)
+      reg("page", "mkB", `b${i}`)
     }
     expect(advertisedFps("page", "mkA")).toHaveLength(FP_CAP_PER_VARIANT)
     expect(advertisedFps("page", "mkB")).toHaveLength(FP_CAP_PER_VARIANT)
@@ -89,7 +102,7 @@ describe("getCachedPartialIds — manifest cap", () => {
     // anything older just re-renders server-side on its next visit.
     const total = CACHED_MANIFEST_CAP + 50
     for (let i = 0; i < total; i++) {
-      registerClientPartial(`chunk-${i}`, "mk", `fp${i}`)
+      reg(`chunk-${i}`, "mk", `fp${i}`)
     }
     const out = getCachedPartialIds()
     expect(out.length).toBe(CACHED_MANIFEST_CAP)
@@ -101,10 +114,10 @@ describe("getCachedPartialIds — manifest cap", () => {
 
   it("re-registration refreshes an id's recency", () => {
     for (let i = 0; i < CACHED_MANIFEST_CAP + 10; i++) {
-      registerClientPartial(`p-${i}`, "mk", `fp${i}`)
+      reg(`p-${i}`, "mk", `fp${i}`)
     }
     // p-0 aged out; registering it again puts it back at the front.
-    registerClientPartial("p-0", "mk", "fp0b")
+    reg("p-0", "mk", "fp0b")
     const out = getCachedPartialIds()
     expect(out[0]).toBe("p-0:mk:fp0")
     expect(out[1]).toBe("p-0:mk:fp0b")
@@ -118,11 +131,9 @@ describe("CLIENT_POOL_CAP eviction — live-tree exemption", () => {
     // and referenced by the committed template. Its element identity is
     // stable, so it never re-registers for recency — exactly the entry
     // naive oldest-first eviction would destroy.
-    registerClientPartial("world", "mk", "fp-world")
     cacheStore(cache, "world", "mk", "WORLD-SUBTREE")
     registerClientPartial("world", "mk", "fp-world")
     // A sacrificial non-live entry registered before the flood.
-    registerClientPartial("stale-chunk", "mk", "fp-stale")
     cacheStore(cache, "stale-chunk", "mk", "STALE-SUBTREE")
     registerClientPartial("stale-chunk", "mk", "fp-stale")
     // The payload commit's prune records what the template references.
@@ -137,8 +148,8 @@ describe("CLIENT_POOL_CAP eviction — live-tree exemption", () => {
 
     // A scroll's worth of fresh registrations blows past the pool cap.
     for (let i = 0; i < CLIENT_POOL_CAP + 40; i++) {
-      registerClientPartial(`chunk-${i}`, "mk", `fp${i}`)
       cacheStore(cache, `chunk-${i}`, "mk", `SUBTREE-${i}`)
+      registerClientPartial(`chunk-${i}`, "mk", `fp${i}`)
     }
 
     // The live-referenced shell survived: a template re-render can still
@@ -157,7 +168,6 @@ describe("CLIENT_POOL_CAP eviction — live-tree exemption", () => {
     for (let i = 0; i < total; i++) live.set(`p-${i}`, new Set(["mk"]))
     pruneToLive(live)
     for (let i = 0; i < total; i++) {
-      registerClientPartial(`p-${i}`, "mk", `fp${i}`)
       cacheStore(cache, `p-${i}`, "mk", `SUBTREE-${i}`)
       registerClientPartial(`p-${i}`, "mk", `fp${i}`)
     }
@@ -174,8 +184,8 @@ describe("CLIENT_POOL_CAP eviction — lane-committed ids are live", () => {
     const React = (await import("react")).default
     const cache = getCurrentPagePartials()
     // The payload commit's live tree: just the shell.
-    registerClientPartial("shell", "mk", "fp-shell")
     cacheStore(cache, "shell", "mk", "SHELL")
+    registerClientPartial("shell", "mk", "fp-shell")
     pruneToLive(new Map([["shell", new Set(["mk"])]]))
 
     // A lane delivers a flip-in subtree BETWEEN payload commits — the
@@ -195,8 +205,8 @@ describe("CLIENT_POOL_CAP eviction — lane-committed ids are live", () => {
     // is DISPLAYED (the commit's re-render substitutes it), so it must
     // never be destroyed under it.
     for (let i = 0; i < CLIENT_POOL_CAP + 40; i++) {
-      registerClientPartial(`flood-${i}`, "mk", `fp${i}`)
       cacheStore(cache, `flood-${i}`, "mk", `SUBTREE-${i}`)
+      registerClientPartial(`flood-${i}`, "mk", `fp${i}`)
     }
     expect(cacheLookup(cache, "lane-chunk", "mk")).toBe(wrapper)
     expect(cacheLookup(cache, "shell", "mk")).toBe("SHELL")

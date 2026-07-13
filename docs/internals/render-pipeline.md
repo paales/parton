@@ -305,6 +305,24 @@ instead of confirming a ghost the client no longer holds. The
 producer writes the report at the destruction site itself — nothing
 infers loss.
 
+The purge also **sticks client-side** — the advertise-honesty gate:
+`registerClientPartial` registers an fp only while the
+`(id, matchKey)` content slot holds the subtree it describes, so the
+fingerprint map is always a subset of the restorable content (never
+advertise an fp for bytes you cannot restore). Without the gate, a
+parked parton's still-MOUNTED fiber (inline inside an ancestor's
+cached wrapper — an eviction deletes its slots without unmounting it)
+re-fires `PartialErrorBoundary`'s render-time fallback registration
+and resurrects the advertised fp; the next flip-in's `cached`
+statement then re-arms the very credit the `evicted` report revoked
+(a flip statement replaces the mirror layers wholesale), the server
+honestly confirms, and the confirm restores nothing — the
+scroll-stress backtrack deadlock. With the gate, both layers agree
+after an eviction: tokens gone client-side, credit revoked
+server-side, and the next flip-in states `cached#=0` — fresh bytes
+within one RTT. Fresh content (`cacheStore`) re-opens registration.
+Pinned by `advertise-honesty.test.tsx`.
+
 ## Preload (server-side warm intent)
 
 `useNavigation().preload(target)` (see

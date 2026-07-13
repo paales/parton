@@ -39,7 +39,12 @@ interface State {
  * Also doubles as the registration vehicle for the partial's
  * fingerprint on the client: during render we push
  * `(partialId, partialFingerprint)` into `_currentPageFingerprints` so the next
- * `getCachedPartialIds()` call picks it up.
+ * `getCachedPartialIds()` call picks it up. The registration is a
+ * FALLBACK to the commit walk's (which stores content first) and is
+ * gated on the content slot still holding the wrapper — a parked
+ * fiber can outlive its cache slots inside an ancestor's cached
+ * subtree, and its re-render must not resurrect an advertised fp the
+ * eviction already purged (see `registerClientPartial`).
  */
 export class PartialErrorBoundary extends React.Component<Props, State> {
   state: State = { error: null }

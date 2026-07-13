@@ -245,6 +245,24 @@ export function touchClientPartial(id: string): void {
 }
 
 export function registerClientPartial(id: string, matchKey: string, fingerprint: string): void {
+  // Advertise-honesty gate: an fp registers only while the
+  // (id, matchKey) CONTENT slot holds the subtree it describes — the
+  // invariant is "never advertise an fp for bytes you cannot restore".
+  // Every holdings surface reads the fingerprint map (`?cached=`, the
+  // attach body manifest, a culling flip's `cachedTokensFor`), and an
+  // fp stated without content makes the server's honest fp-skip
+  // verdict a GHOST CONFIRM: a zero-byte placeholder the substitution
+  // cannot fill, with no delta left anywhere to heal it (the
+  // scroll-stress parked-eviction deadlock). The commit walks store
+  // content BEFORE registering, so every content-backed registration
+  // passes; what this gates is `PartialErrorBoundary`'s render-time
+  // fallback registration re-firing from a still-mounted fiber (parked
+  // inline inside an ancestor's cached wrapper) AFTER an eviction
+  // destroyed the id's slots — it would resurrect the advertised fp
+  // with nothing restorable behind it. Fresh content (`cacheStore`)
+  // re-opens registration; until then the id honestly advertises
+  // nothing and its next appearance renders server-side.
+  if (!_currentPagePartials.get(id)?.has(matchKey)) return
   let inner = _currentPageFingerprints.get(id)
   if (!inner) {
     inner = new Map()
@@ -339,10 +357,12 @@ export function _setManifestPriorityIds(fn: () => readonly string[]): void {
  * Source of truth is `_currentPageFingerprints`, not
  * `_currentPagePartials`. Every rendered Partial — top-level OR deep
  * (`.map()`-generated, nested inside an ancestor's subtree) —
- * registers its (matchKey, fingerprint) client-side as its wrapper
- * mounts via `PartialErrorBoundary`. Reporting from
- * `_currentPageFingerprints` means the skip-on-unchanged optimization
- * applies uniformly across the entire tree.
+ * registers its (matchKey, fingerprint) client-side as the commit walk
+ * caches its wrapper (with `PartialErrorBoundary`'s render as the
+ * fallback vehicle). Reporting from `_currentPageFingerprints` means
+ * the skip-on-unchanged optimization applies uniformly across the
+ * entire tree — and the advertise-honesty gate keeps the map a subset
+ * of the content slots, so every token stated here is restorable.
  */
 export function getCachedPartialIds(): string[] {
   const out: string[] = []

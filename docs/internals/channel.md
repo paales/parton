@@ -396,6 +396,13 @@ Four rules keep the layers truthful:
   `visible` frame's stated holdings REPLACE the id's entry in BOTH
   layers (`applyReportedCached`) — an acked-then-evicted fp must
   never confirm a phantom copy. Burst-race semantics are untouched.
+  The statement's truthfulness is the CLIENT's obligation: because it
+  replaces the layers wholesale, it would re-arm any credit an
+  `evicted` report just revoked — which is why the advertised set is
+  gated at its writer (`registerClientPartial` registers only while
+  the content slot is restorable; see
+  [render-pipeline.md](./render-pipeline.md) §Bounding the client
+  cache).
 - **Loss is reportable** (`AckFrame.evicted`). A client-side
   destruction of COMMITTED content — the pool-cap eviction, the
   cull-park LRU eviction, the payload prune, a displayed cull pair

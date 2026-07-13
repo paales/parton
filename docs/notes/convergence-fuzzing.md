@@ -493,40 +493,64 @@ wrap, write b=8]`; seed 5722 — same shape). Mechanism: one drain
   shrunk sequences, red without the fix):
   `framework/src/lib/__tests__/rival-lane-heal.rsc.test.tsx`.
 
-- **Browser-level finding — ROOT-CAUSED, open (client merge layer):
-  the flip-in confirm against a stated holding whose CONTENT the
-  client already evicted.** `website/validate-scroll-stress.mjs`
-  intermittently (~1 in 3 runs) fails its RE-ENTRY batteries
-  (diagonalBack / southCruise / zigzag / longHaulReturn backtracks)
-  with persistent 2×2 chunk holes inside stuck quad-tile placeholders
-  — previously-visited-then-parked territory only. NOT F7 (the F7 fix
-  does not heal it) and NOT a server-lane bug. The instrumented chain
-  (server flip/lane traces + client IO/controller/transport hooks,
-  one stuck quad end-to-end): the client's re-entry flip-in statement
-  carried `cached` tokens for the quad (`cached#=2` — `cachedTokensFor`
-  reads `_currentPageFingerprints`), the server honored the claim and
-  CONFIRMED with the zero-byte placeholder (878-byte lane) — but the
-  client's CONTENT for the quad was already gone (evicted from the
-  client cache during the scroll churn while its fp tokens survived),
-  so the confirm restored nothing and the skeleton stood. The
-  deadlock is total and mutual: the controller's baseline says
-  in-view (the flip resolved), the session set holds the id, the
-  server mirror holds the confirmed fp — no delta exists anywhere, so
-  nothing re-states or re-lanes until an unrelated out/in cycle whose
-  statement happens to carry `cached#=0` (then the server renders
-  fresh and heals instantly — observed) or the 30s reconcile. The
-  regression detector (`_visibilityContentRegressed`) never fires:
-  there is no content→skeleton TRANSITION to observe — the content
-  was destroyed while parked, before the confirm. The bug is the
-  client's holdings statement lying: a content eviction (the cache
-  pool's `evictOldest` cap path over parked entries) must either
-  purge the id's advertised fp tokens (`partial-client-state.ts`) or
-  ride upstream as an eviction report (the `AckFrame.evicted`
-  machinery the clobber healer already uses) so the flip's lane
-  renders instead of confirming. Client merge layer
-  (`partial-cache.ts` / `partial-client-state.ts` / the pair) — not
-  fixed here (concurrently owned surface); the scroll-stress CI step
-  stays ADVISORY until this lands.
+- **Browser-level finding — FIXED (client merge layer): the flip-in
+  confirm against a stated holding whose CONTENT the client already
+  evicted.** `website/validate-scroll-stress.mjs` intermittently
+  failed its RE-ENTRY batteries (diagonalBack / southCruise / zigzag /
+  longHaulReturn backtracks) with persistent 2×2 chunk holes inside
+  stuck quad-tile placeholders — previously-visited-then-parked
+  territory only. NOT F7 and NOT a server-lane bug. The instrumented
+  chain (server flip/lane traces + client IO/controller/transport
+  hooks, one stuck quad end-to-end): the client's re-entry flip-in
+  statement carried `cached` tokens for the quad (`cached#=2` —
+  `cachedTokensFor` reads `_currentPageFingerprints`), the server
+  honored the claim and CONFIRMED with the zero-byte placeholder —
+  but the client's CONTENT for the quad was already gone, so the
+  confirm restored nothing and the skeleton stood. The deadlock was
+  total and mutual: controller baseline in-view, session set holds
+  the id, server mirror holds the confirmed fp — no delta anywhere
+  until a lucky later flip stating `cached#=0` or the 30s reconcile.
+  The regression detector (`_visibilityContentRegressed`) never
+  fires: the content died PARKED, before the confirm — no
+  content→skeleton transition exists to observe.
+
+  **The actual gap — which layer lied.** Both destroyers already
+  purged BOTH maps and reported upstream (`evictCulledContent` and
+  the pool-cap `evictOldest` delete cache + fps together and ride
+  `AckFrame.evicted`; the server revokes every credit layer). The
+  tokens RESURRECTED after the purge: `PartialErrorBoundary`'s
+  render-time fallback registration (`registerClientPartial` from
+  `render()`) re-fires from a still-MOUNTED fiber — a parked parton
+  lives inline inside an ancestor's cached wrapper, so the eviction
+  deletes its slots without unmounting it, and any later re-render
+  (an ancestor's restore, an offscreen prerender) re-advertised the
+  fp with nothing restorable behind it. A probe build confirmed the
+  writer in the field: every `[resurrect-after-eviction]` stack ran
+  through `PartialErrorBoundary.render`. The server-side revocation
+  cannot defend against it — the next flip statement's `cached`
+  tokens REPLACE the mirror layers wholesale (`applyReportedCached`,
+  the F4 discipline), so a lying client statement re-arms the credit
+  the report just revoked. The client's advertised set is the
+  load-bearing layer.
+
+  **Fix — the advertise-honesty gate** (`registerClientPartial`,
+  `partial-client-state.ts`): an fp registers only while the
+  `(id, matchKey)` CONTENT slot holds the subtree it describes — the
+  invariant "never advertise an fp for bytes you cannot restore",
+  enforced structurally at the one writer of the advertised set
+  (`_currentPageFingerprints` ⊆ `_currentPagePartials`, per variant).
+  The commit walks store content before registering, so every honest
+  registration passes; the boundary's fallback registration becomes a
+  no-op exactly when the content is gone, the next flip-in states
+  `cached#=0`, and the server renders fresh — heal within one flip
+  RTT, with the `evicted` report (already wired) agreeing
+  server-side. Deterministic regression (map-level, the mounted-PEB
+  re-render, and the flip statement's `cached#=0`):
+  `framework/src/lib/__tests__/advertise-honesty.test.tsx`. The
+  scroll-stress CI step is now a HARD GATE (the validator excludes
+  the one DESIGNED ≥400 answer — a `/__parton/channel` 404 for an
+  envelope racing the auto-upgrade's park-exit close, which the
+  transport self-heals by re-owning the frames).
 
 - **Harness finding (fixed alongside F1): a covering segment is not
   a quiescence proof.** The settle protocol formerly terminated a

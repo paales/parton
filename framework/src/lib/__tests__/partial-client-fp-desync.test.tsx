@@ -7,6 +7,7 @@ import {
   registerClientPartial,
   _applyFpUpdates,
 } from "../partial-client.tsx"
+import { cacheStore, getCurrentPagePartials } from "../partial-client-state.ts"
 import { PartialErrorBoundary } from "../partial-error-boundary.tsx"
 
 /**
@@ -150,7 +151,12 @@ describe("fp-set / slot desync on a stable (id, matchKey)", () => {
     // the latest matchKey" heuristic would have mis-pinned A's warm fp
     // onto B.
     const id = "multi-variant"
+    // Registration requires restorable content (the advertise-honesty
+    // gate) — fill each variant's slot the way the commit walk does.
+    const cache = getCurrentPagePartials()
+    cacheStore(cache, id, "mkA", <div data-variant="A" />)
     registerClientPartial(id, "mkA", "a_cold")
+    cacheStore(cache, id, "mkB", <div data-variant="B" />)
     registerClientPartial(id, "mkB", "b_cold") // B is the latest
 
     _applyFpUpdates({ [id]: { from: "a_cold", to: "a_warm" } })

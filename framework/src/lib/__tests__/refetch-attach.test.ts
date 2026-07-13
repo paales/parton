@@ -10,8 +10,10 @@
 import { afterEach, describe, expect, it } from "vitest"
 import {
   CACHED_MANIFEST_CAP,
+  cacheStore,
   getAllCachedPartialTokens,
   getCachedPartialIds,
+  getCurrentPagePartials,
   pruneToLive,
   registerClientPartial,
 } from "../partial-client-state.ts"
@@ -20,9 +22,13 @@ afterEach(() => {
   pruneToLive(new Map())
 })
 
-/** Register `n` distinct (id, matchKey, fp) tokens. */
+/** Register `n` distinct (id, matchKey, fp) tokens — content first,
+ *  the commit walk's order (registration requires a restorable slot:
+ *  the advertise-honesty gate). */
 function registerTokens(n: number): void {
+  const cache = getCurrentPagePartials()
   for (let i = 0; i < n; i++) {
+    cacheStore(cache, `tok-${i}`, "aaaaaaaaaaaaaaaa", `SUBTREE-${i}`)
     registerClientPartial(`tok-${i}`, "aaaaaaaaaaaaaaaa", `fp-${i}`)
   }
 }

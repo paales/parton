@@ -212,6 +212,15 @@ try {
   const netFails = []
   const pageErrors = []
   page.on("response", (r) => {
+    // A 404 on the channel endpoint is the DESIGNED "connection gone"
+    // answer (`handleChannelPost`, connection-session.ts), not a failed
+    // request: under the auto-upgrade, statements ride the old fetch
+    // connection through its park-exit wind-down, and an envelope in
+    // flight at the close lands after the session is gone. The client
+    // transport consumes the 404 as a delivery failure and re-owns the
+    // frames onto the next attach — self-healing by contract, and the
+    // convergence checks above prove the heal. Anything else ≥400 fails.
+    if (r.status() === 404 && r.url().includes("/__parton/channel")) return
     if (r.status() >= 400) netFails.push(`${r.status()} ${r.url().slice(0, 120)}`)
   })
   page.on("requestfailed", (r) => {
