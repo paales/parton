@@ -41,12 +41,19 @@ for renders with no channel — a degraded page's frame navigation and
 the CMS preview iframe; `PartialRoot` reads the params off the
 document URL and writes the same session store before any spec runs.
 The session is
-cookie-backed (`__frame_sid`); state lives in the in-memory store in
-`framework/src/runtime/session.ts`. Entries expire on inactivity —
-every read or write refreshes the session's idle clock, so an active
-session's frame URLs never vanish under the user; sessions idle past
-the TTL (default 30 minutes, `configureSessionStore({ idleTtlMs })`)
-are dropped, bounding the store in a long-lived process.
+cookie-backed (`__frame_sid`); state lives behind the pluggable
+`SessionStore` interface in `framework/src/runtime/session.ts` —
+`MemorySessionStore` by default (per-process, gone on restart), or
+`setSessionStore(new SqliteSessionStore(path))` from
+`runtime/session-store-sqlite.ts` when sessions must survive restarts
+(pass the SQLite cell adapter's `db` to share one database file; see
+[`cell-internals.md`](./cell-internals.md#the-adapter-matrix)). The
+expiry policy is backend-independent and lives above the store:
+entries expire on inactivity — every read or write refreshes the
+session's idle clock, so an active session's frame URLs never vanish
+under the user; sessions idle past the TTL (default 30 minutes,
+`configureSessionStore({ idleTtlMs })`) are dropped by a rate-limited
+sweep, bounding the store in a long-lived process.
 
 ## Client-side handle
 

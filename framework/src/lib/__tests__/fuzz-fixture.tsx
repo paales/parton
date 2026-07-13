@@ -7,10 +7,14 @@
  * `docs/notes/convergence-fuzzing.md`.
  */
 
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { ReactNode } from "react"
 import { runWithRequestAsync } from "../../runtime/context.ts"
 import { _clearInvalidationRegistry } from "../../runtime/invalidation-registry.ts"
 import { MemoryCellStorage, setCellStorage, _resetCellStorage } from "../../runtime/cell-storage.ts"
+import { SqliteCellStorage } from "../../runtime/cell-storage-sqlite.ts"
 import type { FuzzFixture } from "../../test/fuzz-harness.ts"
 import { localCell } from "../cell.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
@@ -176,9 +180,26 @@ export const fixture: FuzzFixture = {
   ],
 }
 
+// FUZZ_CELL_STORAGE=sqlite runs every sequence's cell traffic through
+// the SQLite adapter (one shared database for the whole run, cleared
+// per sequence; `persistScopes: "all"` because the harness runs each
+// sequence in a fresh non-default scope — without it the traffic would
+// land in the adapter's memory bucket and never touch SQL).
+const FUZZ_SQLITE = process.env.FUZZ_CELL_STORAGE === "sqlite"
+let fuzzSqlite: SqliteCellStorage | null = null
+
 export function isolate(): void {
   clearRegistry("all")
   _clearInvalidationRegistry()
   _resetCellStorage()
-  setCellStorage(new MemoryCellStorage())
+  if (FUZZ_SQLITE) {
+    fuzzSqlite ??= new SqliteCellStorage(
+      join(mkdtempSync(join(tmpdir(), "parton-fuzz-cells-")), "cells.db"),
+      { persistScopes: "all" },
+    )
+    fuzzSqlite.clear("all")
+    setCellStorage(fuzzSqlite)
+  } else {
+    setCellStorage(new MemoryCellStorage())
+  }
 }

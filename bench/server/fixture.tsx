@@ -19,6 +19,8 @@
  */
 
 import { localCell, type LocalCell } from "@parton/framework/lib/cell.ts"
+import { hash } from "@parton/framework/lib/hash.ts"
+import { stableStringify } from "@parton/framework/lib/stable-stringify.ts"
 import { PartialRoot, parton, type RenderArgs } from "@parton/framework/lib/partial.tsx"
 import { buildCellSelector } from "@parton/framework/runtime/invalidation-registry.ts"
 import type { ReactNode } from "react"
@@ -73,6 +75,11 @@ export interface DashboardFixture {
   /** Partition-scoped selectors for each live leaf's cell — the exact
    *  string a cell write fires. Bump index i to shift only leaf i. */
   liveSelectors: string[]
+  /** Storage addresses of the live leaves' rows, parallel to
+   *  `liveSelectors`. `BENCH_SEED_ROWS` writes each once before the
+   *  run so every bump's commit-time stamp lands on a REAL row —
+   *  the storage-adapter A/B's write-path stress. */
+  liveRows: Array<{ cellId: string; partitionKey: string }>
   /** Resolved parameters (live clamped to partons). */
   params: Required<DashboardParams>
 }
@@ -170,6 +177,7 @@ export function buildDashboardPage(params: DashboardParams): DashboardFixture {
     : null
 
   const liveSelectors: string[] = []
+  const liveRows: Array<{ cellId: string; partitionKey: string }> = []
   const leaves: ReactNode[] = []
   for (let i = 0; i < partons; i++) {
     if (i < liveCells) {
@@ -178,11 +186,16 @@ export function buildDashboardPage(params: DashboardParams): DashboardFixture {
         leaves.push(<Leaf key={i} />)
         // The exact selector a `pulse.set(v, {partition: {part: i}})` fires.
         liveSelectors.push(buildCellSelector(PULSE_CELL_ID, { part: i }))
+        liveRows.push({ cellId: PULSE_CELL_ID, partitionKey: hash(stableStringify({ part: i })) })
       } else {
         const Leaf = makeLiveLeaf(i, idPrefix)
         leaves.push(<Leaf key={i} />)
         // Inline cell id is `<partonId>/value`; single-slot partition `{}`.
         liveSelectors.push(buildCellSelector(`${idPrefix}leaf-${i}/value`, {}))
+        liveRows.push({
+          cellId: `${idPrefix}leaf-${i}/value`,
+          partitionKey: hash(stableStringify({})),
+        })
       }
     } else {
       const Leaf = makeStaticLeaf(i, idPrefix)
@@ -196,6 +209,7 @@ export function buildDashboardPage(params: DashboardParams): DashboardFixture {
   return {
     Page,
     liveSelectors,
+    liveRows,
     params: { partons, liveCells, depth, sharedPulseCell, idPrefix },
   }
 }

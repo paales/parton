@@ -1,48 +1,35 @@
 /**
- * Remote endpoint dispatch — the host-app side of `<RemoteFrame>`.
+ * Remote metadata endpoints — static concerns of the page-embed model.
  *
- * An app that wants to expose its addressable partons as remote
- * frames mounts a single handler:
- *
- *     const remote = createRemoteHandler({
- *       name: "magento",
- *       renderToFlightStream: (element) =>
- *         renderToReadableStream(element, { onError: ... }),
- *       typesPath: new URL("./app/remote-types.ts", import.meta.url).pathname,
- *     })
- *
- *     // in your fetch handler:
- *     const r = await remote(request)
- *     if (r) return r
- *
- * The handler claims these paths:
+ * Embedding needs NO dedicated render route: a `<RemoteFrame>` fetches
+ * an ORDINARY page URL as Flight (the embed headers — see
+ * `lib/page-embed.ts`), so an app exposing one parton publishes a page
+ * whose route renders just that parton. What remains here is the
+ * static metadata the `parton add` CLI consumes:
  *
  *   OPTIONS  *                         → CORS preflight (204)
- *   GET      /__remote/manifest.json   → spec inventory for the CLI
+ *   GET      /__remote/manifest.json   → embeddable-page inventory
  *   GET      /__remote/types.d.ts      → author-provided types file
- *   GET      /__remote/<selector>      → Flight bytes + snapshot trailer
  *
  * Any other path returns `null` so the caller can fall through to
  * its normal page handler.
+ *
+ * The manifest lists every addressable spec; specs whose `match`
+ * carries a STATIC pathname (a literal URLPattern — no params, no
+ * wildcards) additionally advertise it as `path`: the page a typed
+ * binding embeds. The classification reads the compiled pattern's
+ * grammar, not a guess about intent — a pathname pattern without
+ * URLPattern syntax IS a single fixed page.
  */
 
 import { promises as fs } from "node:fs"
-import type { ReactNode } from "react"
-import { ROOT } from "../lib/partial.tsx"
-import { getSpecById, listSpecs } from "../lib/spec-catalog.ts"
-import { enterRequestRegistry, getActiveRegistry } from "../lib/partial-registry.ts"
-import { wrapStreamWithSnapshotTrailer } from "../lib/snapshot-trailer.ts"
-import { CAPABILITY_HEADER, decodeCapability, runWithCapability } from "./capability.ts"
-import { runWithRequestAsync } from "./context.ts"
+import { listSpecs } from "../lib/spec-catalog.ts"
+import type { CompiledMatch } from "../lib/match.ts"
 
 export interface RemoteHandlerOptions {
   /** Short app name. Appears in the manifest so generated bindings
    *  carry a stable identifier. */
   name: string
-  /** Callback that produces a Flight stream from a React element.
-   *  Each app passes its own bound `renderToReadableStream` so the
-   *  framework doesn't need to depend on `@vitejs/plugin-rsc/rsc`. */
-  renderToFlightStream: (element: ReactNode) => ReadableStream<Uint8Array>
   /** Absolute filesystem path to the author's `remote-types.ts` (or
    *  any TypeScript file). The handler serves its raw contents at
    *  `/__remote/types.d.ts` so the CLI can copy them into the
@@ -52,7 +39,7 @@ export interface RemoteHandlerOptions {
 }
 
 /** Permissive CORS for v1 — capability scoping is the trust boundary
- *  the host can rely on; the request itself is `credentials: "omit"`. */
+ *  the host can rely on; embed fetches are `credentials: "omit"`. */
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, OPTIONS",
@@ -62,15 +49,19 @@ const CORS_HEADERS = {
 
 const MANIFEST_PATH = "/__remote/manifest.json"
 const TYPES_PATH = "/__remote/types.d.ts"
-const REMOTE_PREFIX = "/__remote/"
 
 export interface RemoteManifestSpec {
-  /** Canonical spec id; the URL is `<origin>/__remote/<selector>`. */
+  /** Canonical spec id (the first refetch label). */
   selector: string
   /** PascalCase export name the CLI will use in generated bindings. */
   exportName: string
   /** Refetch labels (first is `selector`). */
   labels: string[]
+  /** The embeddable page path for this spec — its `match`'s static
+   *  pathname — or null when the spec has no single fixed page (no
+   *  match, params, wildcards). The CLI generates bindings only for
+   *  specs with a path. */
+  path: string | null
   /** Type name in the served `types.d.ts`, or null if the spec
    *  doesn't declare a capability. */
   capabilityType: string | null
@@ -82,6 +73,15 @@ export interface RemoteManifest {
   specs: RemoteManifestSpec[]
 }
 
+/** URLPattern pathname syntax — `:name` params, `*` wildcards, groups,
+ *  and modifiers. A pathname pattern containing none of these is a
+ *  literal path (one fixed page). */
+function staticPathOf(match: CompiledMatch | undefined): string | null {
+  const pathname = match?.urlPattern?.pathname
+  if (!pathname) return null
+  return /[:*?+(){}]/.test(pathname) ? null : pathname
+}
+
 export function buildRemoteManifest(name: string, origin: string): RemoteManifest {
   const specs = listSpecs()
     .filter((s) => s.addressable !== false)
@@ -89,6 +89,7 @@ export function buildRemoteManifest(name: string, origin: string): RemoteManifes
       selector: s.id,
       exportName: pascalCase(s.id),
       labels: s.labels,
+      path: staticPathOf(s.match),
       capabilityType: s.capabilityType ?? null,
     }))
     .sort((a, b) => a.selector.localeCompare(b.selector))
@@ -155,36 +156,6 @@ export function createRemoteHandler(
           },
         })
       }
-    }
-
-    if (url.pathname.startsWith(REMOTE_PREFIX)) {
-      const id = decodeURIComponent(url.pathname.slice(REMOTE_PREFIX.length))
-      const spec = getSpecById(id)
-      if (!spec || spec.addressable === false) {
-        return new Response(`Unknown spec: ${id}`, {
-          status: 404,
-          headers: CORS_HEADERS,
-        })
-      }
-      const Component = spec.Component
-      const capability = decodeCapability(request.headers.get(CAPABILITY_HEADER))
-      const { result: stream } = await runWithRequestAsync(request, async () => {
-        enterRequestRegistry("__remote", "streaming")
-        return runWithCapability(capability, () => {
-          const flightStream = opts.renderToFlightStream(<Component />)
-          return wrapStreamWithSnapshotTrailer(flightStream, () => {
-            const reg = getActiveRegistry()
-            return reg ? reg.pendingWrites : new Map()
-          })
-        })
-      })
-      return new Response(stream, {
-        status: 200,
-        headers: {
-          "content-type": "text/x-component;charset=utf-8",
-          ...CORS_HEADERS,
-        },
-      })
     }
 
     return null

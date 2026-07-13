@@ -149,9 +149,24 @@ increments land exactly 100; `cell-update.rsc.test.tsx` proves it).
 There is no separate lock; what would break the invariant is adding an
 `await` inside `updateOneCell` (or before `writeOneCell`'s storage
 write). Async work (the cold loader) is hoisted OUT of the section,
-with the still-cold re-check making it clobber-safe. Cross-process
-writers are outside this contract (sticky sessions are the accepted
-constraint).
+with the still-cold re-check making it clobber-safe.
+
+**The store-level CAS (cross-process writers).** A second process sits
+outside the event loop's protection, so on a VERSIONED adapter — one
+implementing `readVersioned`/`writeIfVersion`, i.e. the SQLite tier —
+`updateOneCell` runs the same synchronous section as a
+compare-and-swap (`runtime/cell-cas.ts`): read the row + its
+store-owned write counter, compute `next`, commit only if the version
+is unchanged. A conflict — possible only when another process
+committed between the read and the write — re-reads and recomputes, so
+updates compose across processes too (`cell-update-sqlite.rsc.test.ts`
+forces the interleave through a second handle;
+`cell-storage-sqlite-contention.test.ts` proves zero lost updates with
+two real child processes). Single-process cost is one versioned read +
+one conditional write, still zero awaits — the retry branch is
+unreachable in-process. Adapters without the versioned methods
+(memory, JSON file, the `atomic()` overlay view) keep the plain path;
+their cross-process posture is last-writer-wins per key.
 
 Under `atomic()` the section reads and writes the transaction overlay
 (`_txView` via `cellStorageForArgs`), so an update composes over
@@ -232,7 +247,9 @@ crosses Flight.
 Two storage tiers, accessed via different module functions:
 
 - **Persistent (`getCellStorage`)** — disk-backed singleton
-  (`JsonFileCellStorage` at `cms/data/cells.json` by default).
+  (`JsonFileCellStorage` at `cms/data/cells.json` by default — the
+  dev tier; `setCellStorage(new SqliteCellStorage(path))` for
+  durable / multi-process deployments, see §The adapter matrix).
   Survives process restart. `localCell` defaults here.
 - **Ephemeral (`getEphemeralCellStorage`)** — connection-scoped
   `MemoryCellStorage`. Lazily created on first access via
@@ -537,7 +554,9 @@ same way: every entry in the batch participates in one outer
 ## Storage
 
 Pluggable via `setCellStorage(backend)`; default is
-`JsonFileCellStorage` at `<CMS_DATA_DIR or cms/data>/cells.json`.
+`JsonFileCellStorage` at `<CMS_DATA_DIR or cms/data>/cells.json` —
+a **dev default**: whole-snapshot, debounced, single-process (the
+matrix below is the choice surface).
 
 ```ts
 export interface CellStorage {
@@ -550,21 +569,66 @@ export interface CellStorage {
   stampTs?(scope, cellId, partitionKey, ts): void // existing rows only
   hasTs?(scope, cellId): boolean // restore fast-path guard
   maxTs?(): number // seats the registry counter
+  // Versioned writes (optional — the store-level CAS for update()):
+  readVersioned?(scope, cellId, partitionKey): { value; version } | undefined
+  writeIfVersion?(scope, cellId, partitionKey, value, expectedVersion): boolean
 }
 ```
 
 Reads are **sync** — a warm cell resolution inside the render path
 never awaits storage (only a cold loader does). Writes are sync at
 the API boundary; durability is a property of the adapter (in-memory
-adapters are instant; `JsonFileCellStorage` debounces to disk).
+adapters are instant; `JsonFileCellStorage` debounces to disk;
+`SqliteCellStorage` commits before returning).
+
+### The adapter matrix
+
+| | `MemoryCellStorage` | `JsonFileCellStorage` (default) | `SqliteCellStorage` (`runtime/cell-storage-sqlite.ts`) |
+|---|---|---|---|
+| Granularity | per-key map | **whole-snapshot file** — every flush rewrites the entire store from THIS process's memory | per-key row `(scope, cellId, partitionKey)` |
+| Durability | none (tests, ephemeral tier) | debounced ~100 ms; SIGKILL inside the window drops the tail | committed to the WAL when `write()` returns — survives SIGKILL (proven by `cell-storage-sqlite-contention.test.ts`); `synchronous=NORMAL`, so OS crash / power loss can drop the un-checkpointed tail |
+| Multi-process | n/a | **unsafe** — last flusher wins the file, silently reverting the other process's keys (harness scenario D) | safe: per-key write ordering from SQLite's write lock; independent handles read committed rows immediately |
+| `update(fn)` | event-loop serialization | event-loop serialization | event-loop serialization + store-level CAS (`readVersioned`/`writeIfVersion`) |
+| ts contract | full | full | full (ts as a column) |
+| Wiring | `setCellStorage(new MemoryCellStorage())` | default | `setCellStorage(new SqliteCellStorage(path))` — deep import; NOT in the barrel (native module: only apps that opt in carry better-sqlite3) |
+
+Scope routing is identical across the persistent adapters: only the
+`default` scope persists; test scopes (`x-test-scope`) live in
+process memory (`SqliteCellStorage` accepts
+`{ persistScopes: "all" }` for harnesses that want scoped traffic on
+the database — the convergence fuzzer uses it).
+
+The same seam split applies to sessions: `setSessionStore` in
+`runtime/session.ts` swaps the in-memory `MemorySessionStore` for
+`SqliteSessionStore` (`runtime/session-store-sqlite.ts`), which can
+share the cell adapter's database handle. The idle-TTL/touch/sweep
+policy lives above the store and is backend-independent
+(`session.test.tsx` runs its whole suite over both).
+
+### The consistency contract (publish-after-commit)
+
+The write pipeline's ordering — `storage.write` first, invalidation
+bump second; under `atomic()` the overlay flushes every value to real
+storage before the transaction's `commitOne` fan-out — is what the
+federation arc's consistency model calls **publish-after-commit**: a
+bump is a doorbell, never a payload. On a synchronous-commit shared
+store (SQLite) that ordering is a cross-process guarantee: any
+subscriber a bump wakes re-reads the store and finds the committed
+row, in this process or another
+(`cell-update-sqlite.rsc.test.ts` §publish-after-commit reads through
+an independent handle at wake time). The JSON adapter satisfies the
+ordering only in-process — its disk image lags the bump by the
+debounce window, which is exactly why it cannot back a multi-process
+deployment.
 
 ### The invalidation ts rides the row
 
 Each row can carry the `ts` of the bump that committed it — stored in
-a map **parallel** to the values (the value read path stays a bare map
-chain), stamped by the invalidation registry at bump commit through
-the ts bridge `cell-write.ts` registers (`_setInvalidationTsBridge`).
-Contract points:
+a map **parallel** to the values in the memory/JSON adapters (the
+value read path stays a bare map chain), and as a plain `ts` column in
+the SQLite adapter — stamped by the invalidation registry at bump
+commit through the ts bridge `cell-write.ts` registers
+(`_setInvalidationTsBridge`). Contract points:
 
 - **`write` preserves any prior ts.** A value write without a stamp —
   a loader seeding a cold slot, `hydrate`, the `atomic()` overlay
@@ -654,8 +718,10 @@ Rapid-fire writes (the streaming-demo's per-second tick, an
 autosave-on-keystroke form) coalesce into one file write per
 window. On process exit a sync flush attempt drains the pending
 write — best-effort; if the process is killed harder, the most
-recent few writes can be lost. Cells aren't the right primitive
-for durability-critical state.
+recent few writes can be lost. That window is the dev-default
+tradeoff; a deployment that can't accept it wires the SQLite adapter
+(§The adapter matrix), whose writes are committed before `write()`
+returns.
 
 ### Atomic writes
 
@@ -678,7 +744,13 @@ setCellStorage(redisStorage)
 A driver may also implement the optional ts methods
 (`readTs`/`stampTs`/`hasTs`/`maxTs`) to join the eviction/restore
 contract; without them its rows are ts-unknown (unbacked — never
-evicted, cold re-record after restart).
+evicted, cold re-record after restart). A driver shared by multiple
+processes should additionally implement the versioned pair
+(`readVersioned`/`writeIfVersion`) so `update(fn)` runs as a
+store-level CAS instead of last-writer-wins (the SQLite adapter is
+the reference implementation, and
+`cell-ts-persistence.rsc.test.ts` — parameterized over backends — is
+the conformance suite to run a new driver through).
 
 Drivers that need async reads (Redis, KV) ship a sync-ish wrapper
 or a warm-cache step the runtime awaits at request entry — same

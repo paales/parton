@@ -21,6 +21,28 @@
  * runs to completion within one tick. There is no separate lock to
  * acquire — adding an `await` inside `updateOneCell` (or inside
  * `writeOneCell` before the storage write) is what would break it.
+ *
+ * Cross-process writers sit OUTSIDE the event loop's protection. On a
+ * versioned storage adapter (`readVersioned`/`writeIfVersion` — the
+ * SQLite tier) `updateOneCell` runs the same synchronous section as a
+ * store-level compare-and-swap (`cell-cas.ts`): a conflict — possible
+ * only when another PROCESS committed between the read and the write —
+ * re-reads and recomputes, so updates compose across processes too.
+ * Adapters without the versioned methods (memory, JSON file, the
+ * `atomic()` overlay view) keep the plain zero-overhead path.
+ *
+ * ── Publish-after-commit ─────────────────────────────────────────────
+ * Every mutation commits its value to storage BEFORE its invalidation
+ * bump publishes: `writeOneCell` runs `storage.write` and only then
+ * `reload({selector})`, and under `atomic()` the overlay flushes every
+ * buffered value to real storage before the transaction's `commitOne`
+ * fan-out fires (see `atomic` in lib/cell.ts). With a synchronous-
+ * commit shared store (the SQLite adapter) that ordering is the
+ * federation arc's consistency contract: a bump is a doorbell, never a
+ * payload — any subscriber it wakes re-reads the store and finds the
+ * committed row, in this process or another. Reordering these two
+ * steps (or making the storage write async-lagging, as a debounced
+ * whole-file flush is across processes) is what would break it.
  */
 
 import {
@@ -30,6 +52,7 @@ import {
   type CellInterface,
   type CellPartitionScope,
 } from "../lib/cell.ts"
+import { casUpdateRow, type VersionedCellStore } from "./cell-cas.ts"
 import { hash } from "../lib/hash.ts"
 import { stableStringify } from "../lib/stable-stringify.ts"
 import { getRegisteredMatchPatterns } from "../lib/partial.tsx"
@@ -202,12 +225,45 @@ export function writeOneCell(
     args = cell.partition(scope)
   }
   const partitionKey = hash(stableStringify(args))
+  // Storage commit first, bump second — the publish-after-commit
+  // ordering (module header): the doorbell must never ring before the
+  // value is readable from the store.
   cellStorageForArgs(cell, args).write(getScope(), cellId, partitionKey, stored)
-  // Count the write for the deferred-commit decision. A write to a
-  // `deferred` cell lets the action response skip its re-render — the
-  // open streaming connection carries the new value instead.
+  publishCellWrite(cell, args)
+}
+
+/** The publish half of every mutation — runs strictly AFTER the value
+ *  landed in storage: tally the write for the deferred-commit decision
+ *  (a write to a `deferred` cell lets the action response skip its
+ *  re-render; the open streaming connection carries the value), then
+ *  fire the partition-scoped invalidation bump. */
+function publishCellWrite(cell: CellInterface<unknown>, args: Record<string, unknown>): void {
   _recordCellWrite(cell.deferred === true)
-  getServerNavigation().reload({ selector: buildCellSelector(cellId, args) })
+  getServerNavigation().reload({ selector: buildCellSelector(cell.id, args) })
+}
+
+/** Mirror of `resolveCellValue`'s warm-read coercion: a stored value
+ *  that fails shape validation (stale disk state after a shape change)
+ *  degrades to `defaultValue`; an absent/invalidated slot reads as
+ *  `defaultValue` too (cold loaders are the caller's concern —
+ *  `updateCell` warms the slot before entering the critical section). */
+function coerceStored(cell: CellInterface<unknown>, raw: unknown): unknown {
+  if (raw === undefined) return cell.defaultValue
+  try {
+    return cell.validate(raw)
+  } catch {
+    return cell.defaultValue
+  }
+}
+
+function assertSyncUpdaterResult(cellId: string, next: unknown): void {
+  if (typeof (next as PromiseLike<unknown> | null)?.then === "function") {
+    throw new TypeError(
+      `cell-update: cell "${cellId}": updater returned a thenable — updaters must be ` +
+        `synchronous ((current) => next). An async updater would reopen the read→write ` +
+        `gap the synchronous section closes, so concurrent updates could clobber again.`,
+    )
+  }
 }
 
 /**
@@ -230,6 +286,17 @@ export function writeOneCell(
  * concern (`updateCell` in lib/cell.ts warms the slot before entering
  * this section) — a loader is async and cannot live inside the
  * synchronous critical section.
+ *
+ * On a VERSIONED adapter the same section runs as a store-level
+ * compare-and-swap (`casUpdateRow`) so cross-process writers compose
+ * too; the retry branch only executes when the store reports a version
+ * conflict, which an in-process writer cannot produce (the section is
+ * synchronous), so single-process cost is one versioned read + one
+ * conditional write — still zero awaits. The `atomic()` overlay view
+ * deliberately exposes no versioned methods: inside a transaction the
+ * update composes over the buffered batch instead (in-process
+ * semantics), and the batch's cross-process story is last-writer-wins
+ * per key, per the consistency contract.
  */
 export function updateOneCell(
   cell: CellInterface<unknown>,
@@ -238,24 +305,23 @@ export function updateOneCell(
 ): void {
   const partitionKey = hash(stableStringify(args))
   const storage = cellStorageForArgs(cell, args)
-  const raw = storage.read(getScope(), cell.id, partitionKey)
-  let current: unknown
-  if (raw === undefined) {
-    current = cell.defaultValue
-  } else {
-    try {
-      current = cell.validate(raw)
-    } catch {
-      current = cell.defaultValue
-    }
+  const scope = getScope()
+  if (storage.readVersioned && storage.writeIfVersion) {
+    casUpdateRow(storage as VersionedCellStore, scope, cell.id, partitionKey, (rawStored) => {
+      const current = coerceStored(cell, rawStored)
+      const next = updater(current)
+      assertSyncUpdaterResult(cell.id, next)
+      const validated = cell.validate(next)
+      return cell.write ? cell.write(validated) : validated
+    })
+    // The CAS committed the canonical value — publish-after-commit's
+    // publish half only.
+    publishCellWrite(cell, args)
+    return
   }
+  const raw = storage.read(scope, cell.id, partitionKey)
+  const current = coerceStored(cell, raw)
   const next = updater(current)
-  if (typeof (next as PromiseLike<unknown> | null)?.then === "function") {
-    throw new TypeError(
-      `cell-update: cell "${cell.id}": updater returned a thenable — updaters must be ` +
-        `synchronous ((current) => next). An async updater would reopen the read→write ` +
-        `gap the synchronous section closes, so concurrent updates could clobber again.`,
-    )
-  }
+  assertSyncUpdaterResult(cell.id, next)
   writeOneCell(cell.id, next, { partition: args })
 }

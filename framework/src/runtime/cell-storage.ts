@@ -94,6 +94,37 @@ export interface CellStorage {
    *  timestamps must never surface inside a live connection's
    *  catch-up window). */
   maxTs?(): number
+
+  // ── Versioned writes (optional — the store-level CAS) ───────────────
+  // A store shared by MULTIPLE processes (the SQLite adapter) exposes a
+  // per-row write counter it owns, and the update pipeline
+  // (`updateOneCell` in cell-write.ts) turns `cell.update(fn)` into a
+  // compare-and-retry against it: read the row + version, apply the
+  // updater, commit only if the version is unchanged, re-read and
+  // retry on conflict. In-process the event loop already serializes
+  // the synchronous read→updater→write section, so a conflict can only
+  // come from another process — adapters without these methods (the
+  // in-memory tiers, the JSON file) keep the plain zero-overhead path.
+
+  /** Atomically read a row's value and its store-owned write counter.
+   *  `undefined` when the row is absent (callers treat that as
+   *  version 0 for `writeIfVersion`). */
+  readVersioned?(
+    scope: string,
+    cellId: string,
+    partitionKey: CellPartitionKey,
+  ): { value: unknown; version: number } | undefined
+  /** Commit `value` only if the row's version still equals
+   *  `expectedVersion` (0 = "row must not exist yet"); returns whether
+   *  the write landed. On success the store bumps the version; any
+   *  prior ts is preserved (a CAS is a value write). */
+  writeIfVersion?(
+    scope: string,
+    cellId: string,
+    partitionKey: CellPartitionKey,
+    value: unknown,
+    expectedVersion: number,
+  ): boolean
 }
 
 // ─── In-memory adapter ────────────────────────────────────────────────
@@ -440,7 +471,13 @@ let _instance: CellStorage | null = null
  * `cms/data/cells.json` (or `$CELLS_DATA_PATH`). Survives process
  * restart.
  *
- * Test/advanced callers can swap the backend via `setCellStorage()`.
+ * The JSON file is the DEV default — whole-snapshot, debounced,
+ * single-process. Deployments that need durable acknowledged writes
+ * or multiple processes swap in the per-key SQLite adapter through
+ * this same seam: `setCellStorage(new SqliteCellStorage(path))` from
+ * `./cell-storage-sqlite.ts` (deep import — the adapter carries a
+ * native module and stays out of the barrel). Choice matrix:
+ * docs/internals/cell-internals.md § The adapter matrix.
  */
 export function getCellStorage(): CellStorage {
   if (!_instance) {

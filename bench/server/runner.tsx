@@ -24,15 +24,21 @@
  * a render without draining would time the queueing call, not the render.
  */
 
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { _clearCellRegistry } from "@parton/framework/lib/cell.ts"
 import { _clearRouteKeyCache } from "@parton/framework/lib/partial.tsx"
 import { clearRegistry } from "@parton/framework/lib/partial-registry.ts"
 import { promoteSnapshotsToCachedOverride } from "@parton/framework/lib/segmented-response.ts"
 import {
   _resetCellStorage,
+  JsonFileCellStorage,
   MemoryCellStorage,
   setCellStorage,
+  type CellStorage,
 } from "@parton/framework/runtime/cell-storage.ts"
+import { SqliteCellStorage } from "@parton/framework/runtime/cell-storage-sqlite.ts"
 import { runWithRequestAsync } from "@parton/framework/runtime/context.ts"
 import {
   _clearInvalidationRegistry,
@@ -115,11 +121,45 @@ export interface RunOptions {
 
 const URL_BASE = "http://bench/dashboard"
 
+// ── Storage-backend A/B (BENCH_CELL_STORAGE) ────────────────────────
+// "memory" (default — the historical baseline), "json"
+// (JsonFileCellStorage on a temp file: the debounced whole-snapshot
+// flusher), or "sqlite" (SqliteCellStorage: per-key synchronous
+// commits). Pair with BENCH_SEED_ROWS=1 so each live partition holds a
+// real row — then every bump's commit-time ts stamp is a genuine
+// per-key storage write, which is what the A/B measures. Baselines in
+// bench/results/ are recorded with the default backend; restore them
+// after an A/B run.
+const CELL_BACKEND = (process.env.BENCH_CELL_STORAGE ?? "memory") as "memory" | "json" | "sqlite"
+const SEED_ROWS = process.env.BENCH_SEED_ROWS === "1"
+
+/** The active backend + its temp dir, replaced per resetWorld. */
+let activeStorage: CellStorage = new MemoryCellStorage()
+let activeStorageDir: string | null = null
+
+function freshCellStorage(): CellStorage {
+  if (activeStorage instanceof SqliteCellStorage) activeStorage.close()
+  if (activeStorageDir) {
+    rmSync(activeStorageDir, { recursive: true, force: true })
+    activeStorageDir = null
+  }
+  if (CELL_BACKEND === "sqlite") {
+    activeStorageDir = mkdtempSync(join(tmpdir(), "parton-bench-cells-"))
+    activeStorage = new SqliteCellStorage(join(activeStorageDir, "cells.db"))
+  } else if (CELL_BACKEND === "json") {
+    activeStorageDir = mkdtempSync(join(tmpdir(), "parton-bench-cells-"))
+    activeStorage = new JsonFileCellStorage(join(activeStorageDir, "cells.json"))
+  } else {
+    activeStorage = new MemoryCellStorage()
+  }
+  return activeStorage
+}
+
 /** Reset all process-global framework state so scenarios don't leak into
  *  each other (registries, route-key cache, cell storage). Shared with
  *  the soak runner. */
 export function resetWorld(): void {
-  setCellStorage(new MemoryCellStorage())
+  setCellStorage(freshCellStorage())
   clearRegistry("all")
   _clearInvalidationRegistry()
   _clearCellRegistry()
@@ -169,6 +209,15 @@ export async function runScenario(
   const { Page, liveSelectors } = fixture
   if (liveSelectors.length === 0) {
     throw new Error(`scenario "${name}": needs at least 1 live cell to bump`)
+  }
+
+  // BENCH_SEED_ROWS: give every live partition a stored row, so each
+  // bump's commit-time ts stamp lands on it — one real per-key storage
+  // write per tick, the backend A/B's write-path stress.
+  if (SEED_ROWS) {
+    for (const { cellId, partitionKey } of fixture.liveRows) {
+      activeStorage.write("default", cellId, partitionKey, 0)
+    }
   }
 
   // Pre-request ticker history: the registry state a long-up server has

@@ -80,6 +80,14 @@ export function createRscRenderRequest(
 export function parseRenderRequest(request: Request): RenderRequest {
   const url = new URL(request.url)
   const isPost = request.method === "POST"
+  // A GET carrying the RSC-render header is a server-to-server page
+  // embed (`<RemoteFrame>` — see `lib/page-embed.ts`): return Flight,
+  // not an HTML document. The URL stays the ordinary page URL, so
+  // match gates, tracked reads, and route keying all evaluate the
+  // page itself.
+  if (!isPost && request.headers.get(HEADER_RSC_RENDER) === "1") {
+    return { isRsc: true, isAction: false, request, url }
+  }
   // The `_.rsc` postfix marks exactly one request kind: an action POST
   // (the attach rides its own endpoint, `POST /__parton/live`; every
   // other GET is a document). A postfixed non-POST is not a render
