@@ -132,9 +132,12 @@ heartbeat — is the factories' business.
    primitive partons and blocks read) and the write surface
    (`atomic`, bound writes, `useCell`).
 4. [`cache.md`](./cache.md) — server-side render-output cache.
-5. [`cms.md`](./cms.md) — CMS layer + editor.
-6. [`frames-navigation.md`](./frames-navigation.md) — `<Frame>`
+5. [`errors.md`](./errors.md) — the error-recovery contract: what
+   throws where, serve-last-known-good, retry/backoff, the staleness
+   marker, observability.
+6. [`cms.md`](./cms.md) — CMS layer + editor.
+7. [`frames-navigation.md`](./frames-navigation.md) — `<Frame>`
    component and the `useNavigation` API.
-7. [`remote-frame.md`](./remote-frame.md) — `<RemoteFrame>` for
+8. [`remote-frame.md`](./remote-frame.md) — `<RemoteFrame>` for
    cross-process composition (same- or cross-origin partons
    stitched into the host's response).

@@ -13,6 +13,9 @@
  *   request misses.
  * - `staleWhileRevalidate`: additional seconds past `maxAge` during
  *   which stale bytes are served while a background refresh runs.
+ * - `staleIfError`: how long a last-known-good entry stays servable
+ *   when a FRESH render throws (the error-recovery contract,
+ *   `docs/reference/errors.md`).
  * - `__slowSource` (dev only): emit stored bytes in artificially
  *   throttled chunks so a hit-path replay exercises Suspense
  *   streaming end-to-end. Used by `cache-streaming-demo.tsx`.
@@ -24,6 +27,26 @@
 export interface CacheOptions {
   maxAge?: number
   staleWhileRevalidate?: number
+  /**
+   * HTTP `stale-if-error`-shaped bound on serve-last-known-good.
+   *
+   * When a fresh render of this spec THROWS (a loader failure — never
+   * the framework's control-flow sentinels) and the byte cache holds a
+   * previous good render for the same (id, variant), the framework
+   * serves those bytes with an explicit staleness marker
+   * (`usePartonStale()`) instead of the error card, and re-attempts on
+   * a capped exponential backoff.
+   *
+   * - omitted (default): last-known-good stays error-servable
+   *   indefinitely — repeated failure keeps the newest good render up.
+   * - `number`: seconds PAST the entry's ordinary stale window
+   *   (`staleUntil`) during which it remains error-servable; older
+   *   entries fall through to the error card.
+   * - `false`: opt out — a failed render always surfaces the error
+   *   card, even when last-known-good bytes exist. Retry scheduling
+   *   still applies.
+   */
+  staleIfError?: number | false
   /**
    * DEV / DEBUG ONLY. When set on a hit-path read, the stored bytes
    * are emitted through the decoder in chunks separated by `perChunkMs`

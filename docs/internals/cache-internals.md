@@ -175,19 +175,77 @@ arm dutifully re-ran the body.
 
 ## Miss path
 
-`renderMissAndStore` tees the Flight stream of the rendered body:
+`attemptRender` tees the Flight stream of the rendered body:
 
-1. **User branch** — decoded immediately, returned to the outer
-   render. Inner Suspense boundaries stay lazy so the client paints
-   fallbacks while async work resolves — the cold render streams
-   exactly like an uncached one.
-2. **Storage branch** — buffered, `stripHoles`'d, stored with each
-   hole enriched by its registry snapshot. Runs in the background;
-   doesn't block the user-facing latency.
+1. **User branch** — decoded immediately (`liveTree`). Inner Suspense
+   boundaries stay lazy so the client paints fallbacks while async
+   work resolves — the cold render streams exactly like an uncached
+   one.
+2. **Storage branch** — buffered; on a clean settle, `stripHoles`'d
+   and stored with each hole enriched by its registry snapshot
+   (`settled` resolves with the outcome). Runs in the background on
+   the streaming path; doesn't block the user-facing latency.
 
-Cold-miss dedupe lives in `inFlightMiss: Map<baseKey, Promise>` —
+Cold-miss dedupe lives in `inFlightMiss: Map<baseKey, Attempt>` —
 multiple concurrent requests for the same cold key share one
-in-flight render.
+in-flight render (`{ liveTree, settled }`).
+
+## Error recovery (the serve-stale-on-error engine)
+
+The contract is [`docs/reference/errors.md`](../reference/errors.md);
+the mechanism lives entirely in `cacheImpl`'s miss handling:
+
+- **The failure signal is the body promise itself.** `children` IS
+  the promise `spec.Render(...)` returned (partial.tsx builds the
+  element before wrapping it in `<Cache>`), so `observeBody` attaches
+  a rejection handler at the source — ahead of the Flight runtime's
+  own (which attaches only when the render reaches the node). On
+  rejection the real error object is classified
+  (`isExpectedRenderError`: sentinels / cancellation pass through)
+  and, for a genuine failure during an attempt, the failure record +
+  retry boundary land SYNCHRONOUSLY, mid-render — strictly before
+  the error row is encoded, hence before the segment driver's
+  post-drain wheel sync reads the snapshot's wake-hint box. The
+  observer attaches on EVERY path (hits included: the body runs every
+  render, and a discarded rejection would otherwise be an unhandled
+  rejection).
+- **Per-scope recovery state.** `lastGood: Map<axis, Entry>` (axis =
+  `id:varyHash` — the placement's identity WITHOUT the fp, so a
+  dep-moved re-render still finds the variant's good bytes; bounded
+  LRU, entries shared by reference with the store) and
+  `failures: Map<axis, FailureRecord>`
+  (`{attempts, since, nextRetryAt, lastError}`).
+- **Never store an errored body.** `attemptRender`'s settle checks
+  `body.outcome` after buffering: any rejection (including sentinels)
+  skips the store — an entry is always a good render, and a
+  sentinel's control-channel side effect can't ride a byte replay. A
+  clean store updates `lastGood` and deletes the failure record.
+- **Retry = a declared boundary.** `recordFailure` folds
+  `nextRetryAt` (`min(base·2ⁿ⁻¹, cap)`, default 1s/16s,
+  `_setErrorRetrySchedule` for tests) into the render's live
+  wake-hint box with the same earliest-wins fold `expires()` uses —
+  the deadline wheel and the fp-skip TTL gate treat the errored
+  snapshot like any time-shaped one. No timers, no new delivery path.
+- **Miss flow.** With an error-servable `lastGood`
+  (`staleIfError`-gated): inside an outstanding failure's retry
+  window, serve it directly (no attempt, no loader run, no event);
+  past the window, run a BUFFERED attempt — hold the response until
+  `settled`, serve fresh on success, serve last-known-good on
+  failure. The buffering cost is confined to exactly this path (miss
+  + prior good render). With no `lastGood`, stream the attempt as
+  today: the failure surfaces as the boundary card, but the retry
+  boundary is already armed.
+- **The marker.** A stale serve wraps `replayEntry`'s tree in
+  `<PartonStaleProvider stale={{since, attempts, retryAt}}>` (a
+  zero-DOM client context from partial-error-boundary.tsx) —
+  `usePartonStale()` is the explicit signal UI reads.
+- **SWR refresh** re-encodes the same settled body output; when this
+  render's body rejected, the refresh returns without storing — a
+  failing body can never clobber the good entry it would otherwise
+  overwrite.
+- **Observability.** One `PartonErrorEvent` per attempt via
+  `onPartonError` (default: a concise `console.error` line); the raw
+  error is separately digest-logged by the Flight `onError` reporter.
 
 ## Slow-source diagnostic
 
@@ -200,10 +258,11 @@ fetch) would produce. `/cache-streaming-demo` drives it.
 
 ## Per-scope state
 
-The cache store, refresh set, and in-flight-miss map all live under
-`ScopeState` keyed by `getScope()`. Production: every request →
-`"default"` → one bucket. Dev: Playwright workers stamp per-worker
-`x-test-scope` headers so parallel runs don't contend.
+The cache store, refresh set, in-flight-miss map, and the recovery
+state (`lastGood` / `failures`) all live under `ScopeState` keyed by
+`getScope()`. Production: every request → `"default"` → one bucket.
+Dev: Playwright workers stamp per-worker `x-test-scope` headers so
+parallel runs don't contend.
 
 ## HMR + clear
 

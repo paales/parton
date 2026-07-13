@@ -48,6 +48,32 @@ export const seedIntersects = (x: number, y: number, size: number): boolean =>
   y < CENTER_PX + SEED_HALF_H &&
   y + size > CENTER_PX - SEED_HALF_H
 
+/**
+ * The flaky district — the error-recovery contract's forcing caller
+ * (`docs/reference/errors.md`): chunks whose loader fails on a
+ * deterministic (coords × time-bucket) schedule, so the world makes
+ * serve-last-known-good, the stale marker, retry/backoff, and the
+ * bounded first-visit error state observable (see `./flaky.ts`).
+ *
+ * A PLANE-coordinate box, so every geometry (`?chunk=`) shares the
+ * same visual region. Placed in the SOUTH-WEST quadrant, outside
+ * every path the standing validators drive — validate-world's four
+ * direction stops / warm path / north stress column, the dense
+ * eastBurst, scroll-stress's cumulative east+south battery, and the
+ * ws/upgrade/two-viewers east-south scrolls — so the world gates
+ * keep their meaning with zero district carve-outs.
+ */
+export const FLAKY_DISTRICT = {
+  x0: CENTER_PX - 8192,
+  x1: CENTER_PX - 6144,
+  y0: CENTER_PX + 2048,
+  y1: CENTER_PX + 4096,
+} as const
+
+/** Is the plane-coordinate box origin `(x, y)` inside the district? */
+export const inFlakyDistrict = (x: number, y: number): boolean =>
+  x >= FLAKY_DISTRICT.x0 && x < FLAKY_DISTRICT.x1 && y >= FLAKY_DISTRICT.y0 && y < FLAKY_DISTRICT.y1
+
 /** The whitelisted chunk sizes. 512 is the default (and the only one
  *  a bare URL ever serves); 256/128 are density stress geometries. */
 export const CHUNK_SIZES = [512, 256, 128] as const

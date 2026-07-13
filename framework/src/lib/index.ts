@@ -129,7 +129,18 @@ export type {
 } from "../runtime/navigation-api.ts"
 export { NavigationError, type NavigationErrorKind } from "../runtime/navigation-error.ts"
 
-export { PartialErrorBoundary } from "./partial-error-boundary.tsx"
+export {
+  PartialErrorBoundary,
+  usePartonStale,
+  type PartonStale,
+} from "./partial-error-boundary.tsx"
+
+// Error recovery — the serve-last-known-good engine riding the byte
+// cache (docs/reference/errors.md). `onPartonError` is the
+// observability hook for failed parton renders; `usePartonStale` (a
+// client hook — deep-import from "use client" modules per the barrel
+// caveat) reads the staleness marker a last-known-good serve carries.
+export { onPartonError, type PartonErrorEvent } from "./cache.tsx"
 export { RemoteFrame, remote, type RemoteFrameProps } from "./remote-frame.tsx"
 
 // Predictive warming — the server-side projector registration the

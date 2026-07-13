@@ -33,9 +33,23 @@ a background refresh. Past both: miss.
 interface CacheOptions {
   maxAge?: number                  // fresh window in seconds
   staleWhileRevalidate?: number    // additional stale-but-servable window
+  staleIfError?: number | false    // serve-last-known-good bound on render error
   __slowSource?: {…}                 // dev-only debug
 }
 ```
+
+## Errors — serve-last-known-good
+
+The byte cache doubles as the error-recovery substrate: when a fresh
+render of a cached spec THROWS (a loader failure — framework
+sentinels pass through untouched), the framework serves the axis's
+last-known-good entry with an explicit staleness marker
+(`usePartonStale()`) instead of the error card, re-attempts on a
+capped backoff, and never stores errored bytes. `staleIfError`
+bounds (or, as `false`, opts out of) the stale serving. The full
+author contract — what throws where, what the boundary shows, the
+retry schedule, the `onPartonError` observability hook — is
+[`errors.md`](./errors.md).
 
 ## Time-based reactivity vs. byte caching
 
@@ -234,6 +248,8 @@ reads and cell resolves stay in the parton body, where they record
 
 ## Related
 
+- [`errors.md`](./errors.md) for the error-recovery contract riding
+  this cache
 - [`partial.md`](./partial.md) for the constructor surface
 - [`frames-navigation.md`](./frames-navigation.md) for frames
 - [`cms.md`](./cms.md) for CMS-driven cache key contributions

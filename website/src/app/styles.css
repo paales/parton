@@ -221,6 +221,27 @@ body {
   color: var(--ink-dim);
 }
 
+/* ── Flaky district — the error-recovery demo (chunk.tsx / flaky.ts) ── */
+
+.chunk--flaky {
+  background: rgb(255 165 60 / 0.04);
+  box-shadow: inset 0 0 0 1px rgb(255 165 60 / 0.18);
+}
+
+/* The stale badge: rendered by <StaleBadge> only when the framework
+   served last-known-good bytes for a failed render (usePartonStale).
+   Amber — distinct from the red error card and the light colors. */
+.chunk__stale {
+  position: absolute;
+  top: calc(2 * var(--tile));
+  left: var(--tile);
+  padding: 0 calc(var(--tile) / 4);
+  color: #141414;
+  background: #ffa53c;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
 /* ── Content cards — tile-aligned ── */
 
 .card {

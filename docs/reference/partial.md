@@ -755,6 +755,11 @@ enclosing error boundary — rather than being swallowed into a card.
 A throw raised *later*, while a child of the resolved body streams,
 is caught by the `PartialErrorBoundary` itself, as before.
 
+The card is the floor, not the whole story: for a byte-cached spec, a
+failed BODY render serves the last-known-good bytes with an explicit
+staleness marker and retries on a capped backoff — the full recovery
+contract is [`errors.md`](./errors.md).
+
 ## Page-level routing — wrapper specs
 
 Page routing is just specs with `match`. There's no separate router
