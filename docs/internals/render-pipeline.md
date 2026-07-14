@@ -264,17 +264,22 @@ set — fresh wrappers, placeholders, and the nested (id, matchKey)
 pairs harvested from cached wrappers. Lane commits never prune: they
 only write fresher content into slots the page already references.
 
-The prune runs **only on a complete render**. A substituted cache
-wrapper can still carry an in-flight Flight lazy — a slow descendant
-(a search stage, the chat's `<ChunkSlot>`) hadn't resolved when the
-wrapper was last cached. The partials _behind_ that lazy are still
-live but aren't materialised in the rendered tree, so a harvest
-under-counts them. Pruning then would evict their cache +
-advertised-fp entries, and the next render's fp-skip placeholder
-would have nothing to substitute — blanking the region until a full
-re-render restores it (the "content behind the search disappears"
-bug). So the walk prunes only in its non-pending branch, deferring to
-a later commit whose render is whole.
+The prune runs **only on a complete render AND a complete harvest**. A
+substituted cache wrapper can still carry an in-flight Flight lazy — a
+slow descendant (a search stage, the chat's `<ChunkSlot>`) hadn't
+resolved when the wrapper was last cached, or a progressive lane
+commit for an ancestor is still streaming its body. The partials
+_behind_ that deferred chunk are still live but aren't materialised in
+the rendered tree, so a harvest under-counts them. Pruning then would
+evict their cache + advertised-fp entries, and the next render's
+fp-skip placeholder would have nothing to substitute — blanking the
+region until a full re-render restores it (the "content behind the
+search disappears" bug; the mid-stream-ancestor variant is fuzz class
+F11). So the walk prunes only in its non-pending branch, AND only when
+the frontier harvest over the cached wrappers itself saw no pending
+chunk (`harvestPartialIds`' pending stats) — a pending-blocked pass
+just refreshes the live-tree eviction exemption and defers the prune
+to a later commit whose render and harvest are whole.
 
 A second bound, `CLIENT_POOL_CAP`, caps the number of distinct ids
 retained across a long journey (a scroll across a cullable field
@@ -614,9 +619,31 @@ and the next nav can fp-skip against a stale entry while the cache
 slot points at fresh content, surfacing the wrong subtree on
 substitution. The async warm-fp trailer upholds the same invariant by
 aliasing its warm fp onto the slot still holding the matching cold fp
-rather than the latest-rendered one (see _Cold → warm fp drift_ below) —
-so a trailer from a query a concurrent refetch already superseded is
-dropped, not mis-attached.
+rather than the latest-rendered one (see _Cold → warm fp drift_ below).
+An alias whose anchor has not registered yet — the anchor wrapper is
+still behind a pending Flight chunk, so its cold fp lands only at the
+settlement re-walk — PENDS per (id, `from`) and is consumed by exactly
+that registration (fuzz class F10); a replacing store from a NEWER
+commit batch clears the id's older pending aliases, so a trailer from
+a query a concurrent refetch already superseded still dies with the
+content generation it described.
+
+Stores themselves carry commit order: every commit batch (one
+payload's walk plus its settlement re-walks) runs under a monotonic
+store seq, recorded per slot, and `cacheStore` DROPS a store whose
+batch is older than the slot's occupant — a late re-walk of a
+superseded payload is an out-of-order write (the client-side sibling
+of the server's as-of drop; fuzz class F9). A dropped store also
+suppresses the walk's follow-up fp registration — the fp describes
+bytes the slot does not hold. A commit whose remaining rows REJECTED
+(a navigation tore the body mid-stream after a progressive root-ready
+commit) EVICTS every variant it still owns and de-advertises every
+cached wrapper whose content references an evicted variant through a
+placeholder — a torn subtree must neither be confirmable (ghost
+confirm) nor shadow good inline content through `substituteNested`,
+and an ancestor's fp must not claim a composition whose hole is now
+unbacked (fuzz class F12; `_evictTornVariant` /
+`_dropVariantFingerprints`).
 
 Each `(id, matchKey)` fp set is additionally capped at
 `FP_CAP_PER_VARIANT` (4) entries, oldest-first — a live parton
@@ -760,10 +787,16 @@ can overwrite the slot — and clear its fp set — between the body commit
 and the trailer. A "latest matchKey" heuristic would then pin this warm
 fp onto the superseded slot, so the manifest would advertise a fingerprint
 whose content the slot no longer holds; a server fp-skip on it restores
-the wrong node. Content-matching drops such a superseded trailer (no
-slot holds `from`), keeping the advertised fp-set in lockstep with the
-node each slot actually holds — the invariant that makes every fp-skip
-safe. This is exactly the search type→backspace stale-result guard in
+the wrong node. Content-matching parks such an unanchored alias in the
+pending-alias ledger (per (id, `from`) — see `_pendingFpAliases`): the
+one registration that can legitimately consume it is its own render's
+cold fp, still decoding behind a pending chunk (fuzz class F10), and a
+replacing store from any newer commit batch clears the id's older
+pending entries — so a genuinely superseded trailer still dies with
+the content generation it described, keeping the advertised fp-set in
+lockstep with the node each slot actually holds — the invariant that
+makes every fp-skip safe. This is exactly the search type→backspace
+stale-result guard in
 `e2e-testing/e2e/search-result-ordering.spec.ts` and the unit
 reproduction in `partial-client-fp-desync.test.tsx`.
 

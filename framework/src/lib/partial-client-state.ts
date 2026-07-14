@@ -57,6 +57,56 @@ export type PartialCache = Map<string, Map<string, ReactNode>>
 const _currentPagePartials: PartialCache = new Map()
 const _currentPageFingerprints = new Map<string, Map<string, Set<string>>>()
 
+// ─── Commit-order bookkeeping ─────────────────────────────────────
+//
+// The client commits deliveries in wire order, but a commit's WRITES
+// can trail its walk: a payload holding still-pending Flight chunks is
+// re-walked when the rows land (`scheduleLaneRewalk`, PartialsClient's
+// incomplete-walk re-render), and by then a NEWER commit — a covering
+// navigation segment, a fresher lane — may have replaced the slot. A
+// late re-walk is an out-of-order write; letting it land would swap
+// superseded content over the page (the client-side sibling of the
+// server's as-of drop discipline). Every commit batch therefore runs
+// under a monotonic store seq, recorded per slot; `cacheStore` drops a
+// store whose seq is older than the slot's current occupant.
+
+let _storeSeqCounter = 0
+let _activeStoreSeq: number | null = null
+const _slotStoreSeq = new Map<string, Map<string, number>>()
+
+/** Mint the store seq for a new commit batch (one payload's walk and
+ *  every settlement re-walk of that same payload). */
+export function _nextStoreSeq(): number {
+  return ++_storeSeqCounter
+}
+
+/** Run a (synchronous) commit walk under its batch's store seq. */
+export function _runWithStoreSeq<T>(seq: number, fn: () => T): T {
+  const prev = _activeStoreSeq
+  _activeStoreSeq = seq
+  try {
+    return fn()
+  } finally {
+    _activeStoreSeq = prev
+  }
+}
+
+function _recordSlotSeq(id: string, matchKey: string, seq: number): void {
+  let inner = _slotStoreSeq.get(id)
+  if (!inner) {
+    inner = new Map()
+    _slotStoreSeq.set(id, inner)
+  }
+  inner.set(matchKey, seq)
+}
+
+/** The store seq of a slot's current occupant — the ownership signal
+ *  for the torn-delivery fp drop (a payload only un-advertises
+ *  variants IT still owns). */
+export function _slotStoreSeqOf(id: string, matchKey: string): number | undefined {
+  return _slotStoreSeq.get(id)?.get(matchKey)
+}
+
 /** The one live `PartialCache` instance backing the current page. */
 export function getCurrentPagePartials(): PartialCache {
   return _currentPagePartials
@@ -70,15 +120,21 @@ export function cacheLookup(
   return cache.get(id)?.get(matchKey)
 }
 
-/** Store a wrapper into its `(id, matchKey)` slot. Returns whether the
- *  slot already held content — `false` is a FIRST FILL (the commit
- *  walk's paint-blocking signal, see `LazyWalkStats.firstFill`). */
+/** One `cacheStore` call's outcome. `"first"` is a FIRST FILL (the
+ *  commit walk's paint-blocking signal, see `LazyWalkStats.firstFill`);
+ *  `"identical"` is a re-walk's re-store of the same node (kept);
+ *  `"stale"` means the store was DROPPED by the out-of-order guard —
+ *  the caller must not register fingerprints for it (the slot holds a
+ *  newer commit's content the fp does not describe). */
+export type CacheStoreOutcome = "first" | "replaced" | "identical" | "stale"
+
+/** Store a wrapper into its `(id, matchKey)` slot. */
 export function cacheStore(
   cache: PartialCache,
   id: string,
   matchKey: string,
   node: ReactNode,
-): boolean {
+): CacheStoreOutcome {
   let inner = cache.get(id)
   if (!inner) {
     inner = new Map()
@@ -91,8 +147,19 @@ export function cacheStore(
   // exactly what it holds, including a cold→warm trailer alias that
   // may have landed between the walks. Only a store that CHANGES the
   // slot's content invalidates its fp-set.
-  if (replacing && inner.get(matchKey) === node) return true
+  if (replacing && inner.get(matchKey) === node) return "identical"
+  // Out-of-order guard: a store carrying an OLDER batch seq than the
+  // slot's occupant is a late re-walk of a superseded payload (fuzz
+  // class F9) — its delivery was covered by whatever wrote the slot
+  // since, so it must not land. A store outside any batch is its own
+  // (newest) batch.
+  const seq = _activeStoreSeq ?? ++_storeSeqCounter
+  if (replacing) {
+    const slotSeq = _slotStoreSeq.get(id)?.get(matchKey)
+    if (slotSeq !== undefined && slotSeq > seq) return "stale"
+  }
   inner.set(matchKey, node)
+  _recordSlotSeq(id, matchKey, seq)
   // Overwriting a cache slot invalidates any fingerprint that
   // referred to the old content. Without this, fps from prior
   // navs accumulate in `_currentPageFingerprints[id][matchKey]`
@@ -106,9 +173,37 @@ export function cacheStore(
   // `registerClientPartial` is about to write after this call.
   if (replacing) {
     _currentPageFingerprints.get(id)?.delete(matchKey)
+    // A replacing store is a new content generation for the id — any
+    // cold→warm alias still waiting for its anchor and minted BEFORE
+    // this store's batch described an OLD generation's bytes and dies
+    // with the fp-set it would have joined. Aliases minted during this
+    // batch (the store's own response's trailer, applied between the
+    // walks) survive for the late registration that consumes them.
+    const pendingAliases = _pendingFpAliases.get(id)
+    if (pendingAliases) {
+      for (const [from, entry] of pendingAliases) {
+        if (entry.seq < seq) pendingAliases.delete(from)
+      }
+      if (pendingAliases.size === 0) _pendingFpAliases.delete(id)
+    }
   }
-  return replacing
+  return replacing ? "replaced" : "first"
 }
+
+/**
+ * Cold→warm aliases whose anchor has not registered yet, per id
+ * (`from` → `to`). An fp-updates trailer can land while its response's
+ * rows are still pending decode — the wrapper behind the pending chunk
+ * registers its cold fp only at the settlement re-walk, AFTER the
+ * trailer's `_applyFpUpdates` ran, so an anchor-at-apply-time-only
+ * discipline silently drops the warm alias and the next presentation
+ * re-renders the parton at full price (fuzz class F10 — the
+ * registration-after-trailer gap). An unmatched alias pends here and
+ * is consumed by the registration of its exact `from`; a REPLACING
+ * content store clears the id's pending aliases (a new render owns the
+ * slot — stale aliases die with the fp-set, same lifecycle).
+ */
+const _pendingFpAliases = new Map<string, Map<string, { to: string; seq: number }>>()
 
 /**
  * Register a partial's fingerprint from the client side.
@@ -225,6 +320,8 @@ function evictOldest(): void {
     if (_liveTreeIds.has(id)) continue
     _currentPageFingerprints.delete(id)
     _currentPagePartials.delete(id)
+    _slotStoreSeq.delete(id)
+    _pendingFpAliases.delete(id)
     _onContentLoss?.(id)
     _onIdPruned?.(id)
     if (_currentPageFingerprints.size <= CLIENT_POOL_CAP) return
@@ -284,16 +381,26 @@ export function registerClientPartial(id: string, matchKey: string, fingerprint:
     set = new Set()
     inner.set(matchKey, set)
   }
-  if (set.has(fingerprint)) return
-  set.add(fingerprint)
-  evictOldest()
-  // Evict the oldest entries (insertion order) once the cap is
-  // reached. Without this, a live partial that re-renders every
-  // segment would inflate `?cached=` unboundedly.
-  while (set.size > FP_CAP_PER_VARIANT) {
-    const oldest = set.values().next().value
-    if (oldest === undefined) break
-    set.delete(oldest)
+  if (!set.has(fingerprint)) {
+    set.add(fingerprint)
+    evictOldest()
+    // Evict the oldest entries (insertion order) once the cap is
+    // reached. Without this, a live partial that re-renders every
+    // segment would inflate `?cached=` unboundedly.
+    while (set.size > FP_CAP_PER_VARIANT) {
+      const oldest = set.values().next().value
+      if (oldest === undefined) break
+      set.delete(oldest)
+    }
+  }
+  // A pending cold→warm alias anchored on this fp (its trailer landed
+  // before this registration — see `_pendingFpAliases`): consume it so
+  // the variant advertises the warm fp too.
+  const pending = _pendingFpAliases.get(id)
+  const alias = pending?.get(fingerprint)
+  if (alias !== undefined) {
+    pending!.delete(fingerprint)
+    registerClientPartial(id, matchKey, alias.to)
   }
 }
 
@@ -309,24 +416,43 @@ export function registerClientPartial(id: string, matchKey: string, fingerprint:
 export function _applyFpUpdates(updates: FpUpdatesPayload): void {
   for (const [id, { from, to }] of Object.entries(updates)) {
     const inner = _currentPageFingerprints.get(id)
-    if (!inner) continue
     // Alias the warm fp `to` onto the variant slot whose set still
     // holds the cold fp `from` — matched by CONTENT. The trailer is
     // async: it lands after its response's body committed, by which
     // point a concurrent refetch for a DIFFERENT query against the same
     // stable `(id, matchKey)` may have overwritten the slot — and
     // cleared its fp-set (see `cacheStore`). Anchoring on `from` means
-    // such a superseded trailer finds no slot and is dropped, so the
-    // advertised fp-set stays in lockstep with the node the slot
-    // actually holds — the invariant that makes every server fp-skip
-    // restore the content the server matched it against. `from` folds in
-    // matchKey, so it pins exactly one slot. registerClientPartial
-    // enforces the per-variant fp cap.
-    for (const [mk, set] of inner) {
-      if (set.has(from)) {
-        registerClientPartial(id, mk, to)
-        break
+    // such a superseded trailer finds no slot NOW — it pends (below)
+    // for the one registration that can legitimately consume it (its
+    // own render's `from`, still decoding) and dies with the next
+    // replacing store otherwise, so the advertised fp-set stays in
+    // lockstep with the node the slot actually holds — the invariant
+    // that makes every server fp-skip restore the content the server
+    // matched it against. `from` folds in matchKey, so it pins exactly
+    // one slot. registerClientPartial enforces the per-variant fp cap.
+    let anchored = false
+    if (inner) {
+      for (const [mk, set] of inner) {
+        if (set.has(from)) {
+          registerClientPartial(id, mk, to)
+          anchored = true
+          break
+        }
       }
+    }
+    if (!anchored) {
+      // The anchor variant hasn't registered `from` yet (its rows are
+      // still pending decode) — pend for the registration to consume.
+      // The mint seq (the newest commit batch started so far) scopes
+      // the entry's lifetime: a replacing store from a NEWER batch
+      // clears it (its generation is over), while the response's own
+      // batch — already started when its trailer applies — keeps it.
+      let p = _pendingFpAliases.get(id)
+      if (!p) {
+        p = new Map()
+        _pendingFpAliases.set(id, p)
+      }
+      p.set(from, { to, seq: _storeSeqCounter })
     }
   }
 }
@@ -443,6 +569,50 @@ export function cachedTokensFor(ids: readonly string[]): string[] {
 }
 
 /**
+ * Evict a variant a TORN delivery still owns — content slot,
+ * advertised fingerprints, pending aliases, the loss report. A
+ * progressive lane commit whose remaining rows REJECTED (a navigation
+ * tore the body mid-stream) holds a subtree with pending-forever holes:
+ * its fps describe the FULL body the server rendered (advertising them
+ * would let the next presentation CONFIRM torn content — a ghost
+ * confirm with no delta left to heal it), and the slot's node SHADOWS
+ * good content through `substituteNested` (a later confirm of an
+ * ancestor substitutes the torn slot over the ancestor's own fresh
+ * inline copy). Evicting both makes the substitution keep whatever
+ * inline content the displayed tree carries, the id's next appearance
+ * render server-side (over-fetch, never stale), and the loss report
+ * revoke the server's mirror credit.
+ */
+/**
+ * Drop a variant's ADVERTISED fingerprints without touching its
+ * content slot — the composition half of the torn-delivery discipline:
+ * a cached wrapper whose content holds a PLACEHOLDER for an evicted
+ * variant can no longer restore the composition its fp describes, so
+ * the claim must go (its next presentation renders fresh — with the
+ * evicted child inside — the full heal); the content stays for
+ * whatever the displayed tree can still use of it.
+ */
+export function _dropVariantFingerprints(id: string, matchKey: string): void {
+  const fps = _currentPageFingerprints.get(id)
+  if (!fps?.delete(matchKey)) return
+  if (fps.size === 0) _currentPageFingerprints.delete(id)
+  _pendingFpAliases.delete(id)
+  _onContentLoss?.(id)
+}
+
+export function _evictTornVariant(id: string, matchKey: string): void {
+  const slots = _currentPagePartials.get(id)
+  const held = slots?.delete(matchKey) ?? false
+  if (slots !== undefined && slots.size === 0) _currentPagePartials.delete(id)
+  const fps = _currentPageFingerprints.get(id)
+  const advertised = fps?.delete(matchKey) ?? false
+  if (fps !== undefined && fps.size === 0) _currentPageFingerprints.delete(id)
+  _slotStoreSeq.get(id)?.delete(matchKey)
+  _pendingFpAliases.delete(id)
+  if (held || advertised) _onContentLoss?.(id)
+}
+
+/**
  * Prune both client maps down to the given live `(id, matchKey)` set.
  * Anything in the maps but not in `live` was superseded — a
  * churned-away instance id, an evicted variant, a partial from a
@@ -485,6 +655,18 @@ export function pruneToLive(live: Map<string, Set<string>>): void {
       if (byMatchKey.size === 0) map.delete(id)
     }
   }
+  for (const [id, byMk] of _slotStoreSeq) {
+    const liveMks = live.get(id)
+    if (!liveMks) {
+      _slotStoreSeq.delete(id)
+      _pendingFpAliases.delete(id)
+      continue
+    }
+    for (const mk of [...byMk.keys()]) {
+      if (!liveMks.has(mk)) byMk.delete(mk)
+    }
+    if (byMk.size === 0) _slotStoreSeq.delete(id)
+  }
   if (_onContentLoss) for (const id of lost) _onContentLoss(id)
   // Page-membership teardown: an id that left BOTH maps is off the
   // page — no commit references it rendered, skipped, or parked.
@@ -514,7 +696,34 @@ export function evictCulledContent(id: string): void {
   const held = _currentPagePartials.has(id) || _currentPageFingerprints.has(id)
   _currentPagePartials.delete(id)
   _currentPageFingerprints.delete(id)
+  _slotStoreSeq.delete(id)
+  _pendingFpAliases.delete(id)
   if (held) _onContentLoss?.(id)
+}
+
+/**
+ * TEST-ONLY: reset every module-level map/slot to its boot state. The
+ * state is module-level BY DESIGN (it must survive the browser's
+ * void→payload remount — see the module doc), which means a test that
+ * drives the real merge layer (the v2 convergence fuzzer) needs an
+ * explicit reset between trials; nothing in production calls this.
+ */
+export function _resetClientStateForTest(): void {
+  _currentPagePartials.clear()
+  _currentPageFingerprints.clear()
+  _slotStoreSeq.clear()
+  _pendingFpAliases.clear()
+  _liveTreeIds = new Set()
+  if (_pendingLaneNotify !== null) {
+    _pendingLaneNotify.cancel()
+    _pendingLaneNotify = null
+  }
+  _template = null
+  _templateRoute = null
+  _frameUrls.clear()
+  _liveCatchupAnchor = null
+  _documentAnchor = null
+  _liveConnectionId = null
 }
 
 // ─── Lane commits ─────────────────────────────────────────────────

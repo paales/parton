@@ -46,6 +46,9 @@ import {
   treeHasPendingLazy,
 } from "./partial-cache.ts"
 import {
+  _addLiveTreeIds,
+  _nextStoreSeq,
+  _runWithStoreSeq,
   cacheLookup,
   getCurrentPagePartials,
   getTemplate,
@@ -106,6 +109,11 @@ interface PartialsClientProps {
  */
 let _walkedChildren: ReactNode = null
 let _walkComplete = false
+/** The store-seq batch of `_walkedChildren`'s walk — every re-walk of
+ *  the SAME children (an incomplete walk re-run after chunks settled)
+ *  writes under it, so a late pass never clobbers a slot a newer lane
+ *  commit wrote in between (the out-of-order guard in `cacheStore`). */
+let _walkStoreSeq = 0
 
 /**
  * Arrange a re-walk of `children` for the moment its in-flight Flight
@@ -226,6 +234,7 @@ export function PartialsClient({ children }: PartialsClientProps) {
   if (_walkedChildren === children && _walkComplete) {
     return renderChildren(renderTemplate(getTemplate(), cache))
   }
+  if (_walkedChildren !== children) _walkStoreSeq = _nextStoreSeq()
   _walkedChildren = children
   _walkComplete = false
   // Walk the streamed tree and track every Partial id encountered,
@@ -244,7 +253,7 @@ export function PartialsClient({ children }: PartialsClientProps) {
   // no entry to fill the placeholder with on the next render.
   const seen = new Map<string, Set<string>>()
   const stats: LazyWalkStats = { pending: 0, thenables: [] }
-  cacheFromStreamingChildren(children, cache, seen, stats)
+  _runWithStoreSeq(_walkStoreSeq, () => cacheFromStreamingChildren(children, cache, seen, stats))
   // Route this payload renders for — keys the template reuse below so a
   // cross-route nav never reuses the prior route's template.
   const route = templateRouteKey()
@@ -312,6 +321,7 @@ export function PartialsClient({ children }: PartialsClientProps) {
   // itself be a wrapper containing more nested partials, so harvest
   // until no new pairs appear.
   let frontier: Array<[string, string]> = []
+  const harvestStats = { pending: 0 }
   for (const [id, mks] of seen) for (const mk of mks) frontier.push([id, mk])
   while (frontier.length > 0) {
     const next: Array<[string, string]> = []
@@ -321,7 +331,7 @@ export function PartialsClient({ children }: PartialsClientProps) {
       const inner = (wrapper as { props?: { children?: ReactNode } }).props?.children
       if (inner == null) continue
       const nested = new Map<string, Set<string>>()
-      harvestPartialIds(inner, nested)
+      harvestPartialIds(inner, nested, harvestStats)
       for (const [nid, nmks] of nested) {
         for (const nmk of nmks) {
           const existing = seen.get(nid)
@@ -343,7 +353,19 @@ export function PartialsClient({ children }: PartialsClientProps) {
   // variant whose hidden Activity sibling is still emitted by the
   // server stays alive, while a variant no longer referenced
   // anywhere (different layout, never re-emitted) drops.
-  pruneToLive(seen)
+  //
+  // A pending-BLOCKED harvest defers the prune: a cached wrapper whose
+  // content is still streaming (a progressive lane commit mid-body)
+  // hides its nested variants behind an unresolved chunk, and pruning
+  // what the harvest couldn't see would blank those regions the moment
+  // the template re-substitutes (fuzz class F11). Over-retention,
+  // never blanking — the next fully-harvestable commit prunes; the
+  // live-tree fold still refreshes the eviction exemption.
+  if (harvestStats.pending === 0) {
+    pruneToLive(seen)
+  } else {
+    _addLiveTreeIds(seen.keys())
+  }
   _walkComplete = true
 
   const rendered = renderTemplate(derived, cache)

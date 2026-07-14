@@ -18,21 +18,31 @@ interleaving; the space of interleavings (a write racing a navigation
 racing a flip) is where the bugs live. The fuzzer walks that space
 with a seeded PRNG and checks the oracle at every quiescence point.
 
-Status: **v1 shipped** — `framework/src/test/fuzz-harness.ts` (runner,
-model, oracle, shrinker), `framework/src/test/fuzz-wire.ts` (Flight
-extraction), `framework/src/lib/__tests__/fuzz-fixture.tsx` (the
-fixture app), `framework/src/lib/__tests__/fuzz-convergence.rsc.test.tsx`
-(the CI budget + env knobs). The findings ledger is at the bottom —
-the v1 harness found two real framework bug classes on its first day,
-and fixing them exposed three more the old classifier had lumped in.
-F1–F8 are FIXED (F8 was found in the FIELD, not by the fuzzer — it
-lives in the layer the v1 model deliberately does not run; see the
-model-gap note under "What it does NOT cover").
-Every seed runs as an ordinary case: the CI budget is
-fully clean and any failure there is a new finding. The post-F7 long
-runs are ZERO findings at every budget tried (3000×20, 1000×50 from a
-distinct seed range, 500×50 — the last after fixing a harness
-settle-terminator hole, seed 336 below).
+Status: **v1 and v2 shipped.** v1 —
+`framework/src/test/fuzz-harness.ts` (runner, model, oracle,
+shrinker), `framework/src/test/fuzz-wire.ts` (Flight extraction),
+`framework/src/lib/__tests__/fuzz-fixture.tsx` (the fixture app),
+`framework/src/lib/__tests__/fuzz-convergence.rsc.test.tsx` (the CI
+budget + env knobs). v2 — the REAL client merge layer under the walk
+(§v2 below): `framework/src/test/fuzz-harness-v2.ts`,
+`framework/src/lib/__tests__/fuzz-fixture-v2.tsx` (v1's shapes plus
+the async-body `$@` geometry),
+`framework/src/lib/__tests__/fuzz-convergence-v2.rsc.test.tsx`.
+The findings ledger is at the bottom — the v1 harness found two real
+framework bug classes on its first day, and fixing them exposed three
+more the old classifier had lumped in. F1–F8 are FIXED (F8 was found
+in the FIELD, not by the fuzzer — it lives in the layer the v1 model
+deliberately does not run; v2 exists to close exactly that gap and
+found four more real merge-layer classes on ITS first day: F9–F12,
+all fixed, plus one OPEN server-side finding, seed 77 below).
+Every seed runs as an ordinary case: the CI budgets are
+fully clean and any failure there is a new finding. The post-F7 v1
+long runs are ZERO findings at every budget tried (3000×20, 1000×50
+from a distinct seed range, 500×50 — the last after fixing a harness
+settle-terminator hole, seed 336 below). The post-F12 v2 long runs:
+500×20 (seeds 1–500) → 499 clean / 1 (seed 77, the open class),
+500×30 (seeds 10000+) → **500 / 0**, 1000×20 (seeds 50000+) → 998 / 2
+(both the seed-77 class).
 
 ## The action alphabet
 
@@ -234,6 +244,101 @@ oracle wants the lane path correct without the healer), and
 `_setFirstAckDeadlineMs` is raised so debugger pauses can't degrade
 the connection.
 
+## v2 — the walk drives the REAL client merge layer
+
+v1's model applies commit RULES to per-id records; a bug in the walks
+themselves can never surface there (the F8 lesson). v2 is a second,
+deeper oracle beside it: every step renders the fixture through the
+real server, encodes to real Flight bytes, decodes with the real
+Flight client, and commits through the REAL merge functions. Harness:
+`framework/src/test/fuzz-harness-v2.ts`; fixture:
+`fuzz-fixture-v2.tsx` (the v1 shapes plus `fz-async-leaf` and
+`fz-async-wrap`/`fz-async-inner` — async Render bodies whose children
+cross the wire as outlined `$@` promise rows, pinned by the geometry
+test the same way `async-parent-nested-heal.rsc.test.tsx` pins it).
+
+**What runs for real.** Whole-tree steps (attach, navigations) run the
+same walk `PartialsClient` runs in the browser —
+`cacheFromStreamingChildren` → `deriveTemplate`/`setTemplate` →
+frontier harvest → `pruneToLive` — with the manifest built from the
+client's own `getCachedPartialIds()` and the visible set on the
+request's connection session. Lane steps (writes fan out to every
+live displayed parton; refetches force one; flip-ins revalidate the
+flipped parton) re-render one parton from its registry snapshot
+(`partialFromSnapshot` under a lane-shaped partial state,
+`flushScopeId` trailer — the production lane pipeline) and commit
+through the real `_commitPartonLane` / `_commitPartonLaneProgressive`
++ `_applyFpUpdates`. The fp-skip verdicts deciding who ships bytes
+and who confirms are the real server verdicts against the client's
+real advertised manifest. Module-level client state persists across
+steps and resets per trial (`_resetClientStateForTest`,
+`_resetLaneCommitStateForTest`).
+
+**Interleaving as fuzz dimensions, causally.** Each action carries a
+`DeliveryPlan`: `hold` withholds tail Flight rows at commit time (the
+decoded chunks are GENUINELY pending — the settlement re-walk
+machinery arms for real; a held lane commits through the progressive
+root-ready contract), `order` sequences the held delivery's two
+release events (fp-trailer apply vs row settlement + re-walks — both
+orders reachable, the e728964 dimension), `reverse` flips the lane
+commit order (rival orderings). Held deliveries stay held across
+subsequent actions (`release` pops the oldest; `settle` drains all);
+a NAVIGATE tears held lanes — their chunks REJECT — mirroring the
+region tear (delivering a pre-nav lane's rows after the covering
+segment is an interleaving the real transport cannot produce; an
+earlier harness draft did, and manufactured false staleness).
+Quiescence is the re-walks' own completion signal
+(`_settleLaneRewalksForTest`, scoped per (parton, commit
+generation)), never a timer; a watchdog is pure failure detection.
+
+**The oracles** (after a forced settle):
+
+1. **Convergence** — `renderTemplate(template, cache)` over the real
+   client state, walked with an await-based collector (hidden
+   `<Activity>` = parked, CullPair display follows the stated set),
+   must equal a fresh cold render of the final URL + scope +
+   visibility set: state / stamp / matchKey per parton.
+2. **Advertise honesty** — (a) every advertised `id:matchKey:fp`
+   token has a content slot (restorability, the structural gate);
+   (b) a fresh render presented the FULL manifest
+   (`getAllCachedPartialTokens`) must not confirm content the client
+   cannot restore or holds stale (ghost / stale confirm — the client
+   copy's stamp is compared against the cold stamp for every
+   non-parked hole/confirm); (c) warm skip parity: the CONNECTION
+   flavor's candidate (`_recomputeSubtreeWarmFp`) must be among the
+   advertised fps for every current-content leaf that advertises
+   anything — losing the warm alias is the e728964 class (full price
+   on every connection nav). Discrete-nav parity (the emitted-fp
+   flavor) is deliberately NOT asserted: body reads lag one render,
+   so the visit after a bucket's cold record legitimately re-renders
+   (the documented cold-record over-fetch).
+
+**What stays modeled/out, honestly.** React's actual DOM commit,
+hydration, Activity parking mechanics and the cull-park content pool
+(v2's culled "display" is the harness's stated set, v1 semantics);
+`PartialsClient`'s ~30 lines of orchestration are transcribed into
+`walkWholeTree` (the walks, template ops and state modules are the
+real ones — the component's React wiring is not executed; kept in
+lockstep by hand); the live-connection delivery plane — envelopes,
+acks, the as-of guard, the server mirror layers — stays v1's job (v2
+renders are request/response with the manifest, so mirror-side
+classes like F4–F7 are v1's to catch); frames, cookies, actions,
+`expires()`, defer gates, byte-cache replay are in neither alphabet
+yet. Regression demonstrations (run locally, not committed): blinding
+`unwrapLazy`'s thenable arm (the 34e1b9a revert) fails the CI budget
+and pinned seed 90001 with the exact F8 signature; removing
+`cacheStore`'s identity check (the e728964 revert) fails pinned seed
+90002 with the warm-parity signature. Both are ordinary clean cases
+on HEAD.
+
+**Cost + budget.** ~25–30 ms per trial at 20 actions (~1.3 ms per
+action — each action is one-to-eleven real renders + Flight decode +
+commit; 500×20 ≈ 13 s, 1000×20 ≈ 26 s wall). The CI budget is 25
+trials × 15 actions from seed 1 (~1 s), running as part of
+`yarn test:rsc` beside v1's, plus the pinned deterministic seeds
+(90001/90002 — the two demonstrations; 90011/90017/90072/90305 — the
+F9–F12 shrunk repros; seed 77 pinned `it.fails` as the OPEN finding).
+
 ## Running it
 
 ```bash
@@ -248,22 +353,27 @@ PARTON_WAKE_PARITY=1 FUZZ_BUDGET=500 yarn test:rsc fuzz-convergence
 
 # Knobs: FUZZ_BUDGET (sequences), FUZZ_LEN (actions/sequence),
 #        FUZZ_SEED (first seed; sequence i uses FUZZ_SEED + i)
+
+# v2 — the real-merge-layer walk (CI: 25 trials × 15 actions):
+yarn test:rsc fuzz-convergence-v2
+
+# v2 long local run:
+FUZZ_V2_BUDGET=500 FUZZ_V2_LEN=20 yarn test:rsc fuzz-convergence-v2
+
+# Knobs: FUZZ_V2_BUDGET, FUZZ_V2_LEN, FUZZ_V2_SEED (same shapes)
 ```
 
 ## Staging
 
-- **v1 (this)** — in-process rsc tier: real segment driver, real
+- **v1** — in-process rsc tier: real segment driver, real
   channel apply, fake wire (in-process reader), sequential burst
-  schedule. The deterministic ratchet.
-- **v2 — schedule permutation.** The v1 reader consumes the wire in
-  server emission order and issues actions burst-sequentially. v2
-  permutes DELIVERY: hold decoded lanes/segments and commit them in
-  PRNG-chosen order (bounded reordering windows), drive demand
-  backpressure (small `desiredSize`, stalls), and interleave action
-  issuance with partial drains — the client-side race surface
-  (per-parton lane chains vs segment commits, as-of arbitration under
-  reorder). Needs the model to adopt the client's per-parton
-  commit-chain rules rather than wire order.
+  schedule, MODELED client. The protocol/mirror ratchet.
+- **v2 (shipped)** — the REAL client merge layer under the walk (§v2
+  above): real renders → real Flight decode → the real commit walks,
+  template substitution, prune, fp registration and trailer aliasing,
+  with held-delivery interleaving (rows vs trailer vs re-walks) as
+  seeded dimensions. The merge-layer ratchet — the two harnesses
+  overlap on the oracle and split the mechanism surface.
 - **v3 — browser-level AI chaos sessions.** Real Chromium (the
   browser tier / e2e apps): an agent drives arbitrary UI (scroll
   storms, rapid nav, form races) against the real merge layer, with
@@ -544,9 +654,12 @@ wrap, write b=8]`; seed 5722 — same shape). Mechanism: one drain
   records, and `fuzz-wire.ts` resolves `$@` rows structurally, so the
   model "saw" content the real merge layer could not reach; the
   fixture also has no async Render body, so no `$@` row ever crossed
-  the fuzz wire. The gap is recorded under "What it does NOT cover".
-  Deterministic regression (real Flight encode→decode, real commit
-  walk + template substitution, red without the fix):
+  the fuzz wire. The gap is recorded under "What it does NOT cover" —
+  and CLOSED by v2 (§v2 above), which drives the real walks against
+  real Flight decodes with the `$@` geometry in its fixture; the F8
+  revert demonstration (pinned seed 90001) is red within one CI
+  budget. Deterministic regression (real Flight encode→decode, real
+  commit walk + template substitution, red without the fix):
   `framework/src/lib/__tests__/async-parent-nested-heal.rsc.test.tsx`;
   thenable-arm unit coverage (memo poisoning, plain-thenable
   instrumentation, rejected-chunk opacity) beside the memo tests in
@@ -649,3 +762,106 @@ b=21]`, timing-sensitive ~1-in-few runs). Driver-side tracing proved
   contiguous watermark (surfacing as a rare settle watchdog). The
   real client consumes exactly this case as PROCESSED with a drop
   report (`_laneDeliveryDroppedStale`); the model now mirrors it.
+
+## Findings ledger (v2)
+
+The first v2 runs (25×15 through 500×20) surfaced FOUR real
+merge-layer classes — every one in the code the v1 model deliberately
+does not run — plus one open server-side class. All four fixes are in
+the client merge layer (`partial-client-state.ts` /
+`partial-cache.ts` / `partial-client.tsx`); each has a pinned
+deterministic seed in `fuzz-convergence-v2.rsc.test.tsx` and the full
+node+rsc suites are untouched by them.
+
+- **F9 — FIXED: a superseded payload's late settlement re-walk
+  clobbers a newer commit's slot (staleness).** A progressive/held
+  lane commit re-walks its payload when the captured chunks settle —
+  guarded only by the per-parton lane GENERATION, which whole-tree
+  commits never bump: a covering navigation segment could replace the
+  slot with fresh content and the old lane's re-walk would re-store
+  its older body right over it (shrunk repro: two held write lanes,
+  then a covering navigate — the client ends showing the write-era
+  body at the post-nav state). The same door exists through
+  `PartialsClient`'s incomplete-walk re-render clobbering a newer
+  LANE's slot. **Fix:** commit-order bookkeeping — every commit batch
+  (one payload's walk + its re-walks) runs under a monotonic store
+  seq, recorded per slot; `cacheStore` drops a store whose batch is
+  older than the slot's occupant (the client-side sibling of the
+  server's as-of drop), and a dropped store suppresses the walk's
+  follow-up fp registration (a torn superseded payload's re-walk
+  would otherwise RESURRECT a claim for content the slot no longer
+  holds — the ghost-confirm direction). Pinned seed 90011.
+
+- **F10 — FIXED: the cold→warm alias dies when its anchor registers
+  late (over-fetch, the e728964 sibling).** `_applyFpUpdates` anchored
+  an alias on the variant set holding `from` — but when the anchor
+  wrapper is still behind a pending chunk (its cold fp registers only
+  at the settlement re-walk), a trailer applied between the walks
+  found no anchor and dropped the warm fp: the variant advertised
+  cold-only forever and every connection nav re-rendered it full
+  price (the warm-parity oracle's signature). **Fix:** the
+  pending-alias ledger — an unanchored alias pends per (id, `from`),
+  is consumed by exactly that registration, and dies when a REPLACING
+  store from a newer commit batch retires its content generation
+  (mint-seq scoped, so a response's own stores never eat its own
+  alias, while a genuinely superseded trailer still dies). Pinned
+  seed 90017.
+
+- **F11 — FIXED: a pending-blocked frontier harvest let the prune
+  blank nested variants (staleness/blanking).** `PartialsClient`'s
+  prune expands `seen` by harvesting cached wrappers — and
+  `harvestPartialIds` silently stops at pending chunks, so a prune
+  running while an ANCESTOR's progressive lane commit was mid-stream
+  dropped every nested variant hiding behind the unresolved chunk
+  (inner/async-inner blanked; shrunk repro: navigate, held navigate,
+  held write lanes). **Fix:** the harvest reports pendingness and a
+  pending-blocked pass DEFERS the prune (over-retention, never
+  blanking — the same discipline the pending-RENDER guard always had;
+  the live-tree eviction exemption still refreshes). Pinned seed
+  90072.
+
+- **F12 — FIXED: a torn progressive delivery kept advertising — and
+  displaying — bytes it could not complete (ghost confirm +
+  shadowing).** A lane committed at root-ready whose remaining rows
+  REJECT (navigation tear) held a subtree with pending-forever holes:
+  its fps stayed advertised (next presentation CONFIRMS torn content
+  with no delta left to heal it), the torn slot SHADOWED good inline
+  content through `substituteNested` (a later ancestor confirm
+  substituted the torn slot over the ancestor's own fresh copy), and
+  an ancestor's advertised fp kept claiming a composition whose hole
+  the eviction had unbacked. **Fix:** the settlement re-walk reads its
+  own `allSettled` outcomes — on any rejection it EVICTS every variant
+  the payload still owns (slot-seq ownership; content + fps + loss
+  report) and de-advertises every cached wrapper whose content
+  references an evicted variant through a placeholder
+  (`collectPlaceholderRefs`; a slot whose own content is still
+  streaming is de-advertised conservatively). Over-fetch on tears,
+  never a standing blank. Pinned seed 90305.
+
+- **OPEN (seed 77) — the flush recompute retags a culled-ancestor
+  descendant (staleness on flip-in; server-side, F2's sibling).**
+  `computeWarmFps` heals every route snapshot under the flush
+  request — including a descendant whose ANCESTOR was culled on this
+  response: the descendant's body never ran, yet its fp is recomputed
+  under the new request state and the heal retags the client's parked
+  copy (held inside the culled ancestor's content) with a state it
+  does not carry. The next flip-in's verdict then legitimately
+  CONFIRMS the mis-tagged copy: `[flip out wrap, navigate cross-state,
+  flip in wrap]` shows the pre-nav descendant state (~0.2% of v2
+  trials; seeds 77/50507/50925 all shrink to this shape). The F2
+  discipline ("a gate-failed snapshot gets NO warm fp — nothing
+  rendered, there is no drift to heal") needs a culled-ancestor
+  sibling in `computeWarmFps` (fp-trailer.ts — outside the v2
+  change's territory, so ledgered instead of fixed). Pinned
+  `it.fails` in `fuzz-convergence-v2.rsc.test.tsx`; flip it to an
+  ordinary case with the fix.
+
+- **Harness finding: delivering a pre-nav lane's rows after the
+  covering segment is not a real interleaving.** An early v2 draft
+  released held lane bytes across navigations; the real transport
+  TEARS the region's open lanes at a window statement, so those rows
+  reject client-side and never commit. The un-torn version
+  manufactured "staleness" the production client cannot exhibit; the
+  harness now tears held lanes on navigate (their chunks reject, the
+  settlement re-walk runs against the rejections — which is exactly
+  what surfaced F12 for real).

@@ -3,6 +3,8 @@
  * surface (match-gated variants, cell readers, cullable pairs, a
  * nested cullable wrapper) plus the harness wiring (`FuzzFixture`)
  * and the isolation reset shared by the CI test and long local runs.
+ * The partons and cells are exported individually so the v2 fixture
+ * (`fuzz-fixture-v2.tsx`) composes the same shapes into its own page.
  * See `fuzz-convergence.rsc.test.tsx` and
  * `docs/notes/convergence-fuzzing.md`.
  */
@@ -24,9 +26,9 @@ import { SkelBox } from "./cull-skeleton-fixture.tsx"
 
 // ─── Cells ───────────────────────────────────────────────────────────
 
-const fzTick = localCell({ id: "fz-tick", shape: "number", initial: 0 })
-const fzCellA = localCell({ id: "fz-a", shape: "number", initial: 0 })
-const fzCellB = localCell({ id: "fz-b", shape: "number", initial: 0 })
+export const fzTick = localCell({ id: "fz-tick", shape: "number", initial: 0 })
+export const fzCellA = localCell({ id: "fz-a", shape: "number", initial: 0 })
+export const fzCellB = localCell({ id: "fz-b", shape: "number", initial: 0 })
 
 // ─── Fixture partons ─────────────────────────────────────────────────
 //
@@ -35,7 +37,7 @@ const fzCellB = localCell({ id: "fz-b", shape: "number", initial: 0 })
 // request state reproduces every stamp byte-for-byte. Stamps are
 // `[S|<id>|<state>]`, the content-level oracle currency.
 
-const Sentinel = parton(
+export const Sentinel = parton(
   async function FzSentinelRender(_: RenderArgs) {
     const t = await fzTick.resolve()
     return <div>{`[S|fz-sentinel|t=${t.value}]`}</div>
@@ -44,7 +46,7 @@ const Sentinel = parton(
 )
 
 // Always-on, both request axes: a searchParam + a cell.
-const Shared = parton(
+export const Shared = parton(
   async function FzSharedRender(_: RenderArgs) {
     const q = searchParam("q") ?? ""
     const a = await fzCellA.resolve()
@@ -54,7 +56,7 @@ const Shared = parton(
 )
 
 // Match-gated variants — park/restore across navigations.
-const Alpha = parton(
+export const Alpha = parton(
   async function FzAlphaRender(_: RenderArgs) {
     const a = await fzCellA.resolve()
     return <div>{`[S|fz-alpha|a=${a.value}]`}</div>
@@ -62,7 +64,7 @@ const Alpha = parton(
   { match: "/alpha", selector: "fz-alpha" },
 )
 
-const Beta = parton(
+export const Beta = parton(
   function FzBetaRender(_: RenderArgs) {
     const q = searchParam("q") ?? ""
     return <div>{`[S|fz-beta|q=${q}]`}</div>
@@ -71,7 +73,7 @@ const Beta = parton(
 )
 
 // Value-conditional existence: only exists while ?q= is present.
-const Gated = parton(
+export const Gated = parton(
   function FzGatedRender(_: RenderArgs) {
     const q = searchParam("q") ?? ""
     return <div>{`[S|fz-gated|q=${q}]`}</div>
@@ -80,7 +82,7 @@ const Gated = parton(
 )
 
 // Cullable pair — cell reader.
-const CullA = parton(
+export const CullA = parton(
   async function FzCullARender(_: RenderArgs) {
     const b = await fzCellB.resolve()
     return <div>{`[S|fz-cull-a|b=${b.value}]`}</div>
@@ -89,7 +91,7 @@ const CullA = parton(
 )
 
 // Cullable pair — searchParam reader.
-const CullB = parton(
+export const CullB = parton(
   function FzCullBRender(_: RenderArgs) {
     const q = searchParam("q") ?? ""
     return <div>{`[S|fz-cull-b|q=${q}]`}</div>
@@ -101,7 +103,7 @@ const CullB = parton(
 // child — descendant-fold coverage (the wrapper's client fp may drift
 // after lane-only child updates: over-fetch, never stale) plus
 // ancestor-park cascading (a culled wrapper hides the child).
-const Inner = parton(
+export const Inner = parton(
   async function FzInnerRender(_: RenderArgs) {
     const q = searchParam("q") ?? ""
     const b = await fzCellB.resolve()
@@ -110,7 +112,7 @@ const Inner = parton(
   { selector: "fz-inner" },
 )
 
-const Wrap = parton(
+export const Wrap = parton(
   async function FzWrapRender(_: RenderArgs) {
     const a = await fzCellA.resolve()
     return (
@@ -140,7 +142,7 @@ function FuzzPage(): ReactNode {
 
 // ─── The fixture wiring ──────────────────────────────────────────────
 
-async function writeCell(
+export async function writeCell(
   cell: { set: (v: number) => Promise<void> },
   scope: string,
   url: string,

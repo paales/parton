@@ -15,7 +15,12 @@ import type { FpUpdatesPayload } from "./fp-trailer-marker.ts"
 import {
   _addLiveTreeIds,
   _applyFpUpdates,
+  _dropVariantFingerprints,
+  _evictTornVariant,
+  _nextStoreSeq,
+  _runWithStoreSeq,
   _setLiveCatchupAnchor,
+  _slotStoreSeqOf,
   cacheLookup,
   cacheStore,
   getCurrentPagePartials,
@@ -187,21 +192,35 @@ export function addSeen(out: Map<string, Set<string>>, id: string, matchKey: str
  * Wrappers without a `partialMatchKey` prop (legacy fixtures, missing
  * server-side wire) fall back to the empty string so they're still
  * tracked as a single-variant cache entry under `(id, "")`.
+ *
+ * `stats.pending` counts the deferred nodes the harvest could NOT see
+ * through (a cached wrapper whose content is still streaming — a
+ * progressive lane commit mid-body). A prune fed a pending-blocked
+ * harvest would delete every nested variant hiding behind the chunk
+ * out from under the displayed tree (fuzz class F11) — the caller must
+ * DEFER the prune when `pending > 0` (over-retention, never blanking;
+ * the next fully-harvestable commit prunes).
  */
-export function harvestPartialIds(node: ReactNode, out: Map<string, Set<string>>): void {
+export function harvestPartialIds(
+  node: ReactNode,
+  out: Map<string, Set<string>>,
+  stats?: { pending: number },
+): void {
   if (node == null || typeof node === "boolean") return
   if (typeof node === "string" || typeof node === "number") return
   if (Array.isArray(node)) {
     for (let i = 0; i < node.length; i++) {
-      harvestPartialIds(node[i] as ReactNode, out)
+      harvestPartialIds(node[i] as ReactNode, out, stats)
     }
     return
   }
   const unwrapped = unwrapLazy(node)
   if (unwrapped !== node) {
-    // Errored OR pending lazy — can't descend; skip.
+    // Errored OR pending lazy — can't descend; skip (pending counted:
+    // nested variants may hide behind the chunk).
+    if (unwrapped === LAZY_PENDING && stats) stats.pending++
     if (unwrapped == null || unwrapped === LAZY_PENDING) return
-    harvestPartialIds(unwrapped as ReactNode, out)
+    harvestPartialIds(unwrapped as ReactNode, out, stats)
     return
   }
   if (!isValidElement(node)) return
@@ -210,7 +229,7 @@ export function harvestPartialIds(node: ReactNode, out: Map<string, Set<string>>
     const id = getPartialId(node)
     if (id) addSeen(out, id, getPartialMatchKey(node) ?? "")
     const inner = (node.props as { children?: ReactNode })?.children
-    if (inner != null) harvestPartialIds(inner, out)
+    if (inner != null) harvestPartialIds(inner, out, stats)
     return
   }
   if (isPlaceholder(node)) {
@@ -219,7 +238,46 @@ export function harvestPartialIds(node: ReactNode, out: Map<string, Set<string>>
     return
   }
   const inner = (node.props as { children?: ReactNode })?.children
-  if (inner != null) harvestPartialIds(inner, out)
+  if (inner != null) harvestPartialIds(inner, out, stats)
+}
+
+/**
+ * Collect the (id, matchKey) pairs a cached subtree references through
+ * bare PLACEHOLDERS — the slots its rendered form depends on from
+ * OUTSIDE itself (`substituteNested` fills them at template render).
+ * Wrappers reached inline are self-carried content, not references,
+ * so they are descended but not collected. `stats.pending` counts
+ * deferred nodes the walk could not see through — a caller deciding
+ * composition honesty must treat those as "references unknown".
+ */
+function collectPlaceholderRefs(
+  node: ReactNode,
+  out: Map<string, Set<string>>,
+  stats: { pending: number },
+): void {
+  if (node == null || typeof node === "boolean") return
+  if (typeof node === "string" || typeof node === "number") return
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      collectPlaceholderRefs(node[i] as ReactNode, out, stats)
+    }
+    return
+  }
+  const unwrapped = unwrapLazy(node)
+  if (unwrapped !== node) {
+    if (unwrapped === LAZY_PENDING) stats.pending++
+    if (unwrapped == null || unwrapped === LAZY_PENDING) return
+    collectPlaceholderRefs(unwrapped as ReactNode, out, stats)
+    return
+  }
+  if (!isValidElement(node)) return
+  if (isPlaceholder(node)) {
+    const id = getPlaceholderId(node)
+    if (id) addSeen(out, id, getPlaceholderMatchKey(node) ?? "")
+    return
+  }
+  const inner = (node.props as { children?: ReactNode })?.children
+  if (inner != null) collectPlaceholderRefs(inner, out, stats)
 }
 
 /**
@@ -714,26 +772,35 @@ export function cacheFromStreamingChildren(
       const mk = getPartialMatchKey(node) ?? ""
       if (seen) addSeen(seen, id, mk)
       touchClientPartial(id)
-      const replacing = cacheStore(cache, id, mk, node)
-      if (!replacing && stats) stats.firstFill = true
-      // A content store for a parton whose mounted content has been
-      // parked since its bytes were minted is a RETURNING render —
-      // the fp moved while parked, so the parked fiber must be
-      // dropped, not reconciled into. The cull-park generation bump
-      // does that (see `cull-pair.tsx`); ordinary live updates are
-      // untouched. (Skeletons never store — they're client-rendered
-      // from the pair, not cached wrappers.)
-      contentSlotStored(id)
-      // Populate the fingerprint map synchronously from the tree walk
-      // rather than waiting for each `<PartialErrorBoundary>` to
-      // commit on the client. The commit order is non-deterministic
-      // across transitions (React may defer subtrees such as the
-      // `<head>` wrapper), so a targeted refetch fired right after a
-      // client nav could otherwise send a `?cached=` that's missing
-      // late-committing ids. The wrapper already carries the
-      // fingerprint — just lift it off.
-      const fp = getPartialFingerprint(node)
-      if (fp) registerClientPartial(id, mk, fp)
+      const outcome = cacheStore(cache, id, mk, node)
+      if (outcome === "first" && stats) stats.firstFill = true
+      // A STALE store (the out-of-order guard dropped it — the slot
+      // holds a newer commit's content) must leave the slot's
+      // bookkeeping alone: registering this wrapper's fp would
+      // advertise bytes the slot does not hold (a torn superseded
+      // payload's re-walk resurrecting a dead claim — the ghost-confirm
+      // class), and the cull-park store signal belongs to the content
+      // that actually landed.
+      if (outcome !== "stale") {
+        // A content store for a parton whose mounted content has been
+        // parked since its bytes were minted is a RETURNING render —
+        // the fp moved while parked, so the parked fiber must be
+        // dropped, not reconciled into. The cull-park generation bump
+        // does that (see `cull-pair.tsx`); ordinary live updates are
+        // untouched. (Skeletons never store — they're client-rendered
+        // from the pair, not cached wrappers.)
+        contentSlotStored(id)
+        // Populate the fingerprint map synchronously from the tree walk
+        // rather than waiting for each `<PartialErrorBoundary>` to
+        // commit on the client. The commit order is non-deterministic
+        // across transitions (React may defer subtrees such as the
+        // `<head>` wrapper), so a targeted refetch fired right after a
+        // client nav could otherwise send a `?cached=` that's missing
+        // late-committing ids. The wrapper already carries the
+        // fingerprint — just lift it off.
+        const fp = getPartialFingerprint(node)
+        if (fp) registerClientPartial(id, mk, fp)
+      }
     }
     // Descend: nested partial wrappers need their own top-level cache
     // entries so subsequent parent-only refetches with inner
@@ -846,9 +913,16 @@ export function _commitPartonLane(
     generation = (_laneCommitGeneration.get(partonId) ?? 0) + 1
     _laneCommitGeneration.set(partonId, generation)
   }
+  // One store-seq batch per commit: the walk below AND every
+  // settlement re-walk of this same payload write under it, so a late
+  // re-walk can never clobber a slot a newer commit wrote (the
+  // out-of-order guard in `cacheStore` — fuzz class F9).
+  const storeSeq = _nextStoreSeq()
   const seen = new Map<string, Set<string>>()
   const stats: LazyWalkStats = { pending: 0, thenables: [] }
-  cacheFromStreamingChildren(node, getCurrentPagePartials(), seen, stats)
+  _runWithStoreSeq(storeSeq, () =>
+    cacheFromStreamingChildren(node, getCurrentPagePartials(), seen, stats),
+  )
   // The committed subtree is part of the DISPLAYED tree the moment the
   // notify's transition re-renders the template — its ids join the
   // pool-cap eviction exemption (`_liveTreeIds`), which payload commits
@@ -862,13 +936,60 @@ export function _commitPartonLane(
   // The supersede guard is what makes a re-walk safe; a caller that
   // named no parton gets exactly the one walk.
   if (partonId !== undefined && generation !== undefined) {
-    scheduleLaneRewalk(partonId, generation, node, stats)
+    scheduleLaneRewalk(partonId, generation, storeSeq, node, stats)
   }
 }
 
 /** Per-parton lane commit generation — the supersede guard for the
  *  lane commits' resolve-time re-walks. */
 const _laneCommitGeneration = new Map<string, number>()
+
+/** In-flight settlement re-walk hops (hop promise → its commit's
+ *  (parton id, generation), one entry per scheduled hop of
+ *  `scheduleLaneRewalk`). The map is the re-walks' own completion
+ *  signal — the v2 convergence fuzzer drains it at its settle points
+ *  instead of guessing with timers (quiescence from causality). */
+const _outstandingLaneRewalks = new Map<Promise<void>, { id: string; gen: number }>()
+
+/** TEST-ONLY: the current lane-commit generation for a parton — pair
+ *  with `_settleLaneRewalksForTest(id, gen)` to await exactly one
+ *  commit's re-walk chain. */
+export function _laneCommitGenerationForTest(partonId: string): number {
+  return _laneCommitGeneration.get(partonId) ?? 0
+}
+
+/** TEST-ONLY: resolve once every currently-scheduled settlement
+ *  re-walk (and any hop it chains) has run. Scope with `partonId` (+
+ *  optionally `generation`) to await exactly one commit's chain — a
+ *  harness deliberately holding OTHER deliveries' bytes must not await
+ *  hops that cannot settle yet. */
+export async function _settleLaneRewalksForTest(
+  partonId?: string,
+  generation?: number,
+): Promise<void> {
+  const pending = (): Promise<void>[] => {
+    const out: Promise<void>[] = []
+    for (const [hop, tag] of _outstandingLaneRewalks) {
+      if (partonId !== undefined && tag.id !== partonId) continue
+      if (generation !== undefined && tag.gen !== generation) continue
+      out.push(hop)
+    }
+    return out
+  }
+  for (let hops = pending(); hops.length > 0; hops = pending()) {
+    await Promise.all(hops)
+  }
+}
+
+/** TEST-ONLY: reset the lane-commit supersede generations between
+ *  fuzz trials (module-level state, same rationale as
+ *  `_resetClientStateForTest`). Outstanding re-walk hops are dropped
+ *  from the tracking set too — a prior trial's held decode may never
+ *  settle, and its hop is moot (the generation reset no-ops it). */
+export function _resetLaneCommitStateForTest(): void {
+  _laneCommitGeneration.clear()
+  _outstandingLaneRewalks.clear()
+}
 
 /**
  * Re-walk a committed lane payload each time its captured pending
@@ -883,23 +1004,92 @@ const _laneCommitGeneration = new Map<string, number>()
 function scheduleLaneRewalk(
   partonId: string,
   generation: number,
+  storeSeq: number,
   node: ReactNode,
   stats: LazyWalkStats,
 ): void {
   const thenables = stats.thenables ?? []
   if (stats.pending === 0 || thenables.length === 0) return
-  void Promise.allSettled(thenables.map((t) => Promise.resolve(t))).then(() => {
+  const hop = Promise.allSettled(thenables.map((t) => Promise.resolve(t))).then((settled) => {
+    // A REJECTED chunk means the body TORE mid-stream (a navigation
+    // ended the region over this progressive commit) — the stored
+    // subtrees hold pending-forever holes, and their fps describe the
+    // FULL body the server rendered. Every variant whose slot THIS
+    // payload still owns (the slot's store seq is this batch's) is
+    // EVICTED — see `_evictTornVariant` for why keeping either half is
+    // a ghost-confirm / content-shadowing hazard. A later CONFIRM
+    // commit bumps the generation without replacing the slot, so the
+    // supersede guard below must NOT gate this.
+    if (settled.some((r) => r.status === "rejected")) {
+      const torn = new Map<string, Set<string>>()
+      const tornStats: LazyWalkStats = { pending: 0, thenables: [] }
+      _runWithStoreSeq(storeSeq, () =>
+        cacheFromStreamingChildren(node, getCurrentPagePartials(), torn, tornStats),
+      )
+      const evicted = new Map<string, Set<string>>()
+      for (const [id, mks] of torn) {
+        for (const mk of mks) {
+          if (_slotStoreSeqOf(id, mk) === storeSeq) {
+            _evictTornVariant(id, mk)
+            addSeen(evicted, id, mk)
+          }
+        }
+      }
+      // Composition honesty: a cached wrapper whose content references
+      // an evicted variant through a PLACEHOLDER can no longer restore
+      // the composition its fp describes — a confirm against it would
+      // leave an unbacked hole with no delta left to heal it. Drop the
+      // claim (fps only; the content stays displayable); a slot whose
+      // content is itself still streaming (pending — its references
+      // unknowable) is dropped conservatively too. Over-fetch, never
+      // a standing blank.
+      if (evicted.size > 0) {
+        const cache = getCurrentPagePartials()
+        for (const [refId, byMk] of cache) {
+          for (const [refMk, refNode] of byMk) {
+            if (evicted.get(refId)?.has(refMk)) continue
+            const refs = new Map<string, Set<string>>()
+            const refStats = { pending: 0 }
+            collectPlaceholderRefs(refNode, refs, refStats)
+            let referencesEvicted = refStats.pending > 0
+            if (!referencesEvicted) {
+              for (const [eid, emks] of evicted) {
+                const seenMks = refs.get(eid)
+                if (seenMks !== undefined && [...emks].some((m) => seenMks.has(m))) {
+                  referencesEvicted = true
+                  break
+                }
+              }
+            }
+            if (referencesEvicted) _dropVariantFingerprints(refId, refMk)
+          }
+        }
+      }
+      notifyLaneCommitCoalesced()
+      return
+    }
     if (_laneCommitGeneration.get(partonId) !== generation) return
     const seen = new Map<string, Set<string>>()
     const next: LazyWalkStats = { pending: 0, thenables: [] }
-    cacheFromStreamingChildren(node, getCurrentPagePartials(), seen, next)
+    // The commit's own batch seq — a slot a newer commit wrote since
+    // this payload's first walk stays untouched (out-of-order guard).
+    _runWithStoreSeq(storeSeq, () =>
+      cacheFromStreamingChildren(node, getCurrentPagePartials(), seen, next),
+    )
     // Same live-tree fold as the commit — each re-walk may surface
     // newly-resolved ids.
     _addLiveTreeIds(seen.keys())
     if (next.firstFill === true) notifyLaneCommit()
     else notifyLaneCommitCoalesced()
-    scheduleLaneRewalk(partonId, generation, node, next)
+    scheduleLaneRewalk(partonId, generation, storeSeq, node, next)
   })
+  // Track the hop for `_settleLaneRewalksForTest` — a chained hop
+  // registers itself inside this one's body, before this entry clears.
+  _outstandingLaneRewalks.set(hop, { id: partonId, gen: generation })
+  void hop.then(
+    () => _outstandingLaneRewalks.delete(hop),
+    () => _outstandingLaneRewalks.delete(hop),
+  )
 }
 
 /**
