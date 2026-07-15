@@ -83,3 +83,31 @@ describe("duplicate spec id — newer generation (HMR re-evaluation)", () => {
     expect(text).toContain("BODY-B")
   })
 })
+
+describe("anonymous Render — no derivable identity", () => {
+  it("an anonymous Render with no selector throws at construct time", () => {
+    let thrown: Error | null = null
+    try {
+      // An arrow passed directly into parton() gets NO inferred name —
+      // there is nothing stable to derive the id from, and any
+      // fallback shared across anonymous specs collides (the field
+      // report: two anonymous specs both minted "anon" and tripped
+      // the duplicate-id gate with a misleading message).
+      parton((_: RenderArgs) => <div />, "/anon-spec")
+    } catch (e) {
+      thrown = e as Error
+    }
+    expect(thrown).not.toBeNull()
+    expect(thrown!.message).toContain("anonymous")
+    expect(thrown!.message).toContain("selector")
+  })
+
+  it("an anonymous Render WITH an explicit selector is fine", () => {
+    const Spec = parton((_: RenderArgs) => <div data-testid="anon-ok" />, {
+      match: "/anon-spec-ok",
+      selector: "#anon-ok",
+    })
+    expect(Spec).toBeDefined()
+    expect(getSpecById("anon-ok")).toBeDefined()
+  })
+})

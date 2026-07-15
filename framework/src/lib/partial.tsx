@@ -520,7 +520,20 @@ function autoSelector(render: (...args: never[]) => unknown): SelectorTokens {
       break
     }
   }
-  if (!stem) stem = "anon"
+  if (!stem) {
+    // No name, no identity: the auto-derived id IS the spec's stable
+    // identity (catalog key, wire id, cache/fp key), and an anonymous
+    // function carries nothing stable to derive it from — any fallback
+    // (a shared "anon", a definition counter) either collides or
+    // reshuffles across builds, serving one spec's cached bytes for
+    // another.
+    throw new Error(
+      "parton: the Render function is anonymous, so no id can be derived. " +
+        "Name the function (its name is the parton's identity — " +
+        '`parton(async function ProductCard() {…})`) or pass an explicit ' +
+        'selector: `parton(Render, { selector: "#product-card", match })`.',
+    )
+  }
   return stem
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .replace(/[_\s]+/g, "-")
