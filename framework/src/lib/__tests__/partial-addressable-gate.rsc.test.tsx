@@ -101,14 +101,17 @@ describe("addressable gate — wire fp emission", () => {
 
     // Child is non-addressable — boundary exists (id is bound to
     // the React tree for context propagation), but the fp prop is
-    // omitted, so Flight doesn't serialize it.
-    expect(fps.has("gate-child")).toBe(true)
-    expect(fps.get("gate-child")).toBeUndefined()
+    // omitted, so Flight doesn't serialize it. Auto ids under a
+    // parent carry the placement fold (`gate-child~<hash>`).
+    const childId = [...fps.keys()].find((id) => id.startsWith("gate-child~"))
+    expect(childId).toBeDefined()
+    expect(fps.get(childId!)).toBeUndefined()
 
     // The reading child is non-addressable too — its tracked read is
     // a dependency, not an address.
-    expect(fps.has("read-only-child")).toBe(true)
-    expect(fps.get("read-only-child")).toBeUndefined()
+    const readingId = [...fps.keys()].find((id) => id.startsWith("read-only-child~"))
+    expect(readingId).toBeDefined()
+    expect(fps.get(readingId!)).toBeUndefined()
   })
 
   it("an explicit selector flips the gate on — the spec emits a fingerprint", async () => {

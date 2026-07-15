@@ -67,6 +67,15 @@ they never set the id. `selector: "page-block composed-hero"` on
 `["hero", "page-block", "composed-hero"]`. This differs from
 `parton`, where the first label (prefix-stripped) IS the id.
 
+Block ids ride the same catalog collision gate as `parton` ids: two
+distinct specs claiming one id throw at construct time (see
+[partial.md § Selector grammar](./partial.md#selector-grammar)). A
+block's id is always explicit at the partial layer (the block wrapper
+pins it as the first label), so it is never placement-folded and a
+singleton block placed directly at two spots in one request is
+rejected as an authoring error — slot-placed instances are exempt,
+each rendering under its CMS row id via `__instanceId`.
+
 ## Options
 
 ```ts
@@ -86,11 +95,11 @@ interface BlockOptions<V, S> {
 }
 ```
 
-| Option | Notes |
-|---|---|
-| `selector` | Refetch labels; `#` pins the id (see above). Slot-allow filters and `nav.reload({selector: "…"})` match any label. |
-| `schema` | Sync. Receives `{ cms }` — the CMS read surface, nothing else. Returns content reads (`cms.text(...)`, `cms.enum(...)`) and child slot compositions (`cms.blocks(...)`, `cms.block(...)`); both flow into Render as props. Request-dimension deps come from the tracked server-hooks (`searchParam()`, `cookie()`, …) read in the Render body, same as on `parton` — rare on blocks, whose content side lives on the `cms` surface. |
-| `match`, `cache`, `defer`, `fallback`, `keepalive` | Same as [`parton`](./partial.md#options). |
+| Option                                             | Notes                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `selector`                                         | Refetch labels; `#` pins the id (see above). Slot-allow filters and `nav.reload({selector: "…"})` match any label.                                                                                                                                                                                                                                                                                                                  |
+| `schema`                                           | Sync. Receives `{ cms }` — the CMS read surface, nothing else. Returns content reads (`cms.text(...)`, `cms.enum(...)`) and child slot compositions (`cms.blocks(...)`, `cms.block(...)`); both flow into Render as props. Request-dimension deps come from the tracked server-hooks (`searchParam()`, `cookie()`, …) read in the Render body, same as on `parton` — rare on blocks, whose content side lives on the `cms` surface. |
+| `match`, `cache`, `defer`, `fallback`, `keepalive` | Same as [`parton`](./partial.md#options).                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## `cms` surface on schema
 
@@ -164,9 +173,9 @@ multiple placements share the label and refetch together:
 ```tsx
 const LivePrice = parton(LivePriceRender, { selector: "price" })
 
-{products.map(p => (
-  <LivePrice key={p.sku} sku={p.sku} basePrice={p.price} />
-))}
+{
+  products.map((p) => <LivePrice key={p.sku} sku={p.sku} basePrice={p.price} />)
+}
 ```
 
 `nav.reload({selector: "price"})` fans out across every placement.

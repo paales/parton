@@ -11,13 +11,32 @@ keeping for context).
 
 ## Backlog
 
-### Scoped selectors
+### Scoped selectors / module-scoped auto-ids
 
 Resolve selector tokens (`#foo` / `.bar`) per module or per spec-tree
 path instead of in a global flat namespace. Today the spec catalog is
-one flat map keyed by id (last registration wins, silently), forcing
-factories to hand-disambiguate internal names; scoping lets the same
-name be reused across invocations.
+one flat map keyed by id — a same-generation duplicate claim now
+THROWS at construct time naming both definition sites (the collision
+gate in `spec-catalog.ts`), so the failure is loud, but the namespace
+is still flat: two modules can't both auto-name a Render
+`SearchResults`.
+
+The durable fix is folding module identity into AUTO-derived ids —
+`greeting-page/second-parton`, the way `use client` references are
+stamped with `path#export`. Findings from the identity-fix arc
+(2026-07): nothing in the toolchain reaches `parton()` with a module
+id today. The `@vitejs/plugin-rsc` patch is a RUNTIME Flight patch
+(per-component ALS for server context) — module identity at define
+time isn't in it, and `parton()` executes at module-eval time when no
+render/request context exists. A stack-derived path is a heuristic
+(dev fs paths vs prod bundle paths diverge → ids would differ between
+dev and prod, breaking cached fps and CMS auto storage keys), so the
+real lever is a NEW compile-time transform stamping the importer's
+root-relative module id into `parton()` / `block()` calls — it must
+cover both constructor forms plus `_buildPartial`, keep dev/prod ids
+byte-identical, and accept a one-time re-key of wire ids and
+auto-named `block()` storage keys. Deferred until that transform is
+worth its weight (multi-team adoption pressure).
 
 String tokens are brittle past a single codebase — highest-leverage
 backlog item before multi-team adoption.
@@ -34,6 +53,7 @@ that depended on it without the caller knowing each affected partial
 id.
 
 Open questions:
+
 - **Storage shape.** Dep records are hashed into the cache key, not
   stored as queryable fields. Either keep a side-index
   `(key → depsKey)` to walk, or accept O(n) scan over cache
@@ -63,6 +83,7 @@ Today `getServerNavigation().reload({ selector: "cart" })` with no constraints b
 Cells mitigate twice: partition-scoped writes (`cell.set` bumps `cell:<id>?<args>`, never the bare label) and storage-as-authoritative reads (a bare-bump re-render reads cell storage, so no upstream round-trip unless the loader misses). But the registry walk + re-render still happens per viewer, and any non-cell loader in the re-rendered body is a real upstream round-trip.
 
 Possible directions:
+
 - **Syntactic sugar.** `reload({ selector: "cart", scope: { cart_id: cartId } })` as a readable alternative to query-string interpolation. Same semantics; easier to read for multi-key cases.
 - **Auto-scope from declared read keys.** If the framework tracks which `readCookie` / `readHeader` calls happened during the action body, fold those into default constraints. Render bodies already get this for free (the read is the dependency — tracked hooks fold into the fp via dep records); action bodies have no equivalent instrumentation yet. Small cost, large ergonomic win — the action says what it touched without naming each axis.
 - **Dev warning on bare bumps.** Warn when a `reload({selector})` would match >1 distinct constraint tuple in the current registry snapshot. Catches the footgun in development; ships nothing to production.
@@ -112,7 +133,7 @@ bump or `expires()` boundary, re-renders, and emits the next
 streams. The open questions resolved themselves: the iteration loop is
 the registry wait + wake hints (no `useRevalidate`), framing reuses the
 fp-trailer sentinel with distinct tags, and backpressure is intrinsic —
-each segment renders *current* state, so intermediate states coalesce.
+each segment renders _current_ state, so intermediate states coalesce.
 See [`../internals/streaming.md`](../internals/streaming.md).
 
 ### Activate ⇄ deactivate symmetry — resolved by read-tracked culling
@@ -147,8 +168,8 @@ overlap:
   and issue an RSC `?cached=` GET. `intercept()` only applies to
   same-document navigations, so a speculation never fires for an
   intercepted link; and even when one does fire (a nav parton doesn't
-  intercept), an activated prerender is a *cold* parton boot (fresh
-  `_currentPagePartials`) and a prefetch warms the *document* entry, not
+  intercept), an activated prerender is a _cold_ parton boot (fresh
+  `_currentPagePartials`) and a prefetch warms the _document_ entry, not
   the RSC request. So Speculation Rules can't warm the client RSC cache
   — that's exactly the gap `preload` fills.
 
@@ -190,6 +211,7 @@ PIM), not in the framework. Two related questions:
   — but warm-caching the cold paths at deploy time is.
 
 Open questions:
+
 - **Enumerate API shape.** Async generator? Paginated callback?
   Static array?
 - **Opt-in vs opt-out.** Some specs depend on cookies/headers and
@@ -239,8 +261,8 @@ framework-issued token. Provider impl downstream.
 
 Surface a sync per-spec `title` contribution the framework collects
 and emits in `<head>` before the body streams. React 19's metadata
-hoisting handles *placement* (an inline `<title>` rendered anywhere
-hoists), but not *timing* — a title rendered after an await arrives
+hoisting handles _placement_ (an inline `<title>` rendered anywhere
+hoists), but not _timing_ — a title rendered after an await arrives
 too late in the stream for first paint. The contribution needs a
 pre-body surface, and the spec constructor has no pre-render callback
 to hang it on — the natural candidate is a spec option (static or a
@@ -256,7 +278,7 @@ OpenTelemetry adapter as one impl; bring-your-own logger as another.
 
 ### i18n — locale routing + translations
 
-Locale as a request *dimension* already works with zero declaration: a
+Locale as a request _dimension_ already works with zero declaration: a
 body that reads the locale cookie/header through a tracked hook folds
 it into its fingerprint like any other read. What's missing is
 everything above that: locale-aware routing (`/nl/p/:slug`), a
@@ -349,7 +371,7 @@ The framework makes two layered claims:
 1. **Partials as addressable RSC subtrees** — solid, working, primitive is coherent.
 2. **Runtime discovery over static analysis** — no static walkers, no codegen, no build-time manifest. The spec catalog and the partial registry both populate at first render.
 
-The second claim is the one that distinguishes this from Next.js App Router in the long run. Everything that reinstates a static walker (typed partial registries via codegen, explicit route manifests, declarative input schemas resolved at build time) works against it. When evaluating future directions, the test is: *can this self-register at render time instead of requiring a pre-render walk?* The current `parton` / `block` constructors pass that test — every spec self-registers when its module loads. Typed-handle codegen fails it. Keep that principle sharp — it's the architectural load-bearing idea and it's easy to erode one convenient walker at a time.
+The second claim is the one that distinguishes this from Next.js App Router in the long run. Everything that reinstates a static walker (typed partial registries via codegen, explicit route manifests, declarative input schemas resolved at build time) works against it. When evaluating future directions, the test is: _can this self-register at render time instead of requiring a pre-render walk?_ The current `parton` / `block` constructors pass that test — every spec self-registers when its module loads. Typed-handle codegen fails it. Keep that principle sharp — it's the architectural load-bearing idea and it's easy to erode one convenient walker at a time.
 
 ---
 

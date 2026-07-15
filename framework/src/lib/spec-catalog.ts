@@ -62,11 +62,53 @@ export interface SpecCatalogEntry {
    *  to bind (`docs/reference/remote-frame.md` § Bound cells).
    *  Runtime enforcement lives in the spec pipeline, not here. */
   cells?: Record<string, { required?: boolean }>
+  /** Code-version generation this spec was constructed under
+   *  (`currentCodeVersion()` at construct time — 0 in prod and tests,
+   *  bumped per HMR js-update in dev). The collision gate's HMR
+   *  discriminator: a claim from a NEWER generation is a module
+   *  re-evaluation of edited code and replaces silently; a
+   *  same-generation claim of a live id is two DISTINCT specs
+   *  fighting over one identity and throws. */
+  generation: number
+  /** Best-effort definition site (first non-framework stack frame at
+   *  construct time). Diagnostic only — it names both sides of an id
+   *  collision in the throw below. */
+  definedAt: string
 }
 
 const specCatalog = new Map<string, SpecCatalogEntry>()
 
+/**
+ * Claim a catalog id. The id is the spec's GLOBAL identity — the
+ * snapshot `type`, the wire-id stem, the refetch label root — so two
+ * distinct specs sharing one id is split-brain: whole-tree renders run
+ * each placement's own closure while every catalog consumer (lane
+ * reconstruction, the descendant fold's gate re-evaluation, the
+ * matchKey ancestor walk) resolves the LAST registration.
+ *
+ * Collision policy (one gate for every id-keyed spec surface —
+ * `componentById` in partial.tsx writes in lockstep, AFTER this claim
+ * succeeds):
+ *
+ *  - no live entry, or a claim from a NEWER code generation → the
+ *    claim lands (first definition, or an HMR re-evaluation of edited
+ *    code replacing its predecessor).
+ *  - a live entry from the SAME generation → throw, naming both
+ *    definition sites. In dev this is the author's collision signal;
+ *    in prod the generation never moves, so a duplicate id fails the
+ *    deploy at module init instead of split-braining at runtime.
+ */
 export function registerSpec(entry: SpecCatalogEntry): void {
+  const existing = specCatalog.get(entry.id)
+  if (existing !== undefined && existing.generation === entry.generation) {
+    throw new Error(
+      `parton: duplicate spec id "${entry.id}" — two distinct specs claimed one catalog id.\n` +
+        `  first defined: ${existing.definedAt} (Render: ${existing.displayName})\n` +
+        `  claimed again: ${entry.definedAt} (Render: ${entry.displayName})\n` +
+        `Auto-derived ids come from the Render function's name — rename one Render, ` +
+        `or give one spec an explicit \`selector\`.`,
+    )
+  }
   specCatalog.set(entry.id, entry)
 }
 

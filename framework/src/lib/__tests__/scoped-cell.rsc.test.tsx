@@ -79,13 +79,13 @@ describe("scoped cell — compound id + registered handle", () => {
         const flag = await localCell("flag", { shape: "boolean", initial: false })
         return <span>{String(flag.value)}</span>
       },
-      { selector: "my-parton", match: "/x" },
+      { selector: "my-parton-b", match: "/x" },
     )
     await flightAt("http://t/x", <Page />)
 
-    const handle = getCellById("my-parton/flag")
+    const handle = getCellById("my-parton-b/flag")
     expect(handle).toBeDefined()
-    expect(() => handle!.validate("not a bool")).toThrow(/my-parton\/flag.*expected boolean/)
+    expect(() => handle!.validate("not a bool")).toThrow(/my-parton-b\/flag.*expected boolean/)
   })
 })
 

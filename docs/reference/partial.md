@@ -29,7 +29,7 @@ function PokemonRender({ id }: { id: string } & RenderArgs) {
 }
 
 // Anywhere in JSX:
-<PokemonPage />
+;<PokemonPage />
 ```
 
 ## Tier 1 — pattern-match shorthand
@@ -48,14 +48,14 @@ const PokemonPage = parton(PokemonRender, "/pokemon/:id")
 `ParseRoute<T>` infers a `{ name: string }` shape from the pattern at
 the type level. URLPattern syntax handled:
 
-| Pattern | Type |
-|---|---|
-| `/:foo` | `{ foo: string }` |
-| `/:foo?` | `{ foo?: string }` (optional) |
-| `/:foo+` / `/:foo*` | `{ foo: string }` (URLPattern flattens repeats to one string) |
-| `/:foo(\d+)` | `{ foo: string }` (regex constraint at runtime; value stays string) |
-| `/*` | not in result (anonymous wildcard) |
-| `/{group}?` | bracket-stripped; named params inside parse normally |
+| Pattern             | Type                                                                |
+| ------------------- | ------------------------------------------------------------------- |
+| `/:foo`             | `{ foo: string }`                                                   |
+| `/:foo?`            | `{ foo?: string }` (optional)                                       |
+| `/:foo+` / `/:foo*` | `{ foo: string }` (URLPattern flattens repeats to one string)       |
+| `/:foo(\d+)`        | `{ foo: string }` (regex constraint at runtime; value stays string) |
+| `/*`                | not in result (anonymous wildcard)                                  |
+| `/{group}?`         | bracket-stripped; named params inside parse normally                |
 
 URLPattern is the source of truth for what actually matches at runtime;
 unparseable corners fall through and the prop is just absent. Params
@@ -71,10 +71,8 @@ const ProductHero = parton(ProductHeroRender, {
   cache: { maxAge: 60 },
 })
 
-async function ProductHeroRender({
-  slug,
-}: { slug: string } & RenderArgs) {
-  const variant = searchParam("variant", "default")   // tracked read
+async function ProductHeroRender({ slug }: { slug: string } & RenderArgs) {
+  const variant = searchParam("variant", "default") // tracked read
   const product = await getProduct(slug)
   return <Hero product={product} variant={variant} />
 }
@@ -88,27 +86,27 @@ resolution surface.
 
 ```ts
 interface PartialOptions {
-  match?: MatchPattern                             // request gate (string or MatchInit)
-  selector?: SelectorTokens                        // auto-derived from Render.name
+  match?: MatchPattern // request gate (string or MatchInit)
+  selector?: SelectorTokens // auto-derived from Render.name
   cache?: CacheOptions
   defer?: true | ReactElement<ActivatorProps>
   fallback?: ReactNode
-  keepalive?: boolean                              // default true
-  fpSkip?: boolean                                 // default true
-  capabilityType?: string                          // remote-manifest typing
+  keepalive?: boolean // default true
+  fpSkip?: boolean // default true
+  capabilityType?: string // remote-manifest typing
 }
 ```
 
-| Option | Notes |
-|---|---|
-| `match` | The request gate. A URLPattern pathname string (`/p/:slug`, `/inspect/*` — descendants only, `/inspect{/*}?` — bare + descendants), or a `MatchInit` object gating any request dimension — URL components, search params, cookies, headers — with per-value predicates. Gate miss → the spec parks (or emits nothing when the client has no cached variant). See [The match gate](#the-match-gate--gating-the-request). Anonymous `*` captures don't fold into the fingerprint — only named groups (`:foo`) do; a spec that genuinely depends on the wildcard tail reads `pathname()` explicitly. |
-| `selector` | One or more refetch labels. Plain strings; leading `#` / `.` are cosmetic and stripped on parse (`"#hero"` and `"hero"` are equivalent). Defaults to `<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. The first label is the spec's catalog id; additional labels are extra fan-out targets. Multiple placements of the same spec share their labels; `nav.reload({selector: "label"})` hits every carrier. |
-| `cache` | See [`cache.md`](./cache.md). |
-| `defer` | `true` for app-driven, an activator element to wire automatically. |
-| `fallback` | React node rendered while the partial's body is suspended. |
-| `keepalive` | When `true` (default), the rendered body is wrapped in a `<Activity mode="visible" key={matchKey}>` while active and the spec emits `<Activity mode="hidden">` + placeholder for each cached variant on a `match` miss (instead of returning nothing). The client substitutes its cached subtree at each placeholder, so the React fiber tree stays shape-stable across active ↔ parked transitions — `useState`, `useRef`, and DOM state survive a navigate-away-and-back round-trip. Multiple variants of the same spec (e.g. `/pokemon/1` ↔ `/pokemon/2`) coexist as hidden Activity siblings keyed by `matchKey` so each variant's fiber stays alive across cross-variant navigation. Set to `false` for partials whose state should reset on cross-route nav (heavy video/iframe DOM, debug-only specs, anything where stale state is worse than re-mount cost). |
-| `fpSkip` | When `false`, this spec is never served from the client's fingerprint cache — every request renders it fresh. The spec still fingerprints normally (folds, trailer, addressability all unchanged); only the serve-from-cache decision is disabled. For always-authoritative surfaces whose output must track the request exactly: the CMS editor chrome opts out because its links embed the full request URL, which no individually-tracked dimension covers. Default `true`. |
-| `capabilityType` | Capability schema name referenced by the `/__remote/manifest.json` endpoint so `parton add` can generate typed bindings. Omit if the spec doesn't read capability values. See [`remote-frame.md`](./remote-frame.md). |
+| Option           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `match`          | The request gate. A URLPattern pathname string (`/p/:slug`, `/inspect/*` — descendants only, `/inspect{/*}?` — bare + descendants), or a `MatchInit` object gating any request dimension — URL components, search params, cookies, headers — with per-value predicates. Gate miss → the spec parks (or emits nothing when the client has no cached variant). See [The match gate](#the-match-gate--gating-the-request). Anonymous `*` captures don't fold into the fingerprint — only named groups (`:foo`) do; a spec that genuinely depends on the wildcard tail reads `pathname()` explicitly.                                                                                                                                                                                                                                                                     |
+| `selector`       | One or more refetch labels. Plain strings; leading `#` / `.` are cosmetic and stripped on parse (`"#hero"` and `"hero"` are equivalent). Defaults to `<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. The first label is the spec's catalog id; additional labels are extra fan-out targets. Multiple placements of the same spec share their labels; `nav.reload({selector: "label"})` hits every carrier.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `cache`          | See [`cache.md`](./cache.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `defer`          | `true` for app-driven, an activator element to wire automatically.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `fallback`       | React node rendered while the partial's body is suspended.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `keepalive`      | When `true` (default), the rendered body is wrapped in a `<Activity mode="visible" key={matchKey}>` while active and the spec emits `<Activity mode="hidden">` + placeholder for each cached variant on a `match` miss (instead of returning nothing). The client substitutes its cached subtree at each placeholder, so the React fiber tree stays shape-stable across active ↔ parked transitions — `useState`, `useRef`, and DOM state survive a navigate-away-and-back round-trip. Multiple variants of the same spec (e.g. `/pokemon/1` ↔ `/pokemon/2`) coexist as hidden Activity siblings keyed by `matchKey` so each variant's fiber stays alive across cross-variant navigation. Set to `false` for partials whose state should reset on cross-route nav (heavy video/iframe DOM, debug-only specs, anything where stale state is worse than re-mount cost). |
+| `fpSkip`         | When `false`, this spec is never served from the client's fingerprint cache — every request renders it fresh. The spec still fingerprints normally (folds, trailer, addressability all unchanged); only the serve-from-cache decision is disabled. For always-authoritative surfaces whose output must track the request exactly: the CMS editor chrome opts out because its links embed the full request URL, which no individually-tracked dimension covers. Default `true`.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `capabilityType` | Capability schema name referenced by the `/__remote/manifest.json` endpoint so `parton add` can generate typed bindings. Omit if the spec doesn't read capability values. See [`remote-frame.md`](./remote-frame.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ## The match gate — gating the request
 
@@ -122,19 +120,25 @@ type FieldTest = string | ((value: string) => boolean)
 type ValueTest = string | ((value: string | null) => boolean)
 
 interface MatchInit {
-  protocol?, hostname?, port?, pathname?, hash?: FieldTest
-  username?, password?, baseURL?: string
-  search?: string                            // raw URLPattern search string
-  searchParams?: Record<string, ValueTest>   // per-param gates
-  cookies?: Record<string, ValueTest>        // per-cookie gates
-  headers?: Record<string, ValueTest>        // per-header gates
+  protocol?
+  hostname?
+  port?
+  pathname?
+  hash?: FieldTest
+  username?
+  password?
+  baseURL?: string
+  search?: string // raw URLPattern search string
+  searchParams?: Record<string, ValueTest> // per-param gates
+  cookies?: Record<string, ValueTest> // per-cookie gates
+  headers?: Record<string, ValueTest> // per-header gates
 }
 ```
 
 - **URL components** (`pathname`, `hostname`, …) take URLPattern
   strings or per-value predicates `(value: string) => boolean`. String
   semantics are strict URLPattern — no auto-suffixing: `match:
-  "/inspect/*"` matches `/inspect/…` and NOT bare `/inspect`; write
+"/inspect/*"` matches `/inspect/…` and NOT bare `/inspect`; write
   `"/inspect{/*}?"` for both.
 - **`searchParams` / `cookies` / `headers`** gate on individual
   values, order-independent (unlike a raw URLPattern `search` string).
@@ -199,7 +203,11 @@ just URL shape, value-conditional existence is a match gate too:
 // Page N of a load-more list exists iff the URL admits it — a miss
 // parks the cached page (back/forward across a load-more boundary
 // restores it).
-match: { searchParams: { pages: (v) => Math.max(1, Number(v) || 1) >= page } }
+match: {
+  searchParams: {
+    pages: (v) => Math.max(1, Number(v) || 1) >= page
+  }
+}
 ```
 
 Contrast `return null` from Render: that's render-emptiness — the
@@ -218,16 +226,16 @@ the fingerprint — a changed cookie / search param / header moves the
 fp and the parton re-renders on the next navigation. The read IS the
 dependency, exactly like a cell.
 
-| Hook | Reads | Records |
-|---|---|---|
-| `cookie(name)` | Request cookie. | `cookie:<name>` |
-| `searchParam(name, fallback?)` | URL search param. The two-argument form defaults an ABSENT param only — a present-but-empty `?q=` still returns `""`. Absence is a value; the fp folds the two distinctly. | `search:<name>` |
-| `header(name)` | Request header, name lowercased per HTTP semantics. Framework-internal `x-parton-*` headers are invisible — the read returns `undefined` and records nothing. | `header:<name>` |
-| `pathname()` | The (frame-resolved) request pathname. The whole-pathname axis — it moves the fp on EVERY path change, so prefer `match()` / `param()` when a named segment is enough. | `pathname:` |
-| `match(pattern)` | Runs `pattern` — a pathname string (typed via `ParseRoute`) or a `URLPatternInit` — against the request URL; returns the named captures or `null`. URL-pattern matching only, no predicate gates (those live on the `match` option). Folds only the MATCHED PARAMS — the spec varies when its captured segment changes, never on every navigation. | `match:<pattern>` |
-| `param(name)` | A resolved match param (`/pokemon/:id` → `param("id")`). Pure read, records NOTHING — match params already fold into the fp via `matchKey`. | — |
-| `session()` | `{ id }` — the session identity; `""` for an anon request with no session yet. | `session:` |
-| `tag(name)` | Registers an invalidation tag computed per render (`` tag(`product:${id}`) ``), so a matching `refreshSelector(name)` shifts the fp and the name becomes a refetch target. Records a `tag:<name>` dep riding store-and-reread — the natural slot for tags a loader's response yields. | `tag:<name>` |
+| Hook                           | Reads                                                                                                                                                                                                                                                                                                                                              | Records           |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `cookie(name)`                 | Request cookie.                                                                                                                                                                                                                                                                                                                                    | `cookie:<name>`   |
+| `searchParam(name, fallback?)` | URL search param. The two-argument form defaults an ABSENT param only — a present-but-empty `?q=` still returns `""`. Absence is a value; the fp folds the two distinctly.                                                                                                                                                                         | `search:<name>`   |
+| `header(name)`                 | Request header, name lowercased per HTTP semantics. Framework-internal `x-parton-*` headers are invisible — the read returns `undefined` and records nothing.                                                                                                                                                                                      | `header:<name>`   |
+| `pathname()`                   | The (frame-resolved) request pathname. The whole-pathname axis — it moves the fp on EVERY path change, so prefer `match()` / `param()` when a named segment is enough.                                                                                                                                                                             | `pathname:`       |
+| `match(pattern)`               | Runs `pattern` — a pathname string (typed via `ParseRoute`) or a `URLPatternInit` — against the request URL; returns the named captures or `null`. URL-pattern matching only, no predicate gates (those live on the `match` option). Folds only the MATCHED PARAMS — the spec varies when its captured segment changes, never on every navigation. | `match:<pattern>` |
+| `param(name)`                  | A resolved match param (`/pokemon/:id` → `param("id")`). Pure read, records NOTHING — match params already fold into the fp via `matchKey`.                                                                                                                                                                                                        | —                 |
+| `session()`                    | `{ id }` — the session identity; `""` for an anon request with no session yet.                                                                                                                                                                                                                                                                     | `session:`        |
+| `tag(name)`                    | Registers an invalidation tag computed per render (``tag(`product:${id}`)``), so a matching `refreshSelector(name)` shifts the fp and the name becomes a refetch target. Records a `tag:<name>` dep riding store-and-reread — the natural slot for tags a loader's response yields.                                                                | `tag:<name>`      |
 
 (Viewport visibility is not a body read — it gates existence via the
 spec-level `cull` option, which records `visible:<id>?seed=<0|1>`
@@ -257,9 +265,9 @@ export const BrowsePage = parton(
   ({ page }) => <PageProducts page={page} products={productsCell.with({ page })} />,
   {
     cull: {
-      rootMargin: "900px 0px",                                 // observer runway
+      rootMargin: "900px 0px", // observer runway
       seed: ({ page }) => Math.abs(page - (Number(searchParam("page")) || 1)) <= 2,
-      skeleton: GridSkeleton,                                  // "use client"
+      skeleton: GridSkeleton, // "use client"
     },
   },
 )
@@ -399,8 +407,7 @@ re-reads it (store-and-reread), so a changed value moves the fp like
 any tracked read. It returns the kind's tracked-read hook:
 
 ```ts
-const docMtime = registerDepKind("docmtime", (abs) =>
-  String(statSync(abs).mtimeMs))
+const docMtime = registerDepKind("docmtime", (abs) => String(statSync(abs).mtimeMs))
 // in a Render:
 docMtime(resolved.abs)
 ```
@@ -417,9 +424,11 @@ used:
 ```tsx
 const FormsDemoPage = parton(
   async function FormsDemoRender(_: RenderArgs) {
-    const notes = await notesCell.resolve()          // module cell
-    const draft = await localCell("draft", {          // parton-scoped cell
-      shape: "string", initial: "",
+    const notes = await notesCell.resolve() // module cell
+    const draft = await localCell("draft", {
+      // parton-scoped cell
+      shape: "string",
+      initial: "",
     })
     return <Editor notes={notes} draft={draft} />
   },
@@ -495,9 +504,9 @@ hints without inline `Date.now()` math. Reading it records nothing;
 it is not a dependency.
 
 ```ts
-expires(time().nextSecond)   // live ticker
-expires(time().in(60_000))   // one-minute TTL
-time().never                 // +Infinity — sentinel for "no expiry"
+expires(time().nextSecond) // live ticker
+expires(time().in(60_000)) // one-minute TTL
+time().never // +Infinity — sentinel for "no expiry"
 ```
 
 ## `Render` props
@@ -506,11 +515,11 @@ time().never                 // +Infinity — sentinel for "no expiry"
 resolved to `ResolvedCell<T>`s), the named match params, and the
 framework-injected `children`. Later rows win on collision.
 
-| Key | Source |
-|---|---|
+| Key                     | Source                                                                                             |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
 | `<JSX call-site props>` | placing spec, e.g. `<Hero pokemonId={id} />` — `CellInterface` / `BoundCell` props arrive resolved |
-| `<named match params>` | the `match` pattern's string half — `/pokemon/:id` → `{ id }` |
-| `children` | framework — passes outer JSX children through |
+| `<named match params>`  | the `match` pattern's string half — `/pokemon/:id` → `{ id }`                                      |
+| `children`              | framework — passes outer JSX children through                                                      |
 
 Everything else the body reads itself: tracked hooks for request
 dimensions, `cell.resolve()` / inline `localCell` for data.
@@ -620,9 +629,9 @@ every spec whose label list includes `"label"` (or whose catalog id
 equals it).
 
 ```ts
-selector: "hero"                   // one label
-selector: "page-block hero"        // two labels
-selector: ["page-block", "hero"]   // same
+selector: "hero" // one label
+selector: "page-block hero" // two labels
+selector: ["page-block", "hero"] // same
 ```
 
 Leading `#` and `.` are stripped on parse — cosmetic on `parton`.
@@ -636,14 +645,45 @@ inside the partial).
 Auto-derived from `Render.name` when omitted: `PokemonHeroRender` →
 `"pokemon-hero"`.
 
-There's no per-page uniqueness check. Multiple placements of the
-same spec share their labels and fan out under refetch — for the
-common LivePrice-per-product case, that's the intended model.
-Placements with distinct call-site props additionally get distinct
-per-instance render ids (`<spec-id>:<props-hash>`), so each is
-individually addressable (`@self`, view culling) while the shared
-labels keep the fan-out; zero-prop placements collapse onto the
-spec id and refetch as one.
+**Catalog ids are unique per spec — enforced.** Two distinct specs
+claiming one id (two Render functions sharing a name, or two specs
+declaring the same selector) throw at construct time, naming both
+definition sites. In dev the gate is generation-keyed so HMR module
+re-evaluation replaces cleanly; in prod a duplicate id fails at module
+init (deploy time) instead of split-braining at runtime — whole-tree
+renders would run each placement's own closure while every catalog
+consumer (isolated refetch, lanes, the descendant fold) resolved only
+the last definition.
+
+**Placement identity.** Each on-page placement renders under an
+effective id derived by the identity ladder:
+
+1. `__instanceId` (framework-internal: slot wiring, snapshot replay) —
+   verbatim;
+2. `<spec-id>:<props-hash>` when the call site passes JSX props —
+   `<LivePrice sku="A"/>` and `<LivePrice sku="B"/>` are distinct
+   instances;
+3. composed on top of 2 for AUTO-derived ids, a placement fold
+   `~<hash(parent path + frame chain)>` — two placements of one spec
+   under different parents, or inside different `<Frame>`s, are
+   distinct instances even with identical props (both hydrate
+   cleanly, fp-skip independently, and never substitute each other's
+   content). Sibling position is deliberately not folded: two
+   same-props placements under the same parent and frame chain share
+   an id — give them distinguishing props;
+4. the bare spec id (root-level singleton).
+
+Multiple placements of the same spec share their LABELS and fan out
+under refetch (`reload({selector})`, `?partials=<label>`) — labels are
+never placement-folded; each placement stays individually addressable
+via its effective id (`@self`, view culling).
+
+An **explicit `selector` id is never placement-folded** — an
+author-declared addressable id asserts singularity. Rendering it at
+two placements in one request is an authoring error: dev throws,
+naming both parent paths; prod logs a structured
+`duplicate-explicit-placement` line and last-wins. Want multiple
+placements? Pass distinct props (leg 2) or drop the selector (leg 3).
 
 ## Skip semantics
 
@@ -673,14 +713,14 @@ A spec emits in one of four shapes, in priority order:
 4. **`match` succeeded, fingerprint differs (fresh render).** Spec
    executes its `Render`, wraps the result in
    `<Activity mode="visible" key={matchKey}>
-   <Suspense …><PartialErrorBoundary …>{body}</PartialErrorBoundary>
-   </Suspense></Activity>`, plus a hidden Activity sibling for each
+<Suspense …><PartialErrorBoundary …>{body}</PartialErrorBoundary>
+</Suspense></Activity>`, plus a hidden Activity sibling for each
    other cached matchKey, and streams it.
 
-**Mental model: `match` chooses *which instance*, its reads choose
-*what that instance shows*.** A new `match` param value mints a new
+**Mental model: `match` chooses _which instance_, its reads choose
+_what that instance shows_.** A new `match` param value mints a new
 variant — a separate, independently-parked subtree, like a React
-`key`; a changed read value transitions the *same* instance in place,
+`key`; a changed read value transitions the _same_ instance in place,
 like props.
 
 `matchKey` is that variant identity. A spec with its OWN `match`
@@ -692,6 +732,7 @@ has no `match`. This propagates URL-derived variant identity through
 the JSX tree without threading extra state.
 
 So:
+
 - `/pokemon/1` ↔ `/pokemon/2`: different variants, independent
   cache slots, React keeps each fiber alive in its own Activity
   sibling.
@@ -720,7 +761,7 @@ placeholder for the same-route refetch optimization, just unwrapped.
 
 A spec's fingerprint folds every previously-registered descendant
 spec's contribution — the descendant's stored dep keys re-read
-against the *current* request (store-and-reread), plus its match
+against the _current_ request (store-and-reread), plus its match
 params and invalidation state. A wrapper that reads nothing from the
 request itself still produces a different fingerprint when any of
 its descendants would render differently. So an ancestor fp-skip can
@@ -738,7 +779,7 @@ JSX parent renders directly.
 ## Error containment
 
 A parton resolves its cell-bearing props and runs its `Render`
-*above* the per-partial `PartialErrorBoundary` (which wraps only the
+_above_ the per-partial `PartialErrorBoundary` (which wraps only the
 already-resolved body). So a throw during resolution — a cell loader
 that rejects, a failed GraphQL read — or a synchronous throw in
 `Render` escapes that boundary. The spec wrapper catches those throws
@@ -752,7 +793,7 @@ client-refetch `NavigationError` carry the `__framework` brand and
 keep bubbling — to the RSC entry (404 / `Location`) or the host's
 enclosing error boundary — rather than being swallowed into a card.
 
-A throw raised *later*, while a child of the resolved body streams,
+A throw raised _later_, while a child of the resolved body streams,
 is caught by the `PartialErrorBoundary` itself, as before.
 
 The card is the floor, not the whole story: for a byte-cached spec, a

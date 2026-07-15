@@ -81,7 +81,7 @@ distinguish two registrations of the same id:
 
 | Axis               | When it differs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parentPath`       | Same id mounted under different ancestors (e.g. `Header` under `PageRoot` vs under `EditorShell`)                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `parentPath`       | Same id mounted under different ancestors. Reachable only by EXPLICIT-selector ids nowadays (e.g. a `#header` spec registered under `PageRoot` on one route and under `EditorShell` on another — per-route hints point each route at its variant): AUTO-derived ids fold the parent path into the effective id itself (see "Effective-id identity" below), so their placements never share an id, and a same-request duplicate of an explicit id is rejected at registration.                                                                         |
 | `parentFrameChain` | Same id rendered inside vs outside a frame                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `culled`           | A cullable spec's culled render (the gate skipped the body; deps are the gate's reads) vs its in-view one — the REGISTRY-INTERNAL `~cull` suffix (`lib/cull-key.ts`; it never crosses the wire — the client has no culled cache variant, the skeleton rides inline on the pair). Per-state snapshots keep each state's dep record intact, so a culling flip's fingerprint folds the record of the state it is ENTERING (`lookupPartial(id, culled)`), not whichever state rendered last. See [render-pipeline.md](./render-pipeline.md#cull-to-park). |
 
@@ -98,6 +98,60 @@ records only the dep keys, re-read per-request inside the spec
 component (store-and-reread). Two concurrent users hitting the same
 route register structurally identical snapshots → idempotent
 overwrite, no clobbering.
+
+## Effective-id identity
+
+The id every registration (and wire wrapper, client cache slot,
+fp-trailer entry) keys on is minted per placement by the identity
+ladder in `createSpecComponent` (partial.tsx):
+
+1. **`__instanceId`** — verbatim (slot wiring; snapshot replay passes
+   the stored, already-folded id back through it, which is what keeps
+   the fold idempotent across streaming render and targeted refetch);
+2. **props-hash** — `spec.id:hash(extraProps)` when the call site
+   passes JSX props;
+3. **placement fold** — AUTO-derived ids compose a trailing
+   `~hash(stableStringify([parent.path, parent.frameChain]))` on top of
+   legs 2/4 whenever either axis is non-empty (`applyPlacementFold`).
+   Two placements of one spec under different parents — or inside
+   different `<Frame>`s — mint distinct ids — one instance per
+   placement, instead of two positions fighting over one
+   `(id, matchKey)` slot (hydration mismatch, route-hint flips,
+   churning trailer heals; for frame divergence, one placement's
+   cached content confirmed against the other's, since the frame folds
+   into the fp but not the matchKey). Root-level unframed placements
+   stay bare, so page chrome keeps ONE id across routes and its
+   cross-route fp-skip credit; a spec under different parents on
+   different routes pays one over-fetch per distinct parent chain
+   instead (over-fetch, never stale — pinned by
+   `cross-route-chrome-substitution.test.tsx`). The `~` grammar is
+   framework-reserved (the embed namespace claims it; app ids must not
+   use it), so `stripPlacementFold` — the matchKey ancestor walk's
+   strip — is a protocol signal, not a guess. Labels are never folded:
+   they stay class-level fan-out targets. The one placement axis
+   deliberately NOT folded is sibling position: two same-props AUTO-id
+   siblings under the same parent and frame chain still share an id —
+   index-based identity would churn ids on every reorder, a worse
+   trade; give such siblings distinguishing props.
+4. **the bare spec id** — root-level singleton.
+
+Explicit-selector ids skip leg 3: an author-declared addressable id
+asserts singularity. `registerPartial` enforces it exactly — a second
+same-request registration of an explicit id whose variant key differs
+(`baseKey`-normalized, so a cull-state twin never trips it) is two
+placements of one asserted singleton: dev throws naming both parent
+paths, prod emits a structured `duplicate-explicit-placement` log and
+last-wins.
+
+Catalog ids themselves are collision-gated one level up:
+`registerSpec` (spec-catalog.ts) throws when a second DISTINCT spec
+claims a live id in the same code generation, naming both definition
+sites. The generation (`currentCodeVersion()`, lib/code-version.ts) is
+what admits HMR: `vite:beforeUpdate` bumps it BEFORE the edited module
+re-evaluates, so a re-registration carries a newer generation and
+replaces silently. Prod's generation never moves — a duplicate id
+fails at module init, at deploy time. `componentById` (partial.tsx)
+writes in lockstep, after the claim succeeds.
 
 ## Pending vs canonical state
 

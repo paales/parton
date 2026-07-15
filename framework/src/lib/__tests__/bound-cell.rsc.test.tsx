@@ -64,7 +64,9 @@ describe("cell.with(args) — bound cells", () => {
     seedCell("test.bound.line", { itemId: "A" }, { qty: 3 })
 
     const Line = parton(
-      function Render({ item }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
+      function SeededLineRender({
+        item,
+      }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
         return <span data-testid="qty">{item.value?.qty ?? "—"}</span>
       },
       { match: "/cart" },
@@ -87,7 +89,7 @@ describe("cell.with(args) — bound cells", () => {
     })
 
     const Page = parton(
-      function Render({ data }: { data: ResolvedCell<{ name: string }> } & RenderArgs) {
+      function LoaderMissRender({ data }: { data: ResolvedCell<{ name: string }> } & RenderArgs) {
         return <span data-testid="name">{data.value.name}</span>
       },
       { match: "/r" },

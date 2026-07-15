@@ -55,10 +55,14 @@ statement's `?__force=` target, a frame navigation's subtrees (see
 Every placement of a `parton(...)` component runs the same async
 wrapper (`createSpecComponent` in `partial.tsx`):
 
-1. **Identity.** `__instanceId` (slot wiring / snapshot replay) or
-   a hash of the call-site JSX props derives the effective id;
-   `__parent` (isolated renders) or server context supplies the
-   parent.
+1. **Identity.** The identity ladder mints the effective id:
+   `__instanceId` (slot wiring / snapshot replay) verbatim; else the
+   spec id plus a call-site props hash; AUTO-derived ids additionally
+   fold the ambient placement — parent path + frame chain (`~<hash>`
+   — one instance per placement; explicit-selector ids stay unfolded
+   and assert singularity). `__parent` (isolated renders) or server
+   context supplies the parent. See registry-internals.md §
+   Effective-id identity.
 2. **Frame + match gate.** The request is frame-resolved through
    the parent's frame chain; the compiled gate (`compileMatch` in
    `lib/match.ts`) evaluates it — URLPattern strings plus per-value

@@ -23,7 +23,7 @@
  *    committed, and the key must never depend on request arrival
  *    order (the failure mode of a first-seen-wins cache).
  */
-import { beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   _clearRouteKeyCache,
   _resetMatchPatterns,
@@ -32,8 +32,24 @@ import {
   parton,
 } from "../partial.tsx"
 
+/** A real HMR re-execution is always preceded by the code-version
+ *  bump (`vite:beforeUpdate` fires before the module re-evaluates —
+ *  see lib/code-version.ts), and the spec catalog's collision gate
+ *  keys on that generation. Simulated re-executions below must carry
+ *  the same signal, or the re-defined spec reads as a same-generation
+ *  duplicate id and throws. */
+function bumpCodeGeneration(): void {
+  globalThis.__partonCodeVersion = (globalThis.__partonCodeVersion ?? 0) + 1
+}
+
+const initialCodeVersion = globalThis.__partonCodeVersion
+
 beforeEach(() => {
   _resetMatchPatterns()
+})
+
+afterEach(() => {
+  globalThis.__partonCodeVersion = initialCodeVersion
 })
 
 describe("pattern registration dedup (HMR re-execution)", () => {
@@ -54,6 +70,7 @@ describe("pattern registration dedup (HMR re-execution)", () => {
     defineSpec()
     expect(getRegisteredMatchPatterns()).toHaveLength(1)
 
+    bumpCodeGeneration()
     defineSpec()
     expect(getRegisteredMatchPatterns()).toHaveLength(1)
   })
@@ -73,6 +90,7 @@ describe("pattern registration dedup (HMR re-execution)", () => {
     defineSpec()
     const before = computeRouteKey("http://t/hmr-stable/1")
 
+    bumpCodeGeneration()
     defineSpec()
     // Recompute from scratch — a cache hit would mask a shifted hash.
     _clearRouteKeyCache()
@@ -201,6 +219,7 @@ describe("route identity — the URL base", () => {
     const queryAfter = computeRouteKey("http://t/order?q=x")
     // Arrival order B: query URL first (reload mid-search).
     _resetMatchPatterns()
+    bumpCodeGeneration()
     define()
     const queryFirst = computeRouteKey("http://t/order?q=x")
     const bareAfter = computeRouteKey("http://t/order")

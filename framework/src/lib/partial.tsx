@@ -106,7 +106,7 @@ import { _onPartonSettled, _openPartonSettleScope, getServerContext } from "./se
 import { _setCurrentParton, type CurrentParton, type WakeHints } from "./current-parton.ts"
 import { CullPair } from "./cull-pair.tsx"
 import { evalDepKeys, readVisible } from "./server-hooks.ts"
-import { codeVersionKey } from "./code-version.ts"
+import { codeVersionKey, currentCodeVersion } from "./code-version.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -579,6 +579,10 @@ function resolveFrameRequest(framePath: readonly string[]): Request {
 interface PartialBoundaryProps {
   id: string
   type: string
+  /** This registration's id is an author-declared (explicit-selector)
+   *  singleton — `registerPartial` rejects a second same-request
+   *  placement of it under a different parent. */
+  explicitId?: boolean
   parentPath: readonly string[]
   /** Refetch labels carried by this rendered instance. Any
    *  `reload({selector: "label"})` matching one of these labels
@@ -636,6 +640,7 @@ interface PartialBoundaryProps {
 export function PartialBoundary({
   id,
   type,
+  explicitId,
   parentPath,
   labels,
   framePath,
@@ -679,6 +684,7 @@ export function PartialBoundary({
   }
   registerPartial(id, {
     type,
+    explicitId,
     fallback,
     labels: labelsWithCells,
     framePath,
@@ -1080,6 +1086,13 @@ interface InternalSpec<V> {
    *  `Render.name`) don't count — they're an internal catalog-id
    *  fallback, not an author-declared addressing surface. */
   addressable: boolean
+  /** True iff the author declared `selector` — the id is an explicit
+   *  addressable identity, not an auto-derived catalog fallback. An
+   *  explicit id asserts SINGULARITY: it is never placement-folded
+   *  (see the identity ladder in `createSpecComponent`), and rendering
+   *  it at two placements in one request is an authoring error
+   *  (enforced by `registerPartial`). */
+  explicitId: boolean
 }
 
 /** Constant matchKey for specs with no match-bearing ancestor on the
@@ -1118,10 +1131,11 @@ export function deriveMatchKey(
   }
   const requestUrl = url ?? getRequest().url
   for (let i = parentPath.length - 1; i >= 0; i--) {
-    // Embed renders mint placement-prefixed effective ids; the catalog
-    // is keyed by bare spec ids, so strip the (framework-reserved)
-    // embed namespace before the lookup.
-    const ancestor = getSpecById(stripEmbedNamespace(parentPath[i]))
+    // Effective ids fold framework-reserved placement terms — the
+    // embed namespace prefix and the placement-fold suffix — while
+    // the catalog is keyed by bare spec ids; strip both before the
+    // lookup.
+    const ancestor = getSpecById(stripPlacementFold(stripEmbedNamespace(parentPath[i])))
     if (!ancestor?.match) continue
     const ancestorParams = ancestor.match.extractParams(requestUrl)
     if (ancestorParams === null || Object.keys(ancestorParams).length === 0) continue
@@ -1359,6 +1373,42 @@ function effectiveIdForInstance(
   }
 }
 
+/**
+ * Placement-identity fold — the third leg of the identity ladder
+ * (`__instanceId` > props-hash > placement-path > spec.id). An
+ * AUTO-minted effective id folds a hash of the ambient placement —
+ * the parent id path AND the frame chain — so two placements of one
+ * spec under different parents, or inside different `<Frame>`s, mint
+ * DISTINCT ids: distinct wire wrappers, registry slots, client cache
+ * slots, fp-trailer heals — instead of fighting over one identity
+ * (hydration mismatch + display collapse on every document load; for
+ * frame divergence, one placement's cached content fp-confirmed
+ * against the other's).
+ *
+ * Grammar: a trailing `~<16 hex>`. `~` is framework-reserved in ids
+ * (the embed-namespace grammar claims it; app ids must not use it),
+ * so the strip is a protocol signal, not a guess. Root-level unframed
+ * placements (both axes empty) stay bare — same-placement chrome
+ * across routes keeps sharing one identity byte-for-byte, which is
+ * what lets chrome fp-skip across routes.
+ *
+ * Labels are NOT folded: they are class-level fan-out targets
+ * (`reload({selector})`, `?partials=<label>`) and must keep matching
+ * every placement. Explicit-selector ids are never folded — an
+ * author-declared addressable id asserts singularity (enforced by
+ * `registerPartial`'s duplicate-placement gate).
+ */
+const PLACEMENT_FOLD_RE = /~[0-9a-f]{16}$/
+
+function applyPlacementFold(id: string, parent: PartialCtx): string {
+  return `${id}~${hash(stableStringify([parent.path, parent.frameChain]))}`
+}
+
+/** Strip the placement-fold suffix — identity for unfolded ids. */
+export function stripPlacementFold(id: string): string {
+  return id.replace(PLACEMENT_FOLD_RE, "")
+}
+
 function createSpecComponent<V>(
   spec: InternalSpec<V>,
 ): FC<PartialComponentProps & Record<string, unknown>> {
@@ -1386,33 +1436,51 @@ function createSpecComponent<V>(
     const parent = __injectedParent ?? getServerContext(ParentContext)
     const opts = spec.options
     // Render-time identity (the `id` keying snapshots, wire, cache
-    // lookup) is:
+    // lookup) — the identity ladder:
     //
-    //   1. `__instanceId` if provided (slot wiring in cms-runtime
-    //      sets this to the slot entry's id);
+    //   1. `__instanceId` if provided, verbatim (slot wiring in
+    //      cms-runtime sets this to the slot entry's id; snapshot
+    //      replay passes the stored — already-folded — id back
+    //      through it);
     //   2. otherwise `spec.id` plus a per-instance hash of any JSX
     //      call-site props — so multiple placements with different
     //      props (e.g. `<LivePrice sku="A"/>` and `<LivePrice
     //      sku="B"/>`) each get a distinct id, instead of all
     //      collapsing onto the spec's catalog id and fighting for
     //      one registry slot;
-    //   3. otherwise just `spec.id` (singleton / no-prop placement).
+    //   3. composed on top of 2 (never replacing it), AUTO-derived
+    //      ids fold the ambient placement — parent path + frame
+    //      chain (`applyPlacementFold`) — so two placements of one
+    //      spec under DIFFERENT parents or frames are distinct
+    //      instances even with identical props. Explicit `selector`
+    //      ids skip this leg: an author-declared id asserts
+    //      singularity.
+    //   4. otherwise just `spec.id` (root-level singleton).
     //
-    // The auto-derivation step keeps the snapshot store one entry
+    // The auto-derivation steps keep the snapshot store one entry
     // per actual on-page placement without forcing authors to thread
     // an explicit instance-id prop through every site.
-    // Priority: `__instanceId` from slot wiring → auto-derive from
-    // extraProps hash → undefined (singleton).
     const autoInstanceKey =
       instanceIdOverride === undefined && Object.keys(extraProps).length > 0
         ? hash(stableStringify(extraProps))
         : undefined
     const effectiveInstanceId =
       instanceIdOverride ?? (autoInstanceKey ? `${spec.id}:${autoInstanceKey}` : undefined)
-    const { id: mintedId, parsed } = effectiveIdForInstance(
+    const { id: baseMintedId, parsed } = effectiveIdForInstance(
       spec as InternalSpec<unknown>,
       effectiveInstanceId,
     )
+    // Placement fold (ladder leg 3). Gated on `instanceIdOverride`
+    // being absent — a caller-supplied id is caller-managed identity,
+    // and snapshot replay (`partialFromSnapshot`) passes stored ids
+    // through `__instanceId`, which is exactly what keeps the fold
+    // idempotent across streaming render and targeted refetch.
+    const mintedId =
+      instanceIdOverride === undefined &&
+      !spec.explicitId &&
+      (parent.path.length > 0 || parent.frameChain.length > 0)
+        ? applyPlacementFold(baseMintedId, parent)
+        : baseMintedId
     // Placement-scoped embed namespace: an embed render (marked by the
     // embed-ns request header — see `lib/page-embed.ts`) folds the
     // host's placement namespace into every effective id it mints, so
@@ -1426,6 +1494,11 @@ function createSpecComponent<V>(
     // converge on the same prefixed identity.
     const embedNs = embedNamespaceOf(getRequest().headers)
     const id = embedNs !== null ? applyEmbedNamespace(embedNs, mintedId) : mintedId
+    // An explicit-selector id rendered without a caller-managed
+    // override asserts singularity for this request — flagged on the
+    // registration so `registerPartial` can reject a second placement
+    // of the same id under a different parent (see its gate).
+    const explicitSingleton = spec.explicitId && instanceIdOverride === undefined
     // Vocabulary-constrained embed render (a grant set without
     // `client` — the Paint tier and everything below the Client
     // grant): the payload may carry no client modules, so the whole
@@ -1837,6 +1910,7 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
+          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -1997,6 +2071,7 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
+          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -2037,6 +2112,7 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
+          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -2146,6 +2222,7 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
+          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -2200,6 +2277,24 @@ function createSpecComponent<V>(
  * typed to `V & RenderArgs`. The phantom has no runtime value;
  * `typeof Spec.props` resolves from the static type.
  */
+/** Best-effort definition-site capture for the spec-catalog collision
+ *  diagnostic: the first stack frame outside the framework's own
+ *  constructor chain (this file, the `block()` wrapper, vendored
+ *  deps). Purely a debug string — identity never derives from it
+ *  (stack shapes differ between dev paths and prod bundles). */
+function captureDefinitionSite(): string {
+  const stack = new Error().stack ?? ""
+  const lines = stack
+    .split("\n")
+    .slice(1)
+    .map((l) => l.trim())
+  const site = lines.find(
+    (l) =>
+      l.startsWith("at ") && !/\/partial\.tsx|\/cms-block\.ts|node_modules|<anonymous>/.test(l),
+  )
+  return site ?? lines[3] ?? "<unknown>"
+}
+
 function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   Render: (props: V & RenderArgs) => ReactNode,
   options: InternalSpecConfig<V>,
@@ -2223,6 +2318,7 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   // of its parent and cannot be the target of selective refetch,
   // session/tag invalidation, or URL-driven variant carve-out.
   const addressable = options.selector !== undefined || options.match !== undefined
+  const explicitId = options.selector !== undefined
 
   const spec: InternalSpec<V> = {
     id,
@@ -2232,11 +2328,16 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
     match,
     Render,
     addressable,
+    explicitId,
   }
 
   const baseComponent = createSpecComponent(spec)
-  componentById.set(id, baseComponent)
 
+  // The catalog claim is the ONE collision gate for every id-keyed
+  // spec surface: it throws on a same-generation duplicate id (two
+  // distinct specs, one identity — see `registerSpec`), so the
+  // `componentById` write below only ever lands in lockstep with a
+  // successful claim.
   registerSpec({
     id,
     labels: parsed.labels,
@@ -2248,7 +2349,10 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
     capabilityType: options.capabilityType,
     fpSkip: options.fpSkip,
     cells: options.cells,
+    generation: currentCodeVersion(),
+    definedAt: captureDefinitionSite(),
   })
+  componentById.set(id, baseComponent)
 
   // Attach `.props` as a phantom field. The runtime value is
   // `undefined`; the type declares it as `V & RenderArgs` so

@@ -48,6 +48,9 @@ import {
   InspectDrawer2,
   InspectDrawer3,
 } from "./pages/inspect-stack.tsx"
+// Duplicate-placement fixture — see pages/dup-placement.tsx.
+import { DupTick, DupWrapperPage } from "./pages/dup-placement.tsx"
+import { SoloWrapperPage } from "./pages/dup-placement-control.tsx"
 
 export function Root() {
   // notFound() / redirect() set the framework control channel eagerly (before
@@ -105,6 +108,12 @@ export function Root() {
             <ProductBrowsePage />
             <MagentoCartPage />
             <InspectBasePage />
+            {/* Duplicate-placement fixture: <DupTick/> is ALSO rendered
+                inside <DupWrapperPage/>'s body — two placements, two
+                placement-folded identities (e2e/duplicate-placement.spec.ts). */}
+            <DupWrapperPage />
+            <DupTick />
+            <SoloWrapperPage />
             <InspectDrawer1 />
             <InspectDrawer2 />
             <InspectDrawer3 />

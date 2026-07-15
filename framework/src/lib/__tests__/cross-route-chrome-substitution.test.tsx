@@ -6,6 +6,19 @@ import { PartialErrorBoundary } from "../partial-error-boundary.tsx"
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /**
+ * Cross-route chrome — the client-merge half of the contract.
+ *
+ * The server-side identity contract this leans on: page chrome shares
+ * ONE id across routes only when its PLACEMENT is the same — an
+ * auto-derived id folds the ambient parent path (`applyPlacementFold`
+ * in partial.tsx), so root-level chrome (`app-nav` here — empty parent
+ * path on every route) keeps a single id, one client cache slot, and
+ * cross-route fp-skip credit. A spec mounted under DIFFERENT parents
+ * across routes mints per-placement ids instead: each parent chain
+ * gets its own slot and pays one over-fetch on first visit (over-fetch,
+ * never stale — and never another placement's bytes; the third test
+ * pins that non-bleed at the merge layer).
+ *
  * Deterministic reproduction of the "chrome blanks on a cross-route nav
  * to a still-streaming page" bug — at the client-merge layer, no
  * network, no timing.
@@ -142,5 +155,32 @@ describe("cross-route nav to a still-streaming page", () => {
     expect(html, "prior route's content leaked into the new page (stuck-page)").not.toContain(
       'data-testid="home-content"',
     )
+  })
+
+  it("placement-folded ids never share a slot — no cross-placement bleed", () => {
+    // The same SPEC under two different parents mints two ids (the
+    // placement fold's `~<hash>` suffix differs). Cache route A's
+    // placement, then navigate to route B where the spec sits under
+    // ANOTHER parent: the server can't fp-skip a cold id, but even a
+    // (hypothetical) placeholder for B's id must not be filled with
+    // A's bytes — distinct ids are distinct cache slots.
+    commitAt("/", [
+      fresh(
+        "side-nav~aaaa1111bbbb2222",
+        <nav data-testid="nav-under-parent-a">
+          <a href="/x">link</a>
+        </nav>,
+      ),
+    ])
+
+    const html = commitAt("/other", [
+      placeholder("side-nav~cccc3333dddd4444"),
+      fresh("other-content", <div data-testid="other-content" />),
+    ])
+
+    expect(html, "another placement's cached bytes bled into a cold placement").not.toContain(
+      'data-testid="nav-under-parent-a"',
+    )
+    expect(html).toContain('data-testid="other-content"')
   })
 })
