@@ -123,6 +123,29 @@ the DEV clear-caches endpoint). Everything else — the segmented
 response driver, fp-trailers, invalidation transactions, the live
 heartbeat — is the factories' business.
 
+## Static assets
+
+Drop files in the app's `public/` dir (`favicon.ico`, `robots.txt`,
+`apple-touch-icon.png`, …) — Vite's own serving layer owns them, in
+every mode this repo runs: `servePublicMiddleware` (dev) and `vite
+preview`'s asset middleware both serve `public/` **before** the RSC
+handler is even installed (both `configureServer` and
+`configurePreviewServer` register the framework's fetch handler as a
+Vite "post" middleware — see `@vitejs/plugin-rsc`'s `plugin.js`). A
+request for a file that exists under `public/` never reaches
+`createRscHandler`'s `fetch` at all; there is nothing for the
+framework to configure. `e2e-testing/public/favicon.ico` is the
+worked example.
+
+A request for a path with **no** `public/` file and **no** spec's
+`match` pattern (a stray crawler probe, a mistyped URL) still reaches
+the handler — and still correctly resolves to HTTP 404 via
+`<NotFoundFallback>` ([`partial.md` § 404
+fallback](./partial.md#404-fallback)), cheaply: `createRscHandler`
+checks the same match-pattern registry before rendering and skips
+straight to the `<NotFound>` document instead of paying for a full
+`<Root/>` pass whose output would be thrown away.
+
 ## Reading order
 
 1. [`partial.md`](./partial.md) — the base constructor: the match

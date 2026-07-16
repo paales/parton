@@ -980,6 +980,16 @@ export const NotFoundFallback = parton(function NotFoundFallbackRender() {
 The set is populated as a side-effect of every `parton(…,
 { match: … })` call; no explicit registration needed.
 
+`createRscHandler` (`framework/src/entry/rsc.tsx`) consults the same
+registry _before_ rendering: a plain document GET whose pathname
+matches no registered pattern skips the `<Root/>` pass entirely and
+renders only `<NotFoundPage>` — the identical outcome
+`<NotFoundFallback>` reaches mid-render, arrived at without paying for
+a full tree render whose output would be discarded. This is what makes
+a crawler probing `/favicon.ico` or `/robots.txt` with no matching
+`public/` file cheap rather than a wasted page render — see
+[`intro.md` § Static assets](./intro.md#static-assets).
+
 ## Sharp edges
 
 - **Slot-placeable units use `block`.** `parton`
