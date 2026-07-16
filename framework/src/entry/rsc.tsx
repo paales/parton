@@ -55,11 +55,7 @@ import {
   wrapStreamWithFpTrailer,
 } from "../lib/fp-trailer.ts"
 import { EMBED_CELLS_HEADER, embedDepthOf, embedNamespaceOf } from "../lib/page-embed.ts"
-import {
-  computeRouteKey,
-  getRegisteredMatchPatterns,
-  partialFromSnapshot,
-} from "../lib/partial.tsx"
+import { computeRouteKey, partialFromSnapshot } from "../lib/partial.tsx"
 import {
   _readSnapshotsForRoute,
   enterRequestRegistry,
@@ -478,35 +474,6 @@ export function createRscHandler(config: RscHandlerConfig): {
     })
   }
 
-  /** The bare `<NotFound/>` document — no `<Root/>`, no page shell,
-   *  just the app's configured 404 component (or a plain-text body
-   *  when none is configured). Self-contained: captures its own
-   *  commit handle and loads the ssr module independently, so a
-   *  caller that knows ahead of render that the response is a 404
-   *  (the pre-render registry gate in `handleRequest`) never pays for
-   *  a `<Root/>` pass whose output it would discard. */
-  async function renderNotFoundDocument(url: URL): Promise<Response> {
-    if (!NotFound) {
-      return new Response("Not Found", { status: 404 })
-    }
-    const commit = _captureCommitHandle()
-    const ssrEntryModule = await import.meta.viteRsc.loadModule<typeof import("./ssr.tsx")>(
-      "ssr",
-      "index",
-    )
-    const notFoundStream = renderToReadableStream<RscPayload>(
-      { root: <NotFound /> },
-      { temporaryReferences: createTemporaryReferenceSet(), onError: onRscRenderError },
-    )
-    const notFoundSsr = await ssrEntryModule.renderHTML(notFoundStream, {
-      debugNojs: url.searchParams.has("__nojs"),
-    })
-    return new Response(wrapSsrStreamWithFpTrailer(notFoundSsr.stream, commit), {
-      status: 404,
-      headers: { "Content-type": "text/html" },
-    })
-  }
-
   async function handleRequest(
     renderRequest: ReturnType<typeof parseRenderRequest>,
   ): Promise<Response> {
@@ -514,28 +481,6 @@ export function createRscHandler(config: RscHandlerConfig): {
 
     if (renderRequest.isRsc && !renderRequest.isAction) {
       return handleEmbedRender(renderRequest)
-    }
-
-    // A plain document GET whose pathname matches NO spec's declared
-    // `match` pattern can never render app content — the identical
-    // authoritative check `<NotFoundFallback>` performs mid-render
-    // (`getRegisteredMatchPatterns()`, the registry every
-    // `parton(Render, {match})` call populates at define time, before
-    // any request arrives). Running it here — before the tree renders
-    // at all — turns a routine static-asset probe with no `public/`
-    // file behind it (a missing favicon, `/robots.txt`, a crawler's
-    // `/.well-known/*`) or a mistyped URL into a single render instead
-    // of a full `<Root/>` pass whose entire output is discarded the
-    // moment `notFound()` fires deep inside it. Scoped to genuine
-    // document loads only (`!isRsc && !isAction`): an action POST
-    // always targets a page that already matched to have rendered the
-    // form in the first place, so it can't hit this gate.
-    if (
-      !renderRequest.isRsc &&
-      !renderRequest.isAction &&
-      !getRegisteredMatchPatterns().some((pattern) => pattern.test(renderRequest.url.href))
-    ) {
-      return renderNotFoundDocument(renderRequest.url)
     }
 
     let returnValue: RscPayload["returnValue"] | undefined

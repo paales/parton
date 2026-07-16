@@ -137,14 +137,16 @@ request for a file that exists under `public/` never reaches
 framework to configure. `e2e-testing/public/favicon.ico` is the
 worked example.
 
-A request for a path with **no** `public/` file and **no** spec's
-`match` pattern (a stray crawler probe, a mistyped URL) still reaches
-the handler — and still correctly resolves to HTTP 404 via
-`<NotFoundFallback>` ([`partial.md` § 404
-fallback](./partial.md#404-fallback)), cheaply: `createRscHandler`
-checks the same match-pattern registry before rendering and skips
-straight to the `<NotFound>` document instead of paying for a full
-`<Root/>` pass whose output would be thrown away.
+A request for a path with **no** `public/` file (a stray crawler
+probe, a mistyped URL) still reaches the handler and renders the
+whole tree; whether that resolves to HTTP 404 is the APP's semantic —
+an app whose pages are match-gated declares it by placing a fallback
+that consults the match registry and throws `notFound()`
+([`partial.md` § 404 fallback](./partial.md#404-fallback)), while an
+app whose document is built of bare, matchless partons (the website's
+tile world) legitimately renders content at every pathname and has no
+404 boundary at all. The framework cannot tell those two apart from
+the registry alone, so it never short-circuits ahead of the render.
 
 ## Reading order
 

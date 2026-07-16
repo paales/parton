@@ -25,15 +25,18 @@ test.describe("static assets", () => {
     expect(body.length).toBeGreaterThan(0)
   })
 
-  test("a static-root miss: cheap 404, not the full app shell", async ({ page, baseURL }) => {
-    // No `public/` file and no spec's `match` covers this pathname —
-    // `getRegisteredMatchPatterns()` (the same registry
-    // `<NotFoundFallback>` consults) says so before any render runs,
-    // so `entry/rsc.tsx` renders ONLY the bare `<NotFoundPage/>`
-    // document, skipping the full `<Root/>` pass (page chrome,
-    // GraphQL-backed sections, the CMS editor shell) entirely. The
-    // response is still an HTML document with status 404 — the
-    // narrow one, not the app's full page shell.
+  test("a static-root miss: 404 with the narrow not-found body, not the app shell", async ({
+    page,
+    baseURL,
+  }) => {
+    // No `public/` file and no spec's `match` covers this pathname.
+    // THIS app declares its 404 boundary by placing
+    // `<NotFoundFallback>`, which consults the match registry
+    // mid-render and throws `notFound()` — so the served document is
+    // the narrow not-found page with status 404, never the full page
+    // shell. (The framework itself never short-circuits on the
+    // registry: an app built of bare, matchless partons renders real
+    // content at every pathname.)
     const res = await page.request.get(`${baseURL}/this-path-has-no-spec-and-no-public-file.png`)
     expect(res.status()).toBe(404)
     const body = await res.text()

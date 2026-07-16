@@ -98,6 +98,23 @@ saturates the pool. Remediation is reducing held-stream occupation
 
 ## Backlog
 
+### A declared 404 boundary — skipping the wasted render on unmatched URLs
+
+A document GET for a URL no spec matches (a favicon probe with no
+`public/` file, a mistyped URL) renders the whole tree just to have
+the app's fallback throw `notFound()` — the full `<Root/>` output is
+discarded. A pre-render short-circuit on "no registered match pattern
+covers this pathname" was tried and REVERTED: it 404'd the website's
+entire world, because an app built of bare matchless partons renders
+real content at every pathname — the registry alone cannot
+distinguish "no page here" from "every URL is a page". The missing
+piece is an app-DECLARED signal: the 404-fallback surface (today an
+app component that walks `getRegisteredMatchPatterns()` and throws)
+could register its existence with the framework, and only THEN may
+the entry short-circuit unmatched document GETs ahead of the render.
+Ship it as a framework-provided fallback primitive with the
+registration built in, replacing e2e-testing's hand-rolled one.
+
 ### Scoped selectors / module-scoped auto-ids
 
 Resolve selector tokens (`#foo` / `.bar`) per module or per spec-tree

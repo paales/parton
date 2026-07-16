@@ -5,17 +5,6 @@ pass; isolated per-parton re-renders exist only as LANES on a held
 live connection, reconstructed from snapshots via
 `partialFromSnapshot`. There is no partial-refetch request mode.
 
-One exception, decided before any render starts: a plain document GET
-whose pathname matches no spec's registered `match` pattern (a static
-asset probe with no `public/` file behind it, a mistyped URL) never
-opens `<PartialRoot>` at all — `createRscHandler`'s `handleRequest`
-(`framework/src/entry/rsc.tsx`) checks `getRegisteredMatchPatterns()`
-up front and renders the bare `<NotFound>` document directly. It's the
-identical outcome `<NotFoundFallback>` reaches from inside a whole-tree
-pass ([`partial.md` § 404 fallback](../reference/partial.md#404-fallback)),
-just decided before paying for the pass. See
-[`intro.md` § Static assets](../reference/intro.md#static-assets).
-
 ## The whole-tree pass
 
 Every render `<PartialRoot>` runs — the SSR document, the attach's
