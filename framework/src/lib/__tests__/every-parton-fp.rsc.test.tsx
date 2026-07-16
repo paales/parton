@@ -3,7 +3,7 @@
  * a bare `parton(Render)` — no `match`, no ancestor parton, nothing
  * but a Render name — emits its `partialFingerprint` on the wire, the
  * boundary the client registers under `id + matchKey`, so it joins the
- * `?cached=` manifest and fp-skips across navigations exactly like a
+ * client's fp manifest and fp-skips across navigations exactly like a
  * match-gated surface. Identity is the Render name (kebab-cased);
  * placement under a parent folds a `~<hash>` suffix onto the id.
  *

@@ -3,9 +3,9 @@
  * dependency surface:
  *
  *   - fp stable while the tracked value is stable (warm renders),
- *   - fp-skip when the client declares the matching `?cached=` fp,
+ *   - fp-skip when the client declares the matching cached-manifest fp,
  *   - fresh render when the tracked value changes under that same
- *     `?cached=` declaration,
+ *     cached-manifest declaration,
  *   - the cold-record gate: no dep record → no skip (over-fetch,
  *     never stale) — on a cold process and on a first visit to a new
  *     route bucket,
@@ -26,7 +26,7 @@
 
 import { describe, expect, it, beforeEach } from "vitest"
 import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
 import { cookie, header, pathname, searchParam } from "../server-hooks.ts"
 import { hash } from "../hash.ts"
@@ -67,7 +67,7 @@ const HooksCookie = parton(
 /**
  * Drive one spec through the fp-skip lifecycle and return what
  * happened at each step: cold render, two warm renders (a hooks-only
- * spec's deps fold from render 2), a `?cached=` visit with the same
+ * spec's deps fold from render 2), a cached-manifest visit with the same
  * cookie (skip expected), and one with a changed cookie (fresh render
  * expected).
  */
@@ -92,12 +92,14 @@ async function lifecycle(
   const warmFp2 = fpById(r3).get(id)
   // Client declares the warm fp as cached → same cookie → fp matches →
   // the server must emit a placeholder, not the body.
-  const skipped = await flightAt(`${url}?cached=${id}:${ROOT_MK}:${warmFp}`, tree, {
+  const skipped = await flightAt(url, tree, {
     cookie: "pref=a",
+    ...withCachedManifest(url, [`${id}:${ROOT_MK}:${warmFp}`]).headers,
   })
   // Same cached declaration, changed cookie → fp mismatch → fresh body.
-  const fresh = await flightAt(`${url}?cached=${id}:${ROOT_MK}:${warmFp}`, tree, {
+  const fresh = await flightAt(url, tree, {
     cookie: "pref=b",
+    ...withCachedManifest(url, [`${id}:${ROOT_MK}:${warmFp}`]).headers,
   })
   return {
     coldFp,
@@ -152,8 +154,9 @@ describe("cold-record gate: no snapshot → no skip for a hooks-only spec", () =
     // it MATCHES — but the read values may have changed (pref=b here).
     // The gate must decline the skip and render fresh, correct bytes.
     clearRegistry("all")
-    const fresh = await flightAt(`${url}?cached=atv-hooks-cookie:${ROOT_MK}:${coldFp}`, tree, {
+    const fresh = await flightAt(url, tree, {
       cookie: "pref=b",
+      ...withCachedManifest(url, [`atv-hooks-cookie:${ROOT_MK}:${coldFp}`]).headers,
     })
     expect(fresh).toContain("hooks-cookie-body:b")
   })
@@ -199,13 +202,10 @@ describe("cold-record gate: no snapshot → no skip for a hooks-only spec", () =
     // First visit to the /gate/p/3 bucket, cookie changed. Without the
     // evidence check the dep-less fps collide and the stale `a` body
     // would be skipped-in; the gate must render fresh `b` bytes.
-    const fresh = await flightAt(
-      `http://t/gate/p/3?cached=atv-gate-tail:${ROOT_MK}:${coldFp}`,
-      tree,
-      {
-        cookie: "pref=b",
-      },
-    )
+    const fresh = await flightAt("http://t/gate/p/3", tree, {
+      cookie: "pref=b",
+      ...withCachedManifest("http://t/gate/p/3", [`atv-gate-tail:${ROOT_MK}:${coldFp}`]).headers,
+    })
     expect(fresh).toContain("gate-tail-body:b")
   })
 })
@@ -351,8 +351,9 @@ describe("descendant fold: a nested hooks-only spec's read change un-skips the w
 
     // Same cookie + cached wrapper fp → the wrapper (whose fold re-reads
     // the child's deps) matches and skips: neither body is emitted.
-    const skipped = await flightAt(`${url}?cached=atv-fold-wrapper:${ROOT_MK}:${wrapperFp}`, tree, {
+    const skipped = await flightAt(url, tree, {
       cookie: "pref=a",
+      ...withCachedManifest(url, [`atv-fold-wrapper:${ROOT_MK}:${wrapperFp}`]).headers,
     })
     expect(skipped).not.toContain("fold-wrapper-body")
     expect(skipped).not.toContain("fold-child-body")
@@ -361,8 +362,9 @@ describe("descendant fold: a nested hooks-only spec's read change un-skips the w
     // re-reads the child's recorded deps at the current request — the
     // wrapper's fp moves, the skip is declined, and the child re-renders
     // with the new value.
-    const fresh = await flightAt(`${url}?cached=atv-fold-wrapper:${ROOT_MK}:${wrapperFp}`, tree, {
+    const fresh = await flightAt(url, tree, {
       cookie: "pref=b",
+      ...withCachedManifest(url, [`atv-fold-wrapper:${ROOT_MK}:${wrapperFp}`]).headers,
     })
     expect(fresh).toContain("fold-wrapper-body")
     expect(fresh).toContain("fold-child-body:b")

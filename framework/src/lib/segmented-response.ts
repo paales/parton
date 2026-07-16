@@ -615,7 +615,6 @@ function liveCatchupTs(): number | null {
  *  (see CLAUDE.md § match); match never sees these either. */
 const NAV_TRANSPORT_PARAMS = [
   "partials",
-  "cached",
   "live",
   "streaming",
   "visible",
@@ -1257,7 +1256,7 @@ async function driveLaneStream(
     // answers with its placeholder (for a culling flip, the
     // confirmation that restores the parked copy with zero bytes)
     // instead of re-shipping identical bytes. No override (the
-    // connection never carried `?cached=`) → no state → every lane
+    // connection never carried a cached manifest) → no state → every lane
     // renders fresh, exactly as a cold client would be served.
     const laneOverride = _getCachedOverride()
     // A forced lane (a url statement's `__force` target) renders
@@ -3131,14 +3130,13 @@ function isParkedOnConnection(
  * Snapshots without an `emittedFp` or without a `matchKey` are
  * skipped: they have no client-visible wire identity to track.
  *
- * Why the override carrier even exists: the previous shape
- * `rewriteCachedFromSnapshots` did `new URL(req.url)` +
- * `url.searchParams.set("cached", […].join(","))` + `url.toString()` +
- * `new Request(...)` + `setRequest(...)` per segment, and the next
- * segment's PartialRoot re-parsed `?cached=` back into Maps. Per-tick
- * profiling showed that round-trip dominating the streaming CPU
- * profile (~7% total + URL parse cost). The carrier collapses it to
- * one map mutation per snapshot.
+ * Why the override carrier even exists: without it, keeping the next
+ * segment's manifest current would mean re-serializing the manifest and
+ * re-parsing it back into Maps per segment. Per-tick profiling showed
+ * that round-trip dominating the streaming CPU profile (~7% total +
+ * parse cost). The carrier collapses it to one map mutation per
+ * snapshot — the next segment's PartialRoot reads the mutated Maps
+ * directly.
  */
 /** Replace the mirror's entries for `id` with the client's reported
  *  holdings — `id:matchKey:fp` tokens, parsed right-to-left like

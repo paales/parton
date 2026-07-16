@@ -56,8 +56,15 @@ interface RoundTrip {
   trailer: Record<string, { from: string; to: string }> | null
 }
 
-async function renderWithTrailer(url: string, node: ReactNode): Promise<RoundTrip> {
-  const request = new Request(url)
+async function renderWithTrailer(
+  url: string,
+  node: ReactNode,
+  cachedManifest?: string,
+): Promise<RoundTrip> {
+  const request = new Request(
+    url,
+    cachedManifest ? { headers: { "x-parton-cached": cachedManifest } } : undefined,
+  )
   const { result } = await runWithRequestAsync(request, async () => {
     const raw = renderServerToFlight(node)
     const wrapped = wrapStreamWithFpTrailer(raw, _captureCommitHandle())
@@ -83,7 +90,8 @@ function wireEmissions(flight: string): Array<{ id: string; mk: string; fp: stri
 }
 
 /** Client manifest mirror: `(id, matchKey)` → fp set, healed by the
- *  trailer the way the real client applies `{from, to}` per id. */
+ *  trailer the way the real client applies `{from, to}` per id.
+ *  Advertised back as the `x-parton-cached` header's token list. */
 class Manifest {
   fps = new Map<string, Set<string>>() // `${id}:${mk}` → fps
   absorb(rt: RoundTrip): void {
@@ -100,7 +108,7 @@ class Manifest {
       }
     }
   }
-  toParam(): string {
+  toHeader(): string {
     const toks: string[] = []
     for (const [key, s] of this.fps) {
       const [id, mk] = key.split(":")
@@ -156,8 +164,7 @@ describe("duplicate placement — two instances, distinct identities", () => {
 
     for (let i = 2; i <= 5; i++) {
       const before = tickRuns
-      const url = `http://t/?cached=${encodeURIComponent(manifest.toParam())}`
-      const r = await renderWithTrailer(url, dupTree)
+      const r = await renderWithTrailer("http://t/", dupTree, manifest.toHeader())
       manifest.absorb(r)
       // fp-skip holds for BOTH placements…
       expect(tickRuns - before, `tick body ran in warm cycle R${i}`).toBe(0)
@@ -180,10 +187,7 @@ describe("duplicate placement — two instances, distinct identities", () => {
     let cold = true
     for (const base of urls) {
       const before = tickRuns
-      const url = cold
-        ? base
-        : `${base}${base.includes("?") ? "&" : "?"}cached=${encodeURIComponent(manifest.toParam())}`
-      const r = await renderWithTrailer(url, dupTree)
+      const r = await renderWithTrailer(base, dupTree, cold ? undefined : manifest.toHeader())
       manifest.absorb(r)
       if (!cold) {
         // The tick has no deps, so no navigation may re-run either
@@ -210,8 +214,7 @@ const FrameBadge = parton(function FrameBadgeRender(_: RenderArgs) {
 // matchKey, one frame's cached content could be substituted /
 // fp-confirmed into the other's position (silent wrongness).
 // `initialUrl` pins each frame's resolved request (a frame with no
-// session URL falls back to the page request, whose `?cached=` would
-// otherwise churn the ambient-frame fp term across warm renders).
+// session URL falls back to the page request).
 const frameTree = (
   <PartialRoot>
     <html lang="en">
@@ -251,10 +254,7 @@ describe("duplicate placement — one spec in two frames", () => {
     // and the only fp-skip placeholder on the wire is frame-a's.
     const a = badges[0]
     const before = badgeRuns
-    const r2 = await renderWithTrailer(
-      `http://t/?cached=${encodeURIComponent(`${a.id}:${a.mk}:${a.fp}`)}`,
-      frameTree,
-    )
+    const r2 = await renderWithTrailer("http://t/", frameTree, `${a.id}:${a.mk}:${a.fp}`)
     expect(badgeRuns - before, "the un-advertised frame placement must re-render").toBe(1)
     // Set-dedup: dev-build Flight repeats props in debug-info rows.
     const placeholders = new Set(

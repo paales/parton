@@ -7,7 +7,7 @@
  *
  *   - `fp` trailer: drift between cold-render fp and warm-emit fp.
  *     Updates the client-side fingerprint registry via
- *     `_applyFpUpdates` so the next `?cached=` reflects the actual
+ *     `_applyFpUpdates` so the next cached manifest reflects the actual
  *     bytes the client now has.
  *
  *   - `url` trailer: server-pushed URL update from

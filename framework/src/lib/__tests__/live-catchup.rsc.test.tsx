@@ -14,11 +14,11 @@
  *      the full initial render, over-fetch never stale.
  *   3. the anchor rides ONLY the attach body — a live GET carrying the
  *      old `?since=` URL form takes the full initial render.
- *   4. the body manifest is the action leg's `?cached=` URL form's
+ *   4. the body manifest is the action leg's `x-parton-cached` header form's
  *      equal: the same tokens produce the same fp-skip verdicts on
  *      either carrier.
- *   5. the body manifest is UNCAPPED — tokens past the URL form's
- *      request-line cap (96) are still honored.
+ *   5. the body manifest is UNCAPPED — tokens past the header form's
+ *      cap (96) are still honored.
  */
 
 import type { ReactNode } from "react"
@@ -193,7 +193,7 @@ describe("the attach — catch-up (statement.since)", () => {
 })
 
 describe("the attach — manifest (statement.cached)", () => {
-  it("the body manifest fp-skips identically to the ?cached= URL form", async () => {
+  it("the body manifest fp-skips identically to the x-parton-cached header form", async () => {
     const scope = freshLiveScope("manifest")
     // Two document renders per drive: the second's emitted fps are the
     // warm, stable ones a client would advertise. Tokens re-derive
@@ -206,13 +206,11 @@ describe("the attach — manifest (statement.cached)", () => {
     if (!urlTokenA || !urlTokenB) throw new Error("expected tokens for both partons")
     let baseline = { a: renders.a, b: renders.b }
 
-    // URL form: the action leg's carrier — a one-shot render
-    // presenting both tokens in `?cached=`.
-    const { stream } = await renderWithRequest(
-      `http://localhost/page?cached=${encodeURIComponent(`${urlTokenA},${urlTokenB}`)}`,
-      <Page />,
-      { headers: { "x-test-scope": scope } },
-    )
+    // Header form: the action leg's carrier — a one-shot render
+    // presenting both tokens in `x-parton-cached`.
+    const { stream } = await renderWithRequest("http://localhost/page", <Page />, {
+      headers: { "x-test-scope": scope, "x-parton-cached": `${urlTokenA},${urlTokenB}` },
+    })
     const urlSegment = await new Response(stream).text()
     expect(renders.a).toBe(baseline.a)
     expect(renders.b).toBe(baseline.b)

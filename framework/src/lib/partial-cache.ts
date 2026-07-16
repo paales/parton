@@ -795,7 +795,7 @@ export function cacheFromStreamingChildren(
         // commit on the client. The commit order is non-deterministic
         // across transitions (React may defer subtrees such as the
         // `<head>` wrapper), so a targeted refetch fired right after a
-        // client nav could otherwise send a `?cached=` that's missing
+        // client could otherwise advertise a cached manifest that's missing
         // late-committing ids. The wrapper already carries the
         // fingerprint — just lift it off.
         const fp = getPartialFingerprint(node)

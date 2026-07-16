@@ -31,9 +31,11 @@ pipeline:
    existence gate — viewport-driven: a culled instance's body never
    runs; the wire carries its client-rendered `skeleton` + props, the
    fp folds the RESOLVED visibility (`measurement ?? seed(props)`).
-   Framework transport params (`TRANSPORT_PARAMS`: partials, cached,
-   live, streaming, visible, __frame, __frameUrl, __cullFlip,
-   __force) are stripped before evaluation — match never sees them.
+   Framework transport params (`TRANSPORT_PARAMS`: partials, live,
+   streaming, visible, __frame, __frameUrl, __cullFlip, __force) are
+   stripped before evaluation — match never sees them. (The fp-skip
+   manifest is never a URL param — it rides the `x-parton-cached`
+   header, self-stripping since match drops all `x-parton-*`.)
 2. **The body reads; the read IS the dependency.** Tracked hooks —
    `searchParam()`, `cookie()`, `header()`, `pathname()`, `match()`,
    `session()`, `tag()` — record what the body actually
@@ -45,8 +47,9 @@ pipeline:
    There is no schema, no vary, no declared dependency list.
 3. **The fingerprint decides re-sending.** The recorded read set
    re-reads against the request + invalidation timestamps and folds
-   into an fp. The client presents cached fps (`?cached=`); a match
-   skips the bytes. Body reads lag one render, healed in-response by
+   into an fp. The client presents cached fps (its manifest — the
+   `x-parton-cached` header on an unattached action POST, the
+   connection's session mirror when attached); a match skips the bytes. Body reads lag one render, healed in-response by
    the fp-trailer; declared match gates are skip-safe from render 1.
    `fpSkip: false` opts a spec out entirely (always-authoritative
    surfaces, e.g. the CMS editor chrome).

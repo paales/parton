@@ -32,7 +32,7 @@ tick-loop / FPS assumptions.
 3. **Smooth correction** — view-transition over snap. Available
    client-side via `document.startViewTransition` around the
    reconcile; no spec-level option today.
-4. **Relevancy** — already in parton via `?cached=`; covers
+4. **Relevancy** — already in parton via the cached manifest; covers
    single-client. Multi-client routing deferred.
 
 ## What we drop

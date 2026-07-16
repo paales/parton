@@ -235,8 +235,9 @@ export function extractPartonView(text: string): ExtractedPayload {
  * — `universeIds`, `parentOf`, `cullableIds`, and the `[S|<id>|…]`
  * stamps a body writes are all bare — so both oracle sides compare on
  * this basis. The harness keeps the raw extraction's WIRE ids for
- * everything the protocol addresses by id (`?__force=`, `?cached=`
- * tokens, the visibility statement, registry/cache lookups); the
+ * everything the protocol addresses by id (`?__force=`, the
+ * `x-parton-cached` tokens, the visibility statement, registry/cache
+ * lookups); the
  * mapping between the two is learned from the wire, never guessed.
  *
  * Stamps pass through untouched — a body's stamp names its spec, which

@@ -877,27 +877,29 @@ async function main() {
     // carries them back; the optimistic overlay holds until the
     // committed watermark covers them.
     const consequenceConn = _channelNavAvailable() ? _getLiveConnectionId() : null
-    // The cached-partial manifest rides the URL as `?cached=` ONLY when
-    // there is no live connection to consult. An attached POST omits it:
-    // the server already knows this connection's holdings from its
-    // session mirror (what it has delivered), which the action adopts —
-    // so re-sending the capped manifest would be redundant and would
-    // bloat the POST's request line. Degraded / pre-establishment pages
-    // (`consequenceConn === null`) keep the carrier — there is no mirror.
-    const actionUrl = new URL(window.location.href)
-    if (consequenceConn === null) {
+    // The cached-partial manifest rides the request as the
+    // `x-parton-cached` header ONLY when there is no live connection to
+    // consult. An attached POST omits it: the server already knows this
+    // connection's holdings from its session mirror (what it has
+    // delivered), which the action adopts — so re-sending the capped
+    // manifest would be redundant. Degraded / pre-establishment pages
+    // (`consequenceConn === null`) carry it — there is no mirror.
+    const actionHeaders: Record<string, string> = {}
+    if (consequenceConn !== null) {
+      actionHeaders["x-parton-conn"] = consequenceConn
+    } else {
       const cachedIds = getCachedPartialIds()
       if (cachedIds.length > 0) {
-        actionUrl.searchParams.set("cached", cachedIds.join(","))
+        actionHeaders["x-parton-cached"] = cachedIds.join(",")
       }
     }
     const renderRequest = createRscRenderRequest(
-      actionUrl.toString(),
+      window.location.href,
       {
         id,
         body: await encodeReply(args, { temporaryReferences }),
       },
-      consequenceConn !== null ? { "x-parton-conn": consequenceConn } : undefined,
+      Object.keys(actionHeaders).length > 0 ? actionHeaders : undefined,
     )
     const response = await fetch(renderRequest)
     if (!response.ok || !response.body) {

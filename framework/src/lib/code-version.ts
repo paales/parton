@@ -4,7 +4,7 @@
  * Code identity is not otherwise part of a parton's fingerprint — the
  * fp folds request dimensions, invalidation timestamps, and descendant
  * deps, and an HMR edit moves none of them. Without this term, the
- * fps the client advertises (`?cached=` / the attach manifest) keep
+ * fps the client advertises (`x-parton-cached` / the attach manifest) keep
  * matching after a server-code edit, the server honestly fp-skips,
  * and the browser keeps displaying the old code's output.
  *

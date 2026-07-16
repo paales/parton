@@ -136,7 +136,7 @@ function PokemonCardGrid({
 function makeSearchArea(scope: "page" | "frame") {
   // The three stages deliberately demonstrate the THREE ways a parton
   // can receive its query-dependent data — and that none of them grows
-  // `?cached=` unbounded (the client commit prunes both client maps to
+  // the cached manifest unbounded (the client commit prunes both client maps to
   // the live/parked tree on every refetch, so superseded entries the
   // client can no longer restore stop being advertised):
   //

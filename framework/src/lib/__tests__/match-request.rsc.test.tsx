@@ -20,7 +20,7 @@
 import { beforeEach, describe, expect, it } from "vitest"
 import { compileMatch } from "../match.ts"
 import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
 import { setCookie } from "../../runtime/context.ts"
 import { hash } from "../hash.ts"
@@ -137,7 +137,11 @@ describe("match over the request", () => {
     const open = await flightAt("http://t/list?pages=3", tree)
     const fp = fpById(open, "mr-page-3")
     expect(fp).toBeDefined()
-    const parked = await flightAt(`http://t/list?pages=1&cached=mr-page-3:${ROOT_MK}:${fp}`, tree)
+    const parked = await flightAt(
+      "http://t/list?pages=1",
+      tree,
+      withCachedManifest("http://t/list?pages=1", [`mr-page-3:${ROOT_MK}:${fp}`]).headers,
+    )
     expect(parked).not.toContain("page-three-body")
     expect(parked).toContain('"data-partial-id":"mr-page-3"')
   })
@@ -201,11 +205,19 @@ describe("match over the request", () => {
     const fp = fpById(r1, "mr-page-3")
     // Same request with the fp cached → skip (declared gates are
     // request-reproducible; no cold-record decline).
-    const skipped = await flightAt(`http://t/list?pages=3&cached=mr-page-3:${ROOT_MK}:${fp}`, tree)
+    const skipped = await flightAt(
+      "http://t/list?pages=3",
+      tree,
+      withCachedManifest("http://t/list?pages=3", [`mr-page-3:${ROOT_MK}:${fp}`]).headers,
+    )
     expect(skipped).not.toContain("page-three-body")
     // Flip below the threshold with the same cached fp → parked, then
     // back above → renders again.
-    const reopened = await flightAt(`http://t/list?pages=5&cached=mr-page-3:${ROOT_MK}:${fp}`, tree)
+    const reopened = await flightAt(
+      "http://t/list?pages=5",
+      tree,
+      withCachedManifest("http://t/list?pages=5", [`mr-page-3:${ROOT_MK}:${fp}`]).headers,
+    )
     expect(reopened).not.toContain("page-three-body") // fp still matches → skip
   })
 })
@@ -216,7 +228,7 @@ describe("transport params are invisible to match", () => {
     const plain = m.evaluate(new Request("http://t/pokemon/1?search=url&q=a"))
     const action = m.evaluate(
       new Request(
-        "http://t/pokemon/1?search=url&q=a&cached=page-stage-3:x:y&__frame=preview&__frameUrl=/p",
+        "http://t/pokemon/1?search=url&q=a&partials=page-stage-3&__frame=preview&__frameUrl=/p",
       ),
     )
     expect(plain.matched).toBe(true)
@@ -225,11 +237,11 @@ describe("transport params are invisible to match", () => {
     // variant identity — otherwise an action response mints a phantom
     // variant that supersedes (and hides) the real one on the client.
     expect(action.params).toEqual(plain.params)
-    expect(m.extractParams("http://t/pokemon/1?q=a&cached=zzz")).toEqual({ query: "a" })
+    expect(m.extractParams("http://t/pokemon/1?q=a&partials=zzz")).toEqual({ query: "a" })
   })
 
   it("searchParams gates see the app URL, not transport params", () => {
-    const m = compileMatch({ searchParams: { cached: (v: string | null) => v === null } })
-    expect(m.evaluate(new Request("http://t/x?cached=a:b:c")).matched).toBe(true)
+    const m = compileMatch({ searchParams: { partials: (v: string | null) => v === null } })
+    expect(m.evaluate(new Request("http://t/x?partials=a:b:c")).matched).toBe(true)
   })
 })

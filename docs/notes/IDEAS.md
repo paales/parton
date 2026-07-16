@@ -105,9 +105,9 @@ and [`../internals/render-pipeline.md`](../internals/render-pipeline.md)
   `cache: { maxAge, staleWhileRevalidate }`); the extension is to
   surface those numbers via the same trailer channel and have the
   client use them to decide
-  when to even send the id in `?cached=` on the next nav (within
+  when to even advertise the id in its cached manifest on the next nav (within
   `maxAge`: paint cached, skip the network round-trip for this id
-  entirely; within SWR window: include in `?cached=` and
+  entirely; within SWR window: advertise in the manifest and
   revalidate in background; past both: include and treat as cold).
 - **Device-aware eviction over the variant pool.** Per-page prune
   already covers cross-layout cleanup, but within-id multi-matchKey
@@ -148,7 +148,7 @@ leaves view. Design + framework-level findings live in
 
 **Shipped — the in-app path.** `useNavigation().preload(target)` warms a
 destination's partials into the client RSC cache on hover: a
-same-document, warm-only GET (`?cached=`) walked into
+same-document, warm-only GET walked into
 `_currentPagePartials` without committing, so the subsequent click
 fp-skips and substitutes from cache. See
 [`../reference/frames-navigation.md`](../reference/frames-navigation.md)
@@ -165,7 +165,7 @@ overlap:
   loads a whole document into a hidden tab; `prefetch` warms the
   document's HTTP-cache entry.
 - Parton `<Link>`s are **same-document** — they `intercept()` the nav
-  and issue an RSC `?cached=` GET. `intercept()` only applies to
+  and issue an RSC refetch GET. `intercept()` only applies to
   same-document navigations, so a speculation never fires for an
   intercepted link; and even when one does fire (a nav parton doesn't
   intercept), an activated prerender is a _cold_ parton boot (fresh

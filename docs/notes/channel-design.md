@@ -12,7 +12,7 @@ visibility-report pattern ([[connection-session]],
 Today the client talks to the server over five shapes: navigation GETs,
 batched `?partials=` refetch GETs, action POSTs, visibility beacon
 POSTs, and the held `?live=1` stream. Each independent request re-presents
-client state (`?cached=` manifests, `?visible=` seeds, `__conn`
+client state (cached manifests, `?visible=` seeds, `__conn`
 threading) and races the others — which is why the client layer carries
 monotonic refetch seqs, the pageUrlKey stale-commit guard, deferred-abort
 supersede, forced-label stripping, and the 96-token manifest cap.
@@ -40,8 +40,8 @@ property of the wire.
    equally be presented on a discrete request — no frame kind may exist
    whose meaning depends on the channel being open.
 2. Attach IS the discrete path: opening the channel presents the full
-   client manifest (the attach body's `cached`; `?cached=` remains the
-   discrete-GET form) plus
+   client manifest (the attach body's `cached`; the `x-parton-cached`
+   header is the discrete action-POST form) plus
    the client's catch-up anchor (the statement's `since` — a
    reconnect whose anchor holds skips the initial segment and opens
    straight into lanes; an anchor failing its epoch/snapshot checks
@@ -194,7 +194,7 @@ no native HTTP/3, so it waits on a terminating-proxy story.
 - **Degraded mode stays GET-shaped** — until the discrete-path
   removal package (§ Landing sequence) lands, when it becomes
   browser-native document navigation. Today the discrete twin keeps
-  `?cached=` + the manifest cap (CDN-cacheable, preload-compatible);
+  the `x-parton-cached` header + the manifest cap;
   attach is the only body-manifest request. "Attached" means
   DUPLEX-VERIFIED: a channel that has never acked once (blocked
   upstream, ad-blocked `/__parton/*` POSTs) drops to discrete — a
@@ -205,8 +205,8 @@ no native HTTP/3, so it waits on a terminating-proxy story.
   relevance false-negatives; an indefinitely-lived channel would
   silently remove it. The channel makes it explicit: a periodic full
   segment (or fold audit) on the stream, cadence configurable.
-- **The manifest moves to the attach body.** `?cached=` survives as
-  the degraded-mode form; the 96-token cap and forced-label stripping
+- **The manifest moves to the attach body.** The `x-parton-cached`
+  header survives as the degraded-mode form; the 96-token cap and forced-label stripping
   go away for attached clients because the mirror is maintained by
   acks, not re-advertised.
 - **Per-tab channel now.** One channel per page lifetime, as the
@@ -256,7 +256,7 @@ here, named so nothing below pretends otherwise.
 
 ## What retires, what remains
 
-Retires with the channel primary: `?cached=` re-advertisement + cap +
+Retires with the channel primary: `x-parton-cached` re-advertisement + cap +
 forced-label stripping (attached clients), refetch-ordering seq +
 pageUrlKey guard + deferred-abort supersede (subsumed by stream order),
 `__conn` URL threading (the channel is the session), the visibility
@@ -288,7 +288,7 @@ Each package is a worktree branch, lands green (`yarn test` +
   `__conn` URL threading retired here, ahead of the § What retires
   schedule.
 - **W2 — attach manifest.** Manifest in the attach body; mirror seeded
-  at attach; `?cached=` kept for discrete mode. Absorbs the `?since`
+  at attach; `x-parton-cached` header kept for discrete mode. Absorbs the `?since`
   anchor: manifest and anchor travel together as one attach statement —
   one catch-up mechanism, not two. LANDED — the attach POST
   (`x-parton-attach` on the page's `_.rsc` URL, body
@@ -384,7 +384,7 @@ Each package is a worktree branch, lands green (`yarn test` +
   The discrete `_.rsc` GET path retires COMPLETELY: degraded mode
   becomes browser-native document navigation (a full load is the one
   fallback that needs no framework transport), the attach moves to a
-  dedicated endpoint, and the `?cached=` / `?partials=` / transport-
+  dedicated endpoint, and the `x-parton-cached` header / `?partials=` / transport-
   param grammar retires with the request line it protected. The
   GET-path guard twins (refetch-ordering issue seq, the pageUrlKey
   stale-commit guard) delete with the path — which is why W5a left

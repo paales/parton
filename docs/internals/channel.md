@@ -47,11 +47,11 @@ POST /__parton/live
   EXPLICIT the moment the region opens (the refetch contract — a
   whole-tree render cannot force a target whose ancestor fp-skips).
 - `cached` — the manifest: the client's `id:matchKey:fp` tokens,
-  stating WHAT it holds. UNCAPPED — the body has no request line to
+  stating WHAT it holds. UNCAPPED — the body has no header budget to
   protect; the 96-entry `CACHED_MANIFEST_CAP` and the parked-id
-  priority walk apply only to the `?cached=` URL form, which survives
+  priority walk apply only to the `x-parton-cached` header form, which survives
   solely on UNATTACHED / degraded ACTION POSTs (a discrete request with
-  a real request line to protect, and no connection mirror to consult —
+  a header budget to protect, and no connection mirror to consult —
   an attached POST sends none, § Action consequence seqs). The body
   manifest is structurally bounded by the
   client pool itself — at most `CLIENT_POOL_CAP` ids, each variant
@@ -515,7 +515,7 @@ held stream in stream order.
 | Frame navigation (`useNavigation(frame).navigate/reload`, frame traverse) | frame-scoped `url` frame (+ a `cancel` co-rider when it supersedes an unsettled fire for the same frame) — §Frames ride the channel                                                                                             | latches; rides the attach's `frames` intent                                     | document navigation carrying `__frame`/`__frameUrl` document params   |
 | Culling flips                                                             | `visible` frames                                                                                                                                                                                                                | PEND until establishment (the attach seed + first segment carry the truth)      | none (no transport)                                                   |
 | Preload (`useNavigation().preload`)                                       | `warm` frame                                                                                                                                                                                                                    | dropped (advisory)                                                              | Speculation Rules document prefetch                                   |
-| Action POSTs, cold start                                                  | discrete by design (the action carries `x-parton-conn` when attached — §Action consequence seqs — and then NO `?cached=`, the server reads the connection mirror; the capped URL manifest survives only on the unattached POST) | same                                                                            | same (native form posts included)                                     |
+| Action POSTs, cold start                                                  | discrete by design (the action carries `x-parton-conn` when attached — §Action consequence seqs — and then NO `x-parton-cached`, the server reads the connection mirror; the capped header manifest survives only on the unattached POST) | same                                                                            | same (native form posts included)                                     |
 
 The pieces:
 
@@ -847,9 +847,9 @@ deferred-only tally takes — [`streaming.md`](./streaming.md) § "Deferred
 
 * **The client names its connection** (`x-parton-conn` on the action
   POST — an explicit statement, never inferred), when attached and
-  non-degraded. On such a POST the client sends NO `?cached=` manifest:
+  non-degraded. On such a POST the client sends NO `x-parton-cached` manifest:
   the server already knows this connection's holdings (its session
-  mirror), which the action adopts. The capped URL manifest survives
+  mirror), which the action adopts. The capped header manifest survives
   only on the UNATTACHED / degraded POST, where there is no mirror.
 * **The action adopts the connection's state**
   (`_adoptConnectionForAction`, before the action body runs). Two
@@ -860,7 +860,7 @@ deferred-only tally takes — [`streaming.md`](./streaming.md) § "Deferred
   re-render the pre-mutation values the driver still holds) — and a
   snapshot of its **cached mirror** + acked layer, so an action that
   DOES render its own root fp-skips against what the server delivered
-  (the `?cached=` replacement above). The mirror snapshot decouples the
+  (the `x-parton-cached` replacement above). The mirror snapshot decouples the
   action's read-only fp checks from the driver's concurrent mutation of
   the live one.
 * **The server reserves INSIDE the action's transaction**

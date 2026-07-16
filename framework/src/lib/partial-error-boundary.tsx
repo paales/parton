@@ -59,7 +59,7 @@ interface Props {
   partialId: string
   /** Structural fingerprint of the partial's children. When present,
    *  gets registered into the client-side fingerprint map on render
-   *  so subsequent navigations can send it back via `?cached=`. */
+   *  so subsequent action POSTs can send it back via `x-parton-cached`. */
   partialFingerprint?: string
   /** Stable variant key for this rendered instance. Derived from
    *  `stableStringify(matchParams)`, so /pokemon/1 and /pokemon/2 get

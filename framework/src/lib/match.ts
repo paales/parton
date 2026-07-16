@@ -86,20 +86,21 @@ export interface CompiledMatch {
   extractParams(url: string): Record<string, string> | null
 }
 
-/** Search params the framework mints for transport — the client cache
- *  manifest (`cached`, an action POST's URL form), the focused
- *  embed-refetch target (`partials`, on an embed-flagged page GET),
- *  and document-level frame routing (`__frame`, `__frameUrl` — a
- *  degraded page's frame navigation, the CMS preview iframe).
- *  Everything else rides the channel: the attach statement's body and
- *  `url` frames, never a page URL. Match never sees these: the SAME
- *  page arrives with and without them (SSR vs action render vs a
- *  degraded frame document vs an embed refetch), and a wildcard
- *  search capture (`"*q=:query"`) would otherwise swallow them into
- *  the named param — splitting variant identity by transport noise,
- *  minting a phantom variant that supersedes (and hides) the real
- *  one on the client. */
-export const TRANSPORT_PARAMS = ["cached", "partials", "__frame", "__frameUrl"] as const
+/** Search params the framework mints for transport — the focused
+ *  embed-refetch target (`partials`, on an embed-flagged page GET) and
+ *  document-level frame routing (`__frame`, `__frameUrl` — a degraded
+ *  page's frame navigation, the CMS preview iframe). The client cache
+ *  manifest is NOT here: an action POST carries it as the
+ *  `x-parton-cached` header (self-stripping — `x-parton-*` never
+ *  reaches a gate), never a URL param. Everything else rides the
+ *  channel: the attach statement's body and `url` frames, never a page
+ *  URL. Match never sees these: the SAME page arrives with and without
+ *  them (SSR vs action render vs a degraded frame document vs an embed
+ *  refetch), and a wildcard search capture (`"*q=:query"`) would
+ *  otherwise swallow them into the named param — splitting variant
+ *  identity by transport noise, minting a phantom variant that
+ *  supersedes (and hides) the real one on the client. */
+export const TRANSPORT_PARAMS = ["partials", "__frame", "__frameUrl"] as const
 
 /** The request URL as the app sees it — transport params stripped. */
 function appUrl(url: string): URL {

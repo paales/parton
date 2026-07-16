@@ -4,9 +4,9 @@
  * Every rendered partial registers its fp per (id, matchKey); the
  * cold→warm transition and live segments keep adding fps for the same
  * variant. The cap bounds what `getCachedPartialIds()` advertises in
- * `?cached=` — keep the LATEST few, evict the oldest (insertion
- * order) — so a live partial can't inflate the query string
- * unboundedly.
+ * the `x-parton-cached` manifest — keep the LATEST few, evict the
+ * oldest (insertion order) — so a live partial can't inflate the
+ * header unboundedly.
  */
 
 import { beforeEach, describe, expect, it } from "vitest"

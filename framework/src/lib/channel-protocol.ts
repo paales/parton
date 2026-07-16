@@ -108,7 +108,7 @@ export const UNACKED_DELIVERY_WINDOW = 64
  *   - `cached` — the manifest: every `id:matchKey:fp` token the client
  *     holds, stating WHAT it has. Uncapped: the body has no
  *     request-line limit, and the client pool bounds it structurally
- *     (the action POST's `?cached=` URL form keeps its cap).
+ *     (the action POST's `x-parton-cached` header form keeps its cap).
  *   - `since` — the catch-up anchor, stating WHEN the client last
  *     heard: the document's registry timeline point. `null` when the
  *     client has no anchor (reopens, post-navigation fires).

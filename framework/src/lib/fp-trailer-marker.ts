@@ -233,7 +233,7 @@ export const TAG_DRAIN = "drain"
  *     onto whichever `(id, matchKey)` slot still holds `from`, matched
  *     by content rather than by "most recently rendered".
  *   - `to`   — the WARM fp the server recomputes once descendants have
- *     registered (the value the next `?cached=` should carry).
+ *     registered (the value the next cached manifest should carry).
  *
  * Carrying `from` (not just `to`) is what keeps the advertised fp-set in
  * lockstep with the slot's node: a trailer is async, so a concurrent

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest"
 import { parton, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { cookie, pathname, searchParam } from "../server-hooks.ts"
 import { Frame } from "../frame.tsx"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { setCookie } from "../../runtime/context.ts"
 import { hash } from "../hash.ts"
 import { stableStringify } from "../stable-stringify.ts"
@@ -412,10 +412,11 @@ describe("multi-variant pool", () => {
     const stalefp = "0".repeat(16)
     const flight = await new Response(
       (
-        await renderWithRequest(
-          `http://t/pokemon/2?cached=multi-variant-test:${mk1}:${stalefp}`,
-          tree,
-        )
+        await renderWithRequest("http://t/pokemon/2", tree, {
+          headers: withCachedManifest("http://t/pokemon/2", [
+            `multi-variant-test:${mk1}:${stalefp}`,
+          ]).headers,
+        })
       ).stream,
     ).text()
 
@@ -442,8 +443,12 @@ describe("multi-variant pool", () => {
     const mk = hash(stableStringify({ id: "1" }))
     const stalefp = "0".repeat(16)
     const flight = await new Response(
-      (await renderWithRequest(`http://t/pokemon/1?cached=no-sibling-test:${mk}:${stalefp}`, tree))
-        .stream,
+      (
+        await renderWithRequest("http://t/pokemon/1", tree, {
+          headers: withCachedManifest("http://t/pokemon/1", [`no-sibling-test:${mk}:${stalefp}`])
+            .headers,
+        })
+      ).stream,
     ).text()
     expect(flight).toContain('"id=","1"')
     // No hidden Activity mode in the stream — only the visible one.
@@ -525,10 +530,12 @@ describe("multi-variant pool", () => {
     const stalefp = "0".repeat(16)
     const flight = await new Response(
       (
-        await renderWithRequest(
-          `http://t/elsewhere?cached=parked-multi-test:${mk1}:${stalefp},parked-multi-test:${mk2}:${stalefp}`,
-          tree,
-        )
+        await renderWithRequest("http://t/elsewhere", tree, {
+          headers: withCachedManifest("http://t/elsewhere", [
+            `parked-multi-test:${mk1}:${stalefp}`,
+            `parked-multi-test:${mk2}:${stalefp}`,
+          ]).headers,
+        })
       ).stream,
     ).text()
     // Both variants represented as hidden placeholders. Body

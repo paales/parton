@@ -235,7 +235,7 @@ export async function runSequence(
   // bookkeeping and the bodies' stamps are bare, so the model and both
   // oracle sides live on the BARE basis, and every id the PROTOCOL
   // carries — the `?__force=` overlay, the visibility statement's ids,
-  // the `?cached=` tokens — resolves through the map the wire itself
+  // the `x-parton-cached` tokens — resolves through the map the wire itself
   // taught us. An unlearned id resolves to itself: a root placement is
   // its own wire id, and a nested one that has never crossed the wire
   // has no snapshot to address anyway.

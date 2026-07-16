@@ -41,7 +41,7 @@ import type { FpUpdatesPayload } from "./fp-trailer-marker.ts"
  * Why nested: navigating `/pokemon/1` ↔ `/pokemon/2` produces two
  * different matchKeys for the same id. Both variants coexist in the
  * cache (rendered as hidden `<Activity>` siblings by the server when
- * the client advertises them via `?cached=`), so the prior variant's
+ * the client advertises them in the cached manifest), so the prior variant's
  * fiber survives the round-trip. Specs without `match` resolve to a
  * constant matchKey — the inner map always has size 1.
  *
@@ -163,7 +163,7 @@ export function cacheStore(
   // Overwriting a cache slot invalidates any fingerprint that
   // referred to the old content. Without this, fps from prior
   // navs accumulate in `_currentPageFingerprints[id][matchKey]`
-  // and travel back to the server in `?cached=`; the next visit
+  // and travel back to the server in the cached manifest; the next visit
   // can fp-skip against a stale entry while the cache slot points
   // at fresh content, and `substituteNested` lands the wrong
   // subtree (or the right one for the wrong URL). Same matchKey
@@ -222,19 +222,25 @@ const _pendingFpAliases = new Map<string, Map<string, { to: string; seq: number 
  *  mount, one from the trailer post-resolution); live partials
  *  emit a fresh pair per segment. Keeping the LATEST few is
  *  enough for the cold/warm fp-skip on the next nav; older fps
- *  for the same variant are stale and only bloat `?cached=`. */
+ *  for the same variant are stale and only bloat the cached manifest. */
 export const FP_CAP_PER_VARIANT = 4
 
-/** Cap on `?cached=` manifest ENTRIES advertised to the server —
- *  the URL form only. The client's local fp cache is unbounded within
- *  a page (pruned to the live tree), but the URL manifest travels in
- *  the request line — a page with hundreds of partons (the website's
- *  chunk world) would otherwise blow the server's request-line limit
- *  (HTTP 431). Only the most recently REGISTERED variants are
+/** Cap on `x-parton-cached` manifest ENTRIES an unattached action POST
+ *  advertises to the server — the header form only. The client's local
+ *  fp cache is unbounded within a page (pruned to the live tree), but
+ *  the header carrying the manifest counts against the response's
+ *  total-header budget — a page with hundreds of partons (the website's
+ *  chunk world) would otherwise blow Node's default 16 KB
+ *  `maxHeaderSize`. Each token is `id:matchKey:fp` — a 16-hex matchKey
+ *  and a 16-hex fp, so ~34 bytes of fixed overhead plus the id. At the
+ *  96 cap a worst-case manifest measures ~7.2 KB for typical
+ *  selector-length ids (~40 chars) and ~12.6 KB even for pathological
+ *  96-char placement ids — under the 16 KB budget with room for the
+ *  remaining headers. Only the most recently REGISTERED variants are
  *  advertised; anything older re-renders server-side on its next
  *  appearance (over-fetch, never stale) and re-enters the manifest by
  *  registering again. The attach BODY manifest
- *  (`getAllCachedPartialTokens`) has no request line to protect and
+ *  (`getAllCachedPartialTokens`) has no header budget to protect and
  *  carries everything. */
 export const CACHED_MANIFEST_CAP = 96
 
@@ -350,7 +356,7 @@ export function registerClientPartial(id: string, matchKey: string, fingerprint:
   // Advertise-honesty gate: an fp registers only while the
   // (id, matchKey) CONTENT slot holds the subtree it describes — the
   // invariant is "never advertise an fp for bytes you cannot restore".
-  // Every holdings surface reads the fingerprint map (`?cached=`, the
+  // Every holdings surface reads the fingerprint map (the `x-parton-cached`
   // attach body manifest, a culling flip's `cachedTokensFor`), and an
   // fp stated without content makes the server's honest fp-skip
   // verdict a GHOST CONFIRM: a zero-byte placeholder the substitution
@@ -386,7 +392,7 @@ export function registerClientPartial(id: string, matchKey: string, fingerprint:
     evictOldest()
     // Evict the oldest entries (insertion order) once the cap is
     // reached. Without this, a live partial that re-renders every
-    // segment would inflate `?cached=` unboundedly.
+    // segment would inflate the cached manifest unboundedly.
     while (set.size > FP_CAP_PER_VARIANT) {
       const oldest = set.values().next().value
       if (oldest === undefined) break
@@ -464,7 +470,7 @@ export function _applyFpUpdates(updates: FpUpdatesPayload): void {
  * client state survives only as long as the server can CONFIRM its
  * fingerprints; on a busy live page the manifest's recency window
  * churns with every lane registration, and without priority a parked
- * subtree silently loses its `?cached=` slots — its next cull-in then
+ * subtree silently loses its cached-manifest slots — its next cull-in then
  * re-renders and drops the parked copy. Bounded by the parked pool's
  * own cap, so the priority block can never starve the recency walk
  * entirely.
@@ -483,7 +489,8 @@ export function _setManifestPriorityIds(fn: () => readonly string[]): void {
  *     than the current variant, so cross-variant navigation parks
  *     the prior variant rather than dropping its fiber.
  *
- * Used by the browser entry to build `?cached=` during navigation.
+ * Used by the browser entry to build the `x-parton-cached` manifest an
+ * unattached action POST carries.
  *
  * Source of truth is `_currentPageFingerprints`, not
  * `_currentPagePartials`. Every rendered Partial — top-level OR deep
@@ -617,7 +624,7 @@ export function _evictTornVariant(id: string, matchKey: string): void {
  * Anything in the maps but not in `live` was superseded — a
  * churned-away instance id, an evicted variant, a partial from a
  * prior route — and the client can no longer restore it, so it must
- * stop being advertised in `?cached=`. Pruning is at (id, matchKey)
+ * stop being advertised in the cached manifest. Pruning is at (id, matchKey)
  * granularity — a parked variant whose hidden Activity sibling is
  * still referenced stays alive, while a variant no longer referenced
  * anywhere drops.
@@ -895,7 +902,7 @@ let _template: ReactNode = null
  * The page `_template` was derived for — the pathname only. The
  * structural skeleton is decided by which specs `match` (a path
  * concern), so a same-page change — a query/state param like
- * `?chat=open` or `?q=…`, a refetch's `?cached=`/`?streaming=`, a frame
+ * `?chat=open` or `?q=…`, a refetch's `?partials=`/`?streaming=`, a frame
  * URL — keeps the same structure and reuses the template, while a
  * different page re-derives. Gates the streaming-mode pending-lazy
  * fallback (see `PartialsClient`): without it, a cross-page nav whose

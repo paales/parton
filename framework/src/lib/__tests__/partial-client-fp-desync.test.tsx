@@ -15,7 +15,7 @@ import { PartialErrorBoundary } from "../partial-error-boundary.tsx"
  * client-merge layer — no network, no timing, no entry.browser guard.
  *
  * The framework caches a rendered partial under (id, matchKey) and
- * advertises a SET of fingerprints for that slot in `?cached=`. The fp
+ * advertises a SET of fingerprints for that slot in the cached manifest. The fp
  * is a pure hash of the spec's INPUTS (id, matchKey, varyKey, props,
  * descendant-fold) — NOT its content — so two distinct queries against
  * a stable (id, matchKey) produce two distinct fps that share one cache

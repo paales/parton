@@ -15,7 +15,7 @@ response, and the fp-skip cascade does the pruning:
   its frame URL and the descendant fold (see
   [`render-pipeline.md`](./render-pipeline.md) §Fingerprint
   protocol).
-- If the client sent that fp in `?cached=`, the parton emits an
+- If the client advertised that fp in its cached manifest, the parton emits an
   `<i hidden data-partial-id>` placeholder and never runs its
   Render body. Anything inside the parton is collapsed to one
   cheap byte.
@@ -917,8 +917,8 @@ Behaviour:
   long-poll connection — `live` holds it open, `streaming` commits
   each pushed segment progressively, and the fire ships as the ATTACH
   POST: the body statement carries the client's FULL manifest (the
-  refetch dispatcher fills it, uncapped — the discrete `?cached=` URL
-  form keeps its 96-entry cap) plus the current visible seed; the
+  refetch dispatcher fills it, uncapped — the discrete `x-parton-cached`
+  header form keeps its 96-entry cap) plus the current visible seed; the
   FIRST fire after a document load
   also presents the document's catch-up anchor (below). The SERVER
   mints the fire's connection id at session open and ships it down

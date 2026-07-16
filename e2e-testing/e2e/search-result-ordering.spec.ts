@@ -22,8 +22,8 @@ import { clearCaches, test, expect, waitForPageInteractive } from "./fixtures"
  * fp/slot lockstep below.
  *
  * The ordering invariant rests on a framework-level fingerprint
- * invariant: the client only ever advertises a fingerprint in `?cached=`
- * that it can correctly restore — i.e. the advertised fp-set for a
+ * invariant: the client only ever advertises a fingerprint in its
+ * cached manifest that it can correctly restore — i.e. the advertised fp-set for a
  * `(id, matchKey)` slot stays in lockstep with the node the slot holds.
  * The subtle break this file pins: the warm-fp trailer (an async
  * cold→warm fp update) used to attach to the "most recently rendered"

@@ -4,7 +4,7 @@
  * `docs/notes/convergence-fuzzing.md` (§v2).
  *
  * Each step renders the fixture through the real server (a real
- * request scope: `?cached=` manifest built from the client's own
+ * request scope: `x-parton-cached` manifest built from the client's own
  * advertised fingerprints, the connection-session visible set, cell
  * writes through request scopes), encodes to real Flight bytes,
  * decodes with the real Flight client, and commits through the real
@@ -116,7 +116,7 @@ export interface SequenceResultV2 {
  * carries for a nested placement (`fz-inner` → `fz-inner~<16 hex>`).
  * The harness learns each bare id's actual wire id from the server's
  * own payloads and translates at every boundary that addresses a parton
- * by id (the registry, the client cache, `?cached=` tokens, the forced
+ * by id (the registry, the client cache, `x-parton-cached` tokens, the forced
  * lane), so the fixture stays authored in spec terms — the same basis
  * the `[S|<id>|…]` stamps its bodies write are on.
  */
@@ -230,9 +230,9 @@ async function renderTree(
   page: () => ReactNode,
   opts: { visible: readonly string[]; cached: readonly string[] },
 ): Promise<RenderedDoc> {
-  const sep = url.includes("?") ? "&" : "?"
-  const full = opts.cached.length > 0 ? `${url}${sep}cached=${opts.cached.join(",")}` : url
-  const request = new Request(`http://localhost${full}`, { headers: { "x-test-scope": scope } })
+  const headers: Record<string, string> = { "x-test-scope": scope }
+  if (opts.cached.length > 0) headers["x-parton-cached"] = opts.cached.join(",")
+  const request = new Request(`http://localhost${url}`, { headers })
   const { result } = await runWithRequestAsync(request, async () => {
     _setConnectionSession({ visible: new Set(opts.visible), ackedFps: new Map() })
     const wrapped = wrapStreamWithFpTrailer(renderServerToFlight(page()), _captureCommitHandle(), {
@@ -677,7 +677,7 @@ export async function runSequenceV2(
   // ── The id basis. A parton's EFFECTIVE id folds its placement: a
   // spec nested under another parton (or inside a `<Frame>`) mints
   // `<id>~<16 hex>`; a root-level placement stays bare. That effective
-  // id is what the registry, the client cache, the `?cached=` tokens
+  // id is what the registry, the client cache, the `x-parton-cached` tokens
   // and the forced lane all address — while the fixture and the bodies'
   // stamps speak bare. So: the walk resolves bare → wire for everything
   // it hands the framework, the views strip wire → bare for everything

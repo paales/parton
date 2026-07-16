@@ -2,7 +2,8 @@
  * The advertise-honesty gate — never advertise an fp for bytes you
  * cannot restore.
  *
- * Every holdings surface (`?cached=`, the attach body manifest, a
+ * Every holdings surface (the `x-parton-cached` manifest, the attach
+ * body manifest, a
  * culling flip's `cachedTokensFor`) reads `_currentPageFingerprints`;
  * an fp stated there without content behind it turns the server's
  * honest fp-skip verdict into a GHOST CONFIRM — a zero-byte

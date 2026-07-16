@@ -18,7 +18,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { clearRegistry } from "../partial-registry.ts"
 import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
 import { searchParam } from "../server-hooks.ts"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { SkelBox } from "./cull-skeleton-fixture.tsx"
 
 function fpById(flight: string): Map<string, string> {
@@ -38,8 +38,9 @@ async function flightAt(
   url: string,
   node: React.ReactNode,
   visible?: readonly string[],
+  headers?: Record<string, string>,
 ): Promise<string> {
-  const { stream } = await renderWithRequest(url, node, { visible })
+  const { stream } = await renderWithRequest(url, node, { visible, headers })
   return await new Response(stream).text()
 }
 
@@ -105,7 +106,12 @@ describe("cull-to-park: the culled emission is the pair, not a body", () => {
     // A flip-in revalidation's verdict: matching manifest fp under a
     // measured set → placeholder, zero body bytes, the confirm marker
     // (re-arms the restored fiber).
-    const skip = await flightAt(`http://t/x?cached=${ID}:${base}:${fpIn}`, tree, [ID])
+    const skip = await flightAt(
+      "http://t/x",
+      tree,
+      [ID],
+      withCachedManifest("http://t/x", [`${ID}:${base}:${fpIn}`]).headers,
+    )
     expect(skip).not.toContain("data-full")
     expect(skip).toContain(`"data-partial-id":"${ID}","data-partial-match":"${base}"`)
     expect(skip).toContain('"data-partial-confirm":true')
@@ -118,7 +124,12 @@ describe("cull-to-park: the culled emission is the pair, not a body", () => {
     const fpIn = fpById(warm).get(ID)
     // Same fp presented on an unmeasured request: skips, but the
     // verdict says nothing about a parked fiber's state — no confirm.
-    const skip = await flightAt(`http://t/x?cached=${ID}:${base}:${fpIn}`, tree)
+    const skip = await flightAt(
+      "http://t/x",
+      tree,
+      undefined,
+      withCachedManifest("http://t/x", [`${ID}:${base}:${fpIn}`]).headers,
+    )
     expect(skip).not.toContain("data-full")
     expect(skip).toContain(`"data-partial-id":"${ID}","data-partial-match":"${base}"`)
     expect(skip).not.toContain('"data-partial-confirm":true')

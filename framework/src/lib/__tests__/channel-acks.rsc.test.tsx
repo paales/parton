@@ -748,7 +748,7 @@ describe("mirror layering", () => {
       const { result } = await runWithRequestAsync(request, async () => {
         // A connection session whose acked layer holds the fp — the
         // shape the ack fold produces (proven above); the optimistic
-        // layer stays EMPTY (no ?cached=, nothing promoted yet).
+        // layer stays EMPTY (no cached manifest, nothing promoted yet).
         if (ackedFps) {
           _setConnectionSession({ visible: null, ackedFps })
         }

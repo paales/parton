@@ -14,21 +14,23 @@ const HEADER_ACTION_ID = "x-rsc-action"
  *  (`headersToRecord` in partial.tsx) so they never reach app code. */
 export const HEADER_RSC_RENDER = "x-parton-render"
 
-/** Framework-internal query params on render-request URLs. `cached`
- *  rides only action POST URLs (the response render's fp-skip manifest
- *  — capped, request-line-bound); `__nojs` is the document-level
- *  no-hydration debug flag. Both are consumed off the raw
+/** Framework-internal query params on render-request URLs. `__nojs` is
+ *  the document-level no-hydration debug flag — consumed off the raw
  *  `getRequest()` before any spec renders, and stripped from the page
  *  URL serialized into the payload for descendant client components
- *  (`PageUrlProvider`): meaningless to app code, and — for `cached` —
- *  kilobytes that would otherwise echo back in every payload.
+ *  (`PageUrlProvider`): meaningless to app code.
+ *
+ *  The fp-skip manifest is NOT a URL param — an unattached action POST
+ *  carries it as the `x-parton-cached` request header (self-stripping:
+ *  `x-parton-*` never reaches a spec's read surface), an attached
+ *  connection supplies it from its session mirror.
  *
  *  `__frame` / `__frameUrl` are deliberately NOT here: a spec may read
  *  them legitimately (the CMS editor checks `__frame=preview`), and a
  *  degraded page's frame navigation is a document GET carrying them.
  *  Everything the interactive transport needs rides the channel — the
  *  attach statement's body and `url` frames — never a page URL. */
-export const FRAMEWORK_URL_PARAMS = ["cached", "__nojs"] as const
+export const FRAMEWORK_URL_PARAMS = ["__nojs"] as const
 
 /** Return `urlString` with every framework-internal query param removed.
  *  Pure string→string; real app params (`?q=`, `?pages=`) pass through

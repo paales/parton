@@ -2,7 +2,7 @@
  * Regression: a wildcard-matched spec with no `vary` should be
  * fingerprint-stable across URLs that hit the same wildcard arm —
  * INCLUDING when the client adds framework-internal query params
- * like `?cached=…` and `?partials=…` to the navigation request.
+ * like `?partials=…` and `?__frame=…` to the navigation request.
  *
  * Reproduces the "/inspect → /inspect/p/3 re-renders the whole grid"
  * problem. The default `varyResult = { ...params }` for a spec
@@ -10,9 +10,9 @@
  * wildcard captures (numeric keys, including the implicit
  * `search: "*"` URLPattern auto-fills for any pattern that doesn't
  * pin search) into the fingerprint. The search wildcard captured
- * the full `?cached=…&partials=…` string the client sent — the very
- * signal the client uses to ask the server to fp-skip ended up
- * changing the fingerprint and preventing the skip.
+ * the full `?partials=…&__frame=…` string the client sent — a
+ * framework-internal transport signal ended up changing the
+ * fingerprint and preventing the skip.
  *
  * Named-param matches (`/p/:id`) MUST stay reactive — anonymous
  * captures don't.
@@ -20,7 +20,7 @@
 
 import { describe, expect, it } from "vitest"
 import { parton, ROOT, PartialRoot, type RenderArgs } from "../partial.tsx"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
 import { hash } from "../hash.ts"
 import { stableStringify } from "../stable-stringify.ts"
@@ -37,8 +37,12 @@ function fingerprintsByPartialId(flight: string): Map<string, string> {
   return out
 }
 
-async function flightAt(url: string, node: React.ReactNode): Promise<string> {
-  const { stream } = await renderWithRequest(url, node)
+async function flightAt(
+  url: string,
+  node: React.ReactNode,
+  headers?: Record<string, string>,
+): Promise<string> {
+  const { stream } = await renderWithRequest(url, node, { headers })
   return await new Response(stream).text()
 }
 
@@ -104,9 +108,10 @@ describe("wildcard match — fingerprint stability", () => {
   })
 
   it("a wildcard-matched spec's fingerprint is stable when the URL grows a search string", async () => {
-    // The bug the user observed: the very `?cached=` param the client
-    // sends to opt into fp-skip changed the spec's fingerprint, so
-    // the server could never skip. The fix is to drop URLPattern's
+    // The bug the user observed: a framework-internal transport query
+    // param (`?partials=`, an embed refetch) the client adds changed
+    // the spec's fingerprint, so a same-arm URL re-rendered instead of
+    // fp-skipping. The fix is to drop URLPattern's
     // anonymous-wildcard captures (numeric keys, including the
     // implicit `search: "*"`) from the default fingerprint surface.
     clearRegistry("all")
@@ -160,7 +165,7 @@ describe("wildcard match — fingerprint stability", () => {
     expect(fpA).not.toBe(fpB)
   })
 
-  it("server fp-skips the wildcard-matched spec when the client sends the matching ?cached= entry", async () => {
+  it("server fp-skips the wildcard-matched spec when the client sends the matching manifest entry", async () => {
     clearRegistry("all")
     const Base = parton(
       function InspectBaseSkipTestRender(_: RenderArgs) {
@@ -190,8 +195,10 @@ describe("wildcard match — fingerprint stability", () => {
     // capture is anonymous (no named params).
     const matchKey = hash(stableStringify({}))
     const second = await flightAt(
-      `http://t/inspect/p/3?cached=inspect-base-skip-test:${matchKey}:${fp}`,
+      "http://t/inspect/p/3",
       tree,
+      withCachedManifest("http://t/inspect/p/3", [`inspect-base-skip-test:${matchKey}:${fp}`])
+        .headers,
     )
     expect(second).not.toContain("grid-body")
   })

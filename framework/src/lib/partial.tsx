@@ -185,7 +185,7 @@ export type CullProps<V> = 0 extends 1 & V
  * to `skeleton` plus the placement's serializable props (~a couple
  * hundred bytes), instead of a rendered body — the skeleton renders
  * CLIENT-SIDE, needs no cache variant, no fingerprint, and no
- * `?cached=` manifest slot, and its permanent presence in the pair
+ * cached-manifest slot, and its permanent presence in the pair
  * makes a cull-OUT flip purely local (swap Activity modes, zero
  * bytes). The parton's fingerprint folds its RESOLVED viewport state
  * (`measurement ?? seed(props)`), so unmeasured and measured renders
@@ -237,7 +237,7 @@ interface InternalSpecConfig<V> {
    *  `<Activity mode="hidden">` with a placeholder when `match` says
    *  the spec shouldn't render on this request — provided
    *  the client has previously cached this id (signalled via
-   *  `?cached=id:fp`). The spec component fiber lives at its natural
+   *  `x-parton-cached` `id:fp` token). The spec component fiber lives at its natural
    *  JSX position (e.g. a root.tsx sibling), so Activity mode flips
    *  rather than the subtree mounting/unmounting; `useState` /
    *  `useRef` / DOM state inside the partial survive cross-route
@@ -516,7 +516,7 @@ export function autoSpecId(render: (...args: never[]) => unknown): string {
  * captures into the default `varyResult` makes spec fingerprints
  * change whenever the URL's search/hash/etc. moves, which silently
  * defeats fp-skip on every navigation that carries framework-internal
- * params (`?cached=…`, `?partials=…`).
+ * params (`?partials=…`) and the `x-parton-cached` manifest header.
  *
  * Drop numeric keys here so only the author's named `:foo` groups
  * flow through. Authors who genuinely need a wildcard tail in their
@@ -962,7 +962,7 @@ export function getRegisteredMatchPatterns(): readonly URLPattern[] {
  */
 /** URL base → routeKey cache. Sound by construction: the matched set
  *  is computed from the base, which is the cache key. Per-segment
- *  streaming responses change only the `?cached=` query each tick;
+ *  streaming responses change only transport query params each tick;
  *  keying by base lets one streaming request's N segments share one
  *  routeKey computation instead of N. Invalidated by pattern
  *  registration so a new pattern can shift the matched-set for
@@ -1184,7 +1184,7 @@ function buildSkeletonElement(cull: CullConfig<any>, props: Record<string, unkno
 /**
  * Parked emission for a keepalive spec whose `match` says it
  * shouldn't render on this request, but the client has it cached
- * (declared via `?cached=id:matchKey:fp`). Returns one
+ * (declared via an `id:matchKey:fp` manifest token). Returns one
  * `<Activity mode="hidden" key={matchKey}>` per cached matchKey,
  * each wrapping a placeholder the client's cache merge resolves to
  * the cached subtree for that variant. Mode flips, fiber persists,
@@ -1777,9 +1777,11 @@ function createSpecComponent<V>(
     // Every parton is addressable: the fp ships on the wire (the
     // boundary prop the client registers under this id + matchKey),
     // the snapshot records it as `emittedFp` (the fp-trailer's
-    // cold→warm heal base), and the id joins the client's `?cached=`
-    // manifest — so a bare `parton(Render)` fp-skips across
-    // navigations exactly like a match-gated one.
+    // cold→warm heal base), and the id joins the client's fp manifest
+    // (the `x-parton-cached` header on a degraded action POST, the
+    // connection's session mirror when attached) — so a bare
+    // `parton(Render)` fp-skips across navigations exactly like a
+    // match-gated one.
     const fpProp: { partialFingerprint: string } = { partialFingerprint: fp }
     const snapshotFp = fp
 
@@ -2333,9 +2335,9 @@ interface PartialRootProps {
 }
 
 /**
- * Parse the client manifest — `?cached=id:matchKey:fp,…` (the comma-
- * joined URL form) or the attach statement's token array — into two
- * maps the request state consults:
+ * Parse the client manifest — the comma-joined `id:matchKey:fp,…`
+ * tokens of the `x-parton-cached` header, or the attach statement's
+ * token array — into two maps the request state consults:
  *   - `cachedFingerprints: Map<id, Set<fp>>` — drives fp-skip decisions
  *     (server's computed fp ∈ set ⇒ emit placeholder).
  *   - `cachedMatchKeys: Map<id, Set<matchKey>>` — drives hidden Activity
@@ -2444,15 +2446,16 @@ export function partialFromSnapshot(id: string, snap: PartialSnapshot): ReactNod
 }
 
 export async function PartialRoot({ children }: PartialRootProps): Promise<ReactNode> {
-  const requestUrl = new URL(getRequest().url)
+  const request = getRequest()
+  const requestUrl = new URL(request.url)
   // The client manifest: the attach statement's uncapped token array
   // (the connection's opening statement — see `channel-protocol.ts`),
-  // or the capped `?cached=` URL form an UNATTACHED action POST carries.
-  // An ATTACHED action POST carries neither — the server already knows
-  // this connection's holdings and adopts them as the pre-installed
-  // override (`_adoptConnectionForAction`), taken by the `existingOverride`
-  // branch below before this param is ever consulted.
-  const cachedParam = _getAttachStatement()?.cached ?? requestUrl.searchParams.get("cached")
+  // or the capped `x-parton-cached` header an UNATTACHED action POST
+  // carries. An ATTACHED action POST carries neither — the server
+  // already knows this connection's holdings and adopts them as the
+  // pre-installed override (`_adoptConnectionForAction`), taken by the
+  // `existingOverride` branch below before this manifest is consulted.
+  const cachedParam = _getAttachStatement()?.cached ?? request.headers.get("x-parton-cached")
 
   // Document-level frame params: a degraded page's frame navigation
   // and the CMS editor's preview iframe carry the frame move as

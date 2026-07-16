@@ -22,7 +22,7 @@ export interface PartialRequestState {
    *  render) vs a whole-tree render (streaming mode). */
   isPartialRefetch: boolean
   /** The client manifest's fingerprints (`id:matchKey:fp` tokens — the
-   *  attach statement's `cached`, or an action POST's capped `?cached=`
+   *  attach statement's `cached`, or an action POST's capped `x-parton-cached`
    *  URL form). Multi-fp per id supported (cold/warm fp drift);
    *  fingerprint-skip decisions consult this map. */
   cachedFingerprints: Map<string, Set<string>>

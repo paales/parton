@@ -1301,7 +1301,7 @@ export function _resolveBoundSession(connectionId: string): ConnectionSession | 
  *     layer: when the action DOES render its own root (a mixed / no-match
  *     batch that reserves nothing), it fp-skips against what the server
  *     has already delivered to THIS connection — so the client never
- *     re-sends its cached manifest as `?cached=` on an attached POST. The
+ *     re-sends its cached manifest as `x-parton-cached` on an attached POST. The
  *     snapshot decouples the action's read-only fp checks from the
  *     driver's concurrent mutation of the live mirror.
  *
@@ -1309,7 +1309,7 @@ export function _resolveBoundSession(connectionId: string): ConnectionSession | 
  * request's scope + session identity must match the attach's (a
  * mismatched or stale `x-parton-conn` adopts nothing — the action still
  * runs on its own throwaway storage, and its response render falls back
- * to the request's own `?cached=`). Returns whether the adopt happened.
+ * to the request's own `x-parton-cached` manifest). Returns whether the adopt happened.
  */
 export function _adoptConnectionForAction(connectionId: string): boolean {
   const session = sessions.get(connectionId)

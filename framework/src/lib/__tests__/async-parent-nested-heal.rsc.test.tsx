@@ -30,7 +30,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import type { ReactElement, ReactNode } from "react"
 import { parton, PartialRoot, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { searchParam } from "../server-hooks.ts"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { consumePayload, type FlightBytes } from "../../test/rsc-server.ts"
 import { clearRegistry } from "../partial-registry.ts"
 import {
@@ -69,8 +69,11 @@ const tree = (
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-async function renderBoth(url: string): Promise<{ text: string; payload: ReactNode }> {
-  const { stream } = await renderWithRequest(url, tree)
+async function renderBoth(
+  url: string,
+  headers?: Record<string, string>,
+): Promise<{ text: string; payload: ReactNode }> {
+  const { stream } = await renderWithRequest(url, tree, { headers })
   const [a, b] = (stream as FlightBytes).tee()
   const [text, payload] = await Promise.all([new Response(a).text(), consumePayload<ReactNode>(b)])
   return { text, payload }
@@ -219,7 +222,10 @@ describe("async-body parent — outlined promise children", () => {
     //    child's fp (the client just committed those bytes), so the
     //    parent's fresh body carries the child as an fp-skip HOLE —
     //    inside the outlined promise row.
-    const r3 = await renderBoth(`http://t/?v=2&cached=${lotId}:${mk}:${fp}`)
+    const r3 = await renderBoth(
+      "http://t/?v=2",
+      withCachedManifest("http://t/?v=2", [`${lotId}:${mk}:${fp}`]).headers,
+    )
     expect(r3.text, "the parent lane must fp-skip the child to a hole").toContain(
       `"data-partial-id":"${lotId}"`,
     )

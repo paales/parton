@@ -186,12 +186,15 @@ Rules that make the gate sound:
   / `headers` records gate specs but never split route buckets —
   route keys come from the URL-pattern half alone.
 - **Transport params are invisible.** The framework mints search
-  params for its own transport — the client cache manifest (`cached`,
-  the capped URL form an action POST carries) and document-level
-  frame routing (`__frame`, `__frameUrl` — a degraded page's frame
-  navigation, the CMS preview iframe) — so the SAME page arrives with
-  and without them. Everything else rides the channel (the attach
-  statement's body and `url` frames on envelopes), never a page URL.
+  params for its own transport — the focused embed-refetch target
+  (`partials`) and document-level frame routing (`__frame`,
+  `__frameUrl` — a degraded page's frame navigation, the CMS preview
+  iframe) — so the SAME page arrives with and without them. The
+  client cache manifest is NOT among them: an unattached action POST
+  carries it as the `x-parton-cached` header (self-stripping — match
+  drops all `x-parton-*`), never a URL param. Everything else rides
+  the channel (the attach statement's body and `url` frames on
+  envelopes), never a page URL.
   Match evaluation and param extraction strip them first; a wildcard
   search capture like `"*q=:query"` never swallows them into the
   named param, so transport noise can't split variant identity. The

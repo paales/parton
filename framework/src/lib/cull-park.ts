@@ -86,7 +86,7 @@ const _parkedSince = new Set<string>()
 /** id → content-slot generation. Keys the content Activity. */
 const _generation = new Map<string, number>()
 
-// Parked ids keep their `?cached=` manifest slots ahead of the
+// Parked ids keep their cached-manifest slots ahead of the
 // recency walk — most-recently-culled first. Without this, a busy
 // live page's lane registrations churn a parked id out of the
 // manifest and its next cull-in can't be fp-confirmed: the parked

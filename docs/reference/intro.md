@@ -55,8 +55,8 @@ one pipeline:
    resolved cells, call-site props, invalidation bumps, the recorded
    reads re-evaluated at the current request, and every descendant's
    contribution. The client states the fingerprints it holds (the
-   attach statement's `cached` manifest; the `?cached=` URL form on
-   an action POST); the server emits a placeholder for any spec whose
+   attach statement's `cached` manifest; the `x-parton-cached` request
+   header on an unattached action POST); the server emits a placeholder for any spec whose
    fp is unchanged, and the client paints the cached subtree from its
    client-side partial cache.
 4. **Per-parton wire.** After first paint the page holds ONE channel

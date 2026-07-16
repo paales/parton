@@ -200,3 +200,22 @@ export async function renderPayloadWithRequest<T>(
   })
   return { stream: result, cookies }
 }
+
+/**
+ * Present a client fp-skip manifest to a harness render exactly as an
+ * unattached (degraded / pre-establishment) action POST does — the
+ * `x-parton-cached` request header carrying comma-joined
+ * `id:matchKey:fp` tokens. `PartialRoot` parses it identically to the
+ * attach statement's token array. The single statement of the fp-skip
+ * handshake idiom for the rsc tier: pass `url` and the tokens, spread
+ * the returned `headers` into the render call.
+ *
+ *   const { url, headers } = withCachedManifest(base, [`${id}:${mk}:${fp}`])
+ *   await flightAt(url, tree, headers)
+ */
+export function withCachedManifest(
+  url: string,
+  tokens: readonly string[],
+): { url: string; headers: Record<string, string> } {
+  return { url, headers: { "x-parton-cached": tokens.join(",") } }
+}

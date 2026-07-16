@@ -23,7 +23,7 @@ import {
   withLiveDrive,
 } from "../../test/live-drive.tsx"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { computeRouteKey, parton, PartialRoot, type RenderArgs } from "../partial.tsx"
 import {
   clearRegistry,
@@ -36,8 +36,12 @@ import { expires, staleUntil, time } from "../server-hooks.ts"
 import { hash } from "../hash.ts"
 import { stableStringify } from "../stable-stringify.ts"
 
-async function flightAt(url: string, node: React.ReactNode): Promise<string> {
-  const { stream } = await renderWithRequest(url, node)
+async function flightAt(
+  url: string,
+  node: React.ReactNode,
+  headers?: Record<string, string>,
+): Promise<string> {
+  const { stream } = await renderWithRequest(url, node, { headers })
   return await new Response(stream).text()
 }
 
@@ -171,19 +175,19 @@ describe("wake hooks — expires()/staleUntil()/time()", () => {
 
     // Within the 300ms window: fp matches AND the snapshot is fresh →
     // skip (placeholder, no body).
-    const cachedUrl = `${url}?cached=wake-short:${ROOT_MK}:${fp}`
-    const skipped = await flightAt(cachedUrl, tree)
+    const { headers } = withCachedManifest(url, [`wake-short:${ROOT_MK}:${fp}`])
+    const skipped = await flightAt(url, tree, headers)
     expect(skipped).not.toContain("short-ttl-body")
 
     // The skip pass re-registered the snapshot; the prior box must have
     // been threaded through (a skip must not erase the wake schedule).
-    const afterSkip = await committedSnap(cachedUrl, "wake-short")
+    const afterSkip = await committedSnap(url, "wake-short")
     expect(effectiveExpiresAt(afterSkip!)).toBeDefined()
 
     // Past the boundary: same fp declaration, but the snapshot expired
     // → the TTL gate declines the skip and renders fresh.
     await new Promise((r) => setTimeout(r, 350))
-    const fresh = await flightAt(cachedUrl, tree)
+    const fresh = await flightAt(url, tree, headers)
     expect(fresh).toContain("short-ttl-body")
   })
 })

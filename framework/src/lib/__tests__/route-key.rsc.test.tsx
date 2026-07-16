@@ -171,9 +171,9 @@ describe("route identity — the URL base", () => {
       },
     )
     // Per-segment streaming URLs differ only in framework query params
-    // (`?cached=…`) — same base, same routeKey, one cache entry.
+    // (`?partials=…`) — same base, same routeKey, one cache entry.
     const first = computeRouteKey("http://t/p/pikachu")
-    const second = computeRouteKey("http://t/p/pikachu?cached=hero:mk:fp")
+    const second = computeRouteKey("http://t/p/pikachu?partials=hero")
     expect(second).toBe(first)
   })
 

@@ -489,7 +489,7 @@ export function wrapStreamWithFpTrailer(
     /** Observer for every update entry this response ships. The live
      *  connection passes one that folds each warm fp into its cached
      *  override, so the SERVER-side skip check tracks the same
-     *  cold→warm drift the client's `?cached=` heals track — without
+     *  cold→warm drift the client's cached manifest heals track — without
      *  it, a drifted parton (any ancestor of live descendants) can
      *  never fp-skip on the connection: its promoted emitted fp is
      *  permanently one drift behind the next render's candidate. */
@@ -542,7 +542,7 @@ export function wrapStreamWithFpTrailer(
   // Cumulative fp-update map for this response. Every emission — the
   // settle-time entries and the flush safety net — sends the WHOLE map,
   // so the last entry on the wire is always complete and consumers keep
-  // last-wins semantics (the splitter's trailer map, `?cached=`
+  // last-wins semantics (the splitter's trailer map, the cached manifest
   // registration) without merge logic.
   const cumulative: FpUpdatesPayload = {}
   /** Entries already shipped. Each marker carries only the DELTA since

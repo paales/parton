@@ -81,16 +81,16 @@ interface RequestStore {
    *  browser URL / frame URL store. Multiple navigate calls within a
    *  segment merge into one update; the LAST `history` wins. */
   pendingUrlUpdate?: UrlUpdateEntry
-  /** Carry the `?cached=…` parsed maps in-memory across segments of a
-   *  single request so the driver doesn't have to rebuild the request
-   *  URL between segments. Cold first segment: PartialRoot parses
-   *  ?cached= and stores the parsed Maps here. Subsequent segments:
-   *  the driver appends newly-emitted (id, matchKey, fp) tuples to the
-   *  same Maps; PartialRoot's next render reads from these Maps
-   *  directly instead of re-parsing the URL. Without this carrier, the
-   *  driver was doing `new URL(...)` + `searchParams.set` +
-   *  `url.toString()` + `new Request(...)` per segment — ~7% of CPU in
-   *  the streaming case. */
+  /** Carry the parsed cached-manifest maps in-memory across segments of
+   *  a single request so the driver doesn't have to re-derive them
+   *  between segments. Cold first segment: PartialRoot parses the
+   *  client's manifest (the `x-parton-cached` header or the attach
+   *  statement's token array) and stores the parsed Maps here.
+   *  Subsequent segments: the driver appends newly-emitted
+   *  (id, matchKey, fp) tuples to the same Maps; PartialRoot's next
+   *  render reads from these Maps directly instead of re-parsing.
+   *  Without this carrier, the driver would re-derive the manifest per
+   *  segment — ~7% of CPU in the streaming case. */
   cachedOverride?: CachedOverride
   /** The ids being FORCE-refetched on the current render — a selector
    *  nav's `__force` targets, resolved to ids. The descendant fold
@@ -536,9 +536,9 @@ export function _mergeUrlUpdate(partial: UrlUpdateEntry): void {
 }
 
 /** Install a cached-override carrier into the current request store.
- *  Called by PartialRoot on the cold render after parsing `?cached=`,
- *  so the segment driver can mutate it between segments without
- *  rewriting the request URL. */
+ *  Called by PartialRoot on the cold render after parsing the client's
+ *  cached manifest, so the segment driver can mutate it between
+ *  segments without re-deriving it. */
 export function _setCachedOverride(override: CachedOverride): void {
   const store = requestContext.getStore()
   if (store) store.cachedOverride = override

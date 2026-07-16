@@ -74,9 +74,9 @@ export const PartialIdContext = createContext<string | null>(null)
  *
  * Because it's never read on a client-driven `.rsc` refetch (the live
  * Navigation API is present there), `PartialRoot` seeds it as `null` on
- * those — serializing the URL would echo the framework-internal `?cached=`
- * query (kilobytes) back into every payload for nothing. It carries a
- * real (framework-param-stripped) string only on the SSR document render.
+ * those — serializing the URL into every refetch payload would be dead
+ * weight the live Navigation API supersedes. It carries a real
+ * (framework-param-stripped) string only on the SSR document render.
  */
 export const PageUrlContext = createContext<string | null>(null)
 

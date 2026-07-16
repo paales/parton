@@ -15,7 +15,7 @@
  *
  * Partial fingerprints fold in the latest matching `ts` so any tagged
  * invalidation shifts the partial's fp on the next render. Version-
- * stamp model — the client's `?cached=` is the source of truth for
+ * stamp model — the client's cached manifest is the source of truth for
  * what fp it has. The one per-connection structure here is the
  * inverted wake index (below): live connections subscribe their route
  * snapshots under the same (name, constraintsKey) keys the store

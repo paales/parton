@@ -15,7 +15,7 @@
 
 import { describe, expect, it, beforeEach } from "vitest"
 import { computeRouteKey, parton, PartialRoot, type RenderArgs } from "../partial.tsx"
-import { renderWithRequest } from "../../test/rsc-server.ts"
+import { renderWithRequest, withCachedManifest } from "../../test/rsc-server.ts"
 import { runWithRequestAsync } from "../../runtime/context.ts"
 import { _clearInvalidationRegistry, refreshSelector } from "../../runtime/invalidation-registry.ts"
 import { clearRegistry, enterRequestRegistry, lookupPartial } from "../partial-registry.ts"
@@ -26,8 +26,12 @@ import "../../runtime/cms-runtime.ts"
 import { hash } from "../hash.ts"
 import { stableStringify } from "../stable-stringify.ts"
 
-async function flightAt(url: string, node: React.ReactNode): Promise<string> {
-  const { stream } = await renderWithRequest(url, node)
+async function flightAt(
+  url: string,
+  node: React.ReactNode,
+  headers?: Record<string, string>,
+): Promise<string> {
+  const { stream } = await renderWithRequest(url, node, { headers })
   return await new Response(stream).text()
 }
 
@@ -71,13 +75,13 @@ describe("render-body tag() — dep-record ride", () => {
     expect(warm2).toBe(warm) // stable while the tag's ts is stable
 
     // Cached warm fp, no bump → skip (placeholder, no body).
-    const cachedUrl = `${url}?cached=tag-ride:${ROOT_MK}:${warm}`
-    const skipped = await flightAt(cachedUrl, tree)
+    const { headers } = withCachedManifest(url, [`tag-ride:${ROOT_MK}:${warm}`])
+    const skipped = await flightAt(url, tree, headers)
     expect(skipped).not.toContain("tagged-body")
 
     // Bump the tag → the dep folds the new ts → fp mismatch → fresh.
     refreshSelector("product:42")
-    const fresh = await flightAt(cachedUrl, tree)
+    const fresh = await flightAt(url, tree, headers)
     expect(fresh).toContain("tagged-body")
   })
 

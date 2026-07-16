@@ -511,7 +511,7 @@ export function createRscHandler(config: RscHandlerConfig): {
         // where the held-stream driver's consequence lanes read) and its
         // cached mirror (so an action that renders its own root fp-skips
         // against what the server has delivered to this connection — the
-        // client sends no `?cached=` on an attached POST).
+        // client sends no `x-parton-cached` on an attached POST).
         if (consequenceConn) _adoptConnectionForAction(consequenceConn)
         try {
           // Run inside an invalidation transaction so server-side
