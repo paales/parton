@@ -142,10 +142,16 @@ Which to use:
 
 The fixture is `buildDashboardPage({ partons: N, liveCells: M, depth: D })`
 (`bench/server/fixture.tsx`): N addressable leaf partons, M of them live
-(each reading a DISTINCT inline `localCell`, so bumping cell i shifts only
-leaf i's fingerprint), nested D wrappers deep. Each Render is trivial (a
-span with the cell value) so the measurement isolates framework overhead,
-not user work.
+(each reading a DISTINCT cell under an EXPLICIT id
+`cell:<prefix>leaf-<i>/value`, so bumping cell i shifts only leaf i's
+fingerprint), nested D wrappers deep. The explicit id is load-bearing:
+a string-key `localCell("value")` derives its id from the parton's
+RUNTIME id, which is placement-folded (`leaf-<i>~<hash>`) once nested —
+so the dep it records would not match the selector the harness fires by
+string (`refreshSelector`, bypassing the cell handle a real write goes
+through). An explicit id is fold-free, so the harness-computed selector
+lands. Each Render is trivial (a span with the cell value) so the
+measurement isolates framework overhead, not user work.
 
 The **pulse** category flips the fixture's cell topology
 (`sharedPulseCell: true`): all 512 live leaves read partitions

@@ -86,16 +86,27 @@ export interface DashboardFixture {
 
 // ─── Leaf + wrapper construction ──────────────────────────────────────
 
-/** A live leaf reads a distinct inline cell, folding `cell:<id>/value`
- *  into its fp. The cell id is `<partonId>/value`; the factory pins the
- *  partonId via `displayName` (`<prefix>leaf-<i>`) so each minted leaf
- *  gets a distinct catalog id. */
+/** A live leaf reads a distinct cell under an EXPLICIT id
+ *  (`<prefix>leaf-<i>/value`), folding `cell:<prefix>leaf-<i>/value`
+ *  into its fp. The explicit id is deliberate: a string-key inline
+ *  `localCell("value")` derives its id from the parton's RUNTIME id,
+ *  which is placement-folded (`<prefix>leaf-<i>~<hash>`) once the leaf
+ *  is nested under a wrapper — so the dep it records
+ *  (`cell:<prefix>leaf-<i>~<hash>/value`) would not match a selector
+ *  the harness can compute ahead of render. A real write hits the
+ *  folded id through the cell handle; the harness fires the selector
+ *  string directly, so the two must agree. An explicit id is
+ *  fold-free — the exact string `buildCellSelector` produces below —
+ *  and still distinct per leaf (bumping cell i shifts only leaf i's
+ *  fp). The handle is built at fixture time (after `resetWorld`), like
+ *  the pulse cell. */
 function makeLiveLeaf(i: number, prefix: string) {
+  const cell = localCell({ id: `${prefix}leaf-${i}/value`, shape: "number", initial: 0 })
   return parton(
     Object.assign(
       async function LiveLeafRender(_: RenderArgs) {
         renderCount++
-        const v = await localCell("value", { shape: "number", initial: 0 })
+        const v = await cell.resolve()
         return <span data-leaf={i}>{String(v.value)}</span>
       },
       { displayName: `${prefix}leaf-${i}` },
