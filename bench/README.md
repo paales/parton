@@ -569,3 +569,111 @@ rather than silently becoming the new baseline. The ceilings are
 generous on purpose: healthy runs sit at ~4–12% / ~0.5–5%; the
 pathology class the phases exist to catch is a saturated core (~100%),
 not machine variance.
+
+---
+
+# Client-bundle tracer
+
+`yarn bundle:report` (`node bench/client-bundle.mjs`) — puts a size story
+on what ships to the BROWSER. Where the other benches price server CPU and
+client frame cost, this one answers: _how big is the client bundle, and
+where do the bytes come from?_ It builds the two in-repo apps whose client
+graphs differ most and reports, per app, the CLIENT (browser) environment's
+output.
+
+```bash
+yarn bundle:report                     # build both apps, write the ledger
+node bench/client-bundle.mjs --check   # build both, compare to the committed
+                                       #   ledger (tolerance band), exit
+                                       #   nonzero on breach — local/manual use
+node bench/client-bundle.mjs --app=website   # one app only (no ledger write)
+```
+
+The two data points:
+
+- **website** (`@parton/website`) — the lean demo world.
+- **e2e-testing** (`@parton/e2e-testing`) — the kitchen-sink app (the chat
+  overlay pulls shiki's full grammar set + mermaid/cytoscape/katex, all
+  code-split).
+
+## The lever — Rollup-compatible bundle metadata (Rolldown honors it)
+
+Rolldown ships no native metafile ([rolldown/rolldown#6425]), so the tracer
+uses the Rollup-compatible `generateBundle` hook, which Rolldown fully
+supports: it reads `OutputChunk.modules[id].renderedLength` for per-module
+bytes and each chunk's `imports` / `dynamicImports` for the
+static-vs-dynamic graph. Chunk/asset BYTE sizes are read from the WRITTEN
+files on disk (a later plugin mutates `chunk.code` after our hook, so disk
+is the only byte-exact source — the ledger reconciles to `ls -la dist`
+exactly). Per-module `renderedLength` is pre-minify, so it is scaled per
+chunk to the chunk's real on-disk size before grouping, and the group bytes
+then reconcile to the disk total. The build is driven programmatically
+through Vite's `createBuilder().buildApp()`, so the same three-environment
+plugin-rsc build `yarn build:website` / `yarn build` run also emits the
+stats — one pass, real dist on disk. (An HTML treemap is deliberately not
+emitted: the machine-readable ledger is the diff substrate; the CPU-profile
+harnesses already own the interactive view.)
+
+[rolldown/rolldown#6425]: https://github.com/rolldown/rolldown/issues/6425
+
+## What it reports
+
+Per app: **total client JS** (raw + gzip + brotli), split into the
+**initial** slice (the entry chunk plus its static-import closure — what
+blocks first paint) and the **lazy** slice (chunks reachable only through
+dynamic `import()`); the **top chunks**; a module-level **attribution by
+origin** — react/react-dom, the RSC runtime (`@vitejs/plugin-rsc` client
+runtime + its vendored react-server-dom), `@parton/framework` client code
+(with the exact `lib/` module list), vendored `copies/`, `@parton/cms`, app
+code, other node_modules (sub-grouped by package). **CSS is reported
+separately from JS**; fonts are noted apart. Source maps are never in the
+totals (the tracer sizes only emitted `.js`/`.css`/font assets).
+
+The headline is **initial JS gzip** — the bytes that block first paint.
+`total` JS matters for the website (its total ≈ its initial); for
+e2e-testing the total is ~12 MB of code-split grammars + mermaid, all lazy,
+so its total tracks grammar-registry churn, not first-load cost — read its
+`initial` instead.
+
+## The JSON ledger (regression substrate)
+
+`bench/results/client-bundle.json` is committed — the regression substrate,
+like `server-warm-tick.json`. It carries a git SHA + node + vite + rolldown
+versions and, per app: the total / initial / lazy JS sizes (raw + gzip +
+brotli), the CSS + font totals, the top chunks, and the origin groups —
+each with its `initialRaw` share and, for framework/app/rsc-runtime, the
+full per-module list. So a future diff shows **where** growth came from
+(which origin, which module), not merely that it grew.
+
+To track a change:
+
+```bash
+yarn bundle:report                                # baseline → note the SHA
+cp bench/results/client-bundle.json /tmp/base.json
+# … make your change …
+yarn bundle:report                                # your change
+# diff the per-app initialJs.gzip and the groups[] between the two files
+```
+
+Update the committed ledger (`yarn bundle:report` overwrites it) whenever a
+change intentionally moves the client bundle — the same discipline as the
+other baselines: commit the number you read.
+
+## The CI tripwire — guarding the ledger, not measuring
+
+`node bench/bundle-budget-tripwire.mjs` (a job in the Benches workflow)
+asserts the **committed** ledger keeps each app's first-load client JS
+under a generous ceiling: website `initial` < 130 KiB gzip and `total` <
+140 KiB, e2e-testing `initial` < 140 KiB. Same split as the idle-CPU
+tripwire: the committed ledger is the tripwire's **input**. Bytes ARE
+deterministic per SHA, but the macOS↔ubuntu minifier byte-drift is
+unmeasured — so rather than rebuild-and-compare in CI (which could
+false-positive on that drift), CI guards the committed number directly, and
+the MEASUREMENT stays a dev-machine step (`yarn bundle:report`). A
+first-load regression committed into the ledger (a react DEV build leaking
+to the browser, a heavy new entry-graph dependency) trips visibly instead
+of silently becoming the baseline. The ceilings are generous on purpose:
+healthy runs sit at ~90–95 KiB gzip initial; the pathology class is a
+dev-build leak that 5–10×s the number, not KB creep. The tracer's `--check`
+mode does the stricter build-and-compare (a ±5% / ±8 KiB tolerance band)
+for local use where the toolchain matches the ledger's.

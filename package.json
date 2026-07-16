@@ -42,7 +42,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs}\"",
     "gql:generate": "yarn workspace @parton/e2e-testing gql:generate",
-    "bench:server": "node bench/server/cli.mjs"
+    "bench:server": "node bench/server/cli.mjs",
+    "bundle:report": "node bench/client-bundle.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

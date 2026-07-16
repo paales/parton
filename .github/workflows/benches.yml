@@ -40,6 +40,27 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+  # ── Client-bundle ledger tripwire ──────────────────────────────────
+  bundle-budget:
+    name: Client-bundle ledger tripwire
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # Boots and builds NOTHING: the bundle MEASUREMENT happens on dev
+      # machines (`yarn bundle:report` builds both apps and writes the
+      # committed bench/results/client-bundle.json). Bytes are
+      # deterministic per SHA, but the macOS↔ubuntu minifier byte-drift is
+      # unmeasured, so — like the idle-CPU tripwire — CI guards the
+      # committed LEDGER rather than rebuild-and-compare (which could
+      # false-positive on that drift). A first-load regression committed
+      # into the ledger (a react dev build leaking to the browser, a heavy
+      # new entry-graph dep) trips here instead of silently becoming the
+      # baseline.
+      - name: Bundle budget tripwire
+        run: node bench/bundle-budget-tripwire.mjs
+
   # ── Client scroll-frame CPU harness ────────────────────────────────
   bench-client:
     name: Client-scroll bench (smoke)
