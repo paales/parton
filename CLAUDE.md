@@ -53,15 +53,19 @@ pipeline:
    the fp-trailer; declared match gates are skip-safe from render 1.
    `fpSkip: false` opts a spec out entirely (always-authoritative
    surfaces, e.g. the CMS editor chrome).
-4. **The wire is per-parton.** Addressable specs (`selector || match`)
-   are independently refetchable (`?partials=`), byte-cacheable, and
-   live-updatable — a held connection streams per-parton lanes, each
-   parton at its own cadence.
+4. **The wire is per-parton.** Every parton is addressable — no
+   opt-in: each is independently refetchable (`?partials=`,
+   framework-internal), byte-cacheable, and live-updatable — a held
+   connection streams per-parton lanes, each parton at its own
+   cadence. Identity is the Render function's name (kebab-cased),
+   placement-folded (`~<hash>`) when nested; anonymous Renders throw.
 5. **Writes are plain server functions.** Import cells, call `.set`,
    wrap multi-writes in `atomic(fn)` — one commit, one driver wake, a
    throw rolls the batch back. Invalidation fans out by selector
-   (`cell:<id>?<partition>`, `tag:<name>`, refetch labels) and wakes
-   exactly the partons whose recorded deps match.
+   (`cell:<id>?<partition>`, `tag:<name>`) and wakes exactly the
+   partons whose recorded deps match — cells for state-shaped
+   signals, `tag()` for event-shaped ones; there is no imperative
+   targeted refresh in the author surface.
 
 The canonical shapes:
 
@@ -74,7 +78,6 @@ export const SearchResults = parton(
   },
   {
     match: { pathname: "/search", searchParams: { q: (v) => v !== null } },
-    selector: "#search-results",
   },
 )
 ```
@@ -92,8 +95,8 @@ export async function saveProfile(args: { name: string; bio: string }) {
 ## Spec authoring rules
 
 - **Three constructors, one engine.** Pick by role:
-  - `parton(Render, '/path')` / `parton(Render, {match, selector, cache, defer, fallback, keepalive, fpSkip})` — addressable subtree, request-dimensions only. The everything-else case. Addressability = `selector || match`.
-  - `block(Render, {selector, schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is the CMS resolution surface — the one declared schema in the framework.
+  - `parton(Render, '/path')` / `parton(Render, {match, cull, cache, defer, fallback, keepalive, fpSkip})` — the base addressable subtree, request-dimensions only. The everything-else case. A bare `parton(Render)` is first-class: it fp-skips across navigations exactly like a match-gated surface.
+  - `block(Render, {schema, …})` — slot-placeable, CMS-driven. `schema({cms}) => ({…})` is the CMS resolution surface — the one declared schema in the framework.
   - `<Frame name initialUrl>{…}</Frame>` — plain component, opens a per-name URL scope for descendants (which inherit the frame chain via server context). Framed specs route and key on the frame's URL, not the page's.
 - **The tracking invariant.** A body's read set must be a function of
   tracked inputs, props, and invalidation-covered data (cells/tags) —
@@ -117,11 +120,11 @@ export async function saveProfile(args: { name: string; bio: string }) {
   is the other semantic: render an empty body, replacing the cached
   content.
 - **Slot blocks** self-register in the type catalog under their
-  auto-derived `type` (`HeroRender` → `"hero"`). `selector` is a flat
-  list of refetch labels; the first label is the catalog id — and for
-  singleton blocks, the CMS storage key. Slots compose from a host's
-  `schema` via `cms.blocks(slot, selector?)` / `cms.block(slot,
-  selector?)`; author code never threads content keys.
+  auto-derived `type` (`HeroRender` → `"hero"`) — the catalog id slot
+  lookups resolve, and for singleton blocks, the CMS storage key.
+  Slots compose from a host's
+  `schema` via `cms.blocks(slot)` / `cms.block(slot)`; author code
+  never threads content keys.
 - **No `parent` prop.** A parton reads its parent (id path + frame
   chain) from server context — per-component ALS, backed by the
   `@vitejs/plugin-rsc` patch in `.yarn/patches/` (see
@@ -384,7 +387,7 @@ case in this codebase where the History API is the right tool.
 
 - **Plain components over factories.** Only reach for a `parton()` /
   `block()`-style constructor when define-time work genuinely requires
-  it (catalog registration, selector/URLPattern compile, the
+  it (catalog registration, match/URLPattern compile, the
   Render→Component bridge). When the only "construction" is reading
   props, use a plain component — `<Frame name initialUrl>` carries the
   same information as a factory would, without the indirection.
