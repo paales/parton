@@ -302,32 +302,6 @@ describe("wake parity — the expiry side of the coverage oracle", () => {
     ).not.toThrow()
   })
 
-  it("a due non-addressable child escalates to its carrier on both sides", () => {
-    const { rws } = open()
-    const now = Date.now()
-    const route = new Map([
-      ["parent", snap(["parent"])],
-      [
-        "child",
-        snap(["child"], { expiresAt: now - 50, emittedFp: undefined, parentPath: ["parent"] }),
-      ],
-    ])
-    _syncRouteWakeSubscription(rws, route, 0)
-    vi.advanceTimersByTime(2 * GRID)
-    // The wheel delivered the RAW id; expected escalates to the carrier
-    // and the delivered side escalates identically — parity holds.
-    expect(rws.sub.pending.has("child")).toBe(true)
-    expect(() =>
-      _assertWakeParity(route, 0, rws.sub.pending, unparked, { now, covered: uncovered }),
-    ).not.toThrow()
-    // An empty delivery for the same due child names the carrier as
-    // the missing lane.
-    rws.sub.pending.clear()
-    expect(() =>
-      _assertWakeParity(route, 0, rws.sub.pending, unparked, { now, covered: uncovered }),
-    ).toThrow(/\[parent\]/)
-  })
-
   it("future boundaries and bump parity are untouched by the expiry side", () => {
     const { rws } = open()
     const now = Date.now()

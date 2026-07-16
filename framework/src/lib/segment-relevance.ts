@@ -54,17 +54,17 @@ export function _routeMatchingBumpIds(
 }
 
 /**
- * The nearest snapshot that can actually CARRY a lane — one with an
- * `emittedFp`, the client identity the client can swap in place. A
- * locally rendered parton always emits one; a record that does not
- * (an embed-sourced snapshot replayed from a trailer) has no client
- * slot, so its own lane would render but commit to nothing, and the
- * update rides its nearest fp-bearing ancestor's lane instead — whose
- * render re-renders the subtree containing it, exactly as a whole-tree
- * segment does on the non-lane path. `parentPath` is root-first ending
- * at the immediate parent, so the nearest ancestor is at the tail.
- * Returns `null` when neither the id nor any ancestor bears an fp
- * (nothing can carry the update — the caller drops it).
+ * The snapshot that carries a lane for `id` — itself, when it holds the
+ * `emittedFp` client identity the client can swap in place. Every
+ * registered snapshot bears one: `PartialBoundary` forwards
+ * `emittedFp={snapshotFp}` on every emission (local render, fp-skip,
+ * defer, cull), and both trailer replay (`deserializeSnapshot`) and
+ * byte-cache hole replay preserve the field — the only render path that
+ * registers nothing is a vocabulary-constrained embed. So a snapshot
+ * present in the route map always carries its own lane. The `emittedFp`
+ * guard stays as the carriable invariant: an id absent from the map, or
+ * (defensively) a record without an fp, has no client slot and is
+ * dropped rather than laned into nothing.
  */
 function laneCarrierFor(
   id: string,
@@ -72,13 +72,7 @@ function laneCarrierFor(
 ): string | null {
   const snap = snapshots.get(id)
   if (!snap) return null
-  if (snap.emittedFp) return id
-  for (let i = snap.parentPath.length - 1; i >= 0; i--) {
-    const ancestorId = snap.parentPath[i]
-    if (ancestorId === id) continue
-    if (snapshots.get(ancestorId)?.emittedFp) return ancestorId
-  }
-  return null
+  return snap.emittedFp ? id : null
 }
 
 /** Map matched ids to their lane carriers (`laneCarrierFor`), dropping

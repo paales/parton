@@ -28,23 +28,37 @@ source concat?) vs re-budget the bench for the new model's honest
 cost. The bench is the CPU canary — do not raise its timeout without
 the profile saying the cost is legitimate.
 
-### ResolvedCell into a client component from a matchless parton hangs
+### A ResolvedCell's `set` re-encoded across an embed splice hangs the host
 
-Passing a ResolvedCell (an in-body `localCell(...)` result) as a prop
-to a `"use client"` component from a parton with no `match` hangs the
-render 30–40s (dev AND prod; seen on `/remote-frame-demo` +
-`/embed-demo`, and it is exactly the `<CellCheckbox cell={loader} />`
-shape in `examples/minimal`). Bisected:
+A parton that resolves a cell and passes the whole `ResolvedCell`
+(carrying `set` — a **bound** server-action ref, `__cellWrite.bind(null,
+id)`) into a `"use client"` component hangs the HOST render ~40s when
+that parton is re-rendered inside an ungoverned `<RemoteFrame>` embed
+(reproduced on `/embed-demo` + `/remote-frame-demo`). Root cause: the
+host decodes the embedded payload (`createFromReadableStream`) and
+splices `payload.root` back into its OWN document Flight render; a
+DECODED bound server reference cannot be cleanly re-encoded — the
+document `renderToReadableStream` stream never closes, so
+`await renderHTML(...)` hangs. Isolated:
 
-| variant | result |
+| variant (rendered inside an embed) | result |
 |---|---|
-| bare parton, no cell/client | 1.07s OK |
-| bare + `localCell`, no client comp | 1.07s OK |
-| bare + plain client comp | 2.07s OK |
-| bare + client comp taking a **ResolvedCell prop** | **30–40s HANG** |
+| value only (`cell.value`) → client comp | OK |
+| PLAIN `"use server"` action ref → client comp | OK |
+| ResolvedCell with **bound `set`** → client comp | **~40s HANG** |
 
-A matchless parton renders inside EVERY embed, so this blocks the
-embed surface too. High priority; deserves its own lane.
+NOT the bound-args encryption (`enableActionEncryption: false` still
+hangs) and NOT stream truncation (buffering the segment doesn't help) —
+it is React/plugin-rsc re-encoding a decoded bound server reference.
+The "matchless parton" framing is incidental: a matchless parton
+renders in EVERY embed, so it reliably injects the offending shape; a
+matched parton passing a ResolvedCell across an embed hangs the same
+way. Non-embed renders are fine (the ref is encoded once, fresh).
+Recommended fix direction: an ungoverned same-origin embed should route
+cell writes through the interaction bridge (as GRANTED embeds do) rather
+than splicing a re-encodable server-action ref, or the splice must
+strip/neutralize server-reference rows from the decoded payload
+(degrading embed-side writes gracefully). High priority; own lane.
 
 ### Test-infra: `refreshSelector` bumps cross Playwright workers
 
@@ -54,17 +68,24 @@ another's. Two spec files run `mode: "serial"` as a workaround while
 the playwright config still claims workers>1 is safe. Needs real
 scoping or a documented ownership rule.
 
-### `laneCarrierFor` ancestor escalation may be dead code
-
-Every local render now sets `emittedFp`, so the escalation path may be
-unreachable outside embed-sourced snapshots. Reported during the
-every-parton-addressable work; not ripped out pending a real trace.
-
 ### Interactive-Chrome `/__parton/channel` POST 503s
 
 Real browser tabs occasionally wedge with 503s on the channel POST;
-Playwright doesn't reproduce it. Unfiled beyond this note —
-investigation lane when convenient.
+Playwright doesn't reproduce it. Investigated: the framework NEVER
+emits 503 on the channel POST — `handleChannelPost`
+(`connection-session.ts`) only ever answers 403/400/404/204, and the
+one 503 in the tree (`drainAttachRefusal`, `drain.ts`) is wired to the
+ATTACH leg (`/__parton/live`), not the channel POST. So a channel 503
+is produced UPSTREAM (reverse proxy / LB / Node server) under
+connection-pool exhaustion: real Chrome accumulates long-held
+`/__parton/live` fetch streams (fetch transport, bfcache/tab-suspend
+leaving sockets half-open for the 5-min `KEEPALIVE_MS`, the ~10s
+WS-upgrade overlap `HANDOVER_DRAIN_TIMEOUT_MS`, network flaps), and a
+bounded upstream pool 503s new POSTs until a held stream frees.
+Playwright never bfcaches, upgrades to WS, or flaps, so it never
+saturates the pool. Remediation is reducing held-stream occupation
+(shorter/adaptive fetch keepalive; close the held stream on
+`pagehide`/`freeze`), not a channel-handler change.
 
 ---
 

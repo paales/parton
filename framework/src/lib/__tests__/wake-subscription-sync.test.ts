@@ -22,7 +22,6 @@ import type { PartialSnapshot } from "../partial-registry.ts"
 import {
   _assertWakeParity,
   _closeRouteWakeSubscription,
-  _escalateToLaneCarriers,
   _openRouteWakeSubscription,
   _syncRouteWakeSubscription,
   type RouteWakeSubscription,
@@ -157,36 +156,6 @@ describe("route wake subscription — sync diff", () => {
       since,
     )
     expect(_takeWakeSubscriptionPending(rws.sub)).toEqual([])
-  })
-})
-
-describe("route wake subscription — carrier escalation in the wake gate", () => {
-  it("a non-addressable child's entry carries its addressable ancestor; the ancestor's park gates decide waking", () => {
-    const visible = new Set<string>(["elsewhere"])
-    const { rws, wokeCount } = open({ visible: () => visible })
-    const route = new Map([
-      ["parent", snap(["parent-label"], { cullGated: "parent" })],
-      [
-        "child",
-        snap(["cell:line"], {
-          constraintArgs: { itemId: "X" },
-          emittedFp: undefined,
-          parentPath: ["parent"],
-        }),
-      ],
-    ])
-    _syncRouteWakeSubscription(rws, route, _currentTs())
-    // The child's update can only ride the parent's lane, and the
-    // parent is parked → delivery records silently.
-    refreshSelector("cell:line?itemId=X")
-    expect(wokeCount()).toBe(0)
-    expect([...rws.sub.pending]).toEqual(["child"])
-    // Parent flips in → the same delivery now wakes.
-    visible.add("parent")
-    refreshSelector("cell:line?itemId=X")
-    expect(wokeCount()).toBe(1)
-    // The drain maps the matched child onto its carrier.
-    expect(_escalateToLaneCarriers(rws.sub.pending, route)).toEqual(["parent"])
   })
 })
 
