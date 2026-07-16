@@ -65,14 +65,21 @@ export function CacheControls() {
         size="sm"
         variant="outline"
         onClick={() => {
-          const url = new URL(window.location.href)
-          const current = url.searchParams.get("flavor") ?? "vanilla"
-          const next = current === "vanilla" ? "chocolate" : "vanilla"
-          url.searchParams.set("flavor", next)
-          // Push the new `?flavor=`. Slow reads `flavor` from the URL
-          // via its tracked read, so its fingerprint moves and only it
-          // (plus the flavor-reading wrapper) re-renders.
-          countSettle(navigate(url.toString(), { history: "push" }))
+          // Push the new `?flavor=`. The updater already receives the
+          // current URL, so toggling reads `flavor` straight off it —
+          // no separate `new URL(window.location.href)` first. Slow
+          // reads `flavor` from the URL via its tracked read, so its
+          // fingerprint moves and only it (plus the flavor-reading
+          // wrapper) re-renders.
+          const milestones = navigate(
+            (url) => {
+              const current = url.searchParams.get("flavor") ?? "vanilla"
+              url.searchParams.set("flavor", current === "vanilla" ? "chocolate" : "vanilla")
+              return url
+            },
+            { history: "push" },
+          )
+          countSettle(milestones)
         }}
         data-testid="toggle-flavor"
       >

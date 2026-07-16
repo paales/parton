@@ -5,7 +5,7 @@ scope is independent of the window URL. Wrap a subtree in `<Frame
 name initialUrl>` to open a frame scope. Partials inside resolve
 against the frame URL — both `match` and the tracked server-hooks see
 the frame-resolved request (the framework swaps the request URL via
-the ambient frame chain). So a framed spec routes *and* keys on its
+the ambient frame chain). So a framed spec routes _and_ keys on its
 frame's URL, not the page's: `match: "/cart/open"` placed in a cart
 frame gates on the frame, exactly like a `pathname()` read tracking
 the frame's URL.
@@ -110,11 +110,11 @@ const [navigate] = useNavigation("cart").navigate()
 
 Common spinner predicates:
 
-| Predicate | Reads as |
-|---|---|
-| `committed && !finished` | "in flight, post-commit" — the classic disabled-button case. |
+| Predicate                 | Reads as                                                                |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `committed && !finished`  | "in flight, post-commit" — the classic disabled-button case.            |
 | `committed && !streaming` | "asked, no rows back yet" — clears the moment the first segment paints. |
-| `streaming && !finished` | "rows arriving" — useful for progressive-reveal spinners. |
+| `streaming && !finished`  | "rows arriving" — useful for progressive-reveal spinners.               |
 
 Fire functions:
 
@@ -131,6 +131,55 @@ Fire functions:
 `(url: URL) => URL | string`. On a frame handle every `reload()` is
 in-place: the frame re-renders against its own current URL and the
 document is untouched.
+
+### Updating a single query param
+
+The updater form is also the answer to "how do I change just one
+`?param=`" — it already hands you the CURRENT url (page or frame
+scope), so there's no separate read step. Full doc comment on
+`NavigateTarget` in `navigation-api.ts`; the shapes that come up in
+practice:
+
+```tsx
+const [navigate] = useNavigation().navigate()
+
+// Set — opening a URL-driven overlay.
+function openSearch() {
+  navigate(
+    (url) => {
+      url.searchParams.set("search", "1")
+      return url
+    },
+    { history: "push" },
+  )
+}
+
+// Delete — closing it. A named function (not an inline arrow) is
+// worth it once two call sites (e.g. a close button and an Escape
+// handler) need to drop the exact same params.
+function closeSearch(url: URL): URL {
+  url.searchParams.delete("search")
+  return url
+}
+navigate(closeSearch, { history: "push" })
+
+// Toggle / derive from the current value — no extra read, `url` IS
+// the current request.
+navigate(
+  (url) => {
+    const current = url.searchParams.get("flavor") ?? "vanilla"
+    url.searchParams.set("flavor", current === "vanilla" ? "chocolate" : "vanilla")
+    return url
+  },
+  { history: "push" },
+)
+```
+
+`history: "replace"` for an in-place refinement (search-as-you-type,
+pagination) so a rapid-fire sequence doesn't pile up history entries;
+`"push"` for a bookmark-worthy state change (opening an overlay); add
+`silent: true` for a URL-only sync with no refetch (mirroring scroll
+position into `?pages=` — see [Other commit knobs](#other-commit-knobs)).
 
 The fire function returns `NavigationMilestones` **synchronously** —
 a `{ committed, streaming, finished }` object of three promises
@@ -197,9 +246,14 @@ A search input becomes a one-liner per keystroke:
 const [navigate, progress] = useNavigation().navigate()
 
 function onChange(next: string) {
-  navigate((url) => withQuery(url, next), {
-    history: "replace",
-  }).finished.catch(ignoreAbort)
+  navigate(
+    (url) => {
+      if (next) url.searchParams.set("q", next)
+      else url.searchParams.delete("q")
+      return url
+    },
+    { history: "replace" },
+  ).finished.catch(ignoreAbort)
 }
 ```
 
@@ -221,9 +275,7 @@ shared state:
 
 ```tsx
 function DrawerControls() {
-  return (["cart", "wishlist"] as const).map((frame) => (
-    <OpenButton key={frame} frame={frame} />
-  ))
+  return (["cart", "wishlist"] as const).map((frame) => <OpenButton key={frame} frame={frame} />)
 }
 
 function OpenButton({ frame }: { frame: string }) {
@@ -269,17 +321,17 @@ signal, not a failure — `finished` flips true, `error` stays
 unsurfaced, nothing bubbles. Inline `.catch` handlers should treat
 `err.name === "AbortError"` as a no-op.
 
-When a supersede tears the in-flight RSC stream *mid-render*, React's
+When a supersede tears the in-flight RSC stream _mid-render_, React's
 Flight client may throw a stream error (`"Connection closed."`) rather
 than a clean `AbortError` — thrown while rendering the superseded
 payload, so it lands in an error boundary, not a `.catch`. The
 framework's `<NavigationErrorBoundary>` (wrapped around the rendered
-payload root by the browser bootstrap, *inside* the component that
+payload root by the browser bootstrap, _inside_ the component that
 owns the payload state) recovers from these transient tears in place —
 remounting against the superseding navigation's payload — so a fast
 click-through or back/forward never strands the app on the global
 error page. Genuine render errors still bubble to
-`<GlobalErrorBoundary>`. A tear in a *deferred* part whose server
+`<GlobalErrorBoundary>`. A tear in a _deferred_ part whose server
 render fails closes the whole payload stream; that case still surfaces
 the error page (the page genuinely failed to render) — contain it
 server-side at the failing partial.
@@ -293,17 +345,17 @@ from the client:
 - **Cells** — state-shaped. A parton resolves a cell in its body; the
   read IS the dependency, so a write wakes exactly the partons that
   read it. See [`cells.md`](./cells.md).
-- **`tag()`** — event-shaped. A parton subscribes by *reading*
+- **`tag()`** — event-shaped. A parton subscribes by _reading_
   `tag(name)` in its body; a server action's `refreshSelector(name)`
   wakes every reader.
 
 ```tsx
-export const LivePrice = parton(
-  async function LivePriceRender({ sku }: { sku: string } & RenderArgs) {
-    tag(`price?sku=${encodeURIComponent(sku)}`)   // the read IS the subscription
-    return <Price value={await quote(sku)} />
-  },
-)
+export const LivePrice = parton(async function LivePriceRender({
+  sku,
+}: { sku: string } & RenderArgs) {
+  tag(`price?sku=${encodeURIComponent(sku)}`) // the read IS the subscription
+  return <Price value={await quote(sku)} />
+})
 ```
 
 ```ts
@@ -311,11 +363,11 @@ export const LivePrice = parton(
 import { refreshSelector } from "@parton/framework"
 
 export async function bumpPrice(sku: string) {
-  refreshSelector(`price?sku=${encodeURIComponent(sku)}`)  // exactly one card
+  refreshSelector(`price?sku=${encodeURIComponent(sku)}`) // exactly one card
 }
 
 export async function bumpAllPrices() {
-  refreshSelector("price")                                 // every card
+  refreshSelector("price") // every card
 }
 ```
 
@@ -338,12 +390,12 @@ input moves the result when it flows through one of those scopes.
 
 ### Other commit knobs
 
-| Option | Effect |
-|---|---|
+| Option            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `streaming: true` | Progressive reveal — commit without `startTransition`, so Suspense fallbacks paint and Flight chunks land per-row. Default is `false` (transition-wrapped, atomic swap, no fallback flash) — good for "just swap values" UX. Purely a CLIENT commit-mode switch, read by `reload` and by a frame `navigate`; a window `navigate` always streams, since the destination's Suspense boundaries are newly introduced and paint their fallbacks before filling in. Not to be confused with the `streaming` milestone in `progress` — the option is a behavior switch, the milestone is an event marker. |
-| `silent: true` | Update the URL without firing any refetch. Ignored on frame handles (a frame navigation always re-renders the frame). `navigate`-only. |
-| `signal` | Caller-supplied `AbortSignal` — aborting before the fire completes rejects its milestones with `AbortError`; the covering statement's response is a channel delivery the supersede ordering already arbitrates. `reload`-only. |
-| `cookies` | Write client-side cookies before the refetch fires. `navigate`-only — `reload` does not accept it. See [Cookies](#cookies). |
+| `silent: true`    | Update the URL without firing any refetch. Ignored on frame handles (a frame navigation always re-renders the frame). `navigate`-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `signal`          | Caller-supplied `AbortSignal` — aborting before the fire completes rejects its milestones with `AbortError`; the covering statement's response is a channel delivery the supersede ordering already arbitrates. `reload`-only.                                                                                                                                                                                                                                                                                                                                                                      |
+| `cookies`         | Write client-side cookies before the refetch fires. `navigate`-only — `reload` does not accept it. See [Cookies](#cookies).                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ### Cookies
 

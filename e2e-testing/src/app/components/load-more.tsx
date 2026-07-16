@@ -15,18 +15,21 @@ import type { Navigate } from "@parton/framework"
  */
 const visiblePages = new Set<number>()
 
-function silentlyUpdatePages(navigate: Navigate) {
-  if (visiblePages.size === 0) return
+function silentlyUpdatePages(navigate: Navigate, currentUrl: string | null | undefined) {
+  if (visiblePages.size === 0 || currentUrl == null) return
   const maxVisible = Math.max(...visiblePages)
-  const url = new URL(window.location.href)
-  const current = Number(url.searchParams.get("pages")) || 1
+  const current = Number(new URL(currentUrl).searchParams.get("pages")) || 1
+  if (maxVisible >= current) return
 
-  if (maxVisible < current) {
-    // Scrolling up — update URL for bookmarking/refresh without
-    // triggering a refetch.
-    url.searchParams.set("pages", String(maxVisible))
-    navigate(url.toString(), { history: "replace", silent: true })
-  }
+  // Scrolling up — update URL for bookmarking/refresh without
+  // triggering a refetch.
+  navigate(
+    (url) => {
+      url.searchParams.set("pages", String(maxVisible))
+      return url
+    },
+    { history: "replace", silent: true },
+  )
 }
 
 /**
@@ -35,7 +38,8 @@ function silentlyUpdatePages(navigate: Navigate) {
  */
 export function PageSentinel({ page }: { page: number }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [navigate] = useNavigation().navigate()
+  const nav = useNavigation()
+  const [navigate] = nav.navigate()
 
   useEffect(() => {
     const el = ref.current
@@ -54,7 +58,7 @@ export function PageSentinel({ page }: { page: number }) {
       // on pageload.
       if (!visiblePages.has(page)) return
       visiblePages.delete(page)
-      silentlyUpdatePages(navigate)
+      silentlyUpdatePages(navigate, nav.currentEntry?.url)
     })
 
     observer.observe(el)
@@ -62,7 +66,7 @@ export function PageSentinel({ page }: { page: number }) {
       observer.disconnect()
       visiblePages.delete(page)
     }
-  }, [page, navigate])
+  }, [page, navigate, nav])
 
   return <div ref={ref} className="h-0" />
 }
@@ -79,7 +83,8 @@ export function PageSentinel({ page }: { page: number }) {
 export function LoadMore({ nextPage }: { nextPage: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const triggered = useRef(false)
-  const [navigate, { committed, finished }] = useNavigation().navigate()
+  const nav = useNavigation()
+  const [navigate, { committed, finished }] = nav.navigate()
   const pending = committed && !finished
 
   useEffect(() => {
@@ -97,16 +102,21 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
         // "intersecting" the viewport — IntersectionObserver checks
         // geometry, not occlusion. Auto-firing here would race with
         // the user's keystroke dispatches into the search stages.
-        if (new URL(window.location.href).searchParams.has("search")) return
+        const currentUrl = nav.currentEntry?.url
+        if (currentUrl != null && new URL(currentUrl).searchParams.has("search")) return
 
         if (entry.isIntersecting && !triggered.current) {
           triggered.current = true
-          const url = new URL(window.location.href)
-          url.searchParams.set("pages", String(nextPage))
           // Plain navigate: the moved `?pages=` flips the next page's
           // match gate (it renders) and moves the load-more sentinel's
           // tracked read; every already-loaded page fp-skips.
-          navigate(url.toString(), { history: "replace" })
+          navigate(
+            (url) => {
+              url.searchParams.set("pages", String(nextPage))
+              return url
+            },
+            { history: "replace" },
+          )
         }
       },
       { rootMargin: "200px" },
@@ -114,7 +124,7 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [nextPage, navigate])
+  }, [nextPage, navigate, nav])
 
   return (
     <div ref={ref} className="p-8 text-center">

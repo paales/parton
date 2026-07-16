@@ -5,6 +5,18 @@ import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 import { Button } from "@parton/copies/components/ui/button"
 import { Input } from "@parton/copies/components/ui/input"
 
+/**
+ * Both the header toggle's close button and the dialog's Escape /
+ * backdrop dismissal drop the same two params — a shared updater so
+ * the two call sites can't drift. Passed straight to `navigate` as
+ * the updater-function target (`(url: URL) => URL`).
+ */
+function closeSearchOverlay(url: URL): URL {
+  url.searchParams.delete("search")
+  url.searchParams.delete("q")
+  return url
+}
+
 // Static, stateless spinner — hoisted to module scope so it isn't a new
 // component identity each render (which resets state and blocks the compiler).
 const Spinner = () => (
@@ -57,14 +69,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   }
 
   function closeUrl() {
-    pageNavigate(
-      (url) => {
-        url.searchParams.delete("search")
-        url.searchParams.delete("q")
-        return url
-      },
-      { history: "push" },
-    )
+    pageNavigate(closeSearchOverlay, { history: "push" })
   }
 
   function openFrame() {
@@ -166,14 +171,7 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
     // Page scope: a plain navigate — fp-skip narrows the re-render to
     // the `?search` readers (search region + header). Frame scope: a
     // frame nav refetches the frame subtree.
-    navigate(
-      (url) => {
-        url.searchParams.delete("search")
-        url.searchParams.delete("q")
-        return url
-      },
-      { history: "push" },
-    )
+    navigate(closeSearchOverlay, { history: "push" })
   }
 
   return (
@@ -226,10 +224,7 @@ export function SearchInput({ query }: { query: string }) {
         else url.searchParams.delete("q")
         return url
       },
-      {
-        history: "replace",
-        streaming,
-      },
+      { history: "replace", streaming },
     )
     // Superseded keystroke fires aren't aborted, so this normally just
     // resolves. Keep the AbortError guard anyway: an AbortError is a

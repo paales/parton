@@ -79,6 +79,32 @@ export interface FrameNavigationHistoryEntry extends Omit<NavigationHistoryEntry
  * (resolved against the same base). Returning a cross-origin URL
  * from a frame handle throws; from the window handle it goes through
  * the browser's normal cross-origin navigation behavior.
+ *
+ * ── Updating a single query param ──────────────────────────────────
+ * The updater form is also the answer to "how do I change just one
+ * `?param=`" — it already hands you the CURRENT url, so there's no
+ * separate read step:
+ *
+ *   // Set
+ *   navigate(url => { url.searchParams.set("search", "1"); return url }, { history: "push" })
+ *
+ *   // Delete (conditionally, e.g. clearing on empty input)
+ *   navigate(url => { url.searchParams.delete("q"); return url }, { history: "replace" })
+ *
+ *   // Toggle / derive from the current value — no extra read, `url`
+ *   // IS the current request
+ *   navigate(url => {
+ *     const next = url.searchParams.get("flavor") === "vanilla" ? "chocolate" : "vanilla"
+ *     url.searchParams.set("flavor", next)
+ *     return url
+ *   }, { history: "push" })
+ *
+ * Pair with `history: "replace"` for an in-place refinement
+ * (search-as-you-type, pagination) so rapid fires don't pile up
+ * history entries, `"push"` for a bookmark-worthy state change
+ * (opening an overlay), and `FrameworkNavigateOptions.silent` for a
+ * URL-only sync with no refetch (e.g. mirroring scroll position into
+ * `?pages=`).
  */
 export type NavigateTarget = string | URL | ((current: URL) => URL | string)
 
