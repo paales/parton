@@ -21,8 +21,7 @@
  */
 
 import { localCell, getEphemeralCellStorage } from "@parton/framework"
-import { client } from "../../magento-data.ts"
-import { graphql, type ResultOf } from "../../magento-graphql.ts"
+import { client, graphql, type ResultOf } from "../../magento.ts"
 
 const CartBadgeQuery = graphql(`
   query CartBadge($cartId: String!) {

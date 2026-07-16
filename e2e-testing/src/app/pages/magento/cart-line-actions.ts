@@ -15,9 +15,9 @@
  * list or totals change — not when a single line's details do.
  */
 
-import { hydrateFragmentsFromResult, readCookie } from "@parton/framework"
-import { client } from "../../magento-data.ts"
-import { graphql } from "../../magento-graphql.ts"
+import { hydrateFragmentsFromResult } from "@parton/framework/graphql"
+import { readCookie } from "@parton/framework"
+import { client, graphql } from "../../magento.ts"
 import { cartBadgeCell } from "./cart-badge-cell.ts"
 import { cartCell, cartItemCell } from "./cart-cells.ts"
 

@@ -1,8 +1,8 @@
 "use server"
 
-import { client } from "../../magento-data.ts"
-import { graphql } from "../../magento-graphql.ts"
-import { hydrateFragmentsFromResult, readCookie, setCookie } from "@parton/framework"
+import { client, graphql } from "../../magento.ts"
+import { hydrateFragmentsFromResult } from "@parton/framework/graphql"
+import { readCookie, setCookie } from "@parton/framework"
 import { cartBadgeCell } from "./cart-badge-cell.ts"
 import { cartCell, cartItemCell } from "./cart-cells.ts"
 

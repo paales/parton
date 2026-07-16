@@ -89,22 +89,8 @@ export {
   type ValueOfShape,
 } from "./cell.ts"
 
-export {
-  gqlCell,
-  gqlCellBuilder,
-  runQuery,
-  fragmentCell,
-  hydrateFragmentsFromResult,
-  spreadSitesOf,
-  _clearFragmentCellRegistry,
-  type GqlCell,
-  type GqlCellOpts,
-  type GqlClient,
-  type FragmentCell,
-  type FragmentCellOpts,
-  type FragmentOf,
-  type RewriteSpreads,
-} from "./cell-gql.ts"
+// The GraphQL data layer (gqlCell family, `graphqlBackend`) lives at the
+// `@parton/framework/graphql` subpath — see src/graphql/index.ts.
 
 export {
   useCell,

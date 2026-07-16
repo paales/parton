@@ -18,8 +18,7 @@
  */
 
 import { parton, type RenderArgs } from "@parton/framework"
-import { client } from "../data.ts"
-import { graphql, readFragment, type FragmentOf } from "../pokeapi-graphql.ts"
+import { client, graphql, readFragment, type FragmentOf } from "../pokeapi.ts"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
 import { Badge } from "@parton/copies/components/ui/badge"
 import { buttonVariants } from "@parton/copies/components/ui/button"

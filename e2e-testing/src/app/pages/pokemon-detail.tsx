@@ -10,7 +10,7 @@
  */
 
 import { parton, notFound, tag, type RenderArgs, type ResolvedCell } from "@parton/framework"
-import type { ResultOf } from "../pokeapi-graphql.ts"
+import type { ResultOf } from "../pokeapi.ts"
 import { Frame } from "@parton/framework/lib/frame.tsx"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
 import { Badge } from "@parton/copies/components/ui/badge"

@@ -1,6 +1,6 @@
 /**
- * Pokemon cells — every PokeAPI read flows through the per-backend
- * `pokemon` constructor (`gqlCellBuilder`). The raw `graphql()` call is
+ * Pokemon cells — every PokeAPI read flows through the `pokeapi`
+ * backend (`graphqlBackend`). The raw `graphql()` call is
  * hidden: cells are built straight from query strings. Each cell's wire
  * id auto-derives from its operation name (`query PokemonHero` →
  * `pokemon-hero`). Storage caches per args; immutable data, no TTL.
@@ -10,13 +10,9 @@
  * `pokemonSearch` — placement-bound per (pattern, offset, limit).
  */
 
-import { gqlCellBuilder } from "@parton/framework"
-import { client } from "../data.ts"
-import { graphql } from "../pokeapi-graphql.ts"
+import { pokeapi } from "../pokeapi.ts"
 
-const pokemon = gqlCellBuilder({ client, graphql })
-
-export const pokemonHeroCell = pokemon.query(`#graphql
+export const pokemonHeroCell = pokeapi.query(`#graphql
   query PokemonHero($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       id
@@ -36,7 +32,7 @@ export const pokemonHeroCell = pokemon.query(`#graphql
   }
 `)
 
-export const pokemonStatsCell = pokemon.query(`#graphql
+export const pokemonStatsCell = pokeapi.query(`#graphql
   query PokemonStats($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       pokemon_v2_pokemonstats {
@@ -49,7 +45,7 @@ export const pokemonStatsCell = pokemon.query(`#graphql
   }
 `)
 
-export const pokemonSpeciesCell = pokemon.query(`#graphql
+export const pokemonSpeciesCell = pokeapi.query(`#graphql
   query PokemonSpecies($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) {
       pokemon_v2_pokemonspecy {
@@ -76,7 +72,7 @@ export const pokemonSpeciesCell = pokemon.query(`#graphql
 // Queries that spread `...PokemonListFields` get this cell's BoundCell at
 // each spread site (result → cells), so pokemon.tsx forwards each card to
 // the PokemonCard parton instead of reading a masked fragment.
-export const pokemonCardCell = pokemon.fragment(`#graphql
+export const pokemonCardCell = pokeapi.fragment(`#graphql
   fragment PokemonListFields on pokemon_v2_pokemon {
     id
     name
@@ -91,7 +87,7 @@ export const pokemonCardCell = pokemon.fragment(`#graphql
   }
 `)
 
-export const pokemonListCell = pokemon.query(
+export const pokemonListCell = pokeapi.query(
   `#graphql
     query PokemonList($limit: Int!, $offset: Int!) {
       pokemon_v2_pokemon(limit: $limit, offset: $offset, order_by: { id: asc }) {
@@ -102,7 +98,7 @@ export const pokemonListCell = pokemon.query(
   [pokemonCardCell],
 )
 
-export const pokemonSearchCell = pokemon.query(
+export const pokemonSearchCell = pokeapi.query(
   `#graphql
     query PokemonSearch($pattern: String!, $offset: Int!, $limit: Int!) {
       pokemon_v2_pokemon(

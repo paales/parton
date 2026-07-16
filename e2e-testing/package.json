@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test:e2e": "playwright test",
     "test:e2e:preview": "playwright test --config=playwright.preview.config.ts",
-    "gql:generate": "gql.tada generate-output"
+    "gql:generate": "parton gql https://beta.pokeapi.co/graphql/v1beta --name pokeapi && parton gql https://graphcommerce.vercel.app/api/graphql --name magento"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
@@ -18,9 +18,6 @@
     "@parton/cms": "workspace:*",
     "@parton/copies": "workspace:*",
     "@parton/framework": "workspace:*",
-    "graphql": "^16.13.2",
-    "graphql-config": "^5.1.6",
-    "graphql-request": "^7.4.0",
     "react": "19.3.0-canary-68631c04-20260626",
     "react-dom": "19.3.0-canary-68631c04-20260626",
     "shadcn": "^4.4.0",
@@ -36,7 +33,6 @@
     "@vitejs/plugin-react": "latest",
     "@vitejs/plugin-rsc": "patch:@vitejs/plugin-rsc@npm%3A0.5.24#~/.yarn/patches/@vitejs-plugin-rsc-npm-0.5.24-0a8431f84b.patch",
     "babel-plugin-react-compiler": "^1.0.0",
-    "gql.tada": "^1.9.2",
     "playwright": "^1.59.1",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.3",

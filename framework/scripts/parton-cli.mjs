@@ -31,7 +31,10 @@ function usage() {
   parton add <name> <origin>     Install bindings for a remote app.
   parton update <name>           Re-fetch bindings using the saved origin.
   parton remove <name>           Delete a remote binding directory.
-  parton list                    Show installed remotes.`)
+  parton list                    Show installed remotes.
+  parton gql <url> [options]     Generate a GraphQL backend's -env.d.ts.
+                                 [--name <name>] [--dir <dir>]
+                                 [--header "Key: Value"]... [--scaffold]`)
   process.exit(1)
 }
 
@@ -255,6 +258,11 @@ async function main() {
       case "list":
         await cmdList()
         break
+      case "gql": {
+        const { runGqlGenerate } = await import("../src/graphql/generate.mjs")
+        await runGqlGenerate(rest)
+        break
+      }
       default:
         usage()
     }

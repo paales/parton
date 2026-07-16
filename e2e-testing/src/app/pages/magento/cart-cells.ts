@@ -21,11 +21,7 @@
  * GraphQL mutations themselves migrate later).
  */
 
-import { gqlCellBuilder } from "@parton/framework"
-import { client } from "../../magento-data.ts"
-import { graphql } from "../../magento-graphql.ts"
-
-const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
+import { magento } from "../../magento.ts"
 
 /** Per-line fragment cell. `@_unmask` keeps the query/mutation spread
  *  sites readable (CartItemInterface is abstract). Value type inferred. */

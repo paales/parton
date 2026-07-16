@@ -8,17 +8,15 @@ fans the write back out to every parton that read it — via
 
 Three constructors today, each backed by a different storage tier:
 
-| Constructor                                                  | Storage                                                                                           | Loader                        | Use case                                                                                                              |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `localCell({...})`                                           | **Persistent** — disk-backed (`cms/data/cells.json`). Survives process restart.                   | Optional.                     | User preferences, editor toggles, form drafts. State you actually want to keep.                                       |
-| `gqlCellBuilder({client, graphql})` → `q.query(\`query …\`)` | **Ephemeral, request-scoped** — fresh in-memory storage per request, discarded on request finish. | Always (typed GraphQL query). | Upstream-loaded entity reads — cart, product details, user data.                                                      |
-| `q.fragment(\`fragment …\`, {key?})`                         | **Ephemeral, request-scoped** — same as gqlCell.                                                  | Never.                        | Identity-keyed sub-entities populated by auto-hydration (a query that composes the fragment) or value-keyed `.set()`. |
+| Constructor                                | Storage                                                                                           | Loader                        | Use case                                                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `localCell({...})`                         | **Persistent** — disk-backed (`cms/data/cells.json`). Survives process restart.                   | Optional.                     | User preferences, editor toggles, form drafts. State you actually want to keep.                                       |
+| `graphqlBackend(...).query(\`query …\`)`   | **Ephemeral, request-scoped** — fresh in-memory storage per request, discarded on request finish. | Always (typed GraphQL query). | Upstream-loaded entity reads — cart, product details, user data.                                                      |
+| `backend.fragment(\`fragment …\`, {key?})` | **Ephemeral, request-scoped** — same as the query cell.                                           | Never.                        | Identity-keyed sub-entities populated by auto-hydration (a query that composes the fragment) or value-keyed `.set()`. |
 
-`gqlCellBuilder` mirrors the gql.tada `graphql()` tag — bind the client +
-tag once, then `q.query(\`…\`)`/`q.fragment(\`…\`)`build cells from
-strings (the raw`graphql()`call stays hidden).`gqlCell(client, doc)` is
-the lower-level doc-mode form. All auto-derive the wire id from the
-operation/fragment name.
+`graphqlBackend()` (from `@parton/framework/graphql`) binds the client +
+gql.tada tag once, then `backend.query(\`…\`)`/`backend.fragment(\`…\`)`build cells from strings (the raw`graphql()`call stays hidden).`gqlCell(client, doc)` is the lower-level doc-mode form. All auto-derive
+the wire id from the operation/fragment name.
 
 All three implement the same `Cell<T>` interface — Render code
 doesn't know which backend produced the value.
@@ -252,51 +250,71 @@ const draft = await localCell("draft", { shape: "string", initial: "" })
 Outside a parton's Render the inline form throws — a parton-scoped
 cell needs an owning parton for its id.
 
-## Surface — `gqlCellBuilder`
+## Surface — `graphqlBackend`
 
-`gqlCellBuilder` is the per-backend constructor — the gqlCell analogue
-of the `graphql()` tag. Bind the client + tag once (plus an optional id
-`prefix`); it returns `{ query, fragment }`, which build cells straight
-from strings — the raw `graphql()` call is hidden at every site.
+`graphqlBackend` (from `@parton/framework/graphql`) is the per-backend
+constructor. One call binds the client, the gql.tada `graphql()` tag, and
+the cell builders — fully typed from the schema. It returns `{ query,
+fragment, graphql, client, runQuery, withClient }`: `query` / `fragment`
+build cells straight from strings (the raw `graphql()` call hidden),
+`graphql` + `client` handle mutations and direct reads.
 
 ```ts
-import { gqlCellBuilder } from "@parton/framework"
-import { client } from "../data.ts"
-import { graphql } from "../pokeapi-graphql.ts"
+import { graphqlBackend } from "@parton/framework/graphql"
+import type { introspection } from "./pokeapi-env.d.ts"
 
-const pokemon = gqlCellBuilder({ client, graphql })
+export const pokeapi = graphqlBackend<{
+  introspection: introspection
+  scalars: { jsonb: unknown }
+}>({ endpoint: "https://beta.pokeapi.co/graphql/v1beta" })
 
-export const heroCell = pokemon.query(`
+export const heroCell = pokeapi.query(`
   query PokemonHero($id: Int!) {
     pokemon_v2_pokemon(where: { id: { _eq: $id } }, limit: 1) { id name }
   }
 `) // wire id auto-derives → "pokemon-hero"
 
-// Namespaced ids for a second backend:
-const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
+// A second backend — `prefix` namespaces its cell ids:
+const magento = graphqlBackend<{ introspection: MagentoIntro; scalars: {} }>({
+  endpoint: MAGENTO_ENDPOINT,
+  prefix: "magento",
+})
 export const productsCell = magento.query(`query Products($pageSize: Int!) {…}`)
 // wire id → "magento.products"
 ```
+
+`graphqlBackend<Setup>(config)` mirrors gql.tada's
+`initGraphQLTada<Setup>()` — `Setup` is `{ introspection; scalars }`, the
+`introspection` imported from the generated `-env.d.ts`. `config` takes
+`{ endpoint }` (client built for you) or `{ client }` (a wrapped/custom
+one). The introspection file comes from `parton gql <url> --name <name>`
+— see [`framework/src/graphql/README.md`](../../framework/src/graphql/README.md).
 
 The **wire id auto-derives from the operation name** (kebab-cased,
 optionally `prefix`-namespaced); pass `{ id }` to override, or name the
 operation (anonymous operations throw). `.with(args)` is typed from the
 query's variables, and the result type flows to `ResolvedCell<T>`.
 
-When you already hold a typed document (e.g. to also export its
-`ResultOf` type), use the doc-mode primitive `gqlCell(client, doc, {id?,
-prefix?})` — same auto-id + typed handle.
+`gqlCellBuilder({ client, graphql, prefix? })` is the lower-level builder
+(bind an already-constructed client + tag); `graphqlBackend` is the
+one-call form over it. When you already hold a typed document, the
+doc-mode primitive `gqlCell(client, doc, { id?, prefix? })` builds a cell
+with the same auto-id + typed handle. Both are re-exported from
+`@parton/framework/graphql`.
 
-## Surface — `q.fragment`
+## Surface — `backend.fragment`
 
-`q.fragment(source, { key })` builds a fragment cell from a fragment
-string (the `graphql()` call is hidden). It's typed by — and **keyed
-off** — the fragment: the value type is inferred, the wire id derives
-from the fragment name, and the framework matches the fragment's spreads
-in queries for **auto-hydration**.
+`backend.fragment(source, { key })` builds a fragment cell from a
+fragment string (the `graphql()` call is hidden). It's typed by — and
+**keyed off** — the fragment: the value type is inferred, the wire id
+derives from the fragment name, and the framework matches the fragment's
+spreads in queries for **auto-hydration**.
 
 ```ts
-const magento = gqlCellBuilder({ client, graphql, prefix: "magento" })
+const magento = graphqlBackend<{ introspection; scalars: {} }>({
+  endpoint: MAGENTO_ENDPOINT,
+  prefix: "magento",
+})
 
 export const cartItemCell = magento.fragment(
   `fragment CartLine on CartItemInterface { uid quantity product { sku } }`,

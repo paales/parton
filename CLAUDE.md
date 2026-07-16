@@ -3,8 +3,8 @@
 A React Server Components framework for commerce-shaped UIs:
 **server-owned state** — `useState` on the server — with Flight as the
 communication layer, and independently re-renderable, addressable,
-cacheable subtrees as the unit. Research project — the bet is *dynamic
-range*: one primitive that stretches from the leanest, mobile-snappy
+cacheable subtrees as the unit. Research project — the bet is _dynamic
+range_: one primitive that stretches from the leanest, mobile-snappy
 storefront to a realtime streaming dashboard, so a commerce stack never
 has to bifurcate (Liquid + a React checkout, Luma/Hyvä + yet another
 React app) the way it must today. GraphQL and disk/local storage are
@@ -25,14 +25,14 @@ pipeline:
 
 1. **Match gates existence.** `match` evaluates the request — URL
    patterns and per-value predicates over `searchParams` / `cookies` /
-   `headers`. A miss *parks* the client's cached variant (kept hidden,
+   `headers`. A miss _parks_ the client's cached variant (kept hidden,
    restored on re-match); named params from string patterns become the
    variant's identity (matchKey). The `cull` option is the second
    existence gate — viewport-driven: a culled instance's body never
    runs; the wire carries its client-rendered `skeleton` + props, the
    fp folds the RESOLVED visibility (`measurement ?? seed(props)`).
    Framework transport params (`TRANSPORT_PARAMS`: partials, live,
-   streaming, visible, __frame, __frameUrl, __cullFlip, __force) are
+   streaming, visible, **frame, **frameUrl, **cullFlip, **force) are
    stripped before evaluation — match never sees them. (The fp-skip
    manifest is never a URL param — it rides the `x-parton-cached`
    header, self-stripping since match drops all `x-parton-*`.)
@@ -72,8 +72,8 @@ The canonical shapes:
 ```tsx
 export const SearchResults = parton(
   async function SearchResultsRender(_: RenderArgs) {
-    const q = searchParam("q") ?? ""                    // tracked read → fp
-    const results = await searchCell.resolve({ q })     // cell dep → re-renders on write
+    const q = searchParam("q") ?? "" // tracked read → fp
+    const results = await searchCell.resolve({ q }) // cell dep → re-renders on write
     return <List items={results.value} />
   },
   {
@@ -135,12 +135,12 @@ export async function saveProfile(args: { name: string; bio: string }) {
 
 ## Where to read what
 
-| Folder | For |
-|---|---|
-| [`docs/reference/`](./docs/reference/) | Framework contracts. `intro` · `partial` · `block` · `cells` · `frames-navigation` · `remote-frame` · `cache` · `cms` · `prior-art`. Read these to USE the framework. |
+| Folder                                 | For                                                                                                                                                                                                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docs/reference/`](./docs/reference/) | Framework contracts. `intro` · `partial` · `block` · `cells` · `frames-navigation` · `remote-frame` · `cache` · `cms` · `prior-art`. Read these to USE the framework.                                                                             |
 | [`docs/internals/`](./docs/internals/) | Mechanisms. `testing` · `render-pipeline` · `streaming` · `channel` · `cache-internals` · `cell-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `server-context` · `flight-gotchas`. Read these to MODIFY the framework. |
-| [`docs/notes/`](./docs/notes/) | Active research: backlog (`IDEAS.md`), live design docs for unshipped work, framing notes. |
-| [`docs/archive/`](./docs/archive/) | Superseded designs and debugging logs. Reference only. |
+| [`docs/notes/`](./docs/notes/)         | Active research: backlog (`IDEAS.md`), live design docs for unshipped work, framing notes.                                                                                                                                                        |
+| [`docs/archive/`](./docs/archive/)     | Superseded designs and debugging logs. Reference only.                                                                                                                                                                                            |
 
 Fastest orientation path for a new task: this file → the
 `docs/reference/` page for the surface you're touching → the matching
@@ -151,14 +151,14 @@ Fastest orientation path for a new task: this file → the
 Yarn workspace monorepo. Cross-package imports go through workspace
 names (`@parton/<pkg>`), never relative paths.
 
-| Path | Role |
-|---|---|
-| `framework/` (`@parton/framework`) | The runtime. `framework/index.ts` is the public barrel. `src/lib/` — partials primitives: `partial.tsx` (`parton` + `block` wrapper pipeline), `match.ts` (the compiled match gate), `cell.ts` (cells + `atomic()`), `frame.tsx`, `remote-frame.tsx`, the client merge layer (`partial-client.tsx` boundary + `PartialsClient`; state `partial-client-state.ts`, tree walks `partial-cache.ts`, template `partial-template.tsx`, refetch `refetch.ts`, frame handles `frame-client.tsx`, hooks `use-navigation.tsx`), `partial-registry.ts` (snapshots + route buckets), `server-hooks.ts` (tracked reads + wake hints), `server-context.ts`, `fp-trailer.ts`, `cache.tsx`, `flight-rewrite.ts` / `flight-graph.ts` / `snapshot-trailer.ts` (wire transforms). `src/runtime/` — RSC plumbing: `context.ts` (request ALS), `cell-actions.ts` (write endpoints), `invalidation-registry.ts`, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`. `src/entry/` — the app entry factories (`createRscHandler`, `renderHTML`, `bootBrowser`) that thin app `entry.{rsc,ssr,browser}.tsx` files delegate to. `src/test/` — in-process Flight harness (`rsc-server.ts`). Module map: [`docs/internals/render-pipeline.md`](./docs/internals/render-pipeline.md). |
-| `cms/` (`@parton/cms`) | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/`). Content store as data: `cms/data/content.json` (committed) + `draft.json` (gitignored). Public barrel exports `EditorShell`. |
-| `copies/` (`@parton/copies`) | Vendored shadcn UI primitives (`src/components/ui/`), ai-elements, shared hooks, the `cn` helper. `components.json` lives here — where new shadcn components are added. |
-| `e2e-testing/` (`@parton/e2e-testing`) | Example app (PokeAPI + GraphCommerce Magento backends) + Playwright specs in `e2e/`. `src/entry.{rsc,ssr,browser}.tsx` are thin delegations to `@parton/framework/entry/*`. `vite.config.ts` owns dev/build (its `environments.*.build.rollupOptions.input` map is what wires the three entries together). |
-| `e2e-magento/` (`@parton/e2e-magento`) | Companion app on port 5181 publishing embeddable PAGES for cross-origin `<RemoteFrame>` (pages are the unit of federation; there is no special remote route). Run alongside via `yarn dev:magento`. |
-| `website/` (`@parton/website`) | The parton demo site (port 5183, `yarn dev:website`) — a Factorio-inspired infinite tile world: a quadtree of cullable quad-tile partons over 512px chunk partons, so the document is O(viewport + log world); the framework's story told in-world. |
+| Path                                   | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `framework/` (`@parton/framework`)     | The runtime. `framework/index.ts` is the public barrel. `src/lib/` — partials primitives: `partial.tsx` (`parton` + `block` wrapper pipeline), `match.ts` (the compiled match gate), `cell.ts` (cells + `atomic()`), `frame.tsx`, `remote-frame.tsx`, the client merge layer (`partial-client.tsx` boundary + `PartialsClient`; state `partial-client-state.ts`, tree walks `partial-cache.ts`, template `partial-template.tsx`, refetch `refetch.ts`, frame handles `frame-client.tsx`, hooks `use-navigation.tsx`), `partial-registry.ts` (snapshots + route buckets), `server-hooks.ts` (tracked reads + wake hints), `server-context.ts`, `fp-trailer.ts`, `cache.tsx`, `flight-rewrite.ts` / `flight-graph.ts` / `snapshot-trailer.ts` (wire transforms). `src/runtime/` — RSC plumbing: `context.ts` (request ALS), `cell-actions.ts` (write endpoints), `invalidation-registry.ts`, `cms-{runtime,storage,prerender}.ts`, `navigation-api.ts`, `router.ts`, `session.ts`. `src/entry/` — the app entry factories (`createRscHandler`, `renderHTML`, `bootBrowser`) that thin app `entry.{rsc,ssr,browser}.tsx` files delegate to. `src/test/` — in-process Flight harness (`rsc-server.ts`). Module map: [`docs/internals/render-pipeline.md`](./docs/internals/render-pipeline.md). |
+| `cms/` (`@parton/cms`)                 | CMS editor UI — three-pane shell (`src/editor/shell.tsx`, `actions.ts`, `components/`). Content store as data: `cms/data/content.json` (committed) + `draft.json` (gitignored). Public barrel exports `EditorShell`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `copies/` (`@parton/copies`)           | Vendored shadcn UI primitives (`src/components/ui/`), ai-elements, shared hooks, the `cn` helper. `components.json` lives here — where new shadcn components are added.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `e2e-testing/` (`@parton/e2e-testing`) | Example app (PokeAPI + GraphCommerce Magento backends) + Playwright specs in `e2e/`. `src/entry.{rsc,ssr,browser}.tsx` are thin delegations to `@parton/framework/entry/*`. `vite.config.ts` owns dev/build (its `environments.*.build.rollupOptions.input` map is what wires the three entries together).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `e2e-magento/` (`@parton/e2e-magento`) | Companion app on port 5181 publishing embeddable PAGES for cross-origin `<RemoteFrame>` (pages are the unit of federation; there is no special remote route). Run alongside via `yarn dev:magento`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `website/` (`@parton/website`)         | The parton demo site (port 5183, `yarn dev:website`) — a Factorio-inspired infinite tile world: a quadtree of cullable quad-tile partons over 512px chunk partons, so the document is O(viewport + log world); the framework's story told in-world.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Load-bearing code: `framework/src/`, `cms/src/`, `copies/src/`,
 `e2e-testing/src/`. Treat the rest as ignorable.
@@ -304,24 +304,46 @@ Operational notes that save hours:
 
 ## Data layer
 
-GraphQL via `graphql-request` + gql.tada. One `graphql()` helper per
-backend (per schema); queries are tagged strings with end-to-end type
-inference — never pass manual type generics to `client.request`.
+GraphQL lives under the framework at `@parton/framework/graphql` —
+gql.tada + graphql-request are framework dependencies; an app never adds
+them. One `graphqlBackend()` call per backend (per schema) binds the
+client, the gql.tada tag, and the cell constructors, fully typed
+end-to-end. Queries are tagged strings — never pass manual type generics
+to `client.request`.
 
 ```ts
-// e2e-testing/src/app/magento-graphql.ts
-export const graphql = initGraphQLTada<{ introspection: introspection; scalars: { ... } }>()
-const CartQuery = graphql(`query Cart($cartId: String!) { cart(cart_id: $cartId) { total_quantity } }`)
-const data = await client.request(CartQuery, { cartId })   // typed end-to-end
+// e2e-testing/src/app/magento.ts
+import { graphqlBackend } from "@parton/framework/graphql"
+import type { introspection } from "./magento-env.d.ts"
+
+export const magento = graphqlBackend<{
+  introspection: introspection
+  scalars: { DateTime: string; Date: string }
+}>({ endpoint: MAGENTO_ENDPOINT, prefix: "magento" })
+
+export const { graphql, client } = magento
+const CartQuery = graphql(`
+  query Cart($cartId: String!) {
+    cart(cart_id: $cartId) {
+      total_quantity
+    }
+  }
+`)
+const data = await client.request(CartQuery, { cartId }) // typed end-to-end
 ```
 
-- One `graphql()` helper per backend — don't mix schemas in a document.
-- Define fragments with `graphql()` and pass them to queries that use them.
-- Prefer module-scope `const MyQuery = graphql(\`...\`)` over inlining.
+- The introspection `-env.d.ts` is generated by `parton gql <url> --name
+<name>` (a framework bin — the app needs no gql.tada dep). The full
+  zero-to-backend recipe is [`framework/src/graphql/README.md`](./framework/src/graphql/README.md).
+- One backend per schema — don't mix schemas in a document. `prefix`
+  namespaces cell wire ids; `backend.query()` / `backend.fragment()` build
+  cells (raw `graphql()` hidden); `graphql` + `client` handle mutations.
+- Define fragments with `backend.fragment()`; compose them into queries by
+  passing the CELL. Prefer module-scope `const MyQuery = graphql(\`...\`)`.
 
-| API | Endpoint | For |
-|---|---|---|
-| PokeAPI | `https://beta.pokeapi.co/graphql/v1beta` | Primary example (Hasura) |
+| API           | Endpoint                                       | For                             |
+| ------------- | ---------------------------------------------- | ------------------------------- |
+| PokeAPI       | `https://beta.pokeapi.co/graphql/v1beta`       | Primary example (Hasura)        |
 | GraphCommerce | `https://graphcommerce.vercel.app/api/graphql` | Magento 2 (mutations, `@defer`) |
 
 ## Tooling — `mcp-refactor-typescript`
@@ -332,12 +354,12 @@ crossing file boundaries — they update imports, dynamic imports, JSDoc
 refs, and type-only imports that hand edits miss. All support
 `preview: true`.
 
-| Tool | Use for |
-|---|---|
-| `file_operations` | `rename_file`, `move_file`, `batch_move_files` — instead of `mv` for `.ts`/`.tsx`. |
-| `refactoring` | `rename` (symbol-wide), `extract_function`, `extract_constant`, `extract_variable`, `move_to_file`, `infer_return_type`. |
-| `workspace` | `refactor_module`, `cleanup_codebase` (⚠️ deletes files — always `preview: true` first), `restart_tsserver`. **Skip `find_references`** — it times out; use `refactoring.rename` with `preview: true` for blast-radius checks instead. |
-| `code_quality` | `fix_all`, `organize_imports`, `remove_unused` per file. Run before commits after significant edits. |
+| Tool              | Use for                                                                                                                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file_operations` | `rename_file`, `move_file`, `batch_move_files` — instead of `mv` for `.ts`/`.tsx`.                                                                                                                                                     |
+| `refactoring`     | `rename` (symbol-wide), `extract_function`, `extract_constant`, `extract_variable`, `move_to_file`, `infer_return_type`.                                                                                                               |
+| `workspace`       | `refactor_module`, `cleanup_codebase` (⚠️ deletes files — always `preview: true` first), `restart_tsserver`. **Skip `find_references`** — it times out; use `refactoring.rename` with `preview: true` for blast-radius checks instead. |
+| `code_quality`    | `fix_all`, `organize_imports`, `remove_unused` per file. Run before commits after significant edits.                                                                                                                                   |
 
 ## Working rules
 
@@ -352,7 +374,7 @@ latest state only, no progression.)
 ### No heuristics
 
 Solve a problem with the real signal, never a proxy that's merely
-*usually* right. A heuristic infers intent from a coincidence —
+_usually_ right. A heuristic infers intent from a coincidence —
 matching a pathname to guess "same page", a timeout to guess
 "settled", a string match to guess "benign abort". It works until the
 coincidence breaks, and it bakes in a wrong mental model. When the
