@@ -601,8 +601,8 @@ The two data points:
 
 - **website** (`@parton/website`) — the lean demo world.
 - **e2e-testing** (`@parton/e2e-testing`) — the kitchen-sink app (the chat
-  overlay pulls shiki's full grammar set + mermaid/cytoscape/katex, all
-  code-split).
+  overlay and docs pull a curated shiki grammar set + mermaid/cytoscape/katex,
+  all code-split).
 
 ## The lever — Rollup-compatible bundle metadata (Rolldown honors it)
 
@@ -639,9 +639,9 @@ totals (the tracer sizes only emitted `.js`/`.css`/font assets).
 
 The headline is **initial JS gzip** — the bytes that block first paint.
 `total` JS matters for the website (its total ≈ its initial); for
-e2e-testing the total is ~12 MB of code-split grammars + mermaid, all lazy,
-so its total tracks grammar-registry churn, not first-load cost — read its
-`initial` instead.
+e2e-testing the total is ~5 MB of code-split mermaid/cytoscape/katex plus the
+curated shiki grammars, all lazy, so its total tracks that lazy diagram/
+highlight weight, not first-load cost — read its `initial` instead.
 
 ## The JSON ledger (regression substrate)
 

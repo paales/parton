@@ -1,8 +1,9 @@
 import type { AnchorHTMLAttributes } from "react"
 import { Streamdown, defaultRemarkPlugins } from "streamdown"
-import { code } from "@streamdown/code"
 import { math } from "@streamdown/math"
 import { mermaid } from "@streamdown/mermaid"
+
+import { code } from "./streamdown-code.ts"
 
 import { cn } from "@parton/copies/lib/utils"
 

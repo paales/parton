@@ -1,6 +1,6 @@
 {
-  "sha": "be20eb1",
-  "date": "2026-07-16T19:52:09.150Z",
+  "sha": "308d188",
+  "date": "2026-07-16T21:20:15.712Z",
   "node": "v24.11.1",
   "vite": "8.1.0",
   "rolldown": "1.1.3",
@@ -389,22 +389,22 @@
     },
     "e2e-testing": {
       "totalJs": {
-        "raw": 13465080,
-        "gzip": 2932234,
-        "brotli": 2422091,
-        "chunks": 392
+        "raw": 5033333,
+        "gzip": 1272738,
+        "brotli": 1052655,
+        "chunks": 91
       },
       "initialJs": {
         "raw": 316957,
-        "gzip": 96613,
-        "brotli": 82877,
+        "gzip": 96614,
+        "brotli": 82891,
         "chunks": 2
       },
       "lazyJs": {
-        "raw": 13148123,
-        "gzip": 2835621,
-        "brotli": 2339214,
-        "chunks": 390
+        "raw": 4716376,
+        "gzip": 1176124,
+        "brotli": 969764,
+        "chunks": 89
       },
       "css": {
         "raw": 235205,
@@ -415,30 +415,12 @@
         "raw": 1434076,
         "files": 74
       },
-      "entry": "assets/index-Dy7iN1Co.js",
+      "entry": "assets/index-DpwPKqgH.js",
       "topChunks": [
         {
-          "file": "assets/emacs-lisp-C9PiwqqW.js",
-          "raw": 779847,
-          "gzip": 195962,
-          "load": "lazy"
-        },
-        {
-          "file": "assets/cpp-D-PYxrPR.js",
-          "raw": 626137,
-          "gzip": 43884,
-          "load": "lazy"
-        },
-        {
-          "file": "assets/wasm-BnjxR4X6.js",
-          "raw": 622325,
-          "gzip": 230136,
-          "load": "lazy"
-        },
-        {
-          "file": "assets/markdown-impl-DThfdTQb.js",
-          "raw": 490667,
-          "gzip": 151237,
+          "file": "assets/markdown-impl-BFkubZS9.js",
+          "raw": 1418718,
+          "gzip": 242709,
           "load": "lazy"
         },
         {
@@ -448,7 +430,7 @@
           "load": "lazy"
         },
         {
-          "file": "assets/chunk-BO2N2NFS-DM54d4Dn.js",
+          "file": "assets/chunk-BO2N2NFS-Dqyl4KF9.js",
           "raw": 448561,
           "gzip": 134701,
           "load": "lazy"
@@ -460,75 +442,85 @@
           "load": "lazy"
         },
         {
-          "file": "assets/index-Dy7iN1Co.js",
+          "file": "assets/index-DpwPKqgH.js",
           "raw": 316021,
-          "gzip": 96090,
+          "gzip": 96091,
           "load": "initial"
         },
         {
-          "file": "assets/wolfram-DLL8P-h_.js",
-          "raw": 262384,
-          "gzip": 77051,
-          "load": "lazy"
-        },
-        {
-          "file": "assets/chunk-ICPOFSXX-CvWMJTzf.js",
+          "file": "assets/chunk-ICPOFSXX-sfqBO8Fd.js",
           "raw": 217091,
-          "gzip": 31565,
+          "gzip": 31561,
           "load": "lazy"
         },
         {
-          "file": "assets/vue-vine-C3waRCf0.js",
-          "raw": 190058,
-          "gzip": 17619,
+          "file": "assets/entry.rsc-CD5IgC1H.js",
+          "raw": 154790,
+          "gzip": 48359,
           "load": "lazy"
         },
         {
-          "file": "assets/angular-ts-CMYap2MI.js",
-          "raw": 183731,
-          "gzip": 16238,
+          "file": "assets/architectureDiagram-Q4EWVU46-DvApRWj4.js",
+          "raw": 146788,
+          "gzip": 39812,
           "load": "lazy"
         },
         {
-          "file": "assets/typescript-DN8a22JG.js",
-          "raw": 181146,
-          "gzip": 15750,
+          "file": "assets/sequenceDiagram-FGHM5R23-CE2BWBQK.js",
+          "raw": 115512,
+          "gzip": 30155,
           "load": "lazy"
         },
         {
-          "file": "assets/jsx-DlZ9KC_R.js",
-          "raw": 177858,
-          "gzip": 16285,
+          "file": "assets/chunk-5FUZZQ4R-rEfjE1fv.js",
+          "raw": 97914,
+          "gzip": 23719,
           "load": "lazy"
         },
         {
-          "file": "assets/tsx-xu3XYmnx.js",
-          "raw": 175602,
-          "gzip": 16188,
+          "file": "assets/cose-bilkent-S5V4N54A-O3Cp07ND.js",
+          "raw": 81407,
+          "gzip": 21292,
+          "load": "lazy"
+        },
+        {
+          "file": "assets/blockDiagram-DXYQGD6D-C2zLL82E.js",
+          "raw": 69876,
+          "gzip": 19497,
+          "load": "lazy"
+        },
+        {
+          "file": "assets/c4Diagram-AHTNJAMY-BpnXS5sm.js",
+          "raw": 69170,
+          "gzip": 19143,
+          "load": "lazy"
+        },
+        {
+          "file": "assets/ganttDiagram-T4ZO3ILL-C3Hv9g2p.js",
+          "raw": 69155,
+          "gzip": 22440,
+          "load": "lazy"
+        },
+        {
+          "file": "assets/flowDiagram-DWJPFMVM-2EsIvW2p.js",
+          "raw": 60229,
+          "gzip": 19157,
           "load": "lazy"
         }
       ],
       "groups": [
         {
           "group": "node_modules",
-          "raw": 13086111,
+          "raw": 4652055,
           "initialRaw": 348,
           "subs": [
             {
-              "sub": "@shikijs/langs",
-              "raw": 7425414
-            },
-            {
-              "sub": "@shikijs/themes",
-              "raw": 1311967
-            },
-            {
               "sub": "mermaid",
-              "raw": 1237856
+              "raw": 1246127
             },
             {
-              "sub": "@shikijs/engine-oniguruma",
-              "raw": 630617
+              "sub": "@shikijs/langs",
+              "raw": 786713
             },
             {
               "sub": "cytoscape",
@@ -536,7 +528,7 @@
             },
             {
               "sub": "katex",
-              "raw": 260076
+              "raw": 351669
             },
             {
               "sub": "langium",
@@ -561,6 +553,14 @@
             {
               "sub": "cose-base",
               "raw": 68999
+            },
+            {
+              "sub": "marked",
+              "raw": 65154
+            },
+            {
+              "sub": "@shikijs/vscode-textmate",
+              "raw": 63313
             }
           ]
         },
@@ -585,7 +585,7 @@
         },
         {
           "group": "framework",
-          "raw": 65017,
+          "raw": 65012,
           "initialRaw": 58571,
           "subs": [
             {
@@ -626,15 +626,15 @@
             },
             {
               "sub": "lib/embed-interactive.tsx",
-              "raw": 1894
+              "raw": 1892
             },
             {
               "sub": "lib/cell-client.tsx",
-              "raw": 1849
+              "raw": 1848
             },
             {
               "sub": "lib/partial-error-boundary.tsx",
-              "raw": 1303
+              "raw": 1302
             },
             {
               "sub": "runtime/error-boundary.tsx",
@@ -712,44 +712,44 @@
         },
         {
           "group": "app",
-          "raw": 31612,
+          "raw": 31620,
           "initialRaw": 30,
           "subs": [
             {
               "sub": "app/components/forms-demo-form.tsx",
-              "raw": 4275
+              "raw": 4272
             },
             {
               "sub": "app/components/streaming-demo-card-form.tsx",
-              "raw": 3311
+              "raw": 3308
             },
             {
               "sub": "app/components/search.tsx",
-              "raw": 3079
+              "raw": 3053
             },
             {
               "sub": "app/chat/chat-controls.tsx",
-              "raw": 1736
+              "raw": 1735
             },
             {
               "sub": "app/components/stacked-drawer.tsx",
-              "raw": 1629
+              "raw": 1628
             },
             {
               "sub": "app/components/cursor-layer.tsx",
-              "raw": 1531
+              "raw": 1530
             },
             {
               "sub": "app/components/guarded-note-form.tsx",
-              "raw": 1342
+              "raw": 1341
             },
             {
               "sub": "app/components/load-more.tsx",
-              "raw": 1176
+              "raw": 1243
             },
             {
               "sub": "app/components/cache-controls.tsx",
-              "raw": 1019
+              "raw": 1008
             },
             {
               "sub": "app/pages/streaming-demo-card-shared.ts",
@@ -761,15 +761,15 @@
             },
             {
               "sub": "app/components/docs-sidebar.tsx",
-              "raw": 874
+              "raw": 873
             },
             {
               "sub": "app/components/page-url-sync.tsx",
-              "raw": 802
+              "raw": 801
             },
             {
               "sub": "app/components/lanes-demo-button.tsx",
-              "raw": 776
+              "raw": 775
             },
             {
               "sub": "app/components/defer-demo-controls.tsx",
@@ -781,7 +781,7 @@
             },
             {
               "sub": "app/pages/magento/cart-badge.tsx",
-              "raw": 565
+              "raw": 564
             },
             {
               "sub": "app/components/partial-controls.tsx",
@@ -805,7 +805,7 @@
             },
             {
               "sub": "app/components/streaming-demo-buttons.tsx",
-              "raw": 382
+              "raw": 381
             },
             {
               "sub": "app/components/checkout-step-nav.tsx",
@@ -821,7 +821,7 @@
             },
             {
               "sub": "app/components/remote-refresh-button.tsx",
-              "raw": 282
+              "raw": 281
             },
             {
               "sub": "app/components/tag-demo-controls.tsx",
@@ -906,24 +906,24 @@
         },
         {
           "group": "cms",
-          "raw": 12925,
+          "raw": 12915,
           "initialRaw": 0,
           "subs": [
             {
               "sub": "editor/components/icon.tsx",
-              "raw": 4424
+              "raw": 4421
             },
             {
               "sub": "editor/components/add-block.tsx",
-              "raw": 4174
+              "raw": 4171
             },
             {
               "sub": "editor/components/page-navigator.tsx",
-              "raw": 1938
+              "raw": 1936
             },
             {
               "sub": "editor/components/status-pill.tsx",
-              "raw": 1003
+              "raw": 1002
             },
             {
               "sub": "editor/components/editor-open-nav-link.tsx",
@@ -935,7 +935,7 @@
             },
             {
               "sub": "editor/components/tree-link.tsx",
-              "raw": 302
+              "raw": 301
             },
             {
               "sub": "editor/components/session-toggle.tsx",
@@ -949,28 +949,32 @@
         },
         {
           "group": "copies",
-          "raw": 8803,
+          "raw": 11121,
           "initialRaw": 0,
           "subs": [
             {
               "sub": "components/ai-elements/file-tree.tsx",
-              "raw": 2986
+              "raw": 2984
+            },
+            {
+              "sub": "components/ui/streamdown-code.ts",
+              "raw": 2010
             },
             {
               "sub": "components/ui/drawer.tsx",
-              "raw": 1767
+              "raw": 1766
             },
             {
               "sub": "components/ui/button.tsx",
-              "raw": 1413
+              "raw": 1412
             },
             {
               "sub": "components/ui/markdown-impl.tsx",
-              "raw": 894
+              "raw": 1209
             },
             {
               "sub": "components/ui/alert.tsx",
-              "raw": 609
+              "raw": 608
             },
             {
               "sub": "components/ui/input.tsx",
@@ -978,7 +982,7 @@
             },
             {
               "sub": "components/ui/collapsible.tsx",
-              "raw": 285
+              "raw": 284
             },
             {
               "sub": "components/ui/markdown.tsx",
@@ -996,7 +1000,7 @@
         },
         {
           "group": "other",
-          "raw": 6255,
+          "raw": 6253,
           "initialRaw": 4920,
           "subs": [
             {
@@ -1005,7 +1009,7 @@
             },
             {
               "sub": "virtual:vite-rsc/client-references/group/facade:src/entry.rsc.tsx",
-              "raw": 1334
+              "raw": 1333
             },
             {
               "sub": "rolldown/runtime.js",
@@ -1057,15 +1061,15 @@
         },
         {
           "sub": "lib/embed-interactive.tsx",
-          "raw": 1894
+          "raw": 1892
         },
         {
           "sub": "lib/cell-client.tsx",
-          "raw": 1849
+          "raw": 1848
         },
         {
           "sub": "lib/partial-error-boundary.tsx",
-          "raw": 1303
+          "raw": 1302
         },
         {
           "sub": "runtime/error-boundary.tsx",
