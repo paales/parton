@@ -13,6 +13,21 @@ keeping for context).
 
 Confirmed bugs and debt awaiting a lane — measured, not yet fixed.
 
+### Warm-tick bench ~2× slower since every parton fingerprints
+
+CI evidence (same runner class, same workflow): the Server warm-tick
+bench job finished in 7m32s at `6cd2da8` and times out at 15m on
+`be20eb1` — the harness's duplicate-id crash was fixed in between, so
+the timeout is pure runtime growth. The window contains the two
+commits that added per-parton per-render work: the placement fold
+(`0adcf92`, a hash per auto-id placement) and the selector deletion
+(`2f332d1`, every bare parton now runs the full fp/registry pipeline
+it used to skip). Needs a quiet-machine profile of the warm-tick hot
+path before deciding: optimize (memoize fold inputs? cheaper fp
+source concat?) vs re-budget the bench for the new model's honest
+cost. The bench is the CPU canary — do not raise its timeout without
+the profile saying the cost is legitimate.
+
 ### ResolvedCell into a client component from a matchless parton hangs
 
 Passing a ResolvedCell (an in-body `localCell(...)` result) as a prop
