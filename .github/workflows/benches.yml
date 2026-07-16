@@ -28,8 +28,14 @@ jobs:
       # are machine-independent. The perf numbers are written to the JSON
       # artifact for regression tracking, never asserted against a
       # wall-clock budget — so a slow runner can't red it.
+      #
+      # CI runs the SMOKE profile: every scenario (so every correctness
+      # gate fires), a fraction of the ticks — ~25s instead of the
+      # full-tick matrix. Perf numbers worth reading come from a quiet
+      # dev machine's full run; the artifact here is a coarse trend
+      # line, the gates are the point.
       - name: Run server bench
-        run: yarn bench:server
+        run: yarn bench:server --warmup=5 --measure=30
 
       - name: Upload server bench artifact
         if: always()

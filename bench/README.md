@@ -361,6 +361,14 @@ Wiring this into CI as a regression gate is a deliberate follow-on — it
 needs the CI context (where to store baselines, what regression threshold
 trips a failure, how to handle hardware variance between runners).
 
+CI (the Benches workflow) runs the SMOKE profile —
+`yarn bench:server --warmup=5 --measure=30` — every scenario, a
+fraction of the ticks (~25s wall). The correctness gates (faithful
+renders, exact render counts, the pulse pair) fire identically at any
+tick count; what a shared runner can't provide is trustworthy CPU
+numbers, so the full-tick matrix stays a quiet-dev-machine tool and
+CI's JSON artifact is a coarse trend line only.
+
 ## `--prof` — the flame graph
 
 `yarn bench:server --prof` runs ONE scenario (`scaling/N=1000`) in a

@@ -22,11 +22,18 @@ the timeout is pure runtime growth. The window contains the two
 commits that added per-parton per-render work: the placement fold
 (`0adcf92`, a hash per auto-id placement) and the selector deletion
 (`2f332d1`, every bare parton now runs the full fp/registry pipeline
-it used to skip). Needs a quiet-machine profile of the warm-tick hot
-path before deciding: optimize (memoize fold inputs? cheaper fp
-source concat?) vs re-budget the bench for the new model's honest
-cost. The bench is the CPU canary — do not raise its timeout without
-the profile saying the cost is legitimate.
+it used to skip). The CI TIMEOUT itself was a separate bench-harness
+deadlock (the soak fixture's fold-mismatched selector — fixed), and
+the same stale selector was under-counting warm renders (rndr=2 vs
+the documented 3), so every pre-fix measurement is unfaithful —
+including the first same-machine ratios recorded here (warm p50 3.6×
+at N=10 down to 1.4× at N=1000 vs the `614100a` baseline, loaded
+box). Re-measure on a quiet machine post-fix, then
+`yarn bench:server --prof` the warm-tick hot path before deciding:
+optimize (memoize fold inputs? cheaper fp source concat?) vs
+re-budget for the new model's honest cost. The bench is the CPU
+canary — its smoke ticks are a CI gate again, but the committed
+baselines must not be regenerated until this is resolved.
 
 ### A ResolvedCell's `set` re-encoded across an embed splice hangs the host
 
