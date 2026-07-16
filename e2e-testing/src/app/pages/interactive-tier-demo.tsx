@@ -52,5 +52,5 @@ export const InteractiveTierDemoPage = parton(
       </main>
     )
   },
-  { match: "/interactive-tier-demo", selector: "#interactive-tier-demo" },
+  { match: "/interactive-tier-demo" },
 )

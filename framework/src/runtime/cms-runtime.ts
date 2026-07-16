@@ -34,7 +34,6 @@ export type ContentFieldKind = "text" | "richText" | "number" | "enum" | "image"
 
 export interface SlotSpec {
   multi: boolean
-  allow?: string
 }
 
 export interface Reference<T extends string = string> {
@@ -55,11 +54,11 @@ export interface CmsReadSurface {
   image(name: string): { src: string; alt: string }
   reference(name: string, type: string): string | null
   /** Render a single slot entry (the first one) under `slot`. Returns
-   *  `null` when the slot is empty or no entry matches the selector. */
-  block(slot: string, selector?: string): ReactNode
+   *  `null` when the slot is empty. */
+  block(slot: string): ReactNode
   /** Render every slot entry under `slot` in stored order. Returns
    *  `null` when the slot is empty. */
-  blocks(slot: string, selector?: string): ReactNode
+  blocks(slot: string): ReactNode
 }
 
 // ─── Store schema ──────────────────────────────────────────────────────
@@ -655,48 +654,21 @@ export function createCmsReadSurface(id: string | undefined, request: Request): 
       if (typeof v === "number") return String(v)
       return null
     },
-    block(slot, selector) {
+    block(slot) {
       if (id == null) return null
       const node = lookupCmsNode(id, request)
-      const entries = node?.slots?.[slot] ?? []
-      const matched = filterEntriesBySelector(entries, selector)
-      const first = matched[0]
+      const first = node?.slots?.[slot]?.[0]
       if (!first) return null
       return renderSlotEntry(first)
     },
-    blocks(slot, selector) {
+    blocks(slot) {
       if (id == null) return null
       const node = lookupCmsNode(id, request)
       const entries = node?.slots?.[slot] ?? []
-      const matched = filterEntriesBySelector(entries, selector)
-      if (matched.length === 0) return null
-      return matched.map((entry) => renderSlotEntry(entry))
+      if (entries.length === 0) return null
+      return entries.map((entry) => renderSlotEntry(entry))
     },
   }
-}
-
-/** Filter slot entries against an optional label-selector filter (e.g.
- *  `"page-block"`). Each entry's type → spec → spec.labels provides
- *  the labels to match against. Leading `.` / `#` in the filter is
- *  cosmetic and stripped. */
-function filterEntriesBySelector(
-  entries: readonly CmsNode[],
-  selector: string | undefined,
-): readonly CmsNode[] {
-  if (!selector) return entries
-  const wanted = selector
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .map((t) => (t.startsWith("#") || t.startsWith(".") ? t.slice(1) : t))
-  if (wanted.length === 0) return entries
-  return entries.filter((entry) => {
-    const type = entry.type
-    if (!type) return false
-    const spec = getSpecById(type)
-    if (!spec) return false
-    return wanted.some((w) => spec.labels.includes(w))
-  })
 }
 
 function renderSlotEntry(entry: CmsNode): React.ReactElement | null {

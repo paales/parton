@@ -13,9 +13,8 @@
  *    find the closest match-bearing pattern for variant identity.
  *
  * No CMS coupling: this catalog knows about spec id, render component,
- * and match pattern. CMS-specific block metadata
- * (`schema` callbacks, slot-allow labels) lives separately in
- * `runtime/cms-runtime.ts` as a side-table.
+ * and match pattern. CMS-specific block metadata (`schema` callbacks)
+ * lives separately in `runtime/cms-runtime.ts` as a side-table.
  */
 
 import type { FC } from "react"
@@ -32,22 +31,15 @@ export interface SpecComponentProps {
 }
 
 export interface SpecCatalogEntry {
-  /** Spec catalog id. Derived from `selector` or auto-named from
-   *  `Render.name`. */
+  /** Spec catalog id. Auto-derived from `Render.name` (kebab-cased,
+   *  suffix-stripped — see `autoSpecId` in partial.tsx). */
   id: string
-  /** Refetch labels declared by `selector` (with `id` as the first
-   *  label). `nav.reload({selector: "label"})` matches any of these. */
-  labels: string[]
   /** The component returned by `parton(...)`. */
   Component: FC<SpecComponentProps>
   /** Compiled match gate for the spec's `match` option, if any. */
   match?: import("./match.ts").CompiledMatch
   /** Render-fn display name (for debug). */
   displayName: string
-  /** Author-declared via selector / schema / match. Auto-named specs
-   *  are `false` and excluded from the public `/__remote/<id>`
-   *  surface. */
-  addressable?: boolean
   /** Capability schema type name — referenced by the remote
    *  manifest so the `parton add` CLI can generate typed bindings.
    *  See `PartialOptions.capabilityType`. */
@@ -105,8 +97,8 @@ export function registerSpec(entry: SpecCatalogEntry): void {
       `parton: duplicate spec id "${entry.id}" — two distinct specs claimed one catalog id.\n` +
         `  first defined: ${existing.definedAt} (Render: ${existing.displayName})\n` +
         `  claimed again: ${entry.definedAt} (Render: ${entry.displayName})\n` +
-        `Auto-derived ids come from the Render function's name — rename one Render, ` +
-        `or give one spec an explicit \`selector\`.`,
+        `Ids derive from the Render function's name — rename one Render ` +
+        `(or set a distinct \`displayName\` when a factory mints per-variant Renders).`,
     )
   }
   specCatalog.set(entry.id, entry)

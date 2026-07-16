@@ -19,24 +19,18 @@ interface AddBlockOption {
   type: string
   /** Friendly name (falls back to `type`). */
   displayName?: string
-  /** Labels from the spec catalog — used to bucket into Layout/Content/Commerce. */
-  labels?: ReadonlyArray<string>
   action: () => Promise<unknown>
 }
 
 /**
- * Bucket a block type into the three palette categories using label
- * heuristics. Anything that doesn't match falls into "Blocks".
+ * Bucket a block type into the three palette categories by its type
+ * name. Anything that doesn't match falls into "Blocks".
  */
 function bucketFor(opt: AddBlockOption): string {
   const t = opt.type
-  const labels = opt.labels ?? []
-  const has = (frag: string) => labels.some((x) => x.includes(frag))
-  if (has("group") || has("section") || has("layout") || /^group$/.test(t)) return "Layout"
-  if (has("commerce") || has("product") || has("cart") || /product|cart|collection/.test(t))
-    return "Commerce"
-  if (has("page-block") || has("content") || /text|hero|heading|image|button|rich/.test(t))
-    return "Content"
+  if (/^group$/.test(t) || /section|layout/.test(t)) return "Layout"
+  if (/product|cart|collection/.test(t)) return "Commerce"
+  if (/text|hero|heading|image|button|rich|greeting|slug|multi/.test(t)) return "Content"
   return "Blocks"
 }
 

@@ -96,5 +96,5 @@ export const EmbassyBulletin = parton(
       </Stack>
     )
   },
-  { selector: "embassy-bulletin", match: "/embassy/bulletin" },
+  { match: "/embassy/bulletin" },
 )

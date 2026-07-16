@@ -26,7 +26,7 @@ import {
 import { EconItemPage, EmbedEconDemoPage, EmbedEconInlineDemoPage } from "./pages/embed-econ.tsx"
 import { CmsDemoPage } from "./pages/cms-demo.tsx"
 import { DeferDemoPage } from "./pages/defer-demo.tsx"
-import { SelectorDemoPage } from "./pages/selector-demo.tsx"
+import { TagDemoPage } from "./pages/tag-demo.tsx"
 import { SentinelsDemoPage, NotFoundDemoPage, RedirectDemoPage } from "./pages/sentinels-demo.tsx"
 import { StreamingDemoPage } from "./pages/streaming-demo.tsx"
 import { LanesDemoPage } from "./pages/lanes-demo.tsx"
@@ -51,6 +51,8 @@ import {
 // Duplicate-placement fixture — see pages/dup-placement.tsx.
 import { DupTick, DupWrapperPage } from "./pages/dup-placement.tsx"
 import { SoloWrapperPage } from "./pages/dup-placement-control.tsx"
+// Bare-root-parton fixture — see pages/bare-root-parton.tsx.
+import { BareRootNavPage, BareRootParton } from "./pages/bare-root-parton.tsx"
 
 export function Root() {
   // notFound() / redirect() set the framework control channel eagerly (before
@@ -90,7 +92,7 @@ export function Root() {
             <EmbedEconInlineDemoPage />
             <CmsDemoPage />
             <DeferDemoPage />
-            <SelectorDemoPage />
+            <TagDemoPage />
             <SentinelsDemoPage />
             <NotFoundDemoPage />
             <RedirectDemoPage />
@@ -114,6 +116,13 @@ export function Root() {
             <DupWrapperPage />
             <DupTick />
             <SoloWrapperPage />
+            {/* Bare-root-parton fixture: NO match, no ancestor parton —
+                identity is the Render name alone. It ships its fp like
+                every parton, so it fp-skips across navs; its inline
+                cell is the one thing that re-renders it
+                (e2e/bare-root-parton.spec.ts). */}
+            <BareRootNavPage />
+            <BareRootParton />
             <InspectDrawer1 />
             <InspectDrawer2 />
             <InspectDrawer3 />

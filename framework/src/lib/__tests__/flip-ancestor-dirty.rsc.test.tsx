@@ -30,8 +30,9 @@ import {
 } from "../../test/live-drive.tsx"
 import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts"
 import { handleChannelPost } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
-import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
+import { PartialRoot, parton, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { SkelBox } from "./cull-skeleton-fixture.tsx"
 
@@ -47,22 +48,22 @@ const DirtyChild = parton(
     renders.child++
     return <div data-child>{`child:full:${renders.child}`}</div>
   },
-  { selector: "dirty-child", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
-const DirtyParent = parton(
-  async function DirtyParentRender(_: RenderArgs) {
-    renders.parent++
-    if (gate) await gate
-    return (
-      <div data-parent>
-        {`parent:full:${renders.parent}`}
-        <DirtyChild />
-      </div>
-    )
-  },
-  { selector: "dirty-parent" },
-)
+// The parent reads its wake tag — `refreshSelector("dirty-parent")`
+// opens its lane, and only a tag READER answers that bump.
+const DirtyParent = parton(async function DirtyParentRender(_: RenderArgs) {
+  tag("dirty-parent")
+  renders.parent++
+  if (gate) await gate
+  return (
+    <div data-parent>
+      {`parent:full:${renders.parent}`}
+      <DirtyChild />
+    </div>
+  )
+})
 
 const Page = (): ReactNode => (
   <PartialRoot>
@@ -120,6 +121,16 @@ async function nextLane(iter: AsyncIterator<DemuxedLane>): Promise<DemuxedLane> 
   return step.value
 }
 
+/** The child's wire id. It renders inside the parent, so its identity
+ *  carries a placement fold — read it off the wire rather than
+ *  assuming the bare base, since a `visible` statement only lands on
+ *  the id the emission actually names. */
+function foldedChildId(body: string): string {
+  const m = body.match(/dirty-child~[0-9a-f]{16}/)
+  if (!m) throw new Error("the child's folded id is not on the wire")
+  return m[0]
+}
+
 describe("flip-in dirtying open ancestor lanes", () => {
   it("a child's in-flip re-renders the ancestor lane it landed under", async () => {
     const scope = freshLiveScope("flip-dirty")
@@ -137,6 +148,7 @@ describe("flip-in dirtying open ancestor lanes", () => {
         // whole-tree segment; the parent (non-cull) renders.
         expect(seg0).toContain("parent:full:1")
         expect(renders.child).toBe(0)
+        const childId = foldedChildId(seg0)
 
         const second = await h.segments.next()
         if (second.done || second.value.kind !== "lanes") throw new Error("expected lanes segment")
@@ -154,9 +166,9 @@ describe("flip-in dirtying open ancestor lanes", () => {
 
         // The child flips IN while the parent's lane is open. The
         // drain lanes the child AND dirties the parent's open lane.
-        expect(await postVisible(scope, conn, 1, ["dirty-child"], ["dirty-child"])).toBe(204)
+        expect(await postVisible(scope, conn, 1, [childId], [childId])).toBe(204)
         const childLane = await nextLane(laneIter)
-        expect(childLane.partonId).toBe("dirty-child")
+        expect(stripPlacementFold(childLane.partonId)).toBe("dirty-child")
         expect((await decodeLane(childLane)).bodyText).toContain("child:full")
 
         // Release the parked render: its (now-stale-ordered) body

@@ -1,20 +1,23 @@
 /**
- * Targeted-refetch orchestration for the client.
+ * Targeted-refetch orchestration for the client — framework-internal
+ * id-based forcing (the defer activators' `useActivate` fire, the
+ * interactive-embed bridge's post-write echo). Authors never target
+ * partons: their refresh signals are cells and `tag()`.
  *
- * `enqueueRefetch` is the single dispatch point every selector-scoped
+ * `enqueueRefetch` is the single dispatch point every id-forced
  * refetch goes through — microtask-batched so multiple fires in one
  * tick coalesce into one channel statement. A batch states the page
- * URL with the labels as its one-shot `?__force=` overlay (intent
- * "silent"); the response arrives on the held stream as a whole-tree
- * payload segment with the targets laned explicit after the reopen.
- * Pre-establishment batches latch and ride the attach they trigger
- * (`_channelNavigate`'s attach-with-intent). A DEGRADED page has no
- * freshness transport: fires resolve as no-ops — the page is
- * browser-native, and document loads are its renders.
+ * URL with the effective ids as its one-shot `?__force=` overlay
+ * (intent "silent"); the response arrives on the held stream as a
+ * whole-tree payload segment with the targets laned explicit after
+ * the reopen. Pre-establishment batches latch and ride the attach
+ * they trigger (`_channelNavigate`'s attach-with-intent). A DEGRADED
+ * page has no freshness transport: fires resolve as no-ops — the page
+ * is browser-native, and document loads are its renders.
  *
  * Also home to the framework-internal "silent navigation" info brand
  * (the signal a `nav.navigate()` initiator sends so the page-level
- * intercept stands down) and the client-side selector parser.
+ * intercept stands down).
  */
 
 import { _channelNavigate } from "./channel-client.ts"
@@ -60,41 +63,14 @@ export function isFrameworkSilentInfo(info: unknown): info is FrameworkSilentInf
   )
 }
 
-// ─── Selector parsing (client-side, mirrors partial.tsx) ─────────────
-//
-// Selectors at the use site (`reload({selector})` / `navigate(url,
-// {selector})`) are flat lists of labels. The framework strips
-// leading `#` / `.` characters as cosmetic — both `"#hero"` and
-// `"hero"` resolve to the same label.
-
-export function parseSelectorClient(input: string | string[] | undefined): {
-  labels: string[]
-} {
-  if (input == null) return { labels: [] }
-  const tokens = Array.isArray(input)
-    ? input.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean)
-    : input
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter(Boolean)
-  const labels: string[] = []
-  for (const tok of tokens) {
-    const name = tok.startsWith("#") || tok.startsWith(".") ? tok.slice(1) : tok
-    if (name && !labels.includes(name)) labels.push(name)
-  }
-  return { labels }
-}
-
 // ─── Microtask-batched targeted-refetch dispatcher ────────────────
 //
-// Multiple `reload` / `navigate({ selector })` calls in the same tick
-// coalesce into one channel statement. Keeps tag-fanout and multi-id
-// event handlers cheap: three buttons clicked in the same frame
-// produce one statement with `?__force=a,b,c`. Each batched entry
-// carries its own `streaming` / `finished` deferreds so the batched
-// statement can fan out its two milestones (covering segment
-// committed, covering segment settled) back to every caller
-// separately.
+// Multiple fires in the same tick coalesce into one channel
+// statement: several activators triggering in the same frame produce
+// one statement with `?__force=a,b,c`. Each batched entry carries its
+// own `streaming` / `finished` deferreds so the batched statement can
+// fan out its two milestones (covering segment committed, covering
+// segment settled) back to every caller separately.
 
 /** Two-milestone return mirroring the navigation handles. */
 export interface RefetchMilestones {
@@ -103,16 +79,16 @@ export interface RefetchMilestones {
 }
 
 interface RefetchBatchEntry {
-  /** Selector labels — become the statement's `?__force=` overlay. The
-   *  server resolves them against the route's snapshots (id first,
-   *  then label fan-out) and lanes each target EXPLICIT. */
-  labels: string[]
+  /** Effective parton ids — become the statement's `?__force=`
+   *  overlay. The server resolves each against the route's snapshots
+   *  and lanes it EXPLICIT. */
+  ids: string[]
   /** Render mode for the commit — `false` (default) wraps in
    *  `startTransition`; `true` opts into progressive streaming with
    *  Suspense fallbacks. Mirrors the `streaming` option on
    *  `FrameworkNavigateOptions` / `FrameworkReloadOptions`. */
   streaming: boolean
-  /** Abort signal for this entry — per-selector supersede sets this to
+  /** Abort signal for this entry — a superseding fire sets this to
    *  a fresh `AbortController`'s signal; a superseded fire's record
    *  rejects with AbortError. */
   signal?: AbortSignal
@@ -129,20 +105,20 @@ interface RefetchBatchEntry {
 let _batchRef: RefetchBatchEntry[] = []
 let _batchScheduled = false
 
-// Labels of refetch statements whose covering segment has not settled.
+// Ids of refetch statements whose covering segment has not settled.
 // The transport keeps ONE pending url frame (newest statement wins
 // pre-flush), so a batch flushed while an earlier batch is still
 // uncovered must RESTATE the earlier targets — its `?__force=` is the
-// union — or a same-frame pair of distinct-selector fires would drop
+// union — or a same-frame pair of distinct-target fires would drop
 // the first fire's targets. Restating a force that was already served
 // costs one extra explicit lane render; dropping one loses the refetch.
 const _uncoveredForces = new Map<object, readonly string[]>()
 
 function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
-  const labelSet = new Set<string>()
+  const idSet = new Set<string>()
   let streamingMode = false
   for (const entry of batch) {
-    for (const l of entry.labels) labelSet.add(l)
+    for (const id of entry.ids) idSet.add(id)
     if (entry.streaming) streamingMode = true
   }
 
@@ -155,19 +131,19 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
   const signal =
     signals.length === 0 ? undefined : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
 
-  // The batch as a url statement: the page URL with the labels as its
+  // The batch as a url statement: the page URL with the ids as its
   // `?__force=` overlay, intent "silent". `__force`, not a target
-  // list: the statement's segment is WHOLE-TREE (the URL may have
-  // moved with the batch — a `navigate({selector})` — and every parton
-  // must re-evaluate it; fp-skip prunes the unchanged to placeholders),
-  // with the named targets forced past fp-skip server-side. The
+  // list: the statement's segment is WHOLE-TREE (every parton
+  // re-evaluates the stated URL; fp-skip prunes the unchanged to
+  // placeholders), with the named targets forced past fp-skip
+  // server-side. The
   // connection's mirror is the manifest — nothing re-advertises.
   // Pre-establishment the statement latches and rides the attach it
   // triggers; only a DEGRADED page answers null.
   const stated = new URL(window.location.href)
-  const restated = new Set(labelSet)
-  for (const labels of _uncoveredForces.values()) {
-    for (const l of labels) restated.add(l)
+  const restated = new Set(idSet)
+  for (const ids of _uncoveredForces.values()) {
+    for (const id of ids) restated.add(id)
   }
   if (restated.size > 0) {
     stated.searchParams.set("__force", [...restated].join(","))
@@ -187,9 +163,9 @@ function flushRefetchBatch(batch: RefetchBatchEntry[]): void {
     }
     return
   }
-  if (labelSet.size > 0) {
+  if (idSet.size > 0) {
     const token = {}
-    _uncoveredForces.set(token, [...labelSet])
+    _uncoveredForces.set(token, [...idSet])
     // The covering segment's settle retires the restatement duty —
     // rejections (abort, teardown) retire it too.
     routed.finished.then(

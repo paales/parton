@@ -19,6 +19,7 @@ import { MemoryCellStorage, setCellStorage, _resetCellStorage } from "../../runt
 import { SqliteCellStorage } from "../../runtime/cell-storage-sqlite.ts"
 import type { FuzzFixture } from "../../test/fuzz-harness.ts"
 import { localCell } from "../cell.ts"
+import { tag } from "../current-parton.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { searchParam } from "../server-hooks.ts"
@@ -37,23 +38,24 @@ export const fzCellB = localCell({ id: "fz-b", shape: "number", initial: 0 })
 // request state reproduces every stamp byte-for-byte. Stamps are
 // `[S|<id>|<state>]`, the content-level oracle currency.
 
-export const Sentinel = parton(
-  async function FzSentinelRender(_: RenderArgs) {
-    const t = await fzTick.resolve()
-    return <div>{`[S|fz-sentinel|t=${t.value}]`}</div>
-  },
-  { selector: "fz-sentinel" },
-)
+// The quiescence sentinel. The `tag()` read subscribes it to
+// `refreshSelector("fz-sentinel")`, which is how the drive's shutdown
+// wakes the parked driver so its enqueue fails on the torn controller
+// and the loop exits (without it, shutdown waits out the keepalive
+// backstop — minutes per sequence). A parton is reachable only through
+// the labels it subscribes to: its cells, and its tags.
+export const Sentinel = parton(async function FzSentinelRender(_: RenderArgs) {
+  tag("fz-sentinel")
+  const t = await fzTick.resolve()
+  return <div>{`[S|fz-sentinel|t=${t.value}]`}</div>
+})
 
 // Always-on, both request axes: a searchParam + a cell.
-export const Shared = parton(
-  async function FzSharedRender(_: RenderArgs) {
-    const q = searchParam("q") ?? ""
-    const a = await fzCellA.resolve()
-    return <div>{`[S|fz-shared|q=${q}.a=${a.value}]`}</div>
-  },
-  { selector: "fz-shared" },
-)
+export const Shared = parton(async function FzSharedRender(_: RenderArgs) {
+  const q = searchParam("q") ?? ""
+  const a = await fzCellA.resolve()
+  return <div>{`[S|fz-shared|q=${q}.a=${a.value}]`}</div>
+})
 
 // Match-gated variants — park/restore across navigations.
 export const Alpha = parton(
@@ -61,7 +63,7 @@ export const Alpha = parton(
     const a = await fzCellA.resolve()
     return <div>{`[S|fz-alpha|a=${a.value}]`}</div>
   },
-  { match: "/alpha", selector: "fz-alpha" },
+  { match: "/alpha" },
 )
 
 export const Beta = parton(
@@ -69,7 +71,7 @@ export const Beta = parton(
     const q = searchParam("q") ?? ""
     return <div>{`[S|fz-beta|q=${q}]`}</div>
   },
-  { match: "/beta", selector: "fz-beta" },
+  { match: "/beta" },
 )
 
 // Value-conditional existence: only exists while ?q= is present.
@@ -78,7 +80,7 @@ export const Gated = parton(
     const q = searchParam("q") ?? ""
     return <div>{`[S|fz-gated|q=${q}]`}</div>
   },
-  { match: { searchParams: { q: (v) => v !== null } }, selector: "fz-gated" },
+  { match: { searchParams: { q: (v) => v !== null } } },
 )
 
 // Cullable pair — cell reader.
@@ -87,7 +89,7 @@ export const CullA = parton(
     const b = await fzCellB.resolve()
     return <div>{`[S|fz-cull-a|b=${b.value}]`}</div>
   },
-  { selector: "fz-cull-a", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 // Cullable pair — searchParam reader.
@@ -96,21 +98,18 @@ export const CullB = parton(
     const q = searchParam("q") ?? ""
     return <div>{`[S|fz-cull-b|q=${q}]`}</div>
   },
-  { selector: "fz-cull-b", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 // Nested wrapper: a CULLABLE wrapper parton carrying an addressable
 // child — descendant-fold coverage (the wrapper's client fp may drift
 // after lane-only child updates: over-fetch, never stale) plus
 // ancestor-park cascading (a culled wrapper hides the child).
-export const Inner = parton(
-  async function FzInnerRender(_: RenderArgs) {
-    const q = searchParam("q") ?? ""
-    const b = await fzCellB.resolve()
-    return <div>{`[S|fz-inner|q=${q}.b=${b.value}]`}</div>
-  },
-  { selector: "fz-inner" },
-)
+export const Inner = parton(async function FzInnerRender(_: RenderArgs) {
+  const q = searchParam("q") ?? ""
+  const b = await fzCellB.resolve()
+  return <div>{`[S|fz-inner|q=${q}.b=${b.value}]`}</div>
+})
 
 export const Wrap = parton(
   async function FzWrapRender(_: RenderArgs) {
@@ -122,7 +121,7 @@ export const Wrap = parton(
       </div>
     )
   },
-  { selector: "fz-wrap", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 function FuzzPage(): ReactNode {

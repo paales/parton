@@ -62,10 +62,13 @@ describe("per-parton error containment", () => {
     )
 
     const Healthy = parton(
-      function HealthySiblingRender(_: RenderArgs) {
-        return <span data-testid="healthy-body">HEALTHY-OK</span>
-      },
-      { selector: "#healthy", match: "/contain" },
+      Object.assign(
+        function HealthySiblingRender(_: RenderArgs) {
+          return <span data-testid="healthy-body">HEALTHY-OK</span>
+        },
+        { displayName: "healthy" },
+      ),
+      { match: "/contain" },
     )
 
     const out = await flightAt(
@@ -94,17 +97,23 @@ describe("per-parton error containment", () => {
     clearRegistry("all")
 
     const Boom = parton(
-      function BoomRenderThrow(_: RenderArgs) {
-        throw new Error("render exploded")
-      },
-      { selector: "#boom-render", match: "/contain2" },
+      Object.assign(
+        function BoomRenderThrow(_: RenderArgs) {
+          throw new Error("render exploded")
+        },
+        { displayName: "boom-render" },
+      ),
+      { match: "/contain2" },
     )
 
     const Healthy = parton(
-      function HealthySibling2Render(_: RenderArgs) {
-        return <span data-testid="healthy2-body">HEALTHY-2-OK</span>
-      },
-      { selector: "#healthy2", match: "/contain2" },
+      Object.assign(
+        function HealthySibling2Render(_: RenderArgs) {
+          return <span data-testid="healthy2-body">HEALTHY-2-OK</span>
+        },
+        { displayName: "healthy2" },
+      ),
+      { match: "/contain2" },
     )
 
     const out = await flightAt(
@@ -129,11 +138,14 @@ describe("per-parton error containment", () => {
     // rather than being swallowed into an error card — otherwise
     // notFound/redirect would stop reaching the entry.
     const NotFoundParton = parton(
-      function NotFoundPartonRender(_: RenderArgs) {
-        notFound()
-        return null
-      },
-      { selector: "#nf", match: "/nf" },
+      Object.assign(
+        function NotFoundPartonRender(_: RenderArgs) {
+          notFound()
+          return null
+        },
+        { displayName: "nf" },
+      ),
+      { match: "/nf" },
     )
 
     const out = await flightAt(

@@ -92,8 +92,8 @@ export function AutoScrollToBottom({ containerTestId }: { containerTestId: strin
 
 /**
  * Collapsed-state pill at bottom-right. Sets `?chat=open` and triggers a
- * targeted refetch of `#chat-overlay` so the full overlay expands in
- * place without re-rendering the host page.
+ * frame navigate (the overlay lives in its own `<Frame>`) so the full
+ * overlay expands in place without re-rendering the host page.
  */
 export function ChatOpenPill() {
   const [navigate] = useNavigation().navigate()
@@ -106,7 +106,7 @@ export function ChatOpenPill() {
         url.searchParams.set("chat", "open")
         return url
       },
-      { history: "replace", selector: "#chat-overlay" },
+      { history: "replace" },
     )
   }
 
@@ -131,8 +131,8 @@ export function ChatOpenPill() {
 }
 
 /**
- * Collapses the overlay — inverse of `ChatOpenPill`. Targeted refetch of
- * `#chat-overlay` with `?chat=closed` so the host page is untouched.
+ * Collapses the overlay — inverse of `ChatOpenPill`: the same frame
+ * navigate with `?chat=closed`, so the host page is untouched.
  */
 export function ChatClosePill() {
   const [navigate] = useNavigation().navigate()
@@ -143,7 +143,7 @@ export function ChatClosePill() {
         url.searchParams.set("chat", "closed")
         return url
       },
-      { history: "replace", selector: "#chat-overlay" },
+      { history: "replace" },
     )
   }
 

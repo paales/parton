@@ -49,7 +49,7 @@ const CullProbe = parton(
   function CullProbeRender(_: RenderArgs) {
     return <div data-full={searchParam("q") ?? "none"} />
   },
-  { selector: "#cull-probe", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 const ID = "cull-probe"
 const tree = (

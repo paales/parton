@@ -1,51 +1,87 @@
 "use client"
 
-import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { useRef, useState } from "react"
+import { useActivate, type ActivatorFire } from "@parton/framework/lib/partial-client.tsx"
+import type { ActivatorProps } from "@parton/framework"
 import { Button } from "@parton/copies/components/ui/button"
+import { bumpTag } from "../pages/tag-demo-actions.ts"
 
 /**
- * Manual activator: a plain button that calls a targeted reload.
- * Demonstrates `defer={true}` — the framework isn't wired to any
- * trigger; the app decides when to activate.
+ * Manual activator: a button in the dormant slot that fires the
+ * activation on click. Demonstrates the click-driven shape of the
+ * `useActivate` contract — the framework injects `partialId` (the
+ * parton's effective id) into the `defer` element, and the fire
+ * routes through the same id-forcing protocol every activator uses.
  */
-export function ActivateButton({
+export function WhenClicked({
   partialId,
+  children,
   label,
   testId,
-  streaming,
+}: ActivatorProps & { label?: string; testId?: string }) {
+  if (!partialId) {
+    throw new Error("<WhenClicked> requires `partialId`. Use it as the `defer` prop of a parton.")
+  }
+  const fireRef = useRef<ActivatorFire | null>(null)
+  useActivate(partialId, (fire) => {
+    fireRef.current = fire
+    return () => {
+      fireRef.current = null
+    }
+  })
+  return (
+    <>
+      {children}
+      <div>
+        <Button
+          // `data-hydrated`: React owns the button (onClick live) — the
+          // demo controls hydrate after the page shell; e2e specs click
+          // via the marker-qualified locator.
+          ref={(el) => el?.setAttribute("data-hydrated", "")}
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid={testId ?? "activate-manual"}
+          onClick={() => fireRef.current?.()}
+        >
+          {label ?? "Activate"}
+        </Button>
+      </div>
+    </>
+  )
+}
+
+/**
+ * Tag-bump refetch button: fires the `bumpTag` server action — the
+ * event-shaped refresh signal. The concurrent partons subscribe by
+ * reading `tag("concurrent-<x>")`; each bump lanes its reader on the
+ * held stream, and rapid clicks produce concurrent lane renders.
+ */
+export function BumpButton({
+  name,
+  label,
+  testId,
 }: {
-  partialId: string
+  name: string
   label?: string
   testId?: string
-  /**
-   * If true, the refetch commits each response on arrival (progressive
-   * reveal with Suspense fallbacks) rather than being held back inside
-   * a transition until the body is fully ready.
-   */
-  streaming?: boolean
 }) {
-  const [reload, { committed, finished }] = useNavigation().reload()
-  const pending = committed && !finished
-  // A `streaming` reload holds its connection open after the first
-  // segment commits (`finished` resolves only when the stream closes),
-  // so `committed && !finished` would pin the button disabled for the
-  // stream's lifetime. Streaming refetches are rapid-fire / last-wins,
-  // so they stay clickable; only one-shot reloads disable while loading.
-  const disabled = streaming ? false : pending
+  const [pending, setPending] = useState(false)
   return (
     <Button
-      // `data-hydrated`: React owns the button (onClick live) — the
-      // demo controls hydrate after the page shell; e2e specs click
-      // via the marker-qualified locator.
+      // `data-hydrated` — see WhenClicked above.
       ref={(el) => el?.setAttribute("data-hydrated", "")}
       type="button"
       size="sm"
       variant="outline"
-      data-testid={testId ?? `activate-${partialId}`}
-      onClick={() => reload({ selector: `#${partialId}`, streaming })}
-      disabled={disabled}
+      data-testid={testId ?? `bump-${name}`}
+      onClick={() => {
+        setPending(true)
+        void bumpTag(name).finally(() => setPending(false))
+      }}
+      disabled={pending}
     >
-      {pending ? "…" : (label ?? "Activate")}
+      {pending ? "…" : (label ?? "Refetch")}
     </Button>
   )
 }

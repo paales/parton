@@ -9,7 +9,7 @@
  * same pokemon skips the upstream call.
  */
 
-import { parton, notFound, type RenderArgs, type ResolvedCell } from "@parton/framework"
+import { parton, notFound, tag, type RenderArgs, type ResolvedCell } from "@parton/framework"
 import type { ResultOf } from "../pokeapi-graphql.ts"
 import { Frame } from "@parton/framework/lib/frame.tsx"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
@@ -59,6 +59,9 @@ function TypeBadge({ type, className }: { type: string; className?: string }) {
 const Hero = parton(function PokemonHeroRender({
   hero,
 }: { hero: ResolvedCell<HeroResult | null> } & RenderArgs) {
+  // Event-shaped refresh: the demo controls bump "hero" and this
+  // parton re-renders (see PartialControls).
+  tag("hero")
   const pokemon = hero.value?.pokemon_v2_pokemon[0]
   if (!pokemon) notFound()
   const { name, height, weight } = pokemon
@@ -92,6 +95,7 @@ const Hero = parton(function PokemonHeroRender({
 const Stats = parton(function StatsRender({
   stats,
 }: { stats: ResolvedCell<StatsResult | null> } & RenderArgs) {
+  tag("stats")
   const pokemon = stats.value?.pokemon_v2_pokemon[0]
   if (!pokemon) return null
   const list = pokemon.pokemon_v2_pokemonstats.map((s) => ({
@@ -129,6 +133,7 @@ const Stats = parton(function StatsRender({
 const Species = parton(function SpeciesRender({
   species,
 }: { species: ResolvedCell<SpeciesResult | null> } & RenderArgs) {
+  tag("species")
   const speciesData = species.value?.pokemon_v2_pokemon[0]?.pokemon_v2_pokemonspecy
   if (!speciesData) return null
   const englishEntry = speciesData.pokemon_v2_pokemonspeciesflavortexts[0]

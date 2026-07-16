@@ -27,19 +27,23 @@ let releaseFa: () => void = () => {}
 let faGate: Promise<void> = Promise.resolve()
 
 const Fa = parton(
-  async function FaRender(_: RenderArgs) {
-    renders.fa++
-    if (renders.fa > 1) await faGate
-    return <div data-fa>{`fa:${renders.fa}`}</div>
-  },
-  { selector: "force-a" },
+  Object.assign(
+    async function FaRender(_: RenderArgs) {
+      renders.fa++
+      if (renders.fa > 1) await faGate
+      return <div data-fa>{`fa:${renders.fa}`}</div>
+    },
+    { displayName: "force-a" },
+  ),
 )
 const Fb = parton(
-  function FbRender(_: RenderArgs) {
-    renders.fb++
-    return <div data-fb>{`fb:${renders.fb}`}</div>
-  },
-  { selector: "force-b" },
+  Object.assign(
+    function FbRender(_: RenderArgs) {
+      renders.fb++
+      return <div data-fb>{`fb:${renders.fb}`}</div>
+    },
+    { displayName: "force-b" },
+  ),
 )
 const Page = (): ReactNode => (
   <PartialRoot>

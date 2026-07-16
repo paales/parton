@@ -167,7 +167,7 @@ describe("writeGuard — no read-set pollution", () => {
         await audited.set("visited")
         return <span>ok</span>
       },
-      { match: "/guard-audit", selector: "guard-audit" },
+      { match: "/guard-audit" },
     )
     const tree = (
       <PartialRoot>

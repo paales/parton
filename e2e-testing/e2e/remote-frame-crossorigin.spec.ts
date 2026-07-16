@@ -1,4 +1,4 @@
-import { clearCaches, expect, recordPartialDispatches, request, test } from "./fixtures"
+import { clearCaches, expect, request, test } from "./fixtures"
 
 /**
  * /remote-frame-crossorigin-demo — true cross-origin `<RemoteFrame>`.
@@ -89,33 +89,24 @@ test("capability-scoped remote reads host-declared values", async ({ page }) => 
   await expect(page.getByTestId("magento-payment-total")).toContainText("127.45")
 })
 
-test("selector refetch routes back to the cross-origin remote", async ({ page }) => {
-  // A selector-targeted refetch is a `url` frame with a `?__force=`
-  // overlay on the held channel; the host resolves the embedded
-  // snapshot, and its `source: {kind: "page"}` stamp re-embeds
+test("a tag bump routes a refresh back to the cross-origin remote", async ({ page }) => {
+  // The host's refresh button bumps the tag the remote parton reads
+  // (`tag("magento-stocks")` in the producer's Render — the label
+  // registers as shipped, bare, so the producer's own bumps keep
+  // matching). The bump matches the embed's host-registered snapshot
+  // labels, and its `source: {kind: "page"}` stamp re-embeds
   // `/remote/magento-stocks?partials=<id>` on the REMOTE — the
-  // ordinary protocol at the embedded URL. Drive the page's refresh
-  // button and prove both halves: the dispatch names the label, and
-  // genuinely FRESH remote content lands (the per-render data-tick
-  // moves).
+  // ordinary protocol at the embedded URL. The remote stamps a
+  // per-render `data-tick`, so a moved tick is the direct signal that
+  // a genuinely FRESH remote render crossed the origin boundary and
+  // came back.
   await page.goto("/remote-frame-crossorigin-demo", { timeout: 30000 })
   const stocks = page.getByTestId("magento-stocks")
   await expect(stocks).toBeVisible({ timeout: 15000 })
   const initialTick = await stocks.getAttribute("data-tick")
 
-  const dispatches = recordPartialDispatches(page)
-  await page
-    .getByTestId("rfd-refresh-magento:magento-stocks")
-    .and(page.locator("[data-hydrated]"))
-    .click()
+  await page.getByTestId("rfd-refresh-magento-stocks").and(page.locator("[data-hydrated]")).click()
 
-  await expect
-    .poll(() => dispatches.filter((d) => d.partials?.includes("magento:magento-stocks")).length, {
-      timeout: 10000,
-    })
-    .toBeGreaterThan(0)
-  // Fresh remote render arrived — the refetch crossed the origin
-  // boundary and came back.
   await expect
     .poll(async () => (await stocks.getAttribute("data-tick")) !== initialTick, {
       timeout: 15000,

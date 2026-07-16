@@ -387,7 +387,7 @@ finding F1).
 
 **A lane's heals and promote describe its OWN registrations (the
 capture discipline).** One drain can render one parton TWICE — a
-cullable wrapper's flip-in lane covers its addressable child while the
+cullable wrapper's flip-in lane covers its child while the
 child's parked-era bump lanes it directly — and the two renders commit
 RIVAL snapshot registrations, of which the canonical store keeps only
 the LAST-registered. The client, though, commits lane bodies in WIRE
@@ -446,8 +446,8 @@ reconciles anything the lanes missed.
 ## Writes stay non-streaming
 
 Server functions complete with a one-shot response (no `?live=1` on
-their URL). Their bodies call `cell.set` (batched in `atomic()`) /
-`refreshSelector` / `getServerNavigation().reload({selector})`, which
+their URL). Their bodies call `cell.set` (batched in `atomic()`) or
+`refreshSelector` — the two refresh signals — which
 bumps the **already-open** heartbeat stream. The segment driver
 wakes, the next segment renders, the changed partial's fp moves, the
 bytes ship. The heartbeat is the one connection a write ever needs.
@@ -480,22 +480,22 @@ subscription. There are two URL flags, and conflating them is a bug:
   navigation DEFAULTS to streaming (`browser.tsx`'s `onNavigation`):
   the destination's Suspense boundaries are newly introduced, so the
   React-default reveal shows each fallback then streams its content in
-  — the same behaviour as `startTransition` into a fresh tree. Selector
-  refetches (`enqueueRefetch` — `reload/navigate({selector})`) default
+  — the same behaviour as `startTransition` into a fresh tree.
+  Id-forced refetches (`enqueueRefetch` — the framework-internal
+  `?__force=` lane) default
   to ATOMIC: they replace EXISTING content, where a fallback flash reads
-  as a flicker. A streaming nav's root-ready commit needs one
-  supersede carve-out server-side to stay tear-safe — see
-  [`channel.md`](./channel.md) §Navigation rides the channel
-  (Mid-render supersede).
+  as a flicker. A streaming nav's root-ready commit is what makes a
+  segment's emitted bytes un-truncatable server-side — see
+  [`channel.md`](./channel.md) §Navigation rides the channel (Bytes on
+  the wire forfeit the right to truncate).
 - **`?live=1`** (`reload({live: true})`) is the SERVER hold-open
   subscription. The segment driver parks the connection for the
   keepalive and pushes a fresh segment on every route-relevant bump /
   `expires()` boundary. Only `<LivePageHeartbeat>` sets it.
 
 So the segment driver holds a response open iff `?live=1` **or** a
-render called `markConnectionLive()`. A targeted
-`reload({selector, streaming: true})` (a search keystroke, a
-"refetch this card" button) is a one-shot: it commits its segment
+render called `markConnectionLive()`. A discrete
+`reload({streaming: true})` is a one-shot: it commits its segment
 progressively and the connection closes. It does **not** park for the
 keepalive — a one-shot refetch that held open would pin any
 `committed && !finished` spinner in its loading state for the full
@@ -572,9 +572,9 @@ View culling (the `cull` gate, [`partial.md`](../reference/partial.md)
 writes, applied to a request dimension that moves while a connection
 is open. A viewport flip is not a data write — it changes what the
 CONNECTION should be rendering — so with a live stream open it must
-not fire a second render channel (a `reload({selector})`) that races
-the stream's own renders for the same partons: two channels, double
-bytes, commit contention.
+not fire a second render channel (a one-shot refetch of its own) that
+races the stream's own renders for the same partons: two channels,
+double bytes, commit contention.
 
 The pieces:
 
@@ -738,11 +738,14 @@ dispatch). Only deltas and the once-per-establishment sync drive a
 flush; measurement-only state is a PASSENGER on the next driven
 envelope (the ack-cadence rule — see the newly-measured sync below). At flush time, `collect` receiving the open connection's
 id contributes ONE `visible` frame (cap 256; ids ride the envelope's
-JSON body, so no request-line limit); receiving `null` runs the
-one-shot `reload({selector, params: {visible}})` fallback for the
-flipped-IN ids only (cap 48, the `?partials=` request-line bound;
-cull-outs are local — the inline skeleton — and have no server
-effect without a session). The connection id is SERVER-minted and
+JSON body, so no request-line limit); receiving `null`
+(pre-establishment, or between keepalive close and the next attach)
+contributes nothing and the statements simply STAY PENDING — the next
+attach's `visible` seed states the full set, its whole-tree first
+segment materializes anything in view, and the queued flips ride the
+fresh connection's first flush (the establishment sync drives one),
+where their lanes fp-skip to confirmation placeholders for whatever
+the segment already delivered. The connection id is SERVER-minted and
 established by the stream's `conn` entry as it is read (the wire
 hook in `entry/browser.tsx` → `_channelEstablished`); the transport
 clears it when the connection settles or an envelope's delivery

@@ -7,10 +7,10 @@
  * inside it.
  */
 
-import { parton, type RenderArgs } from "@parton/framework"
+import { parton, tag, type RenderArgs } from "@parton/framework"
 import { WhenVisible } from "../components/when-visible.tsx"
 import { WhenMounted } from "../components/when-mounted.tsx"
-import { ActivateButton } from "../components/defer-demo-controls.tsx"
+import { BumpButton, WhenClicked } from "../components/defer-demo-controls.tsx"
 import { Card, CardContent, CardHeader, CardTitle } from "@parton/copies/components/ui/card"
 
 function InlineCode({ children }: { children: React.ReactNode }) {
@@ -44,8 +44,7 @@ export const ManualPartial = parton(
     )
   },
   {
-    selector: "#manual",
-    defer: true,
+    defer: <WhenClicked label="Activate manually" testId="activate-manual" />,
     fallback: (
       <DormantFallback testId="manual-fallback">
         dormant — waiting for manual activation
@@ -56,18 +55,20 @@ export const ManualPartial = parton(
 
 // Batched activation: two partials that each activate on mount fire in
 // the same tick, so `enqueueRefetch`'s microtask coalescer folds them
-// into ONE refetch (`?partials=batch-a,batch-b`).
+// into ONE statement forcing both ids.
 function makeBatch(label: string) {
   return parton(
-    async function BatchRender({}: RenderArgs) {
-      return (
-        <div data-testid={`${label}-content`}>
-          <Timestamp prefix="activated at" />
-        </div>
-      )
-    },
+    Object.assign(
+      async function BatchRender({}: RenderArgs) {
+        return (
+          <div data-testid={`${label}-content`}>
+            <Timestamp prefix="activated at" />
+          </div>
+        )
+      },
+      { displayName: label },
+    ),
     {
-      selector: `#${label}`,
       defer: <WhenMounted />,
       fallback: (
         <DormantFallback testId={`${label}-fallback`}>
@@ -96,7 +97,6 @@ export const SlowStreamPartial = parton(
     )
   },
   {
-    selector: "#slow-stream",
     fallback: (
       <DormantFallback testId="slow-fallback">slow content streaming… (1.5s)</DormantFallback>
     ),
@@ -114,7 +114,6 @@ export const RaceDeferPartial = parton(
     )
   },
   {
-    selector: "#race-defer",
     defer: <WhenMounted />,
     fallback: (
       <DormantFallback testId="race-defer-fallback">
@@ -126,25 +125,29 @@ export const RaceDeferPartial = parton(
 
 function makeConcurrent(label: string, delayMs: number) {
   return parton(
-    async function ConcurrentRender({}: RenderArgs) {
-      // Server-side render interval, stamped into the DOM. The
-      // concurrency e2e spec proves parallel handling from interval
-      // OVERLAP (`started(b) < finished(a)`), which no client-side
-      // wall-clock measurement can do reliably under machine load.
-      const startedAt = Date.now()
-      await new Promise((r) => setTimeout(r, delayMs))
-      return (
-        <div
-          data-testid={`concurrent-${label}`}
-          data-started-at={startedAt}
-          data-finished-at={Date.now()}
-        >
-          <strong>{label}</strong> ({delayMs}ms): {new Date().toISOString()}
-        </div>
-      )
-    },
+    Object.assign(
+      async function ConcurrentRender({}: RenderArgs) {
+        // The refetch buttons bump this tag — the read subscribes.
+        tag(`concurrent-${label}`)
+        // Server-side render interval, stamped into the DOM. The
+        // concurrency e2e spec proves parallel handling from interval
+        // OVERLAP (`started(b) < finished(a)`), which no client-side
+        // wall-clock measurement can do reliably under machine load.
+        const startedAt = Date.now()
+        await new Promise((r) => setTimeout(r, delayMs))
+        return (
+          <div
+            data-testid={`concurrent-${label}`}
+            data-started-at={startedAt}
+            data-finished-at={Date.now()}
+          >
+            <strong>{label}</strong> ({delayMs}ms): {new Date().toISOString()}
+          </div>
+        )
+      },
+      { displayName: `concurrent-${label}` },
+    ),
     {
-      selector: `#concurrent-${label} .concurrent`,
       fallback: (
         <div data-testid={`concurrent-${label}-fallback`} className="text-muted-foreground">
           {label} ({delayMs}ms): streaming…
@@ -167,7 +170,6 @@ export const VisibilityDeferPartial = parton(
     )
   },
   {
-    selector: "#any",
     defer: <WhenVisible />,
     fallback: (
       <DormantFallback testId="any-fallback">
@@ -197,9 +199,6 @@ export const DeferDemoPage = parton(
           </CardHeader>
           <CardContent className="flex flex-col gap-3 px-0">
             <ManualPartial />
-            <div>
-              <ActivateButton partialId="manual" label="Activate manually" />
-            </div>
           </CardContent>
         </Card>
 
@@ -232,24 +231,9 @@ export const DeferDemoPage = parton(
             <ConcurrentBPartial />
             <ConcurrentCPartial />
             <div className="flex flex-wrap gap-2">
-              <ActivateButton
-                partialId="concurrent-a"
-                label="refetch a"
-                testId="refresh-concurrent-a"
-                streaming
-              />
-              <ActivateButton
-                partialId="concurrent-b"
-                label="refetch b"
-                testId="refresh-concurrent-b"
-                streaming
-              />
-              <ActivateButton
-                partialId="concurrent-c"
-                label="refetch c"
-                testId="refresh-concurrent-c"
-                streaming
-              />
+              <BumpButton name="concurrent-a" label="refetch a" testId="refresh-concurrent-a" />
+              <BumpButton name="concurrent-b" label="refetch b" testId="refresh-concurrent-b" />
+              <BumpButton name="concurrent-c" label="refetch c" testId="refresh-concurrent-c" />
             </div>
           </CardContent>
         </Card>

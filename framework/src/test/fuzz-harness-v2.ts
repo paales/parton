@@ -83,11 +83,16 @@ import {
   getTemplate,
 } from "../lib/partial-client-state.ts"
 import { deriveTemplate, renderTemplate } from "../lib/partial-template.tsx"
-import { computeRouteKey, parseCachedTokens, partialFromSnapshot } from "../lib/partial.tsx"
+import {
+  computeRouteKey,
+  parseCachedTokens,
+  partialFromSnapshot,
+  stripPlacementFold,
+} from "../lib/partial.tsx"
 import { enterRequestRegistry, lookupPartial } from "../lib/partial-registry.ts"
 import { runWithPartialState } from "../lib/partial-request-state.ts"
 import { consumePayload, renderServerToFlight } from "./rsc-server.ts"
-import { extractPartonView } from "./fuzz-wire.ts"
+import { extractPartonView, stripFoldedIds, type ExtractedPayload } from "./fuzz-wire.ts"
 import { mulberry32, pick, type Mismatch } from "./fuzz-harness.ts"
 
 export interface SequenceResultV2 {
@@ -106,6 +111,15 @@ export interface SequenceResultV2 {
 
 // ─── Fixture + action surface ────────────────────────────────────────
 
+/**
+ * Ids here are BARE — a spec's id without the placement fold the wire
+ * carries for a nested placement (`fz-inner` → `fz-inner~<16 hex>`).
+ * The harness learns each bare id's actual wire id from the server's
+ * own payloads and translates at every boundary that addresses a parton
+ * by id (the registry, the client cache, `?cached=` tokens, the forced
+ * lane), so the fixture stays authored in spec terms — the same basis
+ * the `[S|<id>|…]` stamps its bodies write are on.
+ */
 export interface FuzzFixtureV2 {
   /** The page the whole-tree renders serve. */
   page: () => ReactNode
@@ -481,6 +495,10 @@ interface HeldDelivery {
 
 // ─── The client-tree view (oracle side A) ────────────────────────────
 
+/** Every id here is on the BARE basis: the walk strips the placement
+ *  fold off the effective ids the merged tree carries, so a view reads
+ *  against the fixture's own vocabulary (and against `stamps`, which a
+ *  body writes bare). */
 interface ClientView {
   /** Non-parked wrapper sightings: id → matchKey. */
   wrappers: Map<string, string>
@@ -566,17 +584,19 @@ async function collectClientView(
   // CullPair — content slot in `children`; display follows the STATED
   // set (the client's own statement has precedence over emission).
   if (typeof props.id === "string" && "culled" in props && "skel" in props) {
-    if (!hidden) out.pairs.add(props.id)
-    await collectClientView(props.children as ReactNode, culls, out, hidden || culls(props.id))
+    const id = stripPlacementFold(props.id)
+    if (!hidden) out.pairs.add(id)
+    await collectClientView(props.children as ReactNode, culls, out, hidden || culls(id))
     return
   }
   if (isPlaceholder(el)) {
     const id = getPlaceholderId(el)
-    if (id && !hidden) out.holes.add(id)
+    if (id && !hidden) out.holes.add(stripPlacementFold(id))
     return
   }
   if (isPartialWrapper(el)) {
-    const id = getPartialId(el)
+    const raw = getPartialId(el)
+    const id = raw === null ? null : stripPlacementFold(raw)
     if (id && !hidden && !out.wrappers.has(id)) {
       out.wrappers.set(id, getPartialMatchKey(el) ?? "")
     }
@@ -608,8 +628,9 @@ type ColdState =
   | { state: "culled" }
   | { state: "absent" }
 
-function coldStates(text: string, universeIds: readonly string[]): Map<string, ColdState> {
-  const ex = extractPartonView(text)
+/** `ex` on the BARE basis (see `stripFoldedIds`) — the same basis the
+ *  client view is collected on. */
+function coldStates(ex: ExtractedPayload, universeIds: readonly string[]): Map<string, ColdState> {
   const states = new Map<string, ColdState>()
   for (const id of universeIds) {
     if (ex.pairs.get(id) === true) {
@@ -652,6 +673,25 @@ export async function runSequenceV2(
   const scope = `fuzz2-${seed}-${++scopeCounter}`
   let currentUrl = fixture.urls[0]
   const statedVisible = new Set(fixture.initialVisible)
+
+  // ── The id basis. A parton's EFFECTIVE id folds its placement: a
+  // spec nested under another parton (or inside a `<Frame>`) mints
+  // `<id>~<16 hex>`; a root-level placement stays bare. That effective
+  // id is what the registry, the client cache, the `?cached=` tokens
+  // and the forced lane all address — while the fixture and the bodies'
+  // stamps speak bare. So: the walk resolves bare → wire for everything
+  // it hands the framework, the views strip wire → bare for everything
+  // the oracle compares, and the mapping is READ off the server's own
+  // payloads rather than reconstructed (the fold hashes the placement,
+  // which only the render knows). An unlearned id resolves to itself —
+  // a root placement is its own wire id.
+  const wireIds = new Map<string, string>()
+  const learn = (ex: ExtractedPayload): ExtractedPayload => {
+    for (const obs of ex.observations) wireIds.set(stripPlacementFold(obs.id), obs.id)
+    for (const [id] of ex.pairs) wireIds.set(stripPlacementFold(id), id)
+    return ex
+  }
+  const wireIdOf = (bare: string): string => wireIds.get(bare) ?? bare
   /** Ids present on the current route per the last whole-tree render —
    *  the lane fan-out set (the client-side equivalent of the wake
    *  registry's route scoping). */
@@ -679,10 +719,12 @@ export async function runSequenceV2(
     return false
   }
 
-  const visibleList = (): string[] => [...statedVisible]
+  /** The visibility set as the SERVER reads it — the connection
+   *  session gates culls by effective id. */
+  const visibleList = (): string[] => [...statedVisible].map(wireIdOf)
 
   const deriveLiveIds = (text: string): Set<string> => {
-    const ex = extractPartonView(text)
+    const ex = stripFoldedIds(learn(extractPartonView(text)))
     const ids = new Set<string>()
     for (const obs of ex.observations) if (!obs.parked) ids.add(obs.id)
     for (const [id] of ex.pairs) ids.add(id)
@@ -818,8 +860,10 @@ export async function runSequenceV2(
   const laneTargets = (): string[] =>
     fixture.universeIds.filter((id) => liveIds.has(id) && !displayedCulled(id))
 
+  /** `ids` are bare; a lane addresses its parton by effective id all
+   *  the way through (snapshot lookup, force target, commit). */
   const runLanes = async (ids: string[], plan: DeliveryPlan, force: boolean): Promise<void> => {
-    const ordered = plan.reverse === true ? [...ids].reverse() : ids
+    const ordered = (plan.reverse === true ? [...ids].reverse() : ids).map(wireIdOf)
     for (const id of ordered) {
       debug?.(`lane ${id} render start`)
       const doc = await renderLane(scope, currentUrl, id, {
@@ -924,7 +968,13 @@ export async function runSequenceV2(
         visible: visibleList(),
         cached: [],
       })
-      const want = coldStates(cold.text, fixture.universeIds)
+      // The cold render is a full render of the final state — the
+      // authoritative teacher for the id resolution the oracles below
+      // address the registry and the client cache with.
+      const want = coldStates(
+        stripFoldedIds(learn(extractPartonView(cold.text))),
+        fixture.universeIds,
+      )
       const view: ClientView = {
         wrappers: new Map(),
         holes: new Set(),
@@ -978,7 +1028,7 @@ export async function runSequenceV2(
           for (const mk of mks) {
             if (!cache.get(id)?.has(mk)) {
               mismatches.push({
-                id,
+                id: stripPlacementFold(id),
                 field: "fp",
                 expected: "advertised fp backed by restorable content",
                 actual: `token ${token} with no content slot`,
@@ -993,18 +1043,21 @@ export async function runSequenceV2(
           visible: visibleList(),
           cached: tokens,
         })
-        const ex = extractPartonView(honesty.text)
+        const ex = learn(extractPartonView(honesty.text))
         for (const obs of ex.observations) {
           if (obs.parked) continue
-          if (!fixture.universeIds.includes(obs.id)) continue
-          if (displayedCulled(obs.id)) continue // culled content is allowed stale until its flip-in revalidates
-          const w = want.get(obs.id)
+          // The observation carries the EFFECTIVE id — the one the
+          // client cache is keyed by; the fixture's vocabulary is bare.
+          const id = stripPlacementFold(obs.id)
+          if (!fixture.universeIds.includes(id)) continue
+          if (displayedCulled(id)) continue // culled content is allowed stale until its flip-in revalidates
+          const w = want.get(id)
           if (obs.kind === "hole" || obs.kind === "confirm") {
             const mk = obs.matchKey ?? ""
             const content = cacheLookup(cache, obs.id, mk)
             if (content === undefined) {
               mismatches.push({
-                id: obs.id,
+                id,
                 field: "state",
                 expected: "confirmed content restorable client-side",
                 actual: `ghost ${obs.kind} @${mk} (no cached content)`,
@@ -1012,10 +1065,10 @@ export async function runSequenceV2(
               continue
             }
             if (w?.state === "content" && w.matchKey === mk && w.stamp !== null) {
-              const stamp = await stampOfCached(content, obs.id)
+              const stamp = await stampOfCached(content, id)
               if (stamp !== w.stamp) {
                 mismatches.push({
-                  id: obs.id,
+                  id,
                   field: "stamp",
                   expected: `${w.stamp} (server confirmed the client copy)`,
                   actual: `${stamp ?? "<none>"} (stale confirm)`,
@@ -1039,19 +1092,25 @@ export async function runSequenceV2(
       // NOT asserted: body reads lag one render, so the visit after a
       // bucket's cold record legitimately re-renders (the documented
       // cold-record over-fetch).
-      const warmById = await warmRecomputeFps(scope, currentUrl, visibleList(), fixture.universeIds)
+      const warmById = await warmRecomputeFps(
+        scope,
+        currentUrl,
+        visibleList(),
+        fixture.universeIds.map(wireIdOf),
+      )
       for (const id of fixture.universeIds) {
         if (fixture.foldDriftAllowed.has(id)) continue
         if (displayedCulled(id)) continue
         const w = want.get(id)
         if (w?.state !== "content" || w.stamp === null || w.matchKey === null) continue
-        const content = cacheLookup(cache, id, w.matchKey)
+        const wire = wireIdOf(id)
+        const content = cacheLookup(cache, wire, w.matchKey)
         if (content === undefined) continue
         const stamp = await stampOfCached(content, id)
         if (stamp !== w.stamp) continue // stale copy — convergence's finding, not parity's
-        const advertised = tokens.filter((t) => t.startsWith(`${id}:${w.matchKey}:`))
+        const advertised = tokens.filter((t) => t.startsWith(`${wire}:${w.matchKey}:`))
         if (advertised.length === 0) continue
-        const warm = warmById.get(id)
+        const warm = warmById.get(wire)
         if (warm == null) continue
         if (!advertised.some((t) => t.endsWith(`:${warm}`))) {
           mismatches.push({
@@ -1105,7 +1164,9 @@ export async function runSequenceV2(
  *  compare, per parton — `_recomputeSubtreeWarmFp` under a request
  *  scope for the given URL + visibility (the state the trial ended
  *  in). Snapshots come from the cold oracle render, which committed
- *  fresh records for everything live at the final state. */
+ *  fresh records for everything live at the final state. `ids` are
+ *  effective (wire) ids — the registry's own keys — and so are the
+ *  returned map's. */
 async function warmRecomputeFps(
   scope: string,
   url: string,

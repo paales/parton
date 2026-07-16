@@ -1,6 +1,6 @@
 /**
  * Partons this app exposes as EMBEDDABLE PAGES — each spec carries a
- * static-path `match` (`/remote/<selector>`), so other processes
+ * static-path `match` (`/remote/<id>`), so other processes
  * embed it with `<RemoteFrame url>` pointed at that ordinary page
  * URL. The page is addressable, cacheable, and testable in a browser
  * by itself; the manifest advertises the path to the `parton add`
@@ -8,7 +8,7 @@
  * import, which registers them in the spec catalog).
  */
 
-import { parton, getCapability, searchParam, type RenderArgs } from "@parton/framework"
+import { parton, tag, getCapability, searchParam, type RenderArgs } from "@parton/framework"
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -41,7 +41,7 @@ export const MagentoGreeting = parton(
       </div>
     )
   },
-  { selector: "magento-greeting", match: "/remote/magento-greeting" },
+  { match: "/remote/magento-greeting" },
 )
 
 /** Demonstrates navigation within a RemoteFrame: this parton's
@@ -84,7 +84,7 @@ export const MagentoCheckoutStep = parton(
       </div>
     )
   },
-  { selector: "magento-checkout-step", match: "/remote/magento-checkout-step" },
+  { match: "/remote/magento-checkout-step" },
 )
 
 /** A capability-aware parton — reads host-declared values via
@@ -95,6 +95,7 @@ export const MagentoCheckoutStep = parton(
  *  ambient host context). */
 export const MagentoPaymentSummary = parton(
   async function MagentoPaymentSummaryRender(_: RenderArgs) {
+    tag("magento-payment-summary")
     await delay(150)
     const cap = getCapability()
     const cartId = String(cap.cart_id ?? "<missing>")
@@ -127,7 +128,6 @@ export const MagentoPaymentSummary = parton(
     )
   },
   {
-    selector: "magento-payment-summary",
     match: "/remote/magento-payment-summary",
     capabilityType: "PaymentCap",
   },
@@ -138,7 +138,11 @@ export const MagentoPaymentSummary = parton(
  *  Stamps a per-render `data-tick` so e2e tests can assert a
  *  refetch produced a genuinely fresh render. */
 export const MagentoStockTicker = parton(
-  async function MagentoStockTickerRender(_: RenderArgs) {
+  async function MagentoStocksRender(_: RenderArgs) {
+    // The host's refresh button bumps this tag; the bump matches the
+    // embed's host-registered snapshot labels and routes a focused
+    // re-embed back here.
+    tag("magento-stocks")
     await delay(700)
     const tick = Date.now()
     const tickers = [
@@ -175,44 +179,41 @@ export const MagentoStockTicker = parton(
       </div>
     )
   },
-  { selector: "magento-stocks", match: "/remote/magento-stocks" },
+  { match: "/remote/magento-stocks" },
 )
 
-/** A nested addressable parton — rendered INSIDE another parton, so
- *  its snapshot only ever reaches the host's registry via the
- *  trailer that ships with its parent's render. Used to validate
- *  the commit-defer mechanism: the host's `<RemoteFrame>` keeps
- *  commit open until every nested snapshot in the trailer has been
- *  registered, so `nav.reload({selector: "magento:cart-summary"})`
- *  from the host finds the snapshot and routes back to the remote.
- *  Without commit-defer this would race and fall through to a full
- *  streaming-mode page render. */
-export const MagentoCartSummary = parton(
-  async function MagentoCartSummaryRender(_: RenderArgs) {
-    await delay(50)
-    const subtotal = 89.94 + Math.random() * 2
-    return (
-      <div
-        data-testid="magento-cart-summary"
-        data-tick={String(Date.now())}
-        style={{
-          marginTop: "0.5rem",
-          padding: "0.75rem",
-          border: "1px dashed rgba(244, 114, 182, 0.4)",
-          background: "rgba(244, 114, 182, 0.04)",
-          borderRadius: "0.5rem",
-          fontSize: "0.85em",
-          color: "#fbcfe8",
-        }}
-      >
-        <strong>Cart subtotal</strong> · ${subtotal.toFixed(2)}
-        <div style={{ marginTop: "0.25rem", fontSize: "0.75em", opacity: 0.7 }}>
-          Nested addressable parton inside the stock ticker. Host can refetch{" "}
-          <code>magento:cart-summary</code> independently — the framework's commit-defer mechanism
-          guarantees the snapshot lands in the host's registry before the response goes out.
-        </div>
+/** A nested parton — rendered INSIDE another parton, so its snapshot
+ *  only ever reaches the host's registry via the trailer that ships
+ *  with its parent's render. Used to validate the commit-defer
+ *  mechanism: the host's `<RemoteFrame>` keeps commit open until
+ *  every nested snapshot in the trailer has been registered, so a
+ *  host-side `refreshSelector("cart-summary")` finds the snapshot
+ *  and routes back to the remote. Without commit-defer this would
+ *  race and fall through to a full streaming-mode page render. */
+export const MagentoCartSummary = parton(async function CartSummaryRender(_: RenderArgs) {
+  tag("cart-summary")
+  await delay(50)
+  const subtotal = 89.94 + Math.random() * 2
+  return (
+    <div
+      data-testid="magento-cart-summary"
+      data-tick={String(Date.now())}
+      style={{
+        marginTop: "0.5rem",
+        padding: "0.75rem",
+        border: "1px dashed rgba(244, 114, 182, 0.4)",
+        background: "rgba(244, 114, 182, 0.04)",
+        borderRadius: "0.5rem",
+        fontSize: "0.85em",
+        color: "#fbcfe8",
+      }}
+    >
+      <strong>Cart subtotal</strong> · ${subtotal.toFixed(2)}
+      <div style={{ marginTop: "0.25rem", fontSize: "0.75em", opacity: 0.7 }}>
+        Nested parton inside the stock ticker. Host can refetch <code>cart-summary</code>{" "}
+        independently — the framework's commit-defer mechanism guarantees the snapshot lands in the
+        host's registry before the response goes out.
       </div>
-    )
-  },
-  { selector: "cart-summary" },
-)
+    </div>
+  )
+})

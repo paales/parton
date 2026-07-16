@@ -33,6 +33,7 @@ import {
 import { _cacheStats, _clearCache } from "../cache.tsx"
 import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts"
 import { _peekConnectionSession, handleChannelPost } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
@@ -53,13 +54,14 @@ const SLOW_MS = 120
 
 const renders = { tel: 0, warm: 0, cold: 0, capA: 0, capB: 0, win: 0 }
 
-const TelA = parton(
-  function TelARender(_: RenderArgs) {
-    renders.tel++
-    return <div>{`tel:full:${renders.tel}`}</div>
-  },
-  { selector: "tel-a" },
-)
+// The tag read is the bump surface: `refreshSelector("tel-a")` — the
+// positive control that a real dependency still lanes — reaches
+// exactly the readers of that name.
+const TelA = parton(function TelARender(_: RenderArgs) {
+  tag("tel-a")
+  renders.tel++
+  return <div>{`tel:full:${renders.tel}`}</div>
+})
 
 /** The costly subtree — a plain child server component, where cached
  *  content's real work lives in the RSC model. The byte cache stores
@@ -75,16 +77,17 @@ async function SlowLeaf({ tag }: { tag: "warm" | "cold" }) {
 
 const CullWarm = parton(
   function CullWarmRender(_: RenderArgs) {
+    tag("cull-warm")
     return <SlowLeaf tag="warm" />
   },
-  { selector: "cull-warm", cull: { skeleton: SkelBox }, cache: { maxAge: 60 } },
+  { cull: { skeleton: SkelBox }, cache: { maxAge: 60 } },
 )
 
 const CullCold = parton(
   function CullColdRender(_: RenderArgs) {
     return <SlowLeaf tag="cold" />
   },
-  { selector: "cull-cold", cull: { skeleton: SkelBox }, cache: { maxAge: 60 } },
+  { cull: { skeleton: SkelBox }, cache: { maxAge: 60 } },
 )
 
 const CullCapA = parton(
@@ -93,7 +96,6 @@ const CullCapA = parton(
     return <div>{`capA:full:${renders.capA}`}</div>
   },
   {
-    selector: "cull-cap-a",
     cull: { skeleton: SkelBox },
     cache: { maxAge: 60 },
   },
@@ -105,7 +107,6 @@ const CullCapB = parton(
     return <div>{`capB:full:${renders.capB}`}</div>
   },
   {
-    selector: "cull-cap-b",
     cull: { skeleton: SkelBox },
     cache: { maxAge: 60 },
   },
@@ -116,7 +117,7 @@ const CullWin = parton(
     renders.win++
     return <div>{`win:full:${renders.win}`}</div>
   },
-  { selector: "cull-win", cull: { skeleton: SkelBox }, cache: { maxAge: 60 } },
+  { cull: { skeleton: SkelBox }, cache: { maxAge: 60 } },
 )
 
 beforeEach(() => {

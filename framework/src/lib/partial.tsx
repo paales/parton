@@ -112,12 +112,6 @@ export { ROOT, type PartialCtx } from "./partial-context.ts"
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
-/** A refetch label. Plain string; the framework treats CSS-style
- *  `#foo` / `.foo` prefixes as cosmetic and strips them on parse.
- *  Multiple labels per spec are allowed (fan-out refetch targets). */
-export type SelectorToken = string
-export type SelectorTokens = SelectorToken | SelectorToken[]
-
 export interface ActivatorProps {
   partialId?: string
   children?: ReactNode
@@ -167,7 +161,6 @@ export type PartialOptions<V> = Pick<
   | "fallback"
   | "keepalive"
   | "fpSkip"
-  | "selector"
   | "capabilityType"
   | "cells"
 >
@@ -236,10 +229,6 @@ interface InternalSpecConfig<V> {
    *  parameter and the skeleton's props at their definition sites. */
   // V flows FROM the options literal — see above
   cull?: CullConfig<any>
-  /** Refetch labels (whitespace string or array). First label is the
-   *  spec catalog id; additional labels are extra fan-out targets.
-   *  Auto-derives from `Render.name` when omitted. */
-  selector?: SelectorTokens
   cache?: CacheOptions
   defer?: DeferSpec
   fallback?: ReactNode
@@ -472,46 +461,18 @@ export type PartialBuilder<Opts, V = InferV<Opts>> = {
   (Render: (props: V & RenderArgs) => ReactNode): SpecComponent<object, Prettify<V & RenderArgs>>
 }
 
-// ─── Selector parsing & id derivation ─────────────────────────────────
+// ─── Id derivation ─────────────────────────────────────────────────────
 //
-// Selectors are flat lists of string labels. The parser strips leading
-// `#` or `.` as cosmetic (legacy CSS-style syntax keeps working), but
-// the framework no longer distinguishes "unique" from "shared" — all
-// labels are fan-out refetch targets. A spec's labels are stored on
-// its snapshot; `reload({selector: "foo"})` matches every spec whose
-// label set contains "foo" (or whose catalog id is "foo").
-
-interface ParsedSelector {
-  labels: string[]
-}
-
-function stripPrefix(tok: string): string {
-  if (tok.startsWith("#") || tok.startsWith(".")) return tok.slice(1)
-  return tok
-}
-
-function parseSelector(input: SelectorTokens): ParsedSelector {
-  const raw = Array.isArray(input)
-    ? input.map((t) => (typeof t === "string" ? t.trim() : "")).filter(Boolean)
-    : input
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter(Boolean)
-  if (raw.length === 0) {
-    throw new Error("parton: selector is empty")
-  }
-  const labels: string[] = []
-  for (const tok of raw) {
-    const name = stripPrefix(tok)
-    if (!name) throw new Error(`Empty selector token in "${tok}"`)
-    if (!labels.includes(name)) labels.push(name)
-  }
-  return { labels }
-}
+// A spec's catalog id derives from its Render function's name — the
+// name IS the identity: kebab-cased, with a trailing
+// Render/Page/Block/Partial/Component suffix stripped
+// (`PokemonHeroRender` → `"pokemon-hero"`). `displayName` wins over
+// `name` so factories that mint per-variant specs (one `parton()` call
+// per geometry / page window) can name each product explicitly.
 
 const STRIP_SUFFIXES = ["Render", "Page", "Block", "Partial", "Component"]
 
-function autoSelector(render: (...args: never[]) => unknown): SelectorTokens {
+export function autoSpecId(render: (...args: never[]) => unknown): string {
   const raw = (render as { displayName?: string; name?: string }).displayName ?? render.name ?? ""
   let stem = raw
   for (const suf of STRIP_SUFFIXES) {
@@ -529,9 +490,9 @@ function autoSelector(render: (...args: never[]) => unknown): SelectorTokens {
     // another.
     throw new Error(
       "parton: the Render function is anonymous, so no id can be derived. " +
-        "Name the function (its name is the parton's identity — " +
-        '`parton(async function ProductCard() {…})`) or pass an explicit ' +
-        'selector: `parton(Render, { selector: "#product-card", match })`.',
+        "Name the function — its name is the parton's identity: " +
+        "`parton(async function ProductCard() {…})` (or set `displayName` " +
+        "when a factory mints per-variant Renders).",
     )
   }
   return stem
@@ -592,16 +553,12 @@ function resolveFrameRequest(framePath: readonly string[]): Request {
 interface PartialBoundaryProps {
   id: string
   type: string
-  /** This registration's id is an author-declared (explicit-selector)
-   *  singleton — `registerPartial` rejects a second same-request
-   *  placement of it under a different parent. */
-  explicitId?: boolean
   parentPath: readonly string[]
-  /** Refetch labels carried by this rendered instance. Any
-   *  `reload({selector: "label"})` matching one of these labels
-   *  targets this spec. The first label is always `id` itself, so
-   *  refetching by spec catalog id works without an explicit
-   *  selector. */
+  /** Invalidation labels carried by this rendered instance — the
+   *  bump names that can touch it: `cell:<id>` for every cell it
+   *  resolved, plus the bare names of its `tag()` reads. A
+   *  `refreshSelector(name)` matching one of these re-renders this
+   *  parton (fp fold + wake delivery). */
   labels: string[]
   framePath: readonly string[]
   parentFrameChain: readonly string[]
@@ -653,7 +610,6 @@ interface PartialBoundaryProps {
 export function PartialBoundary({
   id,
   type,
-  explicitId,
   parentPath,
   labels,
   framePath,
@@ -697,7 +653,6 @@ export function PartialBoundary({
   }
   registerPartial(id, {
     type,
-    explicitId,
     fallback,
     labels: labelsWithCells,
     framePath,
@@ -1074,38 +1029,19 @@ export function _resetMatchPatterns(): void {
 
 interface InternalSpec<V> {
   /** Spec's catalog id (default render-time identity when no
-   *  per-instance `__instanceId` override is supplied). Derived from
-   *  `selector` or auto-named from `Render.name`. */
+   *  per-instance `__instanceId` override is supplied). Auto-derived
+   *  from `Render.name` — see `autoSpecId`. */
   id: string
   /** Spec catalog type tag (snapshot.type, used to find the spec
    *  Component in cache-mode refetch when the rendered id differs
    *  from spec.id via an `__instanceId` override). Equal to `id`. */
   type: string
-  parsed: ParsedSelector
   options: InternalSpecConfig<V>
   /** Compiled URLPattern for `options.match`, or `undefined` when
    *  the spec has no match. Compiled once at constructor time so
    *  every render-phase `exec` is cheap. */
   match?: CompiledMatch
   Render: (props: V & RenderArgs) => ReactNode
-  /** True iff the author explicitly declared at least one of
-   *  `selector`, `schema`, or `match`. Non-addressable specs (none of
-   *  the three) live entirely inside their parent's render — they
-   *  have no external refetch handle, so the per-spec fp cycle is
-   *  redundant for them. The render path uses this to gate the
-   *  `partialFingerprint` prop on `<PartialErrorBoundary>` and the
-   *  `emittedFp` snapshot field; the parent's descendant fold still
-   *  covers them for fp-skip safety. Auto-derived selectors (from
-   *  `Render.name`) don't count — they're an internal catalog-id
-   *  fallback, not an author-declared addressing surface. */
-  addressable: boolean
-  /** True iff the author declared `selector` — the id is an explicit
-   *  addressable identity, not an auto-derived catalog fallback. An
-   *  explicit id asserts SINGULARITY: it is never placement-folded
-   *  (see the identity ladder in `createSpecComponent`), and rendering
-   *  it at two placements in one request is an authoring error
-   *  (enforced by `registerPartial`). */
-  explicitId: boolean
 }
 
 /** Constant matchKey for specs with no match-bearing ancestor on the
@@ -1354,46 +1290,13 @@ function emitWithVariantSiblings(
 }
 
 /**
- * Resolve the render-time identity for a placement of `spec`.
- *
- *  - If the caller passed `__instanceId` (typically slot wiring in
- *    the CMS layer), that becomes this placement's effective id.
- *  - Otherwise the spec's own catalog id is used.
- *
- * The first label is replaced with the override; the spec's other
- * labels stay as fan-out targets for refetch.
- */
-function effectiveIdForInstance(
-  spec: InternalSpec<unknown>,
-  override: string | undefined,
-): {
-  id: string
-  parsed: ParsedSelector
-} {
-  if (override == null || override === spec.id) {
-    return { id: spec.id, parsed: spec.parsed }
-  }
-  // Per-instance placement: prepend the override as the new
-  // effective id, but KEEP the spec's original labels (including the
-  // catalog id at slot 0) as fan-out targets. Without this, a
-  // multi-instance partial like `LivePrice` (selector `"price"`)
-  // loses the "price" class label on per-instance refetch — and the
-  // next `?partials=price` request finds nothing.
-  const labels = [override, ...spec.parsed.labels.filter((l) => l !== override)]
-  return {
-    id: override,
-    parsed: { labels },
-  }
-}
-
-/**
  * Placement-identity fold — the third leg of the identity ladder
- * (`__instanceId` > props-hash > placement-path > spec.id). An
- * AUTO-minted effective id folds a hash of the ambient placement —
- * the parent id path AND the frame chain — so two placements of one
- * spec under different parents, or inside different `<Frame>`s, mint
- * DISTINCT ids: distinct wire wrappers, registry slots, client cache
- * slots, fp-trailer heals — instead of fighting over one identity
+ * (`__instanceId` > props-hash > placement-path > spec.id). A minted
+ * effective id folds a hash of the ambient placement — the parent id
+ * path AND the frame chain — so two placements of one spec under
+ * different parents, or inside different `<Frame>`s, mint DISTINCT
+ * ids: distinct wire wrappers, registry slots, client cache slots,
+ * fp-trailer heals — instead of fighting over one identity
  * (hydration mismatch + display collapse on every document load; for
  * frame divergence, one placement's cached content fp-confirmed
  * against the other's).
@@ -1404,12 +1307,6 @@ function effectiveIdForInstance(
  * placements (both axes empty) stay bare — same-placement chrome
  * across routes keeps sharing one identity byte-for-byte, which is
  * what lets chrome fp-skip across routes.
- *
- * Labels are NOT folded: they are class-level fan-out targets
- * (`reload({selector})`, `?partials=<label>`) and must keep matching
- * every placement. Explicit-selector ids are never folded — an
- * author-declared addressable id asserts singularity (enforced by
- * `registerPartial`'s duplicate-placement gate).
  */
 const PLACEMENT_FOLD_RE = /~[0-9a-f]{16}$/
 
@@ -1444,7 +1341,7 @@ function createSpecComponent<V>(
     // Parent comes from server context (the ambient parton, threaded
     // through the parton ALS frame — see server-context.ts), NOT a prop.
     // `__parent` overrides it for isolated renders that are their own
-    // render root: a cache hole, a `<RemoteFrame>`, an addressable
+    // render root: a cache hole, a `<RemoteFrame>`, a targeted
     // refetch (`partialFromSnapshot`), where there is no ambient parton.
     const parent = __injectedParent ?? getServerContext(ParentContext)
     const opts = spec.options
@@ -1461,37 +1358,52 @@ function createSpecComponent<V>(
     //      sku="B"/>`) each get a distinct id, instead of all
     //      collapsing onto the spec's catalog id and fighting for
     //      one registry slot;
-    //   3. composed on top of 2 (never replacing it), AUTO-derived
-    //      ids fold the ambient placement — parent path + frame
-    //      chain (`applyPlacementFold`) — so two placements of one
-    //      spec under DIFFERENT parents or frames are distinct
-    //      instances even with identical props. Explicit `selector`
-    //      ids skip this leg: an author-declared id asserts
-    //      singularity.
+    //   3. composed on top of 2 (never replacing it), the id folds
+    //      the ambient placement — parent path + frame chain
+    //      (`applyPlacementFold`) — so two placements of one spec
+    //      under DIFFERENT parents or frames are distinct instances
+    //      even with identical props.
     //   4. otherwise just `spec.id` (root-level singleton).
     //
-    // The auto-derivation steps keep the snapshot store one entry
-    // per actual on-page placement without forcing authors to thread
-    // an explicit instance-id prop through every site.
+    // The derivation steps keep the snapshot store one entry per
+    // actual on-page placement without forcing authors to thread an
+    // explicit instance-id prop through every site.
     const autoInstanceKey =
       instanceIdOverride === undefined && Object.keys(extraProps).length > 0
         ? hash(stableStringify(extraProps))
         : undefined
     const effectiveInstanceId =
       instanceIdOverride ?? (autoInstanceKey ? `${spec.id}:${autoInstanceKey}` : undefined)
-    const { id: baseMintedId, parsed } = effectiveIdForInstance(
-      spec as InternalSpec<unknown>,
-      effectiveInstanceId,
-    )
+    const baseMintedId = effectiveInstanceId ?? spec.id
+    // The per-instance key handed to Render (`__instanceId` in
+    // `renderProps` below) — the caller-managed identity, undecorated.
+    //
+    // Effective ids carry this PLACEMENT's framework-reserved terms:
+    // the embed-namespace prefix and the placement-fold suffix. They
+    // key the WIRE identity — never a Render's per-instance work. A
+    // block reads the same CMS row wherever it is placed; placement
+    // discriminates instances, not content.
+    //
+    // The two paths hand this prop in decorated differently: a
+    // streaming render mints the decorations BELOW this point, so
+    // `effectiveInstanceId` is already bare, while snapshot replay
+    // (`partialFromSnapshot`) hands its stored — fully decorated — id
+    // back through `instanceIdOverride`. Undecorating reconciles them
+    // on the one value Render sees, so both sides of the fp-skip
+    // handshake resolve ONE content key. Both strips parse
+    // framework-reserved grammar (`~` can never appear in an app id),
+    // so each is a protocol signal, not a guess.
+    const instanceKey =
+      effectiveInstanceId === undefined
+        ? undefined
+        : stripPlacementFold(stripEmbedNamespace(effectiveInstanceId))
     // Placement fold (ladder leg 3). Gated on `instanceIdOverride`
     // being absent — a caller-supplied id is caller-managed identity,
     // and snapshot replay (`partialFromSnapshot`) passes stored ids
     // through `__instanceId`, which is exactly what keeps the fold
     // idempotent across streaming render and targeted refetch.
     const mintedId =
-      instanceIdOverride === undefined &&
-      !spec.explicitId &&
-      (parent.path.length > 0 || parent.frameChain.length > 0)
+      instanceIdOverride === undefined && (parent.path.length > 0 || parent.frameChain.length > 0)
         ? applyPlacementFold(baseMintedId, parent)
         : baseMintedId
     // Placement-scoped embed namespace: an embed render (marked by the
@@ -1499,19 +1411,14 @@ function createSpecComponent<V>(
     // host's placement namespace into every effective id it mints, so
     // duplicate embeds of one page — and a page embedding ITSELF —
     // carry distinct, hydration-stable ids on the wire and in every
-    // registry. Labels stay bare: they are class-level fan-out
-    // targets, and the producer's own invalidation selectors must
+    // registry. Labels stay bare: they name the parton's cell/tag
+    // invalidation subscriptions, and the producer's own bumps must
     // keep matching them. Idempotent: a focused `?partials=` refetch
     // passes stored (already-prefixed) ids through `__instanceId`
     // while the descendants it spawns mint bare ids — both routes
     // converge on the same prefixed identity.
     const embedNs = embedNamespaceOf(getRequest().headers)
     const id = embedNs !== null ? applyEmbedNamespace(embedNs, mintedId) : mintedId
-    // An explicit-selector id rendered without a caller-managed
-    // override asserts singularity for this request — flagged on the
-    // registration so `registerPartial` can reject a second placement
-    // of the same id under a different parent (see its gate).
-    const explicitSingleton = spec.explicitId && instanceIdOverride === undefined
     // Vocabulary-constrained embed render (a grant set without
     // `client` — the Paint tier and everything below the Client
     // grant): the payload may carry no client modules, so the whole
@@ -1781,15 +1688,14 @@ function createSpecComponent<V>(
       resolutionParts.sort()
       schemaKeyHash = `|schema=${hash(resolutionParts.join("|"))}`
     }
-    // Fold `tag(name)` registrations (schema-phase server-hook) into the
-    // label set alongside cell labels, so they participate in the fp's
-    // queryMatchingTs fold and in selector-targeted refetch. Empty for
-    // any spec that never calls tag() — byte-identical to before.
+    // The parton's invalidation-label set: `cell:<id>` for every cell
+    // it resolved (schema-phase), plus the bare names of its `tag()`
+    // reads. These are the bump names that can touch it — they
+    // participate in the fp's queryMatchingTs fold and in the wake
+    // index's delivery keying. Empty for a parton that resolves no
+    // cells and reads no tags.
     const tagLabels = selfTags.size > 0 ? [...selfTags] : []
-    const expandedLabels =
-      cellLabels.length > 0 || tagLabels.length > 0
-        ? [...parsed.labels, ...cellLabels, ...tagLabels]
-        : parsed.labels
+    const expandedLabels = [...cellLabels, ...tagLabels]
 
     // ── Fingerprint ──
     // The spec's "own" fp captures only what THIS spec depends on:
@@ -1817,11 +1723,12 @@ function createSpecComponent<V>(
     // collapses the layout instead of substituting in a spacer.
     // Fold in the latest `refreshSelector` ts that matches any of
     // this spec's labels AND whose constraints (if any) are a subset
-    // of constraint inputs. Server-side `getServerNavigation().reload({selector})`
-    // bumps the registry; partials carrying matching labels see their
-    // fp shift on the next render, mismatching the client's cached fp,
-    // and emit fresh content. No registry entries → 0 → no
-    // contribution; same fp as before the registry existed.
+    // of constraint inputs. A cell write or a server-side tag bump
+    // (`refreshSelector(name)`) advances the registry; partons
+    // carrying matching labels see their fp shift on the next render,
+    // mismatching the client's cached fp, and emit fresh content. No
+    // registry entries → 0 → no contribution; same fp as before the
+    // registry existed.
     // Constraint surface for selector-constrained invalidation:
     // merge match params with bound args from any resolved cells
     // (schema OR props). `cell:<id>?key=value` selectors match
@@ -1867,31 +1774,14 @@ function createSpecComponent<V>(
     const structuralFp = hash(`${ownStructuralFp}${descendantFold}`)
     const fp = hash(`${ownStructuralFp}${ambientFrameKey}${descendantFold}`)
 
-    // Non-addressable specs (no author-declared selector/schema/match)
-    // don't ship an fp on the wire — they have no external refetch
-    // handle, so the per-spec fp cycle (boundary prop + trailer entry
-    // + client-side registration + next-nav `?cached=` triple) is
-    // redundant. The parent's descendant fold still covers their deps
-    // for fp-skip safety, and snapshots still record their varyKey so
-    // ancestors compute correct fold contributions. Only the wire
-    // identity is collapsed; structural identity is preserved.
-    //
-    // Spread, don't pass `undefined`: Flight serializes
-    // `prop={undefined}` on a client component as the `"$undefined"`
-    // sentinel (real bytes on the wire), whereas an omitted prop
-    // emits nothing. `fpProp` is `{}` for non-addressable specs,
-    // dropping the key entirely from the serialized prop bag.
-    const fpProp: { partialFingerprint?: string } = spec.addressable
-      ? { partialFingerprint: fp }
-      : {}
-    // Server-internal: PartialBoundary's `emittedFp` never crosses
-    // the wire (PartialBoundary is a server component whose only job
-    // is to call `registerPartial`; only its `children` reach the
-    // client). Passing `undefined` here is free, and
-    // `computeFpUpdates` in fp-trailer.ts already skips
-    // `!snap.emittedFp` — so non-addressable specs are absent from
-    // the trailer too.
-    const snapshotFp = spec.addressable ? fp : undefined
+    // Every parton is addressable: the fp ships on the wire (the
+    // boundary prop the client registers under this id + matchKey),
+    // the snapshot records it as `emittedFp` (the fp-trailer's
+    // cold→warm heal base), and the id joins the client's `?cached=`
+    // manifest — so a bare `parton(Render)` fp-skips across
+    // navigations exactly like a match-gated one.
+    const fpProp: { partialFingerprint: string } = { partialFingerprint: fp }
+    const snapshotFp = fp
 
     // ── Culled emission ──
     // The body never runs. The wire carries the pair — the skeleton
@@ -1923,7 +1813,6 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
-          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -2010,10 +1899,7 @@ function createSpecComponent<V>(
       !vocabConstrained
 
     if (state) {
-      // No uniqueness checks. Selectors are flat labels with fan-out
-      // semantics — multiple placements of the same spec share their
-      // labels and refetch together. seenIds stays as a debug-only
-      // record of what rendered this request.
+      // seenIds is a debug-only record of what rendered this request.
       state.seenIds.add(id)
     }
 
@@ -2024,17 +1910,19 @@ function createSpecComponent<V>(
     // Render receives: extra JSX-prop pass-through, match params,
     // resolved schema + actions, framework-managed (children).
     //
-    // `__instanceId` is also forwarded — partial.tsx already used it
-    // to derive the effective id, but a Render that wraps another
-    // Render (e.g. the CMS block wrapper in `runtime/cms-block.ts`)
-    // needs to see it too so it can route its own per-instance work
-    // (CMS content key resolution, etc.). Plain Renders just ignore
-    // the prop.
+    // `__instanceId` is also forwarded — as the UNDECORATED instance
+    // key (see `instanceKey` above), not the effective wire id. A
+    // Render that wraps another Render (e.g. the CMS block wrapper in
+    // `runtime/cms-block.ts`) routes its own per-instance work off it
+    // (CMS content key resolution, etc.), and that work is
+    // placement-independent: it must resolve identically whether this
+    // render is the streaming one or a replay from a snapshot. Plain
+    // Renders just ignore the prop.
     const renderProps = {
       ...resolvedExtraProps,
       ...(varyResult as object),
       children: outerChildren,
-      ...(effectiveInstanceId !== undefined ? { __instanceId: effectiveInstanceId } : {}),
+      ...(instanceKey !== undefined ? { __instanceId: instanceKey } : {}),
     } as V & RenderArgs
     const fallback = opts.fallback ?? null
 
@@ -2084,7 +1972,6 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
-          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -2125,7 +2012,6 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
-          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -2235,7 +2121,6 @@ function createSpecComponent<V>(
         <PartialBoundary
           id={id}
           type={spec.type}
-          explicitId={explicitSingleton || undefined}
           parentPath={parent.path}
           labels={expandedLabels}
           framePath={ourFrameChain}
@@ -2315,33 +2200,17 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   const match = options.match ? compileMatch(options.match) : undefined
   if (match) registerMatch(match)
 
-  // Selector parsing: flat labels, no unique/shared distinction. The
-  // spec catalog id (`spec.id`) is the FIRST label. Auto-derives from
-  // `Render.name` when no selector is given (`AppNavRender` →
-  // `"app-nav"`).
-  const selectorInput = options.selector ?? autoSelector(Render)
-  const parsed = parseSelector(selectorInput)
-  const id = parsed.labels[0]
+  // The Render function's name is the spec's identity — kebab-cased
+  // (`AppNavRender` → `"app-nav"`). See `autoSpecId`.
+  const id = autoSpecId(Render)
   const type = id
-
-  // Author-declared addressability: any one of selector / schema /
-  // match. Auto-derived selectors (the `?? autoSelector(Render)`
-  // fallback above) don't count — they only exist to give the catalog
-  // a unique id. A spec with none of the three is a structural child
-  // of its parent and cannot be the target of selective refetch,
-  // session/tag invalidation, or URL-driven variant carve-out.
-  const addressable = options.selector !== undefined || options.match !== undefined
-  const explicitId = options.selector !== undefined
 
   const spec: InternalSpec<V> = {
     id,
     type,
-    parsed,
     options,
     match,
     Render,
-    addressable,
-    explicitId,
   }
 
   const baseComponent = createSpecComponent(spec)
@@ -2353,12 +2222,10 @@ function buildSpecComponent<V extends object, Extra = Record<string, unknown>>(
   // successful claim.
   registerSpec({
     id,
-    labels: parsed.labels,
     Component: baseComponent as unknown as FC<SpecComponentProps>,
     match,
     displayName:
       (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? "anon",
-    addressable,
     capabilityType: options.capabilityType,
     fpSkip: options.fpSkip,
     cells: options.cells,

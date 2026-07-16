@@ -63,49 +63,53 @@ export type ChunkComponent = (props: ChunkPos) => React.ReactNode | Promise<Reac
 export function defineWorldChunk(geo: WorldGeometry): ChunkComponent {
   const pulse = definePulse(geo)
   return parton(
-    async function WorldChunkRender({ cx, cy }: ChunkPos & RenderArgs) {
-      const clock = time()
-      const gx = geo.chunkOrigin(cx)
-      const gy = geo.chunkOrigin(cy)
-      const flaky = inFlakyDistrict(gx, gy)
-      if (flaky) {
-        const outage = flakyOutage(cx, cy, clock.now)
-        if (outage.failing) {
-          throw new Error(
-            `flaky district: chunk ${cx},${cy} loader failed (bucket ${outage.bucket})`,
-          )
+    // One spec per geometry — the factory names each product
+    // (`world-chunk`, `world-chunk-128`, …); the name is the identity.
+    Object.assign(
+      async function WorldChunkRender({ cx, cy }: ChunkPos & RenderArgs) {
+        const clock = time()
+        const gx = geo.chunkOrigin(cx)
+        const gy = geo.chunkOrigin(cy)
+        const flaky = inFlakyDistrict(gx, gy)
+        if (flaky) {
+          const outage = flakyOutage(cx, cy, clock.now)
+          if (outage.failing) {
+            throw new Error(
+              `flaky district: chunk ${cx},${cy} loader failed (bucket ${outage.bucket})`,
+            )
+          }
         }
-      }
-      const anchor = await pulse.cell.resolve({ cx, cy })
-      // Milliseconds alive, derived — anchor row + render clock, no
-      // producer. The beat declaration is the whole cadence machinery.
-      const alive = Math.max(0, clock.now - anchor.value)
-      expires(pulse.nextBeat(cx, cy, clock.now))
-      const isDistrictCorner = flaky && gx === FLAKY_DISTRICT.x0 && gy === FLAKY_DISTRICT.y0
-      const auction = inAuctionDistrict(gx, gy)
-      const embassy = inEmbassyDistrict(gx, gy)
-      const modifier = flaky
-        ? " chunk--flaky"
-        : auction
-          ? " chunk--auction"
-          : embassy
-            ? " chunk--embassy"
-            : ""
-      return (
-        <div className={`chunk${modifier}`} data-testid={`chunk-${cx},${cy}`} data-loaded>
-          <span className="chunk__coord">
-            {cx},{cy}
-          </span>
-          <ActivityLight ck={`${cx},${cy}`} stamp={alive} />
-          <span className="chunk__pulse">{alive}ms</span>
-          {flaky ? <StaleBadge /> : null}
-          {cx === 0 && cy === 0 ? <OriginCard /> : null}
-          {isDistrictCorner ? <FlakyDistrictCard /> : null}
-        </div>
-      )
-    },
+        const anchor = await pulse.cell.resolve({ cx, cy })
+        // Milliseconds alive, derived — anchor row + render clock, no
+        // producer. The beat declaration is the whole cadence machinery.
+        const alive = Math.max(0, clock.now - anchor.value)
+        expires(pulse.nextBeat(cx, cy, clock.now))
+        const isDistrictCorner = flaky && gx === FLAKY_DISTRICT.x0 && gy === FLAKY_DISTRICT.y0
+        const auction = inAuctionDistrict(gx, gy)
+        const embassy = inEmbassyDistrict(gx, gy)
+        const modifier = flaky
+          ? " chunk--flaky"
+          : auction
+            ? " chunk--auction"
+            : embassy
+              ? " chunk--embassy"
+              : ""
+        return (
+          <div className={`chunk${modifier}`} data-testid={`chunk-${cx},${cy}`} data-loaded>
+            <span className="chunk__coord">
+              {cx},{cy}
+            </span>
+            <ActivityLight ck={`${cx},${cy}`} stamp={alive} />
+            <span className="chunk__pulse">{alive}ms</span>
+            {flaky ? <StaleBadge /> : null}
+            {cx === 0 && cy === 0 ? <OriginCard /> : null}
+            {isDistrictCorner ? <FlakyDistrictCard /> : null}
+          </div>
+        )
+      },
+      { displayName: geo.chunkSpecId },
+    ),
     {
-      selector: `#${geo.chunkSpecId}`,
       // The byte-cache predictive warming fills (see ./warm.ts): the
       // scroller's telemetry projects which parked chunks the viewport
       // will reach, the warm pass renders them in here, and the real

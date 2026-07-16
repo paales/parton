@@ -44,34 +44,39 @@ function defineQuadLevel(
 ): QuadLevel {
   const half = size / 2
   return parton(
-    function QuadTileRender({ x, y }: QuadPos & RenderArgs) {
-      const cells: React.ReactNode[] = []
-      for (let dy = 0; dy < 2; dy++) {
-        for (let dx = 0; dx < 2; dx++) {
-          const cellX = x + dx * half
-          const cellY = y + dy * half
-          cells.push(
-            <div
-              key={`${dx},${dy}`}
-              className="quad"
-              style={{ left: dx * half, top: dy * half, width: half, height: half }}
-            >
-              {Child === null ? (
-                <Chunk
-                  cx={(cellX - CENTER_PX) / geo.chunkPx}
-                  cy={(cellY - CENTER_PX) / geo.chunkPx}
-                />
-              ) : (
-                <Child x={cellX} y={cellY} />
-              )}
-            </div>,
-          )
+    // One spec per (geometry, level) — the factory names each product;
+    // the Render name is the identity (`quad-tile-4096`,
+    // `quad-tile-1024-128`, …).
+    Object.assign(
+      function QuadTileRender({ x, y }: QuadPos & RenderArgs) {
+        const cells: React.ReactNode[] = []
+        for (let dy = 0; dy < 2; dy++) {
+          for (let dx = 0; dx < 2; dx++) {
+            const cellX = x + dx * half
+            const cellY = y + dy * half
+            cells.push(
+              <div
+                key={`${dx},${dy}`}
+                className="quad"
+                style={{ left: dx * half, top: dy * half, width: half, height: half }}
+              >
+                {Child === null ? (
+                  <Chunk
+                    cx={(cellX - CENTER_PX) / geo.chunkPx}
+                    cy={(cellY - CENTER_PX) / geo.chunkPx}
+                  />
+                ) : (
+                  <Child x={cellX} y={cellY} />
+                )}
+              </div>,
+            )
+          }
         }
-      }
-      return <>{cells}</>
-    },
+        return <>{cells}</>
+      },
+      { displayName: `quad-tile-${size}${geo.suffix}` },
+    ),
     {
-      selector: `#quad-tile-${size}${geo.suffix}`,
       cull: {
         rootMargin: `${geo.quadMaterializeMargin(size)}px`,
         seed: ({ x, y }: QuadPos) => seedIntersects(x, y, size),

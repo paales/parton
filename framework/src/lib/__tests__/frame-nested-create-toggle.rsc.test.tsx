@@ -32,28 +32,27 @@ import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { pathname } from "../server-hooks.ts"
 
-const MenuTab = parton(
-  function MenuTabRender(_: RenderArgs) {
-    return <div data-tab>{`tab:${pathname()}`}</div>
-  },
-  { selector: "menu-tab" },
-)
+const MenuTab = parton(function MenuTabRender(_: RenderArgs) {
+  return <div data-tab>{`tab:${pathname()}`}</div>
+})
 // The outer menu frame: `closed` has no nested frame; `about` places it.
 const MenuFrame = parton(
-  function MenuFrameRender(_: RenderArgs) {
-    const state = pathname()
-    if (state === "/menu/about") {
-      return (
-        <div data-about>
-          <Frame name="tab" initialUrl="/general">
-            <MenuTab />
-          </Frame>
-        </div>
-      )
-    }
-    return <div data-closed>{`menu:${state}`}</div>
-  },
-  { selector: "menu" },
+  Object.assign(
+    function MenuFrameRender(_: RenderArgs) {
+      const state = pathname()
+      if (state === "/menu/about") {
+        return (
+          <div data-about>
+            <Frame name="tab" initialUrl="/general">
+              <MenuTab />
+            </Frame>
+          </div>
+        )
+      }
+      return <div data-closed>{`menu:${state}`}</div>
+    },
+    { displayName: "menu" },
+  ),
 )
 const Page = (): ReactNode => (
   <PartialRoot>

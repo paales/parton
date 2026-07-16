@@ -74,7 +74,7 @@ describe("duplicate spec id — newer generation (HMR re-evaluation)", () => {
     const SpecB = makeSpecB()
 
     // The catalog now resolves to the newest definition — an isolated
-    // reconstruction (a lane, a selector refetch, a cache hole)
+    // reconstruction (a lane, an id-forced refetch, a cache hole)
     // renders the NEW body, in lockstep with whole-tree renders.
     const entry = getSpecById("same-name")
     expect(entry).toBeDefined()
@@ -85,29 +85,22 @@ describe("duplicate spec id — newer generation (HMR re-evaluation)", () => {
 })
 
 describe("anonymous Render — no derivable identity", () => {
-  it("an anonymous Render with no selector throws at construct time", () => {
+  it("an anonymous Render throws at construct time", () => {
     let thrown: Error | null = null
     try {
       // An arrow passed directly into parton() gets NO inferred name —
       // there is nothing stable to derive the id from, and any
       // fallback shared across anonymous specs collides (the field
       // report: two anonymous specs both minted "anon" and tripped
-      // the duplicate-id gate with a misleading message).
+      // the duplicate-id gate with a misleading message). The Render
+      // name IS the identity, so an anonymous Render has none — the
+      // fix is to name the function.
       parton((_: RenderArgs) => <div />, "/anon-spec")
     } catch (e) {
       thrown = e as Error
     }
     expect(thrown).not.toBeNull()
     expect(thrown!.message).toContain("anonymous")
-    expect(thrown!.message).toContain("selector")
-  })
-
-  it("an anonymous Render WITH an explicit selector is fine", () => {
-    const Spec = parton((_: RenderArgs) => <div data-testid="anon-ok" />, {
-      match: "/anon-spec-ok",
-      selector: "#anon-ok",
-    })
-    expect(Spec).toBeDefined()
-    expect(getSpecById("anon-ok")).toBeDefined()
+    expect(thrown!.message).toContain("Name the function")
   })
 })

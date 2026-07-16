@@ -40,12 +40,15 @@ async function flightAt(
 // old "do request reads in schema" convention existed to forbid.
 let renderSeq = 0
 const CachedFlavor = parton(
-  function CachedFlavorRender(_: RenderArgs) {
-    const flavor = cookie("flavor") ?? "none"
-    renderSeq++
-    return <span>{`cached-flavor:${flavor}:render#${renderSeq}`}</span>
-  },
-  { selector: "#cache-write-key", cache: { maxAge: 60 } },
+  Object.assign(
+    function CachedFlavorRender(_: RenderArgs) {
+      const flavor = cookie("flavor") ?? "none"
+      renderSeq++
+      return <span>{`cached-flavor:${flavor}:render#${renderSeq}`}</span>
+    },
+    { displayName: "cache-write-key" },
+  ),
+  { cache: { maxAge: 60 } },
 )
 
 const tree = (

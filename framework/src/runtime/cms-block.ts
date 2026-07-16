@@ -12,21 +12,29 @@
  *     author's Render.
  *   - Records the row as a `cms:<contentKey>` tracked dependency, so
  *     the partial's fingerprint re-reads the content hash on every
- *     fold and moves on CMS edits.
+ *     fold and moves on CMS edits — and registers the row as a
+ *     `cms:<contentKey>` tag, so an editor write's
+ *     `refreshSelector("cms:<key>")` wakes exactly the instance
+ *     bound to the edited row.
  *   - Registers as a slot block (`registerSlotBlockMeta`) so the
  *     editor catalog manifest can enumerate it and slot lookups
  *     can resolve `entry.type` to this Component.
+ *
+ * A block's identity is its Render function's name, exactly like a
+ * parton: `HeroRender` → catalog type `"hero"` — which is also the
+ * CMS storage key for singleton placements.
  */
 
 import { createElement, type ReactNode } from "react"
 import {
   _buildPartial,
+  autoSpecId,
   type PartialOptions,
   type RenderArgs,
   type SpecComponent,
   type SpecExtraProps,
 } from "../lib/partial.tsx"
-import { getCurrentParton } from "../lib/current-parton.ts"
+import { getCurrentParton, tag } from "../lib/current-parton.ts"
 import { createCmsReadSurface, registerSlotBlockMeta, type CmsReadSurface } from "./cms-runtime.ts"
 import { getRequest } from "./context.ts"
 
@@ -53,49 +61,6 @@ export type BlockOptions<V, S> = PartialOptions<V> & {
   schema?: (scope: SchemaScope) => S
 }
 
-const STRIP_SUFFIXES = ["Render", "Page", "Block", "Partial", "Component"]
-
-function autoDerivedId(Render: (...args: never[]) => unknown): string {
-  const raw = (Render as { displayName?: string; name?: string }).displayName ?? Render.name ?? ""
-  let stem = raw
-  for (const suf of STRIP_SUFFIXES) {
-    if (stem.endsWith(suf) && stem.length > suf.length) {
-      stem = stem.slice(0, -suf.length)
-      break
-    }
-  }
-  if (!stem) stem = "anon"
-  return stem
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/[_\s]+/g, "-")
-    .toLowerCase()
-}
-
-/**
- * Block spec id. Inspects the RAW selector string for a leading `#`
- * token — if present, that token IS the spec id (singleton case:
- * `#app-nav` → id `"app-nav"`, the CMS storage row the block reads
- * from). Otherwise the id auto-derives from `Render.name`, matching
- * the slot entry `type` field in `content.json` for multi-instance
- * blocks (`HeroRender` → `"hero"`).
- *
- * `.classes` and unprefixed labels in the selector are purely refetch
- * labels — they don't influence the spec id.
- */
-function deriveSpecId(Render: (...args: never[]) => unknown, selector: unknown): string {
-  const tokens =
-    typeof selector === "string"
-      ? selector.trim().split(/\s+/)
-      : Array.isArray(selector)
-        ? selector.map(String)
-        : []
-  for (const tok of tokens) {
-    const trimmed = tok.trim()
-    if (trimmed.startsWith("#") && trimmed.length > 1) return trimmed.slice(1)
-  }
-  return autoDerivedId(Render)
-}
-
 export function block<
   V extends object = object,
   S extends object = object,
@@ -104,7 +69,11 @@ export function block<
   Render: (props: R) => ReactNode,
   opts: BlockOptions<V, S> = {} as BlockOptions<V, S>,
 ): SpecComponent<SpecExtraProps<R, V & S>, R> {
-  const specId = deriveSpecId(Render as (...args: never[]) => unknown, opts.selector)
+  // The block's catalog type + singleton storage key — the Render
+  // name, kebab-cased (`HeroRender` → `"hero"`). Same derivation the
+  // partial layer applies; computed here too because the CMS layer
+  // needs it for the slot-block side-table before the spec exists.
+  const specId = autoSpecId(Render as (...args: never[]) => unknown)
 
   // Wrap the author's Render with a CMS-aware front-end. partial.tsx
   // sees this wrapper as its `Render` and knows nothing about CMS;
@@ -128,6 +97,12 @@ export function block<
     // → `/cms-demo/beta`) wouldn't move the fp and the spec would
     // fp-skip with stale cached content.
     getCurrentParton()?.deps.add(`cms:${contentKey}`)
+    // And as a TAG — the event-shaped half: an editor write fires
+    // `refreshSelector("cms:<key>")`, which wakes the live preview's
+    // held connection and lanes exactly this instance. The hash dep
+    // above covers freshness (store-and-reread); the tag covers
+    // delivery.
+    tag(`cms:${contentKey}`)
     const cms = createCmsReadSurface(contentKey, getRequest())
     let schemaResult: S | object = {}
     if (opts.schema) {
@@ -143,34 +118,17 @@ export function block<
       children,
     })
   }
+  // The wrapper is what partial.tsx derives the catalog id from —
+  // carry the block's identity through it (every block shares the
+  // `BlockRender` function name otherwise).
+  BlockRender.displayName = specId
 
-  // Build the selector passed to `_buildPartial` so that the first
-  // label is always the block's `specId` (which the partial layer
-  // will then use as the catalog id). User's class labels follow.
-  // Without prepending, the partial layer would auto-derive id from
-  // the wrapper's name (`BlockRender`) or take the user's first label
-  // (which for `selector: ".page-block"` is `.page-block` — not
-  // what `content.json` keys against).
-  const rawTokens =
-    typeof opts.selector === "string"
-      ? opts.selector.trim().split(/\s+/).filter(Boolean)
-      : Array.isArray(opts.selector)
-        ? opts.selector
-            .map(String)
-            .map((t) => t.trim())
-            .filter(Boolean)
-        : []
-  const userLabels = rawTokens
-    .map((t) => (t.startsWith("#") || t.startsWith(".") ? t.slice(1) : t))
-    .filter((t) => t.length > 0)
-  const allLabels = [specId, ...userLabels.filter((l) => l !== specId)]
   const partialOptions: PartialOptions<V & S> = {
     match: opts.match,
     cache: opts.cache,
     defer: opts.defer,
     fallback: opts.fallback,
     keepalive: opts.keepalive,
-    selector: allLabels,
   }
 
   const spec = _buildPartial(BlockRender as never, partialOptions)

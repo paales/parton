@@ -11,7 +11,7 @@ export const PageRootBlock = block(
   },
   {
     schema: ({ cms }) => ({
-      body: cms.blocks("body", ".page-block"),
+      body: cms.blocks("body"),
     }),
   },
 )

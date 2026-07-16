@@ -26,22 +26,16 @@ const silentError = () => {}
  *  settlement is per-parton, not per-request. */
 export async function siblingSettleScenario(): Promise<void> {
   const events: string[] = []
-  const Fast = parton(
-    function SettleSibFastRender({}: RenderArgs) {
-      _onPartonSettled(() => events.push("fast-settled"))
-      return <span>fast</span>
-    },
-    { selector: "settle-sib-fast" },
-  )
-  const Slow = parton(
-    async function SettleSibSlowRender({}: RenderArgs) {
-      _onPartonSettled(() => events.push("slow-settled"))
-      await delay(50)
-      events.push("slow-loaded")
-      return <span>slow</span>
-    },
-    { selector: "settle-sib-slow" },
-  )
+  const Fast = parton(function SettleSibFastRender({}: RenderArgs) {
+    _onPartonSettled(() => events.push("fast-settled"))
+    return <span>fast</span>
+  })
+  const Slow = parton(async function SettleSibSlowRender({}: RenderArgs) {
+    _onPartonSettled(() => events.push("slow-settled"))
+    await delay(50)
+    events.push("slow-loaded")
+    return <span>slow</span>
+  })
   await renderWithRequest(
     "http://t/settle-sib",
     <div>
@@ -62,26 +56,20 @@ export async function siblingSettleScenario(): Promise<void> {
  *  serialized immediately. Own-task completion is not subtree settlement. */
 export async function nestedSettleScenario(): Promise<void> {
   const events: string[] = []
-  const Child = parton(
-    async function SettleNestChildRender({}: RenderArgs) {
-      _onPartonSettled(() => events.push("child-settled"))
-      await delay(50)
-      events.push("child-loaded")
-      return <span>child</span>
-    },
-    { selector: "settle-nest-child" },
-  )
-  const Parent = parton(
-    function SettleNestParentRender({}: RenderArgs) {
-      _onPartonSettled(() => events.push("parent-settled"))
-      return (
-        <div>
-          <Child />
-        </div>
-      )
-    },
-    { selector: "settle-nest-parent" },
-  )
+  const Child = parton(async function SettleNestChildRender({}: RenderArgs) {
+    _onPartonSettled(() => events.push("child-settled"))
+    await delay(50)
+    events.push("child-loaded")
+    return <span>child</span>
+  })
+  const Parent = parton(function SettleNestParentRender({}: RenderArgs) {
+    _onPartonSettled(() => events.push("parent-settled"))
+    return (
+      <div>
+        <Child />
+      </div>
+    )
+  })
   await renderWithRequest("http://t/settle-nest", <Parent />)
   expect(events.filter((e) => e === "child-settled")).toHaveLength(1)
   expect(events.filter((e) => e === "parent-settled")).toHaveLength(1)
@@ -101,17 +89,14 @@ export async function errorSettleScenario(): Promise<void> {
     events.push("boom-thrown")
     throw new Error("settle-boom")
   }
-  const Errory = parton(
-    function SettleErrRender({}: RenderArgs) {
-      _onPartonSettled(() => events.push("err-settled"))
-      return (
-        <div>
-          <Boom />
-        </div>
-      )
-    },
-    { selector: "settle-err" },
-  )
+  const Errory = parton(function SettleErrRender({}: RenderArgs) {
+    _onPartonSettled(() => events.push("err-settled"))
+    return (
+      <div>
+        <Boom />
+      </div>
+    )
+  })
   await renderWithRequest("http://t/settle-err", <Errory />, { onError: silentError })
   // Give a hypothetical double-fire (a second decrement path racing the
   // first) the chance to surface before counting.
@@ -125,23 +110,17 @@ export async function errorSettleScenario(): Promise<void> {
  *  counter leaks and no callback fires twice. */
 export async function abortSettleScenario(): Promise<void> {
   const events: string[] = []
-  const Fast = parton(
-    function SettleAbortFastRender({}: RenderArgs) {
-      _onPartonSettled(() => events.push("fast-settled"))
-      return <span>fast</span>
-    },
-    { selector: "settle-abort-fast" },
-  )
-  const Hang = parton(
-    async function SettleAbortHangRender({}: RenderArgs) {
-      _onPartonSettled(() => events.push("hang-settled"))
-      events.push("hang-started")
-      // Never resolves — only the abort can terminate this subtree's task.
-      await new Promise<never>(() => {})
-      return null
-    },
-    { selector: "settle-abort-hang" },
-  )
+  const Fast = parton(function SettleAbortFastRender({}: RenderArgs) {
+    _onPartonSettled(() => events.push("fast-settled"))
+    return <span>fast</span>
+  })
+  const Hang = parton(async function SettleAbortHangRender({}: RenderArgs) {
+    _onPartonSettled(() => events.push("hang-settled"))
+    events.push("hang-started")
+    // Never resolves — only the abort can terminate this subtree's task.
+    await new Promise<never>(() => {})
+    return null
+  })
   const ac = new AbortController()
   const timer = setTimeout(() => {
     events.push("abort-fired")

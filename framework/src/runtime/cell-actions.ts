@@ -40,8 +40,11 @@
  */
 
 import { writeOneCell } from "./cell-write.ts"
-import { buildCellSelector, runInvalidationTransaction } from "./invalidation-registry.ts"
-import { getServerNavigation } from "./server-navigation.ts"
+import {
+  buildCellSelector,
+  refreshSelector,
+  runInvalidationTransaction,
+} from "./invalidation-registry.ts"
 import { _getCellWriteDelay } from "./cell-write-delay.ts"
 
 /**
@@ -52,8 +55,8 @@ import { _getCellWriteDelay } from "./cell-write-delay.ts"
  * Wrapped in `runInvalidationTransaction` so a thrown validation
  * error (bad client payload) leaves the registry untouched.
  *
- * The write itself calls `getServerNavigation().reload({selector:
- * "cell:<id>"})` (see `writeOneCell`), which bumps the invalidation
+ * The write itself calls `refreshSelector("cell:<id>?<args>")`
+ * (see `writeOneCell`), which bumps the invalidation
  * registry inside the active transaction. Every parton whose schema
  * reads this cell (cells auto-stamp `cell:<id>` onto those partons'
  * labels) sees a new fingerprint and re-renders on the action's
@@ -139,6 +142,6 @@ export async function __cellInvalidate(
   args: Record<string, unknown>,
 ): Promise<void> {
   await runInvalidationTransaction(async () => {
-    getServerNavigation().reload({ selector: buildCellSelector(cellId, args) })
+    refreshSelector(buildCellSelector(cellId, args))
   })
 }

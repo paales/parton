@@ -81,7 +81,7 @@ distinguish two registrations of the same id:
 
 | Axis               | When it differs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parentPath`       | Same id mounted under different ancestors. Reachable only by EXPLICIT-selector ids nowadays (e.g. a `#header` spec registered under `PageRoot` on one route and under `EditorShell` on another — per-route hints point each route at its variant): AUTO-derived ids fold the parent path into the effective id itself (see "Effective-id identity" below), so their placements never share an id, and a same-request duplicate of an explicit id is rejected at registration.                                                                         |
+| `parentPath`       | Same id mounted under different ancestors. Reachable only by CALLER-SUPPLIED `__instanceId` ids (slot wiring — e.g. one CMS row's block registered under `PageRoot` on one route and under `EditorShell` on another; per-route hints point each route at its variant), which skip the placement fold. An id minted from the spec folds the parent path into the effective id itself (see "Effective-id identity" below), so its placements never share an id.                                                                                         |
 | `parentFrameChain` | Same id rendered inside vs outside a frame                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `culled`           | A cullable spec's culled render (the gate skipped the body; deps are the gate's reads) vs its in-view one — the REGISTRY-INTERNAL `~cull` suffix (`lib/cull-key.ts`; it never crosses the wire — the client has no culled cache variant, the skeleton rides inline on the pair). Per-state snapshots keep each state's dep record intact, so a culling flip's fingerprint folds the record of the state it is ENTERING (`lookupPartial(id, culled)`), not whichever state rendered last. See [render-pipeline.md](./render-pipeline.md#cull-to-park). |
 
@@ -103,14 +103,21 @@ overwrite, no clobbering.
 
 The id every registration (and wire wrapper, client cache slot,
 fp-trailer entry) keys on is minted per placement by the identity
-ladder in `createSpecComponent` (partial.tsx):
+ladder in `createSpecComponent` (partial.tsx). Its stem is the spec's
+catalog id — the Render function's NAME, kebab-cased with one trailing
+`Render` / `Page` / `Block` / `Partial` / `Component` suffix stripped
+(`PokemonHeroRender` → `"pokemon-hero"`; `displayName` wins over
+`name`, which is how a factory minting one spec per variant names each
+product explicitly). An anonymous Render throws at construct time —
+the auto-derived id IS the spec's stable identity, and there is
+nothing stable to derive it from (`autoSpecId`). The ladder:
 
 1. **`__instanceId`** — verbatim (slot wiring; snapshot replay passes
    the stored, already-folded id back through it, which is what keeps
    the fold idempotent across streaming render and targeted refetch);
 2. **props-hash** — `spec.id:hash(extraProps)` when the call site
    passes JSX props;
-3. **placement fold** — AUTO-derived ids compose a trailing
+3. **placement fold** — an id minted from the spec composes a trailing
    `~hash(stableStringify([parent.path, parent.frameChain]))` on top of
    legs 2/4 whenever either axis is non-empty (`applyPlacementFold`).
    Two placements of one spec under different parents — or inside
@@ -129,19 +136,34 @@ ladder in `createSpecComponent` (partial.tsx):
    use it), so `stripPlacementFold` — the matchKey ancestor walk's
    strip — is a protocol signal, not a guess. Labels are never folded:
    they stay class-level fan-out targets. The one placement axis
-   deliberately NOT folded is sibling position: two same-props AUTO-id
+   deliberately NOT folded is sibling position: two same-props
    siblings under the same parent and frame chain still share an id —
    index-based identity would churn ids on every reorder, a worse
    trade; give such siblings distinguishing props.
 4. **the bare spec id** — root-level singleton.
 
-Explicit-selector ids skip leg 3: an author-declared addressable id
-asserts singularity. `registerPartial` enforces it exactly — a second
-same-request registration of an explicit id whose variant key differs
-(`baseKey`-normalized, so a cull-state twin never trips it) is two
-placements of one asserted singleton: dev throws naming both parent
-paths, prod emits a structured `duplicate-explicit-placement` log and
-last-wins.
+Leg 1 ids skip the fold: a caller-supplied `__instanceId` is
+caller-managed identity, and snapshot replay hands the stored —
+already-folded — id straight back through it, which is what keeps the
+fold idempotent across streaming render and targeted refetch.
+
+The effective id is what the wire, the registry, and the client cache
+key on. It is NOT what a Render sees: the wrapper forwards
+`__instanceId` on to the Render UNDECORATED — the caller-managed key
+with the embed-namespace prefix and the placement-fold suffix stripped
+(`stripPlacementFold(stripEmbedNamespace(...))`, both parsing the
+reserved `~` grammar). A Render's per-instance work is
+placement-independent — a `block()` reads the same CMS row wherever it
+is placed (`__instanceId ?? spec.id` is its content key, see
+[`../reference/cms.md`](../reference/cms.md)) — so the key must resolve
+identically on both sides of the fp-skip handshake. The two paths hand
+the prop in decorated differently: a streaming render mints the
+decorations after deriving the key, while replay hands its stored,
+fully decorated id back through leg 1. Undecorating reconciles them.
+Labels follow the same rule for the same reason: a block's
+`cms:<contentKey>` dep + tag stay bare, so an editor write's
+`refreshSelector("cms:<key>")` keeps reaching every placement of the
+row it edited.
 
 Catalog ids themselves are collision-gated one level up:
 `registerSpec` (spec-catalog.ts) throws when a second DISTINCT spec
@@ -253,14 +275,29 @@ of every variant and every hint pointing at it, applied at commit.
 
 Content changes and record removal are separate mechanisms:
 
-- **Fingerprint invalidation** (the live path). Server-side
-  `getServerNavigation().reload({ selector: "cart" })` bumps the
-  _invalidation registry_ (`refreshSelector`) under the name
-  `cart`: every placement carrying the `cart` label or id folds the
-  bump's timestamp into its fp (`|inv=`), mismatches the client's
-  cached fp, and re-renders fresh on the next pass. Snapshots stay —
-  the registry record is structural placement, which a content
-  change doesn't move. Cell writes and CMS edits ride this channel.
+- **Fingerprint invalidation** (the live path). `refreshSelector(name)`
+  bumps the _invalidation registry_ under `name` — a server function's
+  `refreshSelector("cart")`, or the `cell:<id>?<partition>` selector a
+  cell write fans out. Every snapshot whose `labels` carry the name
+  (subject to the constraint subset match below) folds the bump's
+  timestamp into its fp (`|inv=`), mismatches the client's cached fp,
+  and re-renders fresh on the next pass. Snapshots stay — the registry
+  record is structural placement, which a content change doesn't move.
+  Cell writes and CMS edits ride this channel.
+
+  A snapshot's `labels` are exactly its invalidation SUBSCRIPTIONS,
+  and the parton's own reads are what write them: `cell:<id>` per cell
+  it resolved (a prop-borne one, a schema one, or an in-body
+  `cell.resolve()` — the last recorded as a dep and folded into labels
+  at boundary registration), plus the bare name of every `tag()` it
+  read. Nothing is declared — the read IS the subscription, so a
+  culled parton, which resolves no cells, carries no `cell:` label and
+  stays dark to cell invalidation until it flips back in. Constraints
+  ride beside the labels in the snapshot's effective constraint
+  surface (match params + bound-cell args), which is what makes a
+  partition-scoped bump (`cell:<id>?sid=7`, a constrained
+  `tag("price?sku=ABC")`) reach only the placements whose surface
+  holds the pair, while the bare name fans out to every reader.
 
   The invalidation registry is compacted latest-per-key: ONE entry
   per (name, canonical-constraints) pair —
@@ -392,7 +429,7 @@ a **cache over storage** — evictable and restorable, lossless:
   timestamps sit below every cursor a live connection can anchor
   (they must read as PAST events — never surface in a catch-up
   window or the parity oracle's since-scan) and every new bump
-  supersedes them. Non-cell entries (tags, app selectors) remain
+  supersedes them. Non-cell entries (tag bumps) remain
   process-memory only: gone on restart, cold re-record — over-fetch,
   never stale.
 

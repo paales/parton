@@ -46,62 +46,53 @@ import {
 
 // ── Live tick partial — time-driven, no cell ────────────────────────
 
-const LiveTick = parton(
-  function LiveTickRender(_: RenderArgs) {
-    // Wake boundary: fresh render every second — the live driver arms
-    // on it, and fp-skip declines a snapshot past it (TTL gate).
-    const clock = time()
-    expires(clock.nextSecond)
-    const tick = Math.floor(clock.now / 1000)
-    return (
-      <div className="font-mono text-sm" data-testid="streaming-demo-tick">
-        Tick #{tick} · server time {new Date().toLocaleTimeString()}
-      </div>
-    )
-  },
-  { selector: "streaming-demo-tick" },
-)
+const LiveTick = parton(function LiveTickRender(_: RenderArgs) {
+  // Wake boundary: fresh render every second — the live driver arms
+  // on it, and fp-skip declines a snapshot past it (TTL gate).
+  const clock = time()
+  expires(clock.nextSecond)
+  const tick = Math.floor(clock.now / 1000)
+  return (
+    <div className="font-mono text-sm" data-testid="streaming-demo-tick">
+      Tick #{tick} · server time {new Date().toLocaleTimeString()}
+    </div>
+  )
+})
 
 // ── Bump counter + button — cell-backed, button inline ──────────────
 
-const BumpCounter = parton(
-  async function BumpCounterRender(_: RenderArgs) {
-    const bumps = await bumpsCell.resolve()
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="font-mono text-sm" data-testid="streaming-demo-bumps">
-          Bumps: {bumps.value}
-        </div>
-        <BumpButton bumps={bumps} />
+const BumpCounter = parton(async function BumpCounterRender(_: RenderArgs) {
+  const bumps = await bumpsCell.resolve()
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="font-mono text-sm" data-testid="streaming-demo-bumps">
+        Bumps: {bumps.value}
       </div>
-    )
-  },
-  { selector: "bump-counter" },
-)
+      <BumpButton bumps={bumps} />
+    </div>
+  )
+})
 
 // ── Card form — three cells, atomic batch, single-inflight client ───
 
-const CardFormPartial = parton(
-  async function CardFormPartialRender(_: RenderArgs) {
-    const [cardName, cardNumber, cardCvc, serverDelay, applyLocalTransform] = await Promise.all([
-      cardNameCell.resolve(),
-      cardNumberCell.resolve(),
-      cardCvcCell.resolve(),
-      serverDelayCell.resolve(),
-      applyLocalTransformCell.resolve(),
-    ])
-    return (
-      <CardForm
-        cardName={cardName}
-        cardNumber={cardNumber}
-        cardCvc={cardCvc}
-        serverDelay={serverDelay}
-        applyLocalTransform={applyLocalTransform}
-      />
-    )
-  },
-  { selector: "card-form" },
-)
+const CardFormPartial = parton(async function CardFormPartialRender(_: RenderArgs) {
+  const [cardName, cardNumber, cardCvc, serverDelay, applyLocalTransform] = await Promise.all([
+    cardNameCell.resolve(),
+    cardNumberCell.resolve(),
+    cardCvcCell.resolve(),
+    serverDelayCell.resolve(),
+    applyLocalTransformCell.resolve(),
+  ])
+  return (
+    <CardForm
+      cardName={cardName}
+      cardNumber={cardNumber}
+      cardCvc={cardCvc}
+      serverDelay={serverDelay}
+      applyLocalTransform={applyLocalTransform}
+    />
+  )
+})
 
 // ── Page ──────────────────────────────────────────────────────────────
 

@@ -26,7 +26,6 @@ export const NavLinkBlock = block(
     return <NavLinkActive href={href} label={label} className={className} />
   },
   {
-    selector: ".nav-item",
     schema: ({ cms }) => ({
       href: cms.text("href"),
       label: cms.text("label"),

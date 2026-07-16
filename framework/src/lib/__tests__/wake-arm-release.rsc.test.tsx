@@ -31,14 +31,11 @@ const renders = { clock: 0 }
 
 // Ticking parton: each 40ms expiry boundary is one wake with no bump
 // involved — the pure time-driven idle path.
-const LeakClock = parton(
-  function LeakClockRender(_: RenderArgs) {
-    renders.clock++
-    expires(time().in(40))
-    return <time data-leak-clock>{`tick-${renders.clock}`}</time>
-  },
-  { selector: "leak-clock" },
-)
+const LeakClock = parton(function LeakClockRender(_: RenderArgs) {
+  renders.clock++
+  expires(time().in(40))
+  return <time data-leak-clock>{`tick-${renders.clock}`}</time>
+})
 
 beforeEach(() => {
   _clearInvalidationRegistry()

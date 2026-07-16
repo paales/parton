@@ -52,13 +52,13 @@ describe("wildcard match — fingerprint stability", () => {
       function ExactMatchTestRender(_: RenderArgs) {
         return <span data-testid="exact-body">exact</span>
       },
-      { selector: "#exact-match-test", match: "/inspect" },
+      { match: "/inspect" },
     )
     const Strict = parton(
       function StrictWildcardTestRender(_: RenderArgs) {
         return <span data-testid="strict-body">strict</span>
       },
-      { selector: "#strict-wildcard-test", match: "/inspect/*" },
+      { match: "/inspect/*" },
     )
 
     const tree = (
@@ -83,7 +83,7 @@ describe("wildcard match — fingerprint stability", () => {
       function InspectBaseFpTestRender(_: RenderArgs) {
         return <div data-testid="grid">grid</div>
       },
-      { selector: "#inspect-base-fp-test", match: "/inspect{/*}?" },
+      { match: "/inspect{/*}?" },
     )
 
     const tree = (
@@ -114,7 +114,7 @@ describe("wildcard match — fingerprint stability", () => {
       function InspectBaseSearchFpTestRender(_: RenderArgs) {
         return <div data-testid="grid">grid</div>
       },
-      { selector: "#inspect-base-search-fp-test", match: "/inspect{/*}?" },
+      { match: "/inspect{/*}?" },
     )
 
     const tree = (
@@ -140,7 +140,7 @@ describe("wildcard match — fingerprint stability", () => {
       function NamedParamFpTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="detail">id={id}</span>
       },
-      { selector: "#named-param-fp-test", match: "/p/:id" },
+      { match: "/p/:id" },
     )
 
     const tree = (
@@ -166,7 +166,7 @@ describe("wildcard match — fingerprint stability", () => {
       function InspectBaseSkipTestRender(_: RenderArgs) {
         return <div data-testid="skip-test-grid">grid-body</div>
       },
-      { selector: "#inspect-base-skip-test", match: "/inspect{/*}?" },
+      { match: "/inspect{/*}?" },
     )
 
     const tree = (

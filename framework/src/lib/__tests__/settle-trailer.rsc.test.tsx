@@ -29,19 +29,23 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 // Cold drift comes from the tracked read: render 1 emits a dep-less
 // cold fp; the recompute folds the recorded cookie dep → {from,to}.
 const FastDrift = parton(
-  function FastDriftRender(_: RenderArgs) {
-    const pref = cookie("pref") ?? ""
-    return <span>{`fast-drift-body:${pref}`}</span>
-  },
-  { selector: "#settle-fast" },
+  Object.assign(
+    function FastDriftRender(_: RenderArgs) {
+      const pref = cookie("pref") ?? ""
+      return <span>{`fast-drift-body:${pref}`}</span>
+    },
+    { displayName: "settle-fast" },
+  ),
 )
 
 const SlowSibling = parton(
-  async function SlowSiblingRender(_: RenderArgs) {
-    await delay(150)
-    return <aside>slow-sibling-body</aside>
-  },
-  { selector: "#settle-slow" },
+  Object.assign(
+    async function SlowSiblingRender(_: RenderArgs) {
+      await delay(150)
+      return <aside>slow-sibling-body</aside>
+    },
+    { displayName: "settle-slow" },
+  ),
 )
 
 /** Drive the wrapped stream chunk by chunk, returning each chunk as

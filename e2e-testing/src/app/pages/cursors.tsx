@@ -15,13 +15,10 @@ import { parton, type RenderArgs } from "@parton/framework"
 import { CursorLayer } from "../components/cursor-layer.tsx"
 import { cursorsCell } from "./cursors-state.ts"
 
-const CursorPresence = parton(
-  async function CursorPresenceRender(_: RenderArgs) {
-    const cursors = await cursorsCell.resolve()
-    return <CursorLayer cursors={cursors} />
-  },
-  { selector: "cursor-presence" },
-)
+const CursorPresence = parton(async function CursorPresenceRender(_: RenderArgs) {
+  const cursors = await cursorsCell.resolve()
+  return <CursorLayer cursors={cursors} />
+})
 
 export const CursorsPage = parton(
   function CursorsRender() {

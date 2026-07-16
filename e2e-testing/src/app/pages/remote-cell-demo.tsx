@@ -45,5 +45,5 @@ export const RemoteCellDemoPage = parton(
       </main>
     )
   },
-  { match: "/remote-cell-demo", selector: "#remote-cell-demo" },
+  { match: "/remote-cell-demo" },
 )

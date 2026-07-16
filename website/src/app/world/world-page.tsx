@@ -69,5 +69,5 @@ export const WorldPage = parton(
   // recurse the world into itself). A pathname predicate, because
   // URLPattern has no negation; it gates but names no params — exactly
   // what `"{/*}?"` (numeric-group-only) provided.
-  { match: { pathname: (p) => !p.startsWith("/embassy") }, selector: "#world" },
+  { match: { pathname: (p) => !p.startsWith("/embassy") } },
 )

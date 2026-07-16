@@ -47,8 +47,9 @@ import {
   _recordDelivery,
   handleChannelPost,
 } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
-import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
+import { PartialRoot, parton, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { searchParam } from "../server-hooks.ts"
 
@@ -63,26 +64,28 @@ function armSlowGate(): void {
   })
 }
 
-const NavShared = parton(
-  function NavSharedRender(_: RenderArgs) {
-    renders.shared++
-    return <div data-shared>{`shared:${renders.shared}`}</div>
-  },
-  { selector: "nav-shared" },
-)
+const NavShared = parton(function NavSharedRender(_: RenderArgs) {
+  renders.shared++
+  return <div data-shared>{`shared:${renders.shared}`}</div>
+})
+// The route leaves subscribe to their bump signal by READING the tag —
+// `refreshSelector("nav-a")` wakes exactly the readers of `nav-a`. The
+// harness's `shutdown(id)` rides the same signal.
 const NavA = parton(
   function NavARender(_: RenderArgs) {
+    tag("nav-a")
     renders.a++
     return <div data-a>{`route-a:${renders.a}`}</div>
   },
-  { match: "/nav-a", selector: "nav-a" },
+  { match: "/nav-a" },
 )
 const NavB = parton(
   function NavBRender(_: RenderArgs) {
+    tag("nav-b")
     renders.b++
     return <div data-b>{`route-b:${renders.b}`}</div>
   },
-  { match: "/nav-b", selector: "nav-b" },
+  { match: "/nav-b" },
 )
 const NavSlow = parton(
   async function NavSlowRender(_: RenderArgs) {
@@ -90,7 +93,7 @@ const NavSlow = parton(
     await slowGate
     return <div data-slow>slow-resolved</div>
   },
-  { match: "/nav-slow", selector: "nav-slow" },
+  { match: "/nav-slow" },
 )
 
 // A nested wrapper + addressable child that reads a searchParam — the
@@ -98,16 +101,14 @@ const NavSlow = parton(
 // without the exclusion a `?x=` change on the child moves the wrapper's
 // fp and re-renders it; with the child force-refetched, the wrapper's
 // fold excludes it and the wrapper fp-skips.
-const FoldChild = parton(
-  function FoldChildRender(_: RenderArgs) {
-    renders.child++
-    const x = searchParam("x") ?? ""
-    return <div data-fold-child>{`child:${x}:${renders.child}`}</div>
-  },
-  { selector: "fold-child" },
-)
+const FoldChild = parton(function FoldChildRender(_: RenderArgs) {
+  renders.child++
+  const x = searchParam("x") ?? ""
+  return <div data-fold-child>{`child:${x}:${renders.child}`}</div>
+})
 const FoldOuter = parton(
   function FoldOuterRender(_: RenderArgs) {
+    tag("fold-outer")
     renders.outer++
     return (
       <div data-fold-outer>
@@ -116,7 +117,7 @@ const FoldOuter = parton(
       </div>
     )
   },
-  { match: "/fold", selector: "fold-outer" },
+  { match: "/fold" },
 )
 const PageFold = (): ReactNode => (
   <PartialRoot>
@@ -250,12 +251,26 @@ describe("url frames drive navigation segments", () => {
         throw new Error("expected payload segment 0")
       await drainPayloadSegment(first.value)
       const conn = h.connectionId() ?? ""
-      await h.segments.next() // lanes
+      const lanesSeg = await h.segments.next()
+      if (lanesSeg.done || lanesSeg.value.kind !== "lanes")
+        throw new Error("expected lanes segment")
+      const warmIter = lanesSeg.value.lanes[Symbol.asyncIterator]()
+
+      // Settle nav-a's record first: segment 0 registered it before the
+      // body's `tag("nav-a")` read landed, so its next render rides the
+      // cold→warm fp drift once (over-fetch, never stale). Spend that
+      // here — the claims below are about a SETTLED mirror, where the
+      // only thing moving the parton is the force itself.
+      refreshSelector("nav-a")
+      const warm = await nextLane(warmIter)
+      expect(warm.partonId).toBe("nav-a")
+      await decodeLane(warm)
+      expect(renders.a).toBe(2)
       expect(
         await post(scope, {
           connection: conn,
           seq: 2,
-          frames: [{ kind: "ack", delivered: 1 }],
+          frames: [{ kind: "ack", delivered: 2 }],
         }),
       ).toBe(204)
 
@@ -290,7 +305,7 @@ describe("url frames drive navigation segments", () => {
       const laneIter = reopened.value.lanes[Symbol.asyncIterator]()
       const lane = await nextLane(laneIter)
       expect(lane.partonId).toBe("nav-a")
-      expect((await decodeLane(lane)).bodyText).toContain("route-a:2")
+      expect((await decodeLane(lane)).bodyText).toContain("route-a:3")
       // The one-shot overlay never persisted into the connection's
       // request state.
       expect(_peekConnectionSession(conn)?.consumedNavSeq).toBe(3)
@@ -600,7 +615,21 @@ describe("the mirror stays honest across navigations", () => {
       expect(seg0).toContain("route-a:1")
       expect(seg0).toContain("shared:1")
       const conn = h.connectionId() ?? ""
-      await h.segments.next() // lanes
+      const lanesSeg = await h.segments.next()
+      if (lanesSeg.done || lanesSeg.value.kind !== "lanes")
+        throw new Error("expected lanes segment")
+      const warmIter = lanesSeg.value.lanes[Symbol.asyncIterator]()
+
+      // Settle nav-a's record: segment 0 registered it before the body's
+      // `tag("nav-a")` read landed, so its next render rides the
+      // cold→warm fp drift once. Spend it here — the round trip below is
+      // about a SETTLED mirror. The lane's promotion is OPTIMISTIC; no
+      // ack is sent here or anywhere in this test.
+      refreshSelector("nav-a")
+      const warm = await nextLane(warmIter)
+      expect(warm.partonId).toBe("nav-a")
+      await decodeLane(warm)
+      expect(renders.a).toBe(2)
 
       // A→B, no ack. nav-shared fp-skips (the mirror holds it).
       expect(
@@ -620,8 +649,8 @@ describe("the mirror stays honest across navigations", () => {
 
       // B→A (return), still no ack ever sent. nav-a AND nav-shared
       // both fp-skip — the mirror retained them across the round trip.
-      // A pruned mirror would re-render nav-a here (renders.a → 2);
-      // the retained mirror skips it (renders.a stays 1).
+      // A pruned mirror would re-render nav-a here (renders.a → 3);
+      // the retained mirror skips it (renders.a stays 2).
       expect(
         await post(scope, {
           connection: conn,
@@ -635,7 +664,7 @@ describe("the mirror stays honest across navigations", () => {
       const navABody = await drainPayloadSegment(navA.value)
       expect(navABody).toContain('"data-partial-id":"nav-a"')
       expect(navABody).toContain('"data-partial-id":"nav-shared"')
-      expect(renders.a).toBe(1)
+      expect(renders.a).toBe(2)
       expect(renders.shared).toBe(1)
 
       await h.shutdown("nav-a")
@@ -702,6 +731,14 @@ describe("the descendant fold excludes forced targets", () => {
       const seg0 = await drainPayloadSegment(first.value)
       expect(seg0).toContain("outer:1")
       expect(seg0).toContain("child::1")
+      // fold-child sits under fold-outer, so its id placement-folds
+      // (`fold-child~<hash>`). The force targets the resolved id — the
+      // one the wire carries — not the base.
+      const childId =
+        [...seg0.matchAll(/"partialId":"([^"]+)"/g)]
+          .map((m) => m[1])
+          .find((id) => stripPlacementFold(id) === "fold-child") ?? ""
+      expect(childId).not.toBe("")
       const conn = h.connectionId() ?? ""
       await h.segments.next() // initial lanes
       expect(
@@ -723,7 +760,7 @@ describe("the descendant fold excludes forced targets", () => {
           frames: [
             {
               kind: "url",
-              url: "/fold?x=1&__force=fold-child",
+              url: `/fold?x=1&__force=${childId}`,
               intent: "push",
             },
           ],
@@ -737,7 +774,7 @@ describe("the descendant fold excludes forced targets", () => {
       if (lanes1.done || lanes1.value.kind !== "lanes") throw new Error("expected reopened lanes")
       const laneIter1 = lanes1.value.lanes[Symbol.asyncIterator]()
       const forced1 = await nextLane(laneIter1)
-      expect(forced1.partonId).toBe("fold-child")
+      expect(stripPlacementFold(forced1.partonId)).toBe("fold-child")
       await decodeLane(forced1)
       expect(renders.outer).toBe(2)
 
@@ -752,7 +789,7 @@ describe("the descendant fold excludes forced targets", () => {
           frames: [
             {
               kind: "url",
-              url: "/fold?x=2&__force=fold-child",
+              url: `/fold?x=2&__force=${childId}`,
               intent: "push",
             },
           ],
@@ -771,7 +808,7 @@ describe("the descendant fold excludes forced targets", () => {
         throw new Error("expected the second reopened lanes")
       const laneIter2 = lanes2.value.lanes[Symbol.asyncIterator]()
       const forced2 = await nextLane(laneIter2)
-      expect(forced2.partonId).toBe("fold-child")
+      expect(stripPlacementFold(forced2.partonId)).toBe("fold-child")
       expect((await decodeLane(forced2)).bodyText).toContain("child:2:")
 
       await h.shutdown("fold-outer")

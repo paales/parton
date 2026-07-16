@@ -27,7 +27,7 @@ modules contributed blocks via mergeable handle files
 hole-punched the dynamic regions out of an otherwise-cacheable HTML
 shell. Block-level cache keys, action-dispatched region refreshes,
 contribution-point composition. The parton primitive maps 1:1
-onto the M1 block; `cache` maps onto Varnish ESI; selector
+onto the M1 block; `cache` maps onto Varnish ESI; tag
 invalidation maps onto cache-tag invalidation.
 
 **Drupal.** Render arrays + regions + blocks + contexts are still
@@ -80,9 +80,11 @@ a click inside a frame stays inside that frame. The differences:
   two axes — browser history (page URLs) and per-entry
   `__frameHistory` (frame URLs scoped to each browser entry) — so
   drawer-shape frames don't pollute browser back.
-- Turbo doesn't have a built-in invalidation graph. Partons do
-  (selector tokens + `getServerNavigation().reload({selector})` from
-  server actions or any server-side task).
+- Turbo doesn't have a built-in invalidation graph. Partons do —
+  and it's woven from the reads themselves: a cell resolve or a
+  `tag()` read in the body subscribes the parton, and a write (or
+  `refreshSelector(name)`) from a server action or any server-side
+  task wakes exactly its readers.
 
 ## JS frameworks that gestured at this
 
@@ -120,11 +122,14 @@ invalidation channel). Missing the in-process render pipeline (its
 fragments cross HTTP boundaries) and the strongly-typed manifest.
 
 **Inertia.** Lazy partials and partial reloads via `only` /
-`except` props on the Inertia visit object. This framework's
-selector-targeted refetch is structurally the same idea, applied to
-RSC subtrees rather than serialized server props. Inertia's
-`reload`-with-progress events are a flat-out better DX than what
-ships here today; flagged for follow-up.
+`except` props on the Inertia visit object — the caller names the
+fragments it wants refreshed. This framework inverts that: nothing
+names a parton from outside. A parton subscribes by reading (a cell,
+a `tag()`), and a write wakes its readers — the same targeted-refetch
+outcome, derived from the dependency graph rather than declared at
+the call site, and applied to RSC subtrees rather than serialized
+server props. Inertia's `reload`-with-progress events are a flat-out
+better DX than what ships here today; flagged for follow-up.
 
 ## Liquid and the Shopify theme editor
 
@@ -195,7 +200,7 @@ server-hooks recording onto the render's live dep set. Same shape.
 
 **Self-adjusting computation (Umut Acar, CMU).** The PhD lineage behind
 Salsa. Acar's thesis: computations that automatically update when their
-inputs change, via a *trace* recorded during first evaluation;
+inputs change, via a _trace_ recorded during first evaluation;
 re-derivation walks the trace and only re-runs nodes whose dependencies
 dirtied. The snapshot map + `descendantContribution` is a hand-written,
 per-request, JS-friendly version of this. The theoretical foundation
@@ -229,7 +234,7 @@ evaluation is lazy and cached. `setAttr` / `connectAttr` is structurally
 "set a tracked input + auto-invalidate downstream specs."
 
 **Fusion 360 / Inventor / SolidWorks (parametric CAD).** Feature-based
-modeling: a part is a *history tree* of features (extrude, fillet,
+modeling: a part is a _history tree_ of features (extrude, fillet,
 hole); changing an upstream parameter re-evaluates downstream features.
 The feature tree is the render tree; parameters are tracked inputs; the
 rebuild operation is fp-driven re-render. CAD has dealt for 30 years
@@ -262,7 +267,7 @@ can be referenced by stable address; resolution can be local, CDN, or
 remote bundle; the same C# code works regardless of where bytes
 physically live. `Addressables.LoadAssetAsync<GameObject>("Enemy_Skeleton")`
 doesn't care whether the prefab is in the build or behind a CDN.
-`<RemoteFrame>` is the same idea applied to *rendered subtrees* —
+`<RemoteFrame>` is the same idea applied to _rendered subtrees_ —
 host writes `<MagentoPaymentSummary />`, doesn't care that resolution
 involves a cross-origin fetch + Flight decode + namespace rewrite.
 Both auto-derive their resolver from the address's registered location.
@@ -289,7 +294,7 @@ region.
 
 **Android Jetpack Compose.** Same family; `@Composable` functions ≡
 `Render`; `remember` / `derivedStateOf` ≡ memoized derived-input
-analogues. Compose's "skippable functions" optimization *is* fp-skip —
+analogues. Compose's "skippable functions" optimization _is_ fp-skip —
 the compiler checks input equality and skips re-composition.
 Auto-tracked via compiler-rewritten code.
 
@@ -351,9 +356,11 @@ process, one state, one loop. Parton pays for the fp/mirror machinery
 precisely so the connection stays disposable and the static end stays
 real.
 
-**Erlang + OTP.** Every spec addressable by selector ↔ every actor
-addressable by `pid`. Selector-targeted refetch ↔ message-pass to a
-specific actor. `<Frame>` as scope opener ↔ `gen_server` with private
+**Erlang + OTP.** Every spec addressable by its id ↔ every actor
+addressable by `pid`. Waking a parton's readers ↔ message-pass to a
+specific actor — though the addressing runs the other way: an Erlang
+sender names the `pid`, while a parton names what it READ and the
+write finds it. `<Frame>` as scope opener ↔ `gen_server` with private
 state. `<RemoteFrame>` is structurally distributed Erlang: different
 node, different process, same addressing scheme via namespacing.
 
@@ -377,9 +384,9 @@ server-side — the read subscribes.
 
 **Notion.** Block-based document; every block is `{id, type, props,
 children}` — literally `cms/data/content.json`'s shape. Notion's
-"synced blocks" (one block referenced from many places) ≡ selector
-fan-out. Notion's database views with filter/sort ≡ CMS configs with
-match clauses.
+"synced blocks" (one block referenced from many places) ≡ tag
+fan-out: many readers of one name, one bump. Notion's database views
+with filter/sort ≡ CMS configs with match clauses.
 
 ## What's distinct in this framework
 

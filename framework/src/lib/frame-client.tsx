@@ -28,18 +28,9 @@ import {
   type NavigateTarget,
   type NavigationMilestones,
 } from "../runtime/navigation-api.ts"
-import {
-  _channelCookieChange,
-  _channelFrameNavigate,
-  _channelIsDegraded,
-} from "./channel-client.ts"
+import { _channelCookieChange, _channelFrameNavigate } from "./channel-client.ts"
 import { getFrameUrl, hasFrameUrl, setFrameUrl } from "./partial-client-state.ts"
-import {
-  enqueueRefetch,
-  makeSilentInfo,
-  parseSelectorClient,
-  type RefetchMilestones,
-} from "./refetch.ts"
+import { enqueueRefetch, makeSilentInfo, type RefetchMilestones } from "./refetch.ts"
 
 // ─── Frame naming + URL contexts ──────────────────────────────────
 
@@ -510,13 +501,6 @@ function makeMilestoneDeferreds(): {
   return { committed, streaming, finished }
 }
 
-function parseOptionsSelector(
-  options: FrameworkNavigateOptions | FrameworkReloadOptions | undefined,
-): { labels: string[] } {
-  if (!options?.selector) return { labels: [] }
-  return parseSelectorClient(options.selector)
-}
-
 // ─── Frame entry projection ───────────────────────────────────────
 
 /**
@@ -669,10 +653,10 @@ function applyClientCookies(cookies: Record<string, string> | undefined): void {
 
 /**
  * Window-scoped handle — a Proxy over `window.navigation` with
- * `name: null`, an extended `navigate()` (updater callback, targeted
- * refetch via `selector`, `silent` URL-only updates) and an extended
- * `reload()` (targeted refetch without a URL change). Everything
- * else passes straight through to the browser.
+ * `name: null`, an extended `navigate()` (updater callback, `silent`
+ * URL-only updates, client cookie writes) and an extended `reload()`
+ * (in-place streaming refetch). Everything else passes straight
+ * through to the browser.
  */
 export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeNavigation {
   const nav = getNavigation()
@@ -687,45 +671,13 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
   ): NavigationMilestones => {
     applyClientCookies(options?.cookies)
     const url = resolveWindowTarget(target)
-    const parsed = parseOptionsSelector(options)
-    const filtered = parsed.labels.length > 0
     const silent = options?.silent === true
     const m = makeMilestoneDeferreds()
 
-    // A selector nav on a DEGRADED page has no refetch transport — it
-    // is a plain navigation, and a plain navigation on a degraded page
-    // is a document load (the listener stands down). Silent navs stay
-    // client-local URL work either way.
-    if (filtered && !silent && _channelIsDegraded()) {
-      const result = nav.navigate(url, {
-        history: options?.history,
-        state: options?.state,
-      })
-      void (async () => {
-        try {
-          await awaitCommitted(result)
-          m.committed.resolve(nav.currentEntry!)
-          await awaitFinished(result)
-          m.streaming.resolve()
-          m.finished.resolve(nav.currentEntry!)
-        } catch (err) {
-          m.committed.reject(err)
-          m.streaming.reject(err)
-          m.finished.reject(err)
-        }
-      })()
-      return {
-        committed: m.committed.promise,
-        streaming: m.streaming.promise,
-        finished: m.finished.promise,
-      }
-    }
-
-    if (filtered || silent) {
+    if (silent) {
       // URL-only update — the page-level listener sees the branded
       // info and declines to intercept, so no refetch fires from its
-      // side. If we have a selector filter, dispatch the targeted
-      // refetch ourselves after commit.
+      // side.
       const result = nav.navigate(url, {
         history: options?.history ?? "push",
         state: options?.state ?? null,
@@ -736,25 +688,7 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
         try {
           await awaitCommitted(result)
           m.committed.resolve(nav.currentEntry!)
-          if (silent) {
-            m.streaming.resolve()
-            m.finished.resolve(nav.currentEntry!)
-            return
-          }
-          // The batched statement: the page URL (already moved — the
-          // silent nav above committed) with the labels as its
-          // `?__force=` overlay. Supersede ordering is the channel's:
-          // a newer statement's covering segment resolves older fires
-          // too, and stream order plus the as-of guard arbitrate
-          // commits. `navigate` has no caller signal (unlike
-          // `reload`), so nothing cancels a window-nav fire.
-          const refetch = enqueueRefetch({
-            labels: parsed.labels,
-            streaming: options?.streaming ?? false,
-          })
-          await refetch.streaming
           m.streaming.resolve()
-          await refetch.finished
           m.finished.resolve(nav.currentEntry!)
         } catch (err) {
           m.committed.reject(err)
@@ -800,22 +734,17 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
   }
 
   const windowReload = (options?: FrameworkReloadOptions): NavigationMilestones => {
-    const parsed = parseOptionsSelector(options)
     const m = makeMilestoneDeferreds()
 
-    // Two ways to reach the in-place refetch path (no browser reload):
+    // Streaming opt-in (`reload({streaming: true})`) reaches the
+    // in-place refetch path (no browser reload): the client commits
+    // the response progressively — a render-mode switch stated on the
+    // channel, not a browser reload.
     //
-    //   1. Selector filter (`reload({selector: "#cart"})`) — targeted
-    //      partial refetch: a `?__force=` statement on the channel.
-    //   2. Streaming opt-in (`reload({streaming: true})`) — the client
-    //      commits the response progressively. A render-mode switch, not
-    //      a browser reload, so it stays in-place too.
-    //
-    // Only a bare `reload()` (no selector, no streaming) falls through
-    // to `nav.reload()` — that's the user-facing "reload this URL"
+    // Only a bare `reload()` (no streaming) falls through to
+    // `nav.reload()` — that's the user-facing "reload this URL"
     // command and IS supposed to do a real browser reload.
-    const wantsInPlace = parsed.labels.length > 0 || options?.streaming === true
-    if (wantsInPlace) {
+    if (options?.streaming === true) {
       m.committed.resolve(nav.currentEntry!)
       void (async () => {
         try {
@@ -823,8 +752,8 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
           // covering segment resolves older fires too. Only the
           // caller's own `options.signal` cancels a fire.
           const refetch = enqueueRefetch({
-            labels: parsed.labels,
-            streaming: options?.streaming ?? false,
+            ids: [],
+            streaming: true,
             signal: options?.signal,
           })
           await refetch.streaming

@@ -71,9 +71,10 @@ export function PageSentinel({ page }: { page: number }) {
  * Sentinel element that triggers loading the next page of results
  * when it enters the viewport via IntersectionObserver.
  *
- * Updates the URL and dispatches a targeted refetch for the new
- * page partial and the load-more sentinel itself in one call.
- * The spinner reads `committed && !finished` for "in flight".
+ * Updates the URL — the moved `?pages=` re-renders exactly the new
+ * page partial (its match gate flips in) and the sentinel (a tracked
+ * read); loaded pages fp-skip. The spinner reads
+ * `committed && !finished` for "in flight".
  */
 export function LoadMore({ nextPage }: { nextPage: number }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -102,10 +103,10 @@ export function LoadMore({ nextPage }: { nextPage: number }) {
           triggered.current = true
           const url = new URL(window.location.href)
           url.searchParams.set("pages", String(nextPage))
-          navigate(url.toString(), {
-            history: "replace",
-            selector: `#page-${nextPage} #load-more`,
-          })
+          // Plain navigate: the moved `?pages=` flips the next page's
+          // match gate (it renders) and moves the load-more sentinel's
+          // tracked read; every already-loaded page fp-skips.
+          navigate(url.toString(), { history: "replace" })
         }
       },
       { rootMargin: "200px" },

@@ -17,7 +17,7 @@ embed-flagged page fetches (server-to-server — see
 `_.rsc` request. The downstream half — segments, lanes, markers — is
 [`streaming.md`](./streaming.md); the delivery-seq / ack / applied
 machinery that makes the channel EVIDENCED is §Delivery is evidenced
-below; window navigation and selector refetches riding the stream is
+below; window navigation and id-forced refetches riding the stream is
 §Navigation rides the channel; frame navigation, producer lanes, and
 action consequence seqs are §Frames ride the channel and §Action
 consequence seqs.
@@ -42,7 +42,7 @@ POST /__parton/live
   `url` frame's target): route key, match gates, and tracked reads
   all evaluate the stated URL. Page URLs never carry transport params
   for the attach. A one-shot `?__force=` overlay may ride its query —
-  a selector refetch that fired pre-establishment — which the entry
+  an id-forced refetch that fired pre-establishment — which the entry
   strips from request state; the driver lanes the named targets
   EXPLICIT the moment the region opens (the refetch contract — a
   whole-tree render cannot force a target whose ancestor fp-skips).
@@ -501,7 +501,7 @@ side is BOUNDED and RECOVERABLE:
 
 ## Navigation rides the channel
 
-WINDOW navigations and batched selector refetches are `url` frames —
+WINDOW navigations and batched id-forced refetches are `url` frames —
 statements of the client's URL — and their responses arrive on the
 held stream in stream order.
 
@@ -511,7 +511,7 @@ held stream in stream order.
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | Window navigation (`nav.navigate`, intercepted)                           | `url` frame, intent `push`/`replace` (a traverse states `replace`)                                                                                                                                                              | latches; rides the attach it triggers (the statement's `url`)                   | not intercepted — browser-native document load                        |
 | Silent window URL sync (`silent: true`, server-push application)          | `url` frame, intent `silent`, fire-and-forget                                                                                                                                                                                   | nothing (the next attach's `url` restates it)                                   | client-local URL work only (still intercepted — no server leg exists) |
-| Batched selector refetch (`reload({selector})`, `navigate({selector})`)   | `url` frame, intent `silent`, page URL + `?__force=<labels>`                                                                                                                                                                    | latches; the overlay rides the attach `url` and the targets lane at region open | resolves as a no-op (document loads are the page's renders)           |
+| Batched id-forced refetch (`enqueueRefetch` — framework-internal)         | `url` frame, intent `silent`, page URL + `?__force=<ids>`                                                                                                                                                                       | latches; the overlay rides the attach `url` and the targets lane at region open | resolves as a no-op (document loads are the page's renders)           |
 | Frame navigation (`useNavigation(frame).navigate/reload`, frame traverse) | frame-scoped `url` frame (+ a `cancel` co-rider when it supersedes an unsettled fire for the same frame) — §Frames ride the channel                                                                                             | latches; rides the attach's `frames` intent                                     | document navigation carrying `__frame`/`__frameUrl` document params   |
 | Culling flips                                                             | `visible` frames                                                                                                                                                                                                                | PEND until establishment (the attach seed + first segment carry the truth)      | none (no transport)                                                   |
 | Preload (`useNavigation().preload`)                                       | `warm` frame                                                                                                                                                                                                                    | dropped (advisory)                                                              | Speculation Rules document prefetch                                   |
@@ -548,12 +548,14 @@ The pieces:
   segment — a navigation to a mostly-mirrored route ships
   placeholders.
 - **Forced targets ride lanes.** A refetch statement's `?__force=`
-  labels never force the SEGMENT render (a whole-tree render cannot
+  ids never force the SEGMENT render (a whole-tree render cannot
   force a target whose ancestor fp-skips or replays a byte cache —
   the ancestor's fold doesn't move on a force, so its placeholder
   would cut the target out). After the region reopens, the driver
-  resolves the labels against the new route's snapshots (id first,
-  then label fan-out) and lanes each target EXPLICIT (`forcedLaneIds`
+  resolves each id against the new route's snapshots
+  (`resolveForcedIds` — a target with no snapshot on this route is
+  dropped, as a real route change legitimately loses it) and lanes
+  each target EXPLICIT (`forcedLaneIds`
   → the lane state's `explicitIds`): fp-skip and the defer gate both
   yield, the refetch contract on the lane path — the attach
   statement's own `?__force=` overlay lanes through the same seam at
@@ -570,27 +572,31 @@ The pieces:
   delivery PROCESSED. This internal seam — "a newer statement aborts
   the in-flight navigation render" — is what the explicit cancel
   frame kind will address directly.
-- **Streaming navs drain past a same-URL refetch.** The supersede has
-  one carve-out (`supersededBy` in `emitNavSegment`): a STREAMING nav
-  (the default commit mode for a window navigation) has already
-  committed a root-ready SHELL on the client — its Suspense fallbacks
-  are showing and its boundaries resolve as the body streams. A
-  pending statement to the SAME effective URL (transport params —
-  `?__force=` &c. — stripped) is a REFETCH of the page being loaded,
-  not a nav away: an on-mount `defer` activation firing off the fresh
-  shell, a selector force. It does NOT supersede. Aborting the stream
-  for it would close the client's committed shell with its Suspense
-  refs still pending, rejecting them (`"Connection closed."`) and
-  tearing the just-revealed partons into their per-partial error
-  cards. Instead the stream DRAINS — its boundaries commit
-  progressively — and the refetch consumes next, its `?__force=`
-  targets riding the reopened region's lanes (fp-skipped whole-tree
-  segment + forced lanes, a cheap covering pass since the drained nav
-  already registered every snapshot). A DIFFERENT effective URL is a
-  genuine navigation-away and still supersedes (serve the new page
-  fast). Atomic navs never reach the carve-out: they buffer their
-  Flight bytes to the atomic swap, so a superseded atomic nav has no
-  committed shell to tear.
+- **Bytes on the wire forfeit the right to truncate.** The supersede
+  gate (`supersededBy` in `emitNavSegment`) reads ONE fact: has this
+  segment already enqueued Flight bytes (`emittedStreamingBytes`,
+  written at the enqueue itself)? A payload segment's Flight document
+  is delivered COMPLETE — that is what the `settled` marker means — and
+  once the first bytes are out, the client may already have committed
+  them root-ready (a streaming nav, the default for a window
+  navigation, commits at root: its Suspense fallbacks show and its
+  boundaries resolve as the body streams). Cancelling the render then
+  closes that committed document with its refs still pending, rejecting
+  them (`"Connection closed."`) and tearing the just-revealed partons
+  into their per-partial error cards. Whether the client committed is
+  the CLIENT's fact — it commits at root-ready, before any newer
+  statement exists — so the server never asks and never infers it from
+  the statement's URL; it honors what it already wrote. EMITTED ⇒ the
+  stream DRAINS (its boundaries commit progressively) and the newest
+  statement consumes right after — the `pendingNav` latch collapsed
+  everything in between, and a same-URL refetch's `?__force=` targets
+  ride the reopened region's lanes (fp-skipped whole-tree segment +
+  forced lanes, a cheap covering pass since the drained nav already
+  registered every snapshot). NOTHING EMITTED ⇒ supersede freely: an
+  atomic nav buffers its Flight bytes to the atomic swap, so it has no
+  committed shell to tear, and a streaming nav suspended on a slow
+  loader has produced no bytes yet — the case the nav-latch arm exists
+  to preempt, and where the supersede's latency win lives.
 - **The as-of guard — pageUrlKey generalized into the protocol.**
   The client's commit arbitration for seq'd deliveries: commit iff
   the delivery's as-of ≥ the navigation point
@@ -610,8 +616,8 @@ The pieces:
   `asOf < navSeq` (that gate can't distinguish held-then-navigated from
   navigated-then-dropped), so it doesn't try. Consume moves the request
   state and reopens lanes; it never touches the mirror.
-- **A selector nav's forced targets don't fold into their ancestors.**
-  A `navigate(url, {selector: [...]})` re-lanes only its named targets;
+- **A forced statement's targets don't fold into their ancestors.**
+  A `?__force=` statement re-lanes only its named targets;
   everything else fp-skips. On the whole-tree segment that means an
   ANCESTOR of a forced target must be able to skip even though a
   descendant it carries changed — so the descendant fold EXCLUDES the
@@ -862,10 +868,9 @@ deferred-only tally takes — [`streaming.md`](./streaming.md) § "Deferred
   action body and the commit): the pending selectors match the
   connection's route snapshots (`_routeMatchingSelectorIds`, parked
   partons excluded), and each target gets a delivery seq assigned
-  (`assignedLaneSeqs`). A match with no `emittedFp` (a selector-less
-  spec — a layout wrapper, a cell-bound child like a cart line) cannot
+  (`assignedLaneSeqs`). A match with no `emittedFp` cannot
   carry a lane: it has no client slot to swap, so it ESCALATES to its
-  nearest addressable ancestor (`laneCarrierFor` in `segment-relevance`,
+  nearest fp-bearing ancestor (`laneCarrierFor` in `segment-relevance`,
   shared with the live lane-open path so the reserve and the driver
   agree on carriers), whose one render re-renders the subtree that
   contains it — exactly as a whole-tree segment does off the lane path.

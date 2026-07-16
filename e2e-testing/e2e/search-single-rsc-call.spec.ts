@@ -2,61 +2,81 @@ import { test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * Regression guard: typing a single character in the search input must
- * dispatch exactly one stages refetch. LoadMore's IntersectionObserver
- * is geometrically still "intersecting" the viewport while the search
- * <dialog> is open on top of it — dialog `inert` / occlusion doesn't
- * affect IntersectionObserver. Without the guard in load-more.tsx,
- * LoadMore races with the keystroke and produces a second dispatch for
- * page-N + load-more.
+ * dispatch exactly one refetch — its own. LoadMore's
+ * IntersectionObserver is geometrically still "intersecting" the
+ * viewport while the search <dialog> is open on top of it — dialog
+ * `inert` / occlusion doesn't affect IntersectionObserver. Without the
+ * guard in load-more.tsx, LoadMore races with the keystroke and bumps
+ * `?pages=`, producing a second dispatch for page-N + load-more.
  *
- * Three carriers can take a refetch: attached to the live channel, the
- * batch rides a `url` frame on a `/__parton/channel` envelope (the
- * page URL with the `?__force=` overlay); after the auto-upgrade the
- * same envelope is a text frame on the `/__parton/ws` socket; and
- * pre-attach it is a discrete `_.rsc` GET with `?partials=`. The
- * keystroke races establishment and the upgrade, so the guard counts
- * dispatches across ALL of them and expects exactly one.
+ * A keystroke is a plain `navigate()`: one whole-tree statement whose
+ * segment fp-skips everything except the `?q` readers (the search
+ * stages). The STATED URL is what names a dispatch — the keystroke
+ * moves `?q`, a LoadMore firing moves `?pages` — so the guard reads
+ * the statement's params.
+ *
+ * The stated URL is also the only stable identity a dispatch has here,
+ * because one logical statement legitimately reaches the wire more
+ * than once and on more than one carrier:
+ *  - carriers vary with connection timing — a statement fired
+ *    pre-establishment latches and rides the attach it triggers
+ *    (stated as the attach URL), an established connection takes it as
+ *    a `url` frame on a `/__parton/channel` envelope, the auto-upgrade
+ *    moves that envelope onto the `/__parton/ws` socket, and a
+ *    discrete `_.rsc` GET is the remaining carrier;
+ *  - envelopes are the RELIABLE class, so an unacked one is
+ *    retransmitted with its original seq;
+ *  - the heartbeat reopens its connection at the now-current URL,
+ *    restating it as transport.
+ * All of those state the SAME url, so counting DISTINCT stated URLs
+ * counts logical dispatches. A LoadMore race states a different one
+ * (`?pages=`), so it stays visible as a second distinct URL.
  */
+
+type Statement = {
+  /** The stated URL — its params name the dispatch, and it is the
+   *  dispatch's identity across carriers and retransmits. */
+  url: string
+  transport: "rsc" | "attach" | "channel" | "ws"
+}
+
 test("single keystroke in search dispatches exactly one RSC call", async ({ page }) => {
-  const rscCalls: Array<{
-    url: string
-    partials: string | null
-    tags: string | null
-    time: number
-  }> = []
-  const urlStatements: Array<{ url: string; partials: string | null; time: number }> = []
-  const t0 = Date.now()
+  const statements: Statement[] = []
+  let armed = false
+  const record = (transport: Statement["transport"], url: string) => {
+    if (armed) statements.push({ url, transport })
+  }
+
   page.on("request", (req) => {
     const url = req.url()
     if (url.includes("_.rsc")) {
-      const u = new URL(url)
       // The heartbeat's live attach POST is transport, not a dispatch.
-      if (u.searchParams.get("live") === "1") return
-      rscCalls.push({
-        url,
-        partials: u.searchParams.get("partials"),
-        tags: u.searchParams.get("tags"),
-        time: Date.now() - t0,
-      })
+      if (new URL(url).searchParams.get("live") === "1") return
+      record("rsc", url)
       return
     }
-    if (url.includes("/__parton/channel")) {
+    if (url.includes("/__parton/live")) {
+      // A statement fired pre-establishment latches and rides the
+      // attach it triggers, which states it as the attach URL.
       try {
-        const envelope = JSON.parse(req.postData() ?? "") as {
-          frames?: Array<{ kind: string; url?: string }>
-        }
-        for (const frame of envelope.frames ?? []) {
-          if (frame.kind !== "url" || !frame.url) continue
-          const stated = new URL(frame.url, "http://localhost")
-          urlStatements.push({
-            url: frame.url,
-            partials: stated.searchParams.get("__force"),
-            time: Date.now() - t0,
-          })
-        }
+        const statement = JSON.parse(req.postData() ?? "") as { url?: string }
+        if (statement.url) record("attach", statement.url)
       } catch {}
+      return
     }
+    if (!url.includes("/__parton/channel")) return
+    try {
+      const envelope = JSON.parse(req.postData() ?? "") as {
+        frames?: Array<{ kind: string; url?: string; frame?: string[] }>
+      }
+      for (const f of envelope.frames ?? []) {
+        // A `frame`-keyed url frame is a frame nav, not a page statement.
+        if (f.kind !== "url" || !f.url || f.frame) continue
+        record("channel", f.url)
+      }
+    } catch {}
   })
+
   // The upgraded socket — envelopes ride it as text frames.
   page.on("websocket", (ws) => {
     if (!ws.url().includes("/__parton/ws")) return
@@ -70,12 +90,7 @@ test("single keystroke in search dispatches exactly one RSC call", async ({ page
         if (typeof message.connection !== "string") return
         for (const f of message.frames ?? []) {
           if (f.kind !== "url" || !f.url || f.frame) continue
-          const stated = new URL(f.url, "http://localhost")
-          urlStatements.push({
-            url: f.url,
-            partials: stated.searchParams.get("__force"),
-            time: Date.now() - t0,
-          })
+          record("ws", f.url)
         }
       } catch {}
     })
@@ -93,44 +108,36 @@ test("single keystroke in search dispatches exactly one RSC call", async ({ page
   // is not covered by React's discrete-event replay).
   await waitForPageInteractive(page)
 
-  // 2. Reset the counters — observe only dispatches from the keystroke
-  //    onward.
-  rscCalls.length = 0
-  urlStatements.length = 0
-
-  // 3. Focus the input and type exactly one character.
+  // 2. Focus first, then arm — the recorder observes the keystroke and
+  //    nothing before it.
   await input.focus()
   await input.press("End")
+  armed = true
+
+  // 3. Type exactly one character.
   await input.press("p")
 
   // 4. Wait long enough for the stages refetch (stage-3 has 2s delay) and
   //    for any spurious LoadMore firings to round-trip.
   await page.waitForTimeout(3000)
 
+  // One logical dispatch per distinct stated URL.
+  const dispatches = [...new Set(statements.map((s) => s.url))]
+
   // Report what we saw (helps diagnose failures).
   console.log(
-    `\n=== dispatches during keystroke (rsc=${rscCalls.length}, channel=${urlStatements.length}) ===`,
+    `\n=== keystroke: ${dispatches.length} dispatch(es) from ${statements.length} wire statement(s) ===`,
   )
-  for (const c of rscCalls) {
-    console.log(`  [${c.time}ms] rsc partials=${c.partials} tags=${c.tags} url=${c.url}`)
-  }
-  for (const s of urlStatements) {
-    console.log(`  [${s.time}ms] channel partials=${s.partials} url=${s.url}`)
-  }
+  for (const s of statements) console.log(`  ${s.transport} ${s.url}`)
 
-  // The stages refetch is the ONE expected dispatch, on whichever
-  // transport carried it. The server resolves `?partials=search-results`
-  // against the route registry by label on both paths.
-  const stageDispatches = [
-    ...rscCalls.filter((c) => c.partials === "search-results"),
-    ...urlStatements.filter((s) => s.partials === "search-results"),
-  ]
-  const otherDispatches = [
-    ...rscCalls.filter((c) => c.partials !== "search-results"),
-    ...urlStatements.filter((s) => s.partials !== null && s.partials !== "search-results"),
-  ]
+  const params = (url: string) => new URL(url, "http://localhost").searchParams
+  // The keystroke's own dispatch: it moved `?q` to the typed character.
+  const queryDispatches = dispatches.filter((url) => params(url).get("q") === "p")
+  // Anything else the keystroke shook loose — a LoadMore firing shows
+  // up here as a `?pages=` bump.
+  const otherDispatches = dispatches.filter((url) => params(url).get("q") !== "p")
 
-  expect(stageDispatches.length, "expected exactly one dispatch for the search stages").toBe(1)
+  expect(queryDispatches.length, "expected exactly one dispatch for the search query").toBe(1)
   expect(
     otherDispatches,
     `expected no unrelated dispatches; got: ${JSON.stringify(otherDispatches)}`,

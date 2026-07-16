@@ -21,7 +21,14 @@
  *     (match-miss keepalive emissions, hidden variant siblings);
  *   - fixture stamps — `[S|<id>|<state>]` string tokens the fuzz
  *     fixture bodies embed, the content-level oracle currency.
+ *
+ * Ids come off the wire as EFFECTIVE ids — a parton placed under
+ * another parton (or inside a `<Frame>`) carries the placement fold
+ * (`<id>~<16 hex>`). `stripFoldedIds` re-keys a whole extraction onto
+ * the bare basis the fixtures name their partons on.
  */
+
+import { stripPlacementFold } from "../lib/partial.tsx"
 
 export interface PartonObservation {
   id: string
@@ -220,4 +227,25 @@ export function extractPartonView(text: string): ExtractedPayload {
   const root = rows.get("0")
   if (root !== undefined) walk(root.value, false)
   return out
+}
+
+/**
+ * Re-key an extraction onto the BARE id basis: every observation's and
+ * pair's placement fold stripped. The fixtures name their partons bare
+ * — `universeIds`, `parentOf`, `cullableIds`, and the `[S|<id>|…]`
+ * stamps a body writes are all bare — so both oracle sides compare on
+ * this basis. The harness keeps the raw extraction's WIRE ids for
+ * everything the protocol addresses by id (`?__force=`, `?cached=`
+ * tokens, the visibility statement, registry/cache lookups); the
+ * mapping between the two is learned from the wire, never guessed.
+ *
+ * Stamps pass through untouched — a body's stamp names its spec, which
+ * placement never folds.
+ */
+export function stripFoldedIds(ex: ExtractedPayload): ExtractedPayload {
+  return {
+    observations: ex.observations.map((o) => ({ ...o, id: stripPlacementFold(o.id) })),
+    pairs: new Map([...ex.pairs].map(([id, culled]) => [stripPlacementFold(id), culled])),
+    stamps: ex.stamps,
+  }
 }

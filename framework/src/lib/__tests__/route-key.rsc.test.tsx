@@ -58,12 +58,14 @@ describe("pattern registration dedup (HMR re-execution)", () => {
     // constructor with the identical options both times.
     const defineSpec = () =>
       parton(
-        function HmrSpecRender() {
-          return null
-        },
+        Object.assign(
+          function HmrSpecRender() {
+            return null
+          },
+          { displayName: "route-key-hmr-spec" },
+        ),
         {
           match: "/hmr/:id",
-          selector: "route-key-hmr-spec",
         },
       )
 
@@ -78,12 +80,14 @@ describe("pattern registration dedup (HMR re-execution)", () => {
   it("routeKeys stay stable across a re-registration", () => {
     const defineSpec = () =>
       parton(
-        function HmrStableRender() {
-          return null
-        },
+        Object.assign(
+          function HmrStableRender() {
+            return null
+          },
+          { displayName: "route-key-hmr-stable" },
+        ),
         {
           match: "/hmr-stable/:id",
-          selector: "route-key-hmr-stable",
         },
       )
 
@@ -99,21 +103,25 @@ describe("pattern registration dedup (HMR re-execution)", () => {
 
   it("two specs sharing one pattern contribute a single signature", () => {
     parton(
-      function SharedARender() {
-        return null
-      },
+      Object.assign(
+        function SharedARender() {
+          return null
+        },
+        { displayName: "route-key-shared-a" },
+      ),
       {
         match: "/shared/:id",
-        selector: "route-key-shared-a",
       },
     )
     parton(
-      function SharedBRender() {
-        return null
-      },
+      Object.assign(
+        function SharedBRender() {
+          return null
+        },
+        { displayName: "route-key-shared-b" },
+      ),
       {
         match: "/shared/:id",
-        selector: "route-key-shared-b",
       },
     )
     expect(getRegisteredMatchPatterns()).toHaveLength(1)
@@ -121,21 +129,25 @@ describe("pattern registration dedup (HMR re-execution)", () => {
 
   it("distinct patterns register side by side and split routeKeys", () => {
     parton(
-      function DistinctARender() {
-        return null
-      },
+      Object.assign(
+        function DistinctARender() {
+          return null
+        },
+        { displayName: "route-key-distinct-a" },
+      ),
       {
         match: "/distinct-a/:id",
-        selector: "route-key-distinct-a",
       },
     )
     parton(
-      function DistinctBRender() {
-        return null
-      },
+      Object.assign(
+        function DistinctBRender() {
+          return null
+        },
+        { displayName: "route-key-distinct-b" },
+      ),
       {
         match: "/distinct-b/:id",
-        selector: "route-key-distinct-b",
       },
     )
     expect(getRegisteredMatchPatterns()).toHaveLength(2)
@@ -148,12 +160,14 @@ describe("pattern registration dedup (HMR re-execution)", () => {
 describe("route identity — the URL base", () => {
   it("same page collapses to one routeKey across query changes", () => {
     parton(
-      function PathOnlyRender() {
-        return null
-      },
+      Object.assign(
+        function PathOnlyRender() {
+          return null
+        },
+        { displayName: "route-key-path-only" },
+      ),
       {
         match: "/p/:slug",
-        selector: "route-key-path-only",
       },
     )
     // Per-segment streaming URLs differ only in framework query params
@@ -165,21 +179,25 @@ describe("route identity — the URL base", () => {
 
   it("a search-bearing pattern never splits its page's bucket", () => {
     parton(
-      function MixedPathRender() {
-        return null
-      },
+      Object.assign(
+        function MixedPathRender() {
+          return null
+        },
+        { displayName: "route-key-mixed-path" },
+      ),
       {
         match: "/search{/*}?",
-        selector: "route-key-mixed-path",
       },
     )
     parton(
-      function SearchMatchRender() {
-        return null
-      },
+      Object.assign(
+        function SearchMatchRender() {
+          return null
+        },
+        { displayName: "route-key-search-match" },
+      ),
       {
         match: { search: "*q=:query" },
-        selector: "route-key-search-match",
       },
     )
     // The typing session: /search → ?q=p → ?q=po. Every shape must
@@ -195,21 +213,25 @@ describe("route identity — the URL base", () => {
   it("routeKey is a pure function of the URL, not of arrival order", () => {
     const define = () => {
       parton(
-        function OrderPathRender() {
-          return null
-        },
+        Object.assign(
+          function OrderPathRender() {
+            return null
+          },
+          { displayName: "route-key-order-path" },
+        ),
         {
           match: "/order{/*}?",
-          selector: "route-key-order-path",
         },
       )
       parton(
-        function OrderSearchRender() {
-          return null
-        },
+        Object.assign(
+          function OrderSearchRender() {
+            return null
+          },
+          { displayName: "route-key-order-search" },
+        ),
         {
           match: { search: "*q=:query" },
-          selector: "route-key-order-search",
         },
       )
     }
@@ -230,12 +252,14 @@ describe("route identity — the URL base", () => {
 
   it("host is part of the base — hostname patterns split per host", () => {
     parton(
-      function HostRender() {
-        return null
-      },
+      Object.assign(
+        function HostRender() {
+          return null
+        },
+        { displayName: "route-key-host" },
+      ),
       {
         match: { hostname: "shop.example", pathname: "/p/:slug" },
-        selector: "route-key-host",
       },
     )
     const shop = computeRouteKey("http://shop.example/p/x")

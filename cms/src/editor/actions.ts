@@ -10,17 +10,20 @@
  *  - `addBlockToSlot` / `removeBlockFromSlot` / `moveBlockInSlot` —
  *    structural slot mutations.
  *
- * Refetch is driven via in-body `getServerNavigation().reload(...)`
- * — the surrounding `runInvalidationTransaction` (installed by the
- * RSC entry) buffers the bump and flushes it on success, so a
- * thrown action leaves the registry untouched.
+ * Refetch is the tag idiom: every block instance reads its content
+ * row as the `cms:<key>` tag (the block wrapper registers it), and
+ * the editor chrome reads `cms-edit-tree` / `cms-edit-fields`; a
+ * write here fires `refreshSelector` on those names. The surrounding
+ * `runInvalidationTransaction` (installed by the RSC entry) buffers
+ * the bumps and flushes them on success, so a thrown action leaves
+ * the registry untouched.
  */
 
 import {
-  getServerNavigation,
   getSlotBlockMeta,
   lookupDraftNode,
   publishDraft,
+  refreshSelector,
   revertDraftNode,
   writeDraftNode,
   type CmsConfig,
@@ -28,9 +31,7 @@ import {
 } from "@parton/framework"
 
 function refetchEditorAround(id: string): void {
-  getServerNavigation().reload({
-    selector: `${id} cms-edit-tree cms-edit-fields`,
-  })
+  refreshSelector([`cms:${id}`, "cms-edit-tree", "cms-edit-fields"])
 }
 
 export async function saveCmsFields(
@@ -95,7 +96,7 @@ export async function saveCmsFields(
 
 export async function publishCmsDraft(): Promise<void> {
   await publishDraft()
-  getServerNavigation().reload({ selector: "cms-edit-tree" })
+  refreshSelector("cms-edit-tree")
 }
 
 export async function resetCmsDraft(id: string): Promise<void> {

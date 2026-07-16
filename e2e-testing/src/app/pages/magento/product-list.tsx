@@ -35,7 +35,6 @@ const MagentoCartBadge = parton(
     return <CartBadge quantity={cart.value?.total_quantity ?? 0} />
   },
   {
-    selector: "#cart-badge .cart .header",
     fallback: <CartBadge quantity={"?"} />,
     // No vary — cart binding flows from the parent via JSX prop
     // (cartBadgeCell.with({cartId})). The cell handles per-cartId
@@ -43,28 +42,22 @@ const MagentoCartBadge = parton(
   },
 )
 
-const MagentoHeader = parton(
-  function MagentoHeaderRender(_: RenderArgs) {
-    // Tracked read — records `cookie:cart_id` on this parton, so a new
-    // cart cookie (set by the add-to-cart action) moves the fp on the
-    // next navigation exactly as the old `vary` did.
-    const cartId = cookie("cart_id") ?? ""
-    return (
-      <header className="mb-4 flex items-center justify-between gap-4">
-        <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
-        {cartId ? (
-          <MagentoCartBadge cart={cartBadgeCell.with({ cartId })} />
-        ) : (
-          <CartBadge quantity={0} />
-        )}
-      </header>
-    )
-  },
-  // Explicit selector keeps the spec addressable (refetchable by label,
-  // fp on the wire) now that no `vary`/`match` marks it as such. Same
-  // id the auto-derived name produced.
-  { selector: "#magento-header" },
-)
+const MagentoHeader = parton(function MagentoHeaderRender(_: RenderArgs) {
+  // Tracked read — records `cookie:cart_id` on this parton, so a new
+  // cart cookie (set by the add-to-cart action) moves the fp on the
+  // next navigation exactly as the old `vary` did.
+  const cartId = cookie("cart_id") ?? ""
+  return (
+    <header className="mb-4 flex items-center justify-between gap-4">
+      <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
+      {cartId ? (
+        <MagentoCartBadge cart={cartBadgeCell.with({ cartId })} />
+      ) : (
+        <CartBadge quantity={0} />
+      )}
+    </header>
+  )
+})
 
 const MagentoProducts = parton(
   function MagentoProductsRender({
@@ -97,7 +90,6 @@ const MagentoProducts = parton(
     )
   },
   {
-    selector: "#products",
     // Byte-cache the product grid; the per-card LivePrice (`.price`)
     // partons stay live as dynamic holes — re-rendered fresh on every
     // cache hit and streamed in over their 1s load. Exercises the

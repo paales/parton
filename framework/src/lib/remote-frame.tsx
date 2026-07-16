@@ -27,8 +27,8 @@
  * reads), split with `splitSegments`: the first segment's body is the
  * Flight payload; its trailer map carries a `snapshots` entry that
  * registers every parton the embedded page rendered into the HOST's
- * registry — stamped `source: { kind: "page", … }` so a selector-
- * targeted refetch routes back as `?partials=<id>` at the embedded
+ * registry — stamped `source: { kind: "page", … }` so a targeted
+ * refetch routes back as `?partials=<id>` at the embedded
  * URL (`_pageEmbedRefetch`). Registration rides `deferCommitUntil`,
  * so the host's commit waits for the trailer.
  *
@@ -101,13 +101,11 @@ export interface RemoteFrameProps {
    *  ONLY what's declared here — the host's cookies don't cross (the
    *  fetch is `credentials: "omit"`, even same-origin). */
   capability?: Capability
-  /** Human namespace for this embed's refetch labels — the typed
-   *  bindings' install name (`magento` turns the embedded page's
-   *  `stocks` label into `magento:stocks` in the host's registry, so
-   *  host-side selectors are self-describing and collision-free
-   *  across remotes). Also prefixes the minted placement namespace
-   *  for debuggable registry ids. Identity does NOT depend on it —
-   *  the placement namespace disambiguates on its own. */
+  /** Human name for this embed — the typed bindings' install name.
+   *  Purely cosmetic: it prefixes the minted placement namespace so
+   *  registry / wire ids are debuggable (`magento~<hash>:…` instead of
+   *  `e~<hash>:…`). Identity does NOT depend on it — the placement
+   *  namespace disambiguates on its own. */
   namespace?: string
   /** Trust grant for the embedded payload — a grant SET (a name is
    *  shorthand for the singleton set). Omitted = full trust: the
@@ -271,7 +269,6 @@ export async function RemoteFrame({
   return embedPage({
     url: absoluteUrl,
     ns,
-    namespace,
     capability,
     cells: resolveCellBindings(cells),
     grants: normalizeEmbedGrants(grant),
@@ -282,7 +279,7 @@ export async function RemoteFrame({
 /**
  * Focused re-embed for a page-sourced snapshot — the refetch half of
  * the page-embed contract. `partialFromSnapshot` (partial.tsx) calls
- * this when a selector-targeted refetch resolves to a snapshot whose
+ * this when a targeted refetch resolves to a snapshot whose
  * `source.kind === "page"`: the ordinary protocol, `?partials=<id>`
  * at the embedded URL, with the ORIGINAL placement namespace and
  * capability replayed off the stamp (never re-derived — the refetch
@@ -302,7 +299,6 @@ async function EmbedRefetch({
   return embedPage({
     url: source.url,
     ns: source.ns,
-    namespace: source.namespace,
     capability: source.capability as Capability | undefined,
     // Bound cells RE-RESOLVE at refetch time — the stamps name the
     // cells, current storage supplies the values. Replaying the
@@ -318,7 +314,6 @@ async function EmbedRefetch({
 async function embedPage(args: {
   url: string
   ns: string
-  namespace?: string
   capability?: Capability
   /** Normalized bound-cell bindings (`null` = none bound). */
   cells: ResolvedCellBindings | null
@@ -411,7 +406,6 @@ async function embedPage(args: {
           kind: "page",
           url: args.url,
           ns: args.ns,
-          ...(args.namespace !== undefined ? { namespace: args.namespace } : {}),
           ...(args.capability !== undefined
             ? { capability: args.capability as Record<string, unknown> }
             : {}),
@@ -424,11 +418,12 @@ async function embedPage(args: {
         }
         for (const [id, ser] of Object.entries(raw)) {
           const snap = deserializeSnapshot(ser)
-          registerPartial(id, {
-            ...snap,
-            labels: args.namespace ? snap.labels.map((l) => `${args.namespace}:${l}`) : snap.labels,
-            source,
-          })
+          // Labels register AS SHIPPED — they are the embedded
+          // partons' cell/tag invalidation names, and a host-side
+          // bump (`refreshSelector(name)` matching a tag the remote
+          // render read) must keep matching them so the wake lanes a
+          // `_pageEmbedRefetch` back through the embedded URL.
+          registerPartial(id, { ...snap, source })
         }
       } catch {
         // Malformed trailer — skip registration, keep the render.
@@ -529,9 +524,9 @@ async function embedPage(args: {
  *
  * The capability shape is enforced at compile time — the host cannot
  * pass a value that doesn't match what the remote page declared. The
- * `namespace` is the CLI's install name; it prefixes the embedded
- * page's refetch labels in the host registry (`magento:stocks`), so
- * host-side selectors stay collision-free across remotes.
+ * `namespace` is the CLI's install name — a debuggable prefix on the
+ * minted placement namespace, nothing more (see
+ * `RemoteFrameProps.namespace`).
  */
 export function remote<Cap = void>(opts: {
   origin: string

@@ -31,6 +31,7 @@ import {
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts"
 import { handleChannelPost } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import { Frame } from "../frame.tsx"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
@@ -39,13 +40,14 @@ import { pathname, searchParam } from "../server-hooks.ts"
 const renders = { panel: 0, forced: 0, probe: 0 }
 let lastProbeV: string | null = null
 
-const IntentPanel = parton(
-  function IntentPanelRender(_: RenderArgs) {
-    renders.panel++
-    return <div data-panel>{`panel:${pathname()}:${renders.panel}`}</div>
-  },
-  { selector: "intent-panel" },
-)
+// Each parton's tag read is the drive's shutdown handle:
+// `refreshSelector`ing the name wakes it so the parked driver observes
+// the torn stream.
+const IntentPanel = parton(function IntentPanelRender(_: RenderArgs) {
+  tag("intent-panel")
+  renders.panel++
+  return <div data-panel>{`panel:${pathname()}:${renders.panel}`}</div>
+})
 
 const PageFramed = (): ReactNode => (
   <PartialRoot>
@@ -55,13 +57,11 @@ const PageFramed = (): ReactNode => (
   </PartialRoot>
 )
 
-const ForcedTarget = parton(
-  function ForcedTargetRender(_: RenderArgs) {
-    renders.forced++
-    return <div data-forced>{`forced:${renders.forced}`}</div>
-  },
-  { selector: "forced-target" },
-)
+const ForcedTarget = parton(function ForcedTargetRender(_: RenderArgs) {
+  tag("forced-target")
+  renders.forced++
+  return <div data-forced>{`forced:${renders.forced}`}</div>
+})
 
 const PageForced = (): ReactNode => (
   <PartialRoot>
@@ -72,14 +72,12 @@ const PageForced = (): ReactNode => (
 // The warm probe reads the request URL — a warm render for the stated
 // target must evaluate the TARGET's request state, observable through
 // the recorded read.
-const WarmProbe = parton(
-  function WarmProbeRender(_: RenderArgs) {
-    renders.probe++
-    lastProbeV = searchParam("v")
-    return <div data-probe>{`probe:${lastProbeV ?? "none"}`}</div>
-  },
-  { selector: "warm-probe" },
-)
+const WarmProbe = parton(function WarmProbeRender(_: RenderArgs) {
+  tag("warm-probe")
+  renders.probe++
+  lastProbeV = searchParam("v")
+  return <div data-probe>{`probe:${lastProbeV ?? "none"}`}</div>
+})
 
 const PageProbe = (): ReactNode => (
   <PartialRoot>

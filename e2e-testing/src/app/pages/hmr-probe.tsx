@@ -14,7 +14,7 @@ const CachedSection = parton(
   function HmrProbeCachedRender(_: RenderArgs) {
     return <div data-testid="hmr-marker-cached">{MARKER}</div>
   },
-  { selector: "#hmr-probe-cached", cache: { maxAge: 60 } },
+  { cache: { maxAge: 60 } },
 )
 
 export const HmrProbePage = parton(

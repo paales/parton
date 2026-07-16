@@ -21,17 +21,14 @@ function bytesOf(s: string): ReadableStream<Uint8Array> {
 
 // magento-shaped: async, Suspense-wrapped, addressable `.price` partons
 // inside a plain grid (the body a `<Cache>` would store).
-const Price = parton(
-  async function PriceRender({ sku }: { sku: string } & RenderArgs) {
-    await new Promise((r) => setTimeout(r, 0))
-    return (
-      <span data-testid={`price-${sku}`} className="price">
-        PRICE_{sku}_CONTENT
-      </span>
-    )
-  },
-  { selector: ".price" },
-)
+const Price = parton(async function PriceRender({ sku }: { sku: string } & RenderArgs) {
+  await new Promise((r) => setTimeout(r, 0))
+  return (
+    <span data-testid={`price-${sku}`} className="price">
+      PRICE_{sku}_CONTENT
+    </span>
+  )
+})
 
 function Grid() {
   return (

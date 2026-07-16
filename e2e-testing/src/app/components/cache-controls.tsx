@@ -14,7 +14,6 @@ import { Button } from "@parton/copies/components/ui/button"
  */
 export function CacheControls() {
   const nav = useNavigation()
-  const [reload, reloadProgress] = nav.reload()
   const [navigate, navigateProgress] = nav.navigate()
   const [settled, setSettled] = useState(0)
   const countSettle = (m: { finished: Promise<unknown> }) => {
@@ -23,9 +22,7 @@ export function CacheControls() {
       () => setSettled((n) => n + 1),
     )
   }
-  const isPending =
-    (reloadProgress.committed && !reloadProgress.finished) ||
-    (navigateProgress.committed && !navigateProgress.finished)
+  const isPending = navigateProgress.committed && !navigateProgress.finished
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -37,7 +34,11 @@ export function CacheControls() {
         type="button"
         size="sm"
         variant="outline"
-        onClick={() => countSettle(reload({ selector: "#slow" }))}
+        // A same-URL replace navigate — one whole-tree statement whose
+        // covering segment fp-skips everything the client holds; the
+        // byte-cached slow parton replays from the server cache when
+        // it does render.
+        onClick={() => countSettle(navigate((url) => url, { history: "replace" }))}
         data-testid="refetch-slow"
       >
         Refetch slow
@@ -50,7 +51,7 @@ export function CacheControls() {
         type="button"
         size="sm"
         variant="outline"
-        onClick={() => countSettle(reload({ selector: "#clock" }))}
+        onClick={() => countSettle(navigate((url) => url, { history: "replace" }))}
         data-testid="refetch-clock"
       >
         Refetch clock
@@ -68,15 +69,10 @@ export function CacheControls() {
           const current = url.searchParams.get("flavor") ?? "vanilla"
           const next = current === "vanilla" ? "chocolate" : "vanilla"
           url.searchParams.set("flavor", next)
-          // Push the new `?flavor=` and refetch just `#slow`. Slow reads
-          // `flavor` from the URL via its own `vary`, so the refetch
-          // re-derives it against the updated URL.
-          countSettle(
-            navigate(url.toString(), {
-              history: "push",
-              selector: "#slow",
-            }),
-          )
+          // Push the new `?flavor=`. Slow reads `flavor` from the URL
+          // via its tracked read, so its fingerprint moves and only it
+          // (plus the flavor-reading wrapper) re-renders.
+          countSettle(navigate(url.toString(), { history: "push" }))
         }}
         data-testid="toggle-flavor"
       >

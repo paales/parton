@@ -14,7 +14,7 @@ the frame's URL.
 const CartContent = parton(function CartContentRender(_: RenderArgs) {
   const state = parseCartState(pathname())   // tracked read of the FRAME url
   return <CartPanel state={state} />
-}, { selector: "#cart" })
+})
 
 <Frame name="cart" initialUrl="/cart/closed">
   <CartContent />
@@ -27,6 +27,13 @@ session-frame-URL store (so descendants find it via session lookup),
 and provides the `useNavigation("cart")` context to client
 descendants. Partons inside the frame inherit the extended frame
 chain via server context — no threading.
+
+The chain is part of a framed placement's identity: a parton placed
+inside a `<Frame>` folds the ambient placement (parent id path + frame
+chain) into its instance id as a trailing `~<16 hex>`. The same spec
+placed in two different frames is therefore two distinct instances —
+distinct wire wrappers, registry slots, and client cache slots — so
+one frame's content can never fp-confirm against the other's.
 
 Multiple sibling partials can live in one frame:
 
@@ -93,10 +100,10 @@ const [reload, { committed, finished }] = nav.reload()
 const [navigate] = useNavigation("cart").navigate()
 
 <Button
-  onClick={() => reload({ selector: "#cart" })}
+  onClick={() => reload({ streaming: true })}
   disabled={committed && !finished}
 >
-  Refresh cart
+  Refresh
 </Button>
 <Button onClick={() => navigate("/cart/open")}>Open cart drawer</Button>
 ```
@@ -111,16 +118,19 @@ Common spinner predicates:
 
 Fire functions:
 
-- `reload()` — whole-page reload.
-- `reload({ selector })` — targeted refetch of the matching Partials.
+- `reload()` — reload the current URL. On the window handle a bare
+  call is a real browser reload: the user-facing "reload this page"
+  command, document and all.
+- `reload({ streaming: true })` — the in-place progressive refetch.
+  The page re-renders against the current URL over the held stream,
+  no document load.
 - `navigate(target)` — push a new URL.
-- `navigate(target, options)` — targeted refetch + URL update.
+- `navigate(target, options)` — URL update + refetch.
 
 `target` is a string, a `URL`, or an updater function
-`(url: URL) => URL | string`. `selector` is one or more labels —
-whitespace-joined string or array, leading `#`/`.` is cosmetic and
-stripped. Refetch fans out across every spec whose labels include
-any of the wanted tokens (or whose id equals one of them).
+`(url: URL) => URL | string`. On a frame handle every `reload()` is
+in-place: the frame re-renders against its own current URL and the
+document is untouched.
 
 The fire function returns `NavigationMilestones` **synchronously** —
 a `{ committed, streaming, finished }` object of three promises
@@ -128,14 +138,19 @@ mirroring the browser's `NavigationResult` plus a framework-native
 `streaming` milestone for the first refetch segment. Chain `await`
 on any of the three if you need to sequence work — typically
 `navigate(...).finished` — or fire-and-forget the object. Two
-reload calls in the same microtask coalesce into one request.
+in-place reload calls in the same microtask coalesce into one request.
 
 ```tsx
 // Wait for the first segment to land (rows visible), then…
-const { streaming } = navigate(url, { selector: ".search-results" })
+const { streaming } = reload({ streaming: true })
 await streaming
 // …kick off something the user can do as soon as they see results.
 ```
+
+A whole-document window `navigate` exposes no per-segment hook, so
+its `streaming` resolves together with `finished`; an in-place
+`reload` and a frame `navigate` both resolve it at the covering
+segment's commit.
 
 **Transport.** Navigations and refetches — window AND frame scoped —
 ride the live channel: the fire becomes a `url` frame on a channel
@@ -157,16 +172,16 @@ about the API surface changes. Mechanics:
 [`../internals/channel.md`](../internals/channel.md) §Navigation
 rides the channel, §Frames ride the channel.
 
-### Supersede ordering for selector refetches
+### Supersede ordering
 
-A selector-filtered `navigate({selector})` or `reload({selector})`
-becomes a `url` statement on the channel — the page URL with the
-labels as a one-shot `?__force=` overlay, intent "silent"; multiple
-fires in one microtask coalesce into one statement. Ordering is the
-held stream's: responses arrive in stream order and every emission
-carries the navigation point it was rendered as-of, so a newer
-fire's segment can never be clobbered by an older one's, and a
-delivery predating a client-side navigation is dropped at commit.
+A `navigate` fire and an in-place `reload({streaming: true})` both
+become a `url` statement on the channel — the stated URL for the
+navigate, the current one for the reload; multiple reload fires in one
+microtask coalesce into one statement. Ordering is the held stream's:
+responses arrive in stream order and every emission carries the
+navigation point it was rendered as-of, so a newer fire's segment can
+never be clobbered by an older one's, and a delivery predating a
+client-side navigation is dropped at commit.
 Until the newer fire's segment commits, the older content keeps
 filling its Suspense boundaries, so the user sees the previous
 query's results gradually being replaced rather than vanishing
@@ -184,14 +199,12 @@ const [navigate, progress] = useNavigation().navigate()
 function onChange(next: string) {
   navigate((url) => withQuery(url, next), {
     history: "replace",
-    selector: ".search-results",
-    streaming: true,
   }).finished.catch(ignoreAbort)
 }
 ```
 
 No stagger / debounce / queue — the held stream's ordering handles
-supersession and the React transition wrapper handles visual
+supersession and the segment's progressive commit handles visual
 continuity.
 
 When called with no name, `useNavigation()` looks up the closest
@@ -207,50 +220,22 @@ For multiple buttons, prefer one tuple-bound child per button over
 shared state:
 
 ```tsx
-function PartialControls() {
-  return (["hero", "stats"] as const).map((id) => (
-    <RefreshButton key={id} id={id} />
+function DrawerControls() {
+  return (["cart", "wishlist"] as const).map((frame) => (
+    <OpenButton key={frame} frame={frame} />
   ))
 }
 
-function RefreshButton({ id }: { id: string }) {
-  const [reload, { committed, finished }] = useNavigation().reload()
+function OpenButton({ frame }: { frame: string }) {
+  const [navigate, { committed, finished }] = useNavigation(frame).navigate()
   const pending = committed && !finished
   return (
-    <Button onClick={() => reload({ selector: `#${id}` })} disabled={pending}>
-      Refresh {id}
+    <Button onClick={() => navigate(`/${frame}/open`)} disabled={pending}>
+      Open {frame}
     </Button>
   )
 }
 ```
-
-### `@self` — refetch the enclosing partial
-
-`"@self"` is a special selector token the hook resolves to the
-enclosing partial's effective id (read from the React context that
-`PartialErrorBoundary` populates). Lets a client component inside a
-partial body fire `reload({ selector: "@self" })` without threading
-the id through props.
-
-```tsx
-const [reload, { committed, finished }] = useNavigation().reload()
-const pending = committed && !finished
-return (
-  <Button onClick={() => reload({ selector: "@self" })} disabled={pending}>
-    Refresh this card
-  </Button>
-)
-```
-
-Works in `selector`, as a string or an array mixed with other labels:
-
-```tsx
-reload({ selector: ["@self", ".price"] })
-```
-
-Used outside any partial, `@self` rejects every milestone with a
-`NavigationError` (kind `decode`, message explains the wiring) —
-loud failure beats silent drop.
 
 ### Error handling
 
@@ -268,7 +253,7 @@ import { NavigationError } from "@parton/framework"
 
 // Inline handling — opt out of the bubbler by catching `.finished`.
 const [navigate] = useNavigation().navigate()
-navigate(url, { selector: "#cart" }).finished.catch((err) => {
+navigate(url).finished.catch((err) => {
   if (err instanceof NavigationError) {
     // err.kind: "network" | "http" | "decode"
     // err.status — HTTP status when kind === "http"
@@ -299,27 +284,64 @@ render fails closes the whole payload stream; that case still surfaces
 the error page (the page genuinely failed to render) — contain it
 server-side at the failing partial.
 
-### Driving a refetch with fresh data
+### Refreshing content — cells and tags
 
-A targeted refetch carries a *signal* — the `selector` — and the
-re-rendered spec sources its request-dependent inputs through its
-tracked reads / `match` / cells, which re-resolve against the current
-request. To drive a refetch with a fresh value, write it where the
-spec reads it: the page URL (`navigate(url, { selector })`), a frame
-URL, or a cookie (`navigate(url, { cookies, selector })`). The
-refetch derives its fingerprint from the recorded read set
-re-evaluated at the current request, so an input moves the result
-when it flows through one of those scopes. Activators (the
-framework's `useActivate`; the example app's `<WhenVisible>` /
-`<WhenMounted>` wrappers; manual buttons) are triggers that fire
-`reload({ selector })`.
+Navigation moves the URL. Content freshness is the other axis, and it
+has its own two signals — both server-side, neither needing a fire
+from the client:
+
+- **Cells** — state-shaped. A parton resolves a cell in its body; the
+  read IS the dependency, so a write wakes exactly the partons that
+  read it. See [`cells.md`](./cells.md).
+- **`tag()`** — event-shaped. A parton subscribes by *reading*
+  `tag(name)` in its body; a server action's `refreshSelector(name)`
+  wakes every reader.
+
+```tsx
+export const LivePrice = parton(
+  async function LivePriceRender({ sku }: { sku: string } & RenderArgs) {
+    tag(`price?sku=${encodeURIComponent(sku)}`)   // the read IS the subscription
+    return <Price value={await quote(sku)} />
+  },
+)
+```
+
+```ts
+"use server"
+import { refreshSelector } from "@parton/framework"
+
+export async function bumpPrice(sku: string) {
+  refreshSelector(`price?sku=${encodeURIComponent(sku)}`)  // exactly one card
+}
+
+export async function bumpAllPrices() {
+  refreshSelector("price")                                 // every card
+}
+```
+
+Tags fan out by name: several partons reading one tag all re-render
+on one bump, and a parton reading several tags re-renders on any of
+them. A name may carry a constraint (`price?sku=ABC`), so the
+bare-name bump reaches every reader of the family while the
+constrained one reaches just the readers that named it. The wakes
+ride the held stream — the button calls the action, the readers
+re-render, no client-side refetch call in between.
+
+**Driving a render with fresh request data.** A spec sources its
+request-dependent inputs through its tracked reads / `match` / cells,
+which re-resolve against the current request. To move one, write it
+where the spec reads it: the page URL (`navigate(url)`), a frame URL
+(`useNavigation("cart").navigate(url)`), or a cookie
+(`navigate(url, { cookies })`). The render derives its fingerprint
+from the recorded read set re-evaluated at the current request, so an
+input moves the result when it flows through one of those scopes.
 
 ### Other commit knobs
 
 | Option | Effect |
 |---|---|
-| `streaming: true` | Progressive reveal — commit without `startTransition`, so Suspense fallbacks paint and Flight chunks land per-row. Default is `false` (transition-wrapped, atomic swap, no fallback flash). Purely a CLIENT commit-mode switch. Not to be confused with the `streaming` milestone in `progress` — the option is a behavior switch, the milestone is an event marker. |
-| `silent: true` | Update the URL without firing any refetch. Wins over `selector` if both are set. Ignored on frame handles. `navigate`-only. |
+| `streaming: true` | Progressive reveal — commit without `startTransition`, so Suspense fallbacks paint and Flight chunks land per-row. Default is `false` (transition-wrapped, atomic swap, no fallback flash) — good for "just swap values" UX. Purely a CLIENT commit-mode switch, read by `reload` and by a frame `navigate`; a window `navigate` always streams, since the destination's Suspense boundaries are newly introduced and paint their fallbacks before filling in. Not to be confused with the `streaming` milestone in `progress` — the option is a behavior switch, the milestone is an event marker. |
+| `silent: true` | Update the URL without firing any refetch. Ignored on frame handles (a frame navigation always re-renders the frame). `navigate`-only. |
 | `signal` | Caller-supplied `AbortSignal` — aborting before the fire completes rejects its milestones with `AbortError`; the covering statement's response is a channel delivery the supersede ordering already arbitrates. `reload`-only. |
 | `cookies` | Write client-side cookies before the refetch fires. `navigate`-only — `reload` does not accept it. See [Cookies](#cookies). |
 
@@ -330,11 +352,10 @@ synchronously before the refetch fetch is issued, so the new values
 travel in the upcoming request's `Cookie` header:
 
 ```tsx
-const [navigate] = useNavigation().navigate()
-navigate(window.location.pathname + window.location.search, {
-  cookies: { theme: "dark" },
-  selector: "theme-aware",
-})
+const nav = useNavigation()
+const [navigate] = nav.navigate()
+
+navigate(nav.currentEntry.url, { cookies: { theme: "dark" } })
 ```
 
 The example above passes the current URL, so `history: "auto"` (the

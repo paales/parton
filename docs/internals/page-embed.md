@@ -126,14 +126,14 @@ and cancels the iterator after its trailers resolve — an embedded
 page holding a live connection would otherwise park it open.
 
 Trailer handling registers each snapshot into the HOST's request
-registry — labels prefixed with the human `namespace` when given, and
-`source: {kind: "page", url, ns, namespace?, capability?, cells?}`
+registry — labels AS SHIPPED (bare), and
+`source: {kind: "page", url, ns, capability?, grant?, cells?}`
 stamped (`cells` holds per-binding STAMPS — cell id + resolved
 partition, never the projected values; in-memory only, since
 `serializeSnapshot` drops `source` wholesale) —
 under `deferCommitUntil`, so the host's stream wrappers hold commit
 until registration lands (route-hint writes visible before the
-response goes out; selector refetch never hits a registry miss).
+response goes out; a targeted lane never hits a registry miss).
 The source stamp is part of the registry's VARIANT KEY
 (`variantKeyOf` in partial-registry.ts): same-origin, host and
 producer share one canonical store, and both register the SAME id
@@ -273,10 +273,12 @@ keyed by bare spec ids. The `~` in the grammar is framework-reserved,
 which is what makes both the idempotence check and the strip a
 protocol signal rather than a guess.
 
-Labels are deliberately NOT placement-prefixed (class-level fan-out;
-producer invalidation selectors must keep matching). The human
-`namespace` prefix on labels is applied host-side at trailer
-registration.
+Labels are deliberately NOT namespaced — neither by the placement
+namespace nor by the human `namespace`. They name the embedded
+partons' cell/tag invalidation subscriptions (class-level fan-out
+targets), and the producer's own bumps must keep matching them so a
+`refreshSelector` wake lanes a `_pageEmbedRefetch` back through the
+embedded URL.
 
 ## Refetch routing
 
@@ -320,12 +322,15 @@ holds `interactive`, wrapping the spliced payload in a
   input itself is UNCONTROLLED (`defaultValue` on the wire), so the
   DOM is the optimistic value and a server refresh at the same tree
   position never clobbers the user's in-progress text.
-- **The server echo is `reload({selector: "@self"})`** — coalesced to
-  one fire per settled burst, only when every queue drained (a reload
-  under a still-pending newer value would echo older server state).
-  `@self` resolves through `PartialIdContext` to the enclosing host
-  parton, whose re-render re-embeds the page — hence the authoring
-  rule that interactive embeds sit inside an addressable parton.
+- **The server echo is a self-refetch** — the bridge forces the
+  enclosing host parton's effective id (read off `PartialIdContext`,
+  dispatched through `enqueueRefetch` — the framework-internal
+  id-forcing protocol; authors never target partons), whose re-render
+  re-embeds the page. Coalesced to one fire per settled burst, only
+  when every queue drained (a refetch under a still-pending newer
+  value would echo older server state). Hence the placement rule: an
+  interactive embed sits inside a host parton — outside one the bridge
+  has no id to force and throws its wiring error.
 - **`data-interactive-ready`** on the wrapper is the wired signal
   (set in the same effect that attaches the listeners, removed on
   cleanup): the embed's DOM streams in and paints before this client

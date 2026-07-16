@@ -13,8 +13,6 @@ export {
   type PartialBuilder,
   type SpecComponent,
   type SpecExtraProps,
-  type SelectorToken,
-  type SelectorTokens,
   type RenderArgs,
   type PartonProps,
   type ActivatorProps,

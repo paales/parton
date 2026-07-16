@@ -170,26 +170,28 @@ refresh.
 
 Three axes:
 
-1. **Server-side `reload({selector})`.** An action body (or any
-   server-side task) calls `getServerNavigation().reload({selector:
-"cart price"})` and the framework bumps the invalidation registry
-   so every spec whose id or label list contains "cart" or "price"
-   sees a fresh fingerprint on the next render — bypassing their
-   cache.
+1. **A write to what the body read.** The two refresh signals both
+   fan out through the invalidation registry, bumping every spec
+   whose recorded read set matches so it sees a fresh fingerprint on
+   the next render — bypassing its cache:
+   - **cells** — a write (`cell.set` / `cell.update` /
+     `.invalidate()`) fans out by `cell:<id>?<partition>` and wakes
+     exactly the partons that resolved it;
+   - **tags** — a parton reads `tag(name)` in its body; a
+     server-side `refreshSelector(name)` wakes every reader.
 
-   > **Scope per-user state.** A bare selector like `"cart"` has no
-   > constraints and matches every cart-tagged parton across every
+   > **Scope per-user state.** A bare tag name like `"cart"` carries
+   > no constraint and matches every parton reading it across every
    > viewer — one user's mutation fans out to every other user's
-   > next nav. For per-request state, add a query-string fragment:
-   > `reload({ selector: "cart?cart_id=" + cartId })` matches only
-   > partons whose effective constraint surface (match params ∪
+   > next nav. For per-request state, constrain the name with a
+   > query-string fragment: a parton reading
+   > `tag("cart?cart_id=" + cartId)` is woken only by a
+   > `refreshSelector` whose constraint surface (match params ∪
    > bound cell args) contains `cart_id=<cartId>`. The author owns
    > this discipline; the framework can't auto-scope because it
    > doesn't know which constraint keys are partition axes vs
-   > incidental reads. See "Sharp edge: `reload({selector})`
-   > is too broad by default" in
-   > [`../notes/IDEAS.md`](../notes/IDEAS.md) for the ergonomic
-   > follow-up being tracked.
+   > incidental reads. Cell partitions carry this scoping natively —
+   > prefer a cell when the thing that changed is state.
 
 2. **Tracked-input change.** A page nav that changes a tracked
    read's value (or a match param) produces a different cache key.

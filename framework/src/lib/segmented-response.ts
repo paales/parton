@@ -626,9 +626,8 @@ const NAV_TRANSPORT_PARAMS = [
 ] as const
 
 /** The navigation-identifying part of a URL: pathname + app search
- *  params (transport params dropped, order-independent). Two statements
- *  with the same effective URL address the same page — a refetch, not a
- *  navigation. */
+ *  params (transport params dropped, order-independent) — the broadcast
+ *  route's identity, so viewers on one page share a render slot. */
 function effectiveNavUrl(url: string): string {
   const u = new URL(url, "http://parton.local")
   for (const p of NAV_TRANSPORT_PARAMS) u.searchParams.delete(p)
@@ -637,19 +636,39 @@ function effectiveNavUrl(url: string): string {
   return search ? `${u.pathname}?${search}` : u.pathname
 }
 
-/** Whether two nav statements target the same page (ignoring transport
- *  params). A same-effective-URL statement arriving over an in-flight
- *  streaming nav is a refetch of the page being loaded, not a nav away
- *  — see `supersededBy` in `emitNavSegment`. */
-function sameEffectiveNavUrl(a: string, b: string): boolean {
-  try {
-    return effectiveNavUrl(a) === effectiveNavUrl(b)
-  } catch {
-    return false
+/**
+ * A frame statement's covering partons: the TOP-MOST snapshots
+ * rendered under the frame — every snapshot whose frame path opens
+ * with the frame's top-level name, minus those with an ancestor that
+ * is itself under the frame (an ancestor's lane re-renders its whole
+ * subtree, so laning the descendant too would double-render it).
+ * Placement is the signal — the snapshot's own framePath, written by
+ * the render that placed it — never a name coincidence.
+ */
+function frameTopmostIds(
+  snapshots: ReadonlyMap<string, PartialSnapshot>,
+  top: string,
+): Set<string> {
+  const under = new Set<string>()
+  for (const [id, snap] of snapshots) {
+    if (snap.framePath[0] === top) under.add(id)
   }
+  const ids = new Set<string>()
+  for (const id of under) {
+    const snap = snapshots.get(id)!
+    let covered = false
+    for (const ancestorId of snap.parentPath) {
+      if (ancestorId !== id && under.has(ancestorId)) {
+        covered = true
+        break
+      }
+    }
+    if (!covered) ids.add(id)
+  }
+  return ids
 }
 
-/** The attach statement's one-shot `__force` overlay — the selector a
+/** The attach statement's one-shot `__force` overlay — the ids a
  *  pre-establishment refetch folded into the statement's URL. Read off
  *  the statement (the entry strips it from request state before any
  *  render); `null` when the statement carries none. */
@@ -1118,9 +1137,9 @@ async function driveLaneStream(
   // The cancel arm — a `cancel` statement's reach into the scope's
   // open lane renders, fired synchronously at envelope apply
   // (`cancelListeners`). Scope membership is the frame's narrowing:
-  // the lane's parton belongs to the scope when its id or a label
-  // matches the scope name, or its snapshot's frame path opens with
-  // it (nested frames cancel with their root). The cancelled pump
+  // the lane's parton belongs to the scope when its id matches the
+  // scope name or its snapshot's frame path opens with it (nested
+  // frames cancel with their root). The cancelled pump
   // winds its CURRENT iteration down — closing the open body with a
   // `muxend` so the client's decode settles and the same id can
   // reopen — and exits; the superseding statement's covering lane
@@ -1130,10 +1149,7 @@ async function driveLaneStream(
     const snapshots = _readSnapshotsForRoute(scope, routeKey)
     for (const [id, runtime] of lanes) {
       const snap = snapshots.get(id)
-      const inScope =
-        id === cancelScope ||
-        (snap?.labels.includes(cancelScope) ?? false) ||
-        snap?.framePath[0] === cancelScope
+      const inScope = id === cancelScope || snap?.framePath[0] === cancelScope
       if (!inScope) continue
       runtime.cancelled = true
       runtime.forced = false
@@ -2063,6 +2079,10 @@ async function driveLaneStream(
     }
     const consumedSeq = session?.consumedNavSeq ?? 0
     const bufferUntilDrain = session !== null && session.consumedNavStreaming !== true
+    // Whether any of this segment's Flight bytes have reached the wire —
+    // the fact `supersededBy` gates on. Written at the enqueue itself, so
+    // it states what the connection DID, never what it was going to do.
+    let emittedStreamingBytes = false
     const bufferedSegment: Uint8Array[] = []
     const flushBufferedSegment = async (): Promise<boolean> => {
       if (!bufferUntilDrain || bufferedSegment.length === 0) return true
@@ -2076,26 +2096,28 @@ async function driveLaneStream(
     const supersededBy = (): boolean => {
       if (session === null || session.pendingNav === null) return false
       if (session.pendingNav.seq <= consumedSeq) return false
-      // A STREAMING nav has already committed a root-ready shell on the
-      // client — its Suspense fallbacks are showing and its boundaries
-      // resolve as the body streams. A pending statement to the SAME
-      // effective URL is a REFETCH of the page being loaded (a defer /
-      // on-mount activation firing off that fresh shell, a selector
-      // force), not a navigation away. Aborting the in-flight stream for
-      // it would close the client's committed shell with its Suspense
-      // refs still pending, rejecting them ("Connection closed.") and
-      // tearing the just-revealed partons. Let the stream DRAIN so its
-      // boundaries commit progressively; the refetch's forces apply once
-      // it consumes next. A DIFFERENT effective URL is a genuine
-      // navigation-away and still supersedes (serve the new page fast).
-      // Atomic navs never reach here with this carve-out — they buffer,
-      // so a superseded atomic nav has no committed shell to tear.
-      if (
-        session.consumedNavStreaming === true &&
-        sameEffectiveNavUrl(session.pendingNav.url, request.url)
-      ) {
-        return false
-      }
+      // Bytes on the wire forfeit the right to truncate. A payload
+      // segment's Flight document is delivered COMPLETE — that is what
+      // the `settled` marker means — and once this segment's first bytes
+      // are out, the client may already have committed them root-ready
+      // (a streaming nav commits at root; its Suspense fallbacks are
+      // showing and its boundaries resolve as the body streams).
+      // Cancelling the render then closes that committed document with
+      // its refs still pending, rejecting them ("Connection closed.") and
+      // tearing the just-revealed partons into their error cards. Whether
+      // the client committed is the CLIENT's fact — it commits at
+      // root-ready, before any newer statement exists — so the server
+      // cannot ask; it can only honor what it already wrote. So: emitted
+      // ⇒ DRAIN, and the newest statement consumes right after (the
+      // pendingNav latch collapses everything in between).
+      //
+      // Nothing emitted ⇒ supersede freely: an atomic nav BUFFERS to its
+      // drain (nothing reaches the wire until it completes), and a
+      // streaming nav suspended on a slow loader has produced no bytes
+      // yet — the case the nav-latch arm below exists to preempt. That is
+      // where the supersede's latency win actually lives, and it is
+      // untouched.
+      if (emittedStreamingBytes) return false
       return true
     }
     const reader = renderFullSegment().getReader()
@@ -2145,6 +2167,7 @@ async function driveLaneStream(
               await reader.cancel(DRIVER_CANCEL_REASON).catch(() => {})
               return "closed"
             }
+            emittedStreamingBytes = true
           }
         }
       }
@@ -2196,30 +2219,27 @@ async function driveLaneStream(
     for (const [, seq] of session.assignedLaneSeqs) session.voidSeqs.add(seq)
     session.assignedLaneSeqs.clear()
     laneNavSeqs.clear()
-    // The union of the consumed statements' `__force` selectors — the
+    // The union of the consumed statements' `__force` ids — the
     // targets that lane after the region reopens. Superseded
     // statements' URLS are moot (the covering statement's stands),
     // but their FORCES are not: a silent restatement with a disjoint
     // target must not lose the earlier statement's refetch.
-    // Resolve `__force` selectors (+ torn unfulfilled forces) to the
-    // ids they hit on the current route: id match first, then label
-    // fan-out — the same narrowing the reopened forced lanes take.
+    // Resolve `__force` targets (+ torn unfulfilled forces) to the
+    // ids they hit on the current route. Forces are effective parton
+    // ids (the framework-internal id-forcing protocol — activators,
+    // the embed bridge's echo); a target without a snapshot on this
+    // route is dropped (a real route change legitimately loses it).
     const resolveForcedIds = (
-      labels: ReadonlySet<string>,
+      forced: ReadonlySet<string>,
       extra: readonly string[],
     ): Set<string> => {
       const snapshots = _readSnapshotsForRoute(scope, routeKey)
-      const wanted = [...labels]
       const ids = new Set<string>()
       for (const id of extra) if (snapshots.has(id)) ids.add(id)
-      for (const name of wanted) if (snapshots.has(name)) ids.add(name)
-      for (const [id, snap] of snapshots) {
-        if (ids.has(id)) continue
-        if (snap.labels.some((l) => wanted.includes(l))) ids.add(id)
-      }
+      for (const id of forced) if (snapshots.has(id)) ids.add(id)
       return ids
     }
-    const forceLabels = new Set<string>()
+    const forcedTargets = new Set<string>()
     // Coverage anchors for the covering segment — captured immediately
     // BEFORE each render begins (the segment-0 `lastTs` discipline):
     // Flight renders lazily, so a write committing mid-stream after
@@ -2245,11 +2265,11 @@ async function driveLaneStream(
         // them (and their subtrees) via the fold exclusion below, so a
         // forced target's ancestor can answer with a placeholder while
         // the forced lane re-renders it fresh.
-        for (const label of (target.searchParams.get("__force") ?? "")
+        for (const forcedId of (target.searchParams.get("__force") ?? "")
           .split(",")
           .map((t) => t.trim())
           .filter(Boolean)) {
-          forceLabels.add(label)
+          forcedTargets.add(forcedId)
         }
         target.searchParams.delete("__force")
         setRequest(new Request(target, { headers: request.headers }))
@@ -2263,8 +2283,8 @@ async function driveLaneStream(
         // re-lanes them independently, so their change must not move an
         // ancestor's fp — the ancestor fp-skips, the forced lane covers
         // the change (parent-valid, child-invalid).
-        if (forceLabels.size > 0 || unfulfilledForces.length > 0) {
-          _setFoldExclusionIds(resolveForcedIds(forceLabels, unfulfilledForces))
+        if (forcedTargets.size > 0 || unfulfilledForces.length > 0) {
+          _setFoldExclusionIds(resolveForcedIds(forcedTargets, unfulfilledForces))
         }
         coverTs = _currentTs()
         coveredPending = [...subscription.sub.pending]
@@ -2299,8 +2319,8 @@ async function driveLaneStream(
     // Torn-but-unfulfilled forces re-lane alongside (their id must
     // still snapshot on the new route — a real route change
     // legitimately drops them).
-    if (forceLabels.size > 0 || unfulfilledForces.length > 0) {
-      const ids = resolveForcedIds(forceLabels, unfulfilledForces)
+    if (forcedTargets.size > 0 || unfulfilledForces.length > 0) {
+      const ids = resolveForcedIds(forcedTargets, unfulfilledForces)
       if (ids.size > 0) {
         enterRequestRegistry(routeKey, "cache")
         for (const id of ids) {
@@ -2361,12 +2381,7 @@ async function driveLaneStream(
       // statements, and the guard is `asOf >= navPoint`.
       session.consumedNavSeq = Math.max(session.consumedNavSeq, nav.seq)
       const top = key.split(".")[0]
-      const ids = new Set<string>()
-      if (snapshots.has(top)) ids.add(top)
-      for (const [id, snap] of snapshots) {
-        if (ids.has(id)) continue
-        if (snap.labels.includes(top)) ids.add(id)
-      }
+      const ids = frameTopmostIds(snapshots, top)
       if (ids.size === 0) {
         uncovered = true
         continue
@@ -2415,30 +2430,25 @@ async function driveLaneStream(
   const onCancelScope = (s: string): void => cancelScopeLanes(s)
   session?.cancelListeners.add(onCancelScope)
 
-  // The attach statement's `__force` targets — a selector refetch that
-  // fired pre-establishment and folded its overlay into the statement's
-  // URL — lane EXPLICIT the moment the region opens, resolved against
-  // the route's snapshots exactly like a consumed url statement's
-  // (id first, then label fan-out). On the full path the whole-tree
-  // initial segment has just rendered (fp-skip may have placeholdered
-  // the targets — a whole-tree render cannot force a target whose
-  // ancestor skips); on the catch-up path there was no segment at all.
-  // Either way the forced lane is the covering render.
+  // The attach statement's `__force` targets — an id-forced refetch
+  // that fired pre-establishment and folded its overlay into the
+  // statement's URL — lane EXPLICIT the moment the region opens,
+  // resolved against the route's snapshots by effective id. On the
+  // full path the whole-tree initial segment has just rendered
+  // (fp-skip may have placeholdered the targets — a whole-tree render
+  // cannot force a target whose ancestor skips); on the catch-up path
+  // there was no segment at all. Either way the forced lane is the
+  // covering render.
   {
     const force = attachForceSelector()
     if (force !== null && session !== null) {
       const snapshots = _readSnapshotsForRoute(scope, routeKey)
-      const wanted = force
+      const ids = new Set<string>()
+      for (const name of force
         .split(",")
         .map((s) => s.trim())
-        .filter(Boolean)
-      const ids = new Set<string>()
-      for (const name of wanted) {
+        .filter(Boolean)) {
         if (snapshots.has(name)) ids.add(name)
-      }
-      for (const [id, snap] of snapshots) {
-        if (ids.has(id)) continue
-        if (snap.labels.some((l) => wanted.includes(l))) ids.add(id)
       }
       if (ids.size > 0) {
         enterRequestRegistry(routeKey, "cache")
@@ -3118,8 +3128,7 @@ function isParkedOnConnection(
  * `state.cachedFingerprints` / `state.cachedMatchKeys` — no URL
  * rewrite, no parse round-trip.
  *
- * Snapshots without an `emittedFp` (non-addressable specs, e.g.
- * layout wrappers with no selector) or without a `matchKey` are
+ * Snapshots without an `emittedFp` or without a `matchKey` are
  * skipped: they have no client-visible wire identity to track.
  *
  * Why the override carrier even exists: the previous shape
@@ -3447,8 +3456,8 @@ export function _reserveActionConsequences(connectionId: string): number[] | nul
  * `cachedFingerprints` map. Call this between segments so the next
  * render's fp-skip path treats just-emitted partials as cached.
  *
- * Snapshots without an `emittedFp` (non-addressable specs) are
- * skipped — there's no client identity to track.
+ * Snapshots without an `emittedFp` are skipped — there's no client
+ * identity to track.
  */
 export function promoteEmittedFpsToCached(
   state: PartialRequestState,

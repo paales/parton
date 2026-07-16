@@ -87,16 +87,19 @@ export interface DashboardFixture {
 // ─── Leaf + wrapper construction ──────────────────────────────────────
 
 /** A live leaf reads a distinct inline cell, folding `cell:<id>/value`
- *  into its fp. The cell id is `<partonId>/value`; partonId derives from
- *  the leaf's first selector label (`<prefix>leaf-<i>`). */
+ *  into its fp. The cell id is `<partonId>/value`; the factory pins the
+ *  partonId via `displayName` (`<prefix>leaf-<i>`) so each minted leaf
+ *  gets a distinct catalog id. */
 function makeLiveLeaf(i: number, prefix: string) {
   return parton(
-    async function LiveLeafRender(_: RenderArgs) {
-      renderCount++
-      const v = await localCell("value", { shape: "number", initial: 0 })
-      return <span data-leaf={i}>{String(v.value)}</span>
-    },
-    { selector: `#${prefix}leaf-${i}` },
+    Object.assign(
+      async function LiveLeafRender(_: RenderArgs) {
+        renderCount++
+        const v = await localCell("value", { shape: "number", initial: 0 })
+        return <span data-leaf={i}>{String(v.value)}</span>
+      },
+      { displayName: `${prefix}leaf-${i}` },
+    ),
   )
 }
 
@@ -112,40 +115,47 @@ const PULSE_CELL_ID = "bench.pulse"
  *  queries the same `cell:bench.pulse` name in the registry. */
 function makePulseLeaf(i: number, pulse: LocalCell<number>, prefix: string) {
   return parton(
-    async function PulseLeafRender(_: RenderArgs) {
-      renderCount++
-      const v = await pulse.resolve({ part: i })
-      return <span data-leaf={i}>{String(v.value)}</span>
-    },
-    { selector: `#${prefix}leaf-${i}` },
+    Object.assign(
+      async function PulseLeafRender(_: RenderArgs) {
+        renderCount++
+        const v = await pulse.resolve({ part: i })
+        return <span data-leaf={i}>{String(v.value)}</span>
+      },
+      { displayName: `${prefix}leaf-${i}` },
+    ),
   )
 }
 
 /** A static leaf has no cell — its fp never moves, so it fp-skips every
- *  warm tick. Still addressable (selector) so it participates in the
- *  fp-skip placeholder path exactly like a live leaf that didn't change. */
+ *  warm tick. It ships its fp like every parton, so it participates in
+ *  the fp-skip placeholder path exactly like a live leaf that didn't
+ *  change. */
 function makeStaticLeaf(i: number, prefix: string) {
   return parton(
-    function StaticLeafRender(_: RenderArgs) {
-      renderCount++
-      return <span data-leaf={i}>static-{i}</span>
-    },
-    { selector: `#${prefix}leaf-${i}` },
+    Object.assign(
+      function StaticLeafRender(_: RenderArgs) {
+        renderCount++
+        return <span data-leaf={i}>static-{i}</span>
+      },
+      { displayName: `${prefix}leaf-${i}` },
+    ),
   )
 }
 
-/** A wrapper parton — addressable (so fp-skippable) and counted. Its
- *  the own-surface is constant: the descendant-fold is what carries
- *  a descendant's invalidation into the wrapper's fp, so a changed leaf
+/** A wrapper parton — fp-skippable and counted. Its own-surface is
+ *  constant: the descendant-fold is what carries a descendant's
+ *  invalidation into the wrapper's fp, so a changed leaf
  *  re-instantiates its wrapper chain while unchanged siblings stay
  *  parked. */
 function makeWrapper(level: number, prefix: string) {
   return parton(
-    function WrapperRender({ children }: RenderArgs) {
-      renderCount++
-      return <div data-wrapper={level}>{children}</div>
-    },
-    { selector: `#${prefix}wrap-${level}` },
+    Object.assign(
+      function WrapperRender({ children }: RenderArgs) {
+        renderCount++
+        return <div data-wrapper={level}>{children}</div>
+      },
+      { displayName: `${prefix}wrap-${level}` },
+    ),
   )
 }
 

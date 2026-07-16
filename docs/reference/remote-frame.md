@@ -47,7 +47,7 @@ interface RemoteFrameProps {
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `url`        | The page URL to embed. Absolute URL (cross-origin) or same-origin path; relative paths resolve against the current request's URL.                                                                                                                                                                                                                                                      |
 | `capability` | Host-declared values the embedded render can read via `getCapability()`. Flat record of JSON-serializable values; serialized as the `x-parton-capability` header and decoded into scope on the embed-flagged page render.                                                                                                                                                              |
-| `namespace`  | Human prefix for the embed's refetch **labels** in the host registry (`magento` turns the embedded page's `stocks` label into `magento:stocks`), so host-side selectors are self-describing across remotes. Identity does not depend on it — see below. Set automatically by `parton add` bindings.                                                                                    |
+| `namespace`  | Human name for this embed — a prefix on the minted **placement namespace**, so registry / wire ids read `magento~<hash>:…` instead of `e~<hash>:…`. Purely cosmetic: identity does not depend on it, the placement namespace disambiguates on its own. Set automatically by `parton add` bindings.                                                                             |
 | `grant`      | Trust grant for the embedded payload — a grant **set** (a bare name is the singleton set). Omitted = full trust: the payload splices as-is. Present = enforced at splice time by the tier rewriter; shipped grants are `"paint"` and `"interactive"`. See [Grants](#grants--the-paint-tier). Replayed on targeted refetch, so a placement can never re-fetch wider than it was placed. |
 | `cells`      | Bound cells — the **inward** state contract. RESOLVED cells only, keyed by the names the remote's spec declares; the projected **values** cross with the embed request. See [Bound cells](#bound-cells--inward-state).                                                                                                                                                                 |
 
@@ -103,16 +103,19 @@ Consequences:
   of tree position), and a targeted refetch **replays** the stored
   namespace rather than re-deriving it.
 
-The `~` character is framework-reserved in id grammar; app selectors
-must not use it. The namespace deliberately excludes the URL's search
+The `~` character is framework-reserved in id grammar; app ids must
+not use it. The namespace deliberately excludes the URL's search
 params, so a frame-driven embed (`?step=payment`) keeps one identity
 while its content moves.
 
-**Labels stay bare.** Refetch labels are class-level fan-out targets;
-the producer's own invalidation selectors keep matching them, and a
-host-side `reload({selector: "price"})` fans out to every embedded
-instance carrying the label. The optional `namespace` prop prefixes
-labels host-side (`magento:stocks`) for cross-remote hygiene.
+**Labels stay bare.** A parton's labels are its recorded reads — the
+`cell:<id>` deps of the cells it resolved, and the names it passed to
+`tag()` — and they register in the host's registry exactly as the
+producer shipped them. Labels are class-level fan-out targets, so the
+producer's own `refreshSelector("price")` keeps reaching every
+embedded instance that read `tag("price")`; prefixing them host-side
+would break precisely that. `namespace` scopes the placement's ids,
+never its labels.
 
 ## Refetch — `?partials=` at the embedded URL
 
@@ -125,17 +128,18 @@ until registration lands). Each snapshot registers in the HOST's
 registry stamped:
 
 ```ts
-source: { kind: "page", url, ns, namespace?, capability? }
+source: { kind: "page", url, ns, capability? }
 ```
 
-`nav.reload({selector})` resolving to a page-sourced snapshot
-re-embeds the page with the ordinary protocol — a page GET at the
-**embedded URL** with `?partials=<id>` plus the embed headers,
-replaying the stored placement namespace and capability. The producer
-answers a _focused_ render: it reconstructs just the target(s) from
-its own registry (the same isolated-render path a local lane takes)
-and ships a fresh trailer. A registry miss on the producer falls back
-to the whole page — over-fetch, never fail.
+A wake that resolves to a page-sourced snapshot — a cell write, or a
+`refreshSelector` matching a label the embed shipped — re-embeds the
+page with the ordinary protocol: a page GET at the **embedded URL**
+with `?partials=<id>` plus the embed headers, replaying the stored
+placement namespace and capability. The producer answers a _focused_
+render: it reconstructs just the target(s) from its own registry (the
+same isolated-render path a local lane takes) and ships a fresh
+trailer. A registry miss on the producer falls back to the whole
+page — over-fetch, never fail.
 
 Nested embeds chain: each hop stamps its OWN fetch URL when
 registering, so a refetch retraces exactly the hops that produced the
@@ -173,12 +177,11 @@ plus the capability you hand it.
 
 // Embedded page's parton
 const MagentoPaymentSummary = parton(
-  async function Render(_: RenderArgs) {
+  async function MagentoPaymentSummaryRender(_: RenderArgs) {
     const cap = getCapability()
     // …
   },
   {
-    selector: "magento-payment-summary",
     match: "/remote/magento-payment-summary",
     capabilityType: "PaymentCap",
   },
@@ -207,12 +210,11 @@ manifest advertises them):
 ```tsx
 // Remote (e2e-magento) — /remote/cart-note
 const MagentoCartNote = parton(
-  async function Render(_: RenderArgs) {
+  async function CartNoteRender(_: RenderArgs) {
     const { cart, locale } = getBoundCells() // exactly the declared names
     // …
   },
   {
-    selector: "cart-note",
     match: "/remote/cart-note",
     cells: { cart: { required: true }, locale: {} },
   },
@@ -372,13 +374,15 @@ The pieces:
   (the DOM is the optimistic value, shown at keystroke); writes flush
   through a per-cell single-inflight, replace-coalescing queue (the
   `useCell().input()` discipline); a `Button` holds `data-pending`
-  for the hop. The SERVER echo is one coalesced
-  `reload({selector: "@self"})` after the queue drains: the enclosing
-  host parton re-renders and the fresh remote render replaces the
-  spliced content in place.
-- **Authoring rule:** an interactive embed must sit inside an
-  **addressable host parton** — `@self` is the bridge's refresh
-  target. The bridge stamps `data-interactive-ready` on its wrapper
+  for the hop. The SERVER echo is one coalesced self-refetch after the
+  queue drains: the bridge forces the enclosing host parton's
+  effective id (the framework-internal id-forcing protocol), that
+  parton re-renders, and the fresh remote render replaces the spliced
+  content in place.
+- **Authoring rule:** an interactive embed must sit inside a **host
+  parton** — its effective id is the echo's refresh target, and
+  outside one the bridge throws its wiring error rather than dropping
+  the echo. The bridge stamps `data-interactive-ready` on its wrapper
   once its listeners are live (the embed's DOM streams in before the
   bridge hydrates) — the explicit signal specs and tools wait on.
 - Under a plain Paint grant the SAME interactive rows **degrade in
@@ -562,15 +566,15 @@ embed headers):
 | `GET /__remote/manifest.json` | Embeddable-page inventory for the CLI |
 | `GET /__remote/types.d.ts`    | Author-provided capability types file |
 
-The manifest lists every addressable spec; a spec whose `match`
-carries a **static pathname** (a literal URLPattern — no params, no
-wildcards) advertises it as `path`, and the CLI generates bindings
-only for those. A nested addressable parton with no page of its own
-(reached via its parent page's trailer) advertises `path: null`. Each
-spec also advertises its bound-cell requirements (`cells` — the
-declaration the host binds against), and the manifest's top-level
-`publishes` lists the ids of every cell the app publishes across the
-boundary (the remoteCell inventory).
+The manifest lists every spec; a spec whose `match` carries a
+**static pathname** (a literal URLPattern — no params, no wildcards)
+advertises it as `path`, and the CLI generates bindings only for
+those. A nested parton with no page of its own (reached via its
+parent page's trailer) advertises `path: null`. Each spec also
+advertises its bound-cell requirements (`cells` — the declaration the
+host binds against), and the manifest's top-level `publishes` lists
+the ids of every cell the app publishes across the boundary (the
+remoteCell inventory).
 
 ## Frame navigation (navigating within an embed)
 
@@ -628,13 +632,13 @@ measured, not yet warranted.
 - **`/embed-demo`** — embeds `/pokemon/1` (a full content page);
   `/embed-nested-demo` chains two levels; `/embed-self-demo` embeds
   itself (depth termination + per-level identity).
-- **`/embed-duplicate-demo`** — the same page embedded twice; a label
-  refetch fans out to both.
+- **`/embed-duplicate-demo`** — the same page embedded twice; a tag
+  bump fans out to both.
 - **`/embed-refetch-demo`** — targeted refetch routing through
   `?partials=` at the embedded URL.
 - **`/remote-frame-demo`** — five same-origin embeds of `/remote/*`
   pages: parallel streaming, client-component hydration, producer-side
-  byte cache, selector refetch.
+  byte cache, tag-driven refresh.
 - **`/remote-frame-crossorigin-demo`** — embeds four `e2e-magento`
   pages (port 5181) via typed bindings, including a capability-scoped
   payment summary and a frame-navigated checkout step.

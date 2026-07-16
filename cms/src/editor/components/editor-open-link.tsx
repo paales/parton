@@ -37,7 +37,6 @@ export function EditorOpenLink({
     void navigate(window.location.pathname + window.location.search, {
       history: "replace",
       cookies: { [EDITOR_COOKIE]: "1" },
-      selector: "#editor-shell",
     })
   }
   return (

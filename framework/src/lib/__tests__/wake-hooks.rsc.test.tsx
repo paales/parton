@@ -58,34 +58,40 @@ const ROOT_MK = hash(stableStringify({}))
 
 // Declares its wake purely via render-body hooks — no vary anywhere.
 const HookTtl = parton(
-  function HookTtlRender(_: RenderArgs) {
-    expires(time().in(5_000))
-    expires(time().in(60_000)) // later boundary — earliest must win
-    staleUntil(time().in(120_000))
-    return <span>hook-ttl-body</span>
-  },
-  { selector: "#wake-ttl" },
+  Object.assign(
+    function HookTtlRender(_: RenderArgs) {
+      expires(time().in(5_000))
+      expires(time().in(60_000)) // later boundary — earliest must win
+      staleUntil(time().in(120_000))
+      return <span>hook-ttl-body</span>
+    },
+    { displayName: "wake-ttl" },
+  ),
 )
 
 // Live ticker: content changes every render, wake declared in-body.
 const renders = { clock: 0 }
 const HookClock = parton(
-  function HookClockRender(_: RenderArgs) {
-    renders.clock++
-    expires(time().in(80))
-    return <time data-hook-clock>{`hook-tick-${renders.clock}`}</time>
-  },
-  { selector: "wake-clock" },
+  Object.assign(
+    function HookClockRender(_: RenderArgs) {
+      renders.clock++
+      expires(time().in(80))
+      return <time data-hook-clock>{`hook-tick-${renders.clock}`}</time>
+    },
+    { displayName: "wake-clock" },
+  ),
 )
 
 // Short-TTL spec for the fp-skip gate: stable fp (no tracked reads),
 // expires 300ms after each render.
 const ShortTtl = parton(
-  function ShortTtlRender(_: RenderArgs) {
-    expires(Date.now() + 300)
-    return <span>short-ttl-body</span>
-  },
-  { selector: "#wake-short" },
+  Object.assign(
+    function ShortTtlRender(_: RenderArgs) {
+      expires(Date.now() + 300)
+      return <span>short-ttl-body</span>
+    },
+    { displayName: "wake-short" },
+  ),
 )
 
 beforeEach(() => {

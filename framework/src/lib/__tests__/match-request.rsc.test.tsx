@@ -44,21 +44,25 @@ const ROOT_MK = hash(stableStringify({}))
 
 // The load-more shape: page 3 exists iff ?pages >= 3.
 const PageThree = parton(
-  function PageThreeRender(_: RenderArgs) {
-    return <span>page-three-body</span>
-  },
+  Object.assign(
+    function PageThreeRender(_: RenderArgs) {
+      return <span>page-three-body</span>
+    },
+    { displayName: "mr-page-3" },
+  ),
   {
-    selector: "#mr-page-3",
     match: { searchParams: { pages: (v) => Number(v ?? "1") >= 3 } },
   },
 )
 
 const CookieGated = parton(
-  function CookieGatedRender(_: RenderArgs) {
-    return <span>beta-panel-body</span>
-  },
+  Object.assign(
+    function CookieGatedRender(_: RenderArgs) {
+      return <span>beta-panel-body</span>
+    },
+    { displayName: "mr-beta" },
+  ),
   {
-    selector: "#mr-beta",
     match: { cookies: { beta: "1" } },
   },
 )
@@ -69,32 +73,38 @@ function GateFlipper({ children }: { children: React.ReactNode }) {
 }
 
 const HeaderGated = parton(
-  function HeaderGatedRender(_: RenderArgs) {
-    return <span>bot-banner-body</span>
-  },
+  Object.assign(
+    function HeaderGatedRender(_: RenderArgs) {
+      return <span>bot-banner-body</span>
+    },
+    { displayName: "mr-bot" },
+  ),
   {
-    selector: "#mr-bot",
     match: { headers: { "user-agent": (v) => (v ?? "").includes("Bot") } },
   },
 )
 
 const InvisibleHeaderGated = parton(
-  function InvisibleHeaderGatedRender(_: RenderArgs) {
-    return <span>invisible-header-body</span>
-  },
+  Object.assign(
+    function InvisibleHeaderGatedRender(_: RenderArgs) {
+      return <span>invisible-header-body</span>
+    },
+    { displayName: "mr-invis" },
+  ),
   {
     // x-parton-* headers are framework-internal: the gate sees null.
-    selector: "#mr-invis",
     match: { headers: { "x-parton-render": (v) => v === null } },
   },
 )
 
 const ParamAndPredicate = parton(
-  function ParamAndPredicateRender({ slug }: { slug: string } & RenderArgs) {
-    return <span>{`combo-body:${slug}`}</span>
-  },
+  Object.assign(
+    function ParamAndPredicateRender({ slug }: { slug: string } & RenderArgs) {
+      return <span>{`combo-body:${slug}`}</span>
+    },
+    { displayName: "mr-combo" },
+  ),
   {
-    selector: "#mr-combo",
     match: {
       pathname: "/combo/:slug",
       searchParams: { admit: (v) => v === "yes" },

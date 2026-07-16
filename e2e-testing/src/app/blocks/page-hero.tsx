@@ -26,7 +26,6 @@ export const PageHeroBlock = block(
     )
   },
   {
-    selector: ".page-block",
     schema: ({ cms }) => ({
       headline: cms.text("headline"),
       subhead: cms.text("subhead"),

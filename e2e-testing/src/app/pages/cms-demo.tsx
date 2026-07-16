@@ -18,7 +18,7 @@ export const CmsDemoRootBlock = block(
   },
   {
     schema: ({ cms }) => ({
-      body: cms.blocks("body", ".page-block"),
+      body: cms.blocks("body"),
     }),
   },
 )
@@ -40,7 +40,7 @@ export const CmsDemoPage = parton(
                 </code>
                 ) whose schema reads a{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-                  cms.blocks("body", ".page-block")
+                  cms.blocks("body")
                 </code>{" "}
                 slot. Every visible piece is a slot child in the CMS store.
               </li>

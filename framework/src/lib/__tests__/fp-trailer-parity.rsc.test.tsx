@@ -18,7 +18,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { ReactNode } from "react"
-import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
+import { parton, PartialRoot, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { searchParam, match } from "../server-hooks.ts"
 import { wrapStreamWithFpTrailer } from "../fp-trailer.ts"
@@ -74,6 +74,15 @@ function fpById(flight: string): Map<string, string> {
   return out
 }
 
+/** Resolve a BASE id to the key the wire and the trailer actually
+ *  carry: a parton rendering inside another one folds its placement
+ *  into its identity (`cell-leaf` → `cell-leaf~<hex>`), while a
+ *  root-level placement stays bare. The tests name base ids. */
+function wireKeyFor(keys: Iterable<string>, base: string): string | undefined {
+  for (const key of keys) if (stripPlacementFold(key) === base) return key
+  return undefined
+}
+
 /**
  * The core parity assertion. Cold-render the tree (capturing the
  * trailer's `to`), then warm-render the SAME url and read the live fp.
@@ -91,10 +100,13 @@ async function assertParity(
   // Warm: same url, the registry is now populated. The body carries
   // the live warm fp.
   const warm = await renderWithTrailer(url, tree, headers)
-  const liveWarmFp = fpById(warm.bodyText).get(id)
+  const warmFps = fpById(warm.bodyText)
+  const wireKey = wireKeyFor(warmFps.keys(), id)
+  const liveWarmFp = wireKey !== undefined ? warmFps.get(wireKey) : undefined
   expect(liveWarmFp, `live warm fp for "${id}" should be present`).toBeDefined()
 
-  const predicted = cold.trailer?.[id]?.to
+  const trailerKey = cold.trailer !== null ? wireKeyFor(Object.keys(cold.trailer), id) : undefined
+  const predicted = trailerKey !== undefined ? cold.trailer?.[trailerKey]?.to : undefined
   if (predicted !== undefined) {
     // The trailer shipped a warm fp for this id — it MUST match what
     // the server recomputes live on the warm visit.
@@ -104,7 +116,9 @@ async function assertParity(
     // fp (no drift). Then the cold body fp must itself equal the live
     // warm fp — otherwise the client never learns the warm fp and the
     // next nav mismatches.
-    const coldBodyFp = fpById(cold.bodyText).get(id)
+    const coldFps = fpById(cold.bodyText)
+    const coldKey = wireKeyFor(coldFps.keys(), id)
+    const coldBodyFp = coldKey !== undefined ? coldFps.get(coldKey) : undefined
     expect(coldBodyFp, `no trailer entry for "${id}" yet cold fp ≠ live warm fp`).toBe(liveWarmFp)
   }
 }
@@ -134,29 +148,23 @@ const counter = localCell({
   initial: 7,
 })
 
-const CellLeaf = parton(
-  async function CellLeafRender(_: RenderArgs) {
-    const c = await counter.resolve()
-    return <span data-testid="cell-leaf">{c.value}</span>
-  },
-  { selector: "#cell-leaf" },
-)
+const CellLeaf = parton(async function CellLeafRender(_: RenderArgs) {
+  const c = await counter.resolve()
+  return <span data-testid="cell-leaf">{c.value}</span>
+})
 
 // A wrapper over the cell leaf. The wrapper's fp drifts cold→warm (its
 // descendant fold is empty on the cold visit, populated on warm) so its
 // trailer entry FIRES — and the leaf below it carries a cell dep.
 // Exercises `recomputeFpWithFold` with a live fold AND a cell-resolving
 // descendant in the same route.
-const CellWrapper = parton(
-  function CellWrapperRender(_: RenderArgs) {
-    return (
-      <div>
-        <CellLeaf />
-      </div>
-    )
-  },
-  { selector: "#cell-wrapper" },
-)
+const CellWrapper = parton(function CellWrapperRender(_: RenderArgs) {
+  return (
+    <div>
+      <CellLeaf />
+    </div>
+  )
+})
 
 describe("parity — body-resolved cell", () => {
   it("a cell-resolving leaf's trailer fp matches the live warm fp", async () => {
@@ -187,7 +195,7 @@ const MatchSpec = parton(
   function MatchSpecRender(_: RenderArgs) {
     return <span data-testid="match-spec" />
   },
-  { selector: "#match-spec", match: "/m/:id" },
+  { match: "/m/:id" },
 )
 
 describe("parity — matchKey", () => {
@@ -204,12 +212,9 @@ describe("parity — matchKey", () => {
 
 // ─── Axis: tracked search-param dep ─────────────────────────────────
 
-const SearchTracked = parton(
-  function SearchTrackedRender(_: RenderArgs) {
-    return <span data-testid="search-tracked">{searchParam("q") ?? "—"}</span>
-  },
-  { selector: "#search-tracked" },
-)
+const SearchTracked = parton(function SearchTrackedRender(_: RenderArgs) {
+  return <span data-testid="search-tracked">{searchParam("q") ?? "—"}</span>
+})
 
 describe("parity — tracked search dep", () => {
   it("holds across query changes", async () => {
@@ -225,13 +230,10 @@ describe("parity — tracked search dep", () => {
 
 // ─── Axis: tracked match() hook dep ─────────────────────────────────
 
-const MatchHook = parton(
-  function MatchHookRender(_: RenderArgs) {
-    const m = match("/p/:slug")
-    return <span data-testid="match-hook">{m?.slug ?? "—"}</span>
-  },
-  { selector: "#match-hook" },
-)
+const MatchHook = parton(function MatchHookRender(_: RenderArgs) {
+  const m = match("/p/:slug")
+  return <span data-testid="match-hook">{m?.slug ?? "—"}</span>
+})
 
 describe("parity — tracked match() hook", () => {
   it("holds across captured-segment changes", async () => {
@@ -247,22 +249,16 @@ describe("parity — tracked match() hook", () => {
 
 // ─── Axis: descendant fold (wrapper over a tracked child) ───────────
 
-const FoldChild = parton(
-  function FoldChildRender(_: RenderArgs) {
-    return <span data-testid="fold-child">{searchParam("q") ?? "—"}</span>
-  },
-  { selector: "#fold-child" },
-)
-const FoldWrapper = parton(
-  function FoldWrapperRender(_: RenderArgs) {
-    return (
-      <div>
-        <FoldChild />
-      </div>
-    )
-  },
-  { selector: "#fold-wrapper" },
-)
+const FoldChild = parton(function FoldChildRender(_: RenderArgs) {
+  return <span data-testid="fold-child">{searchParam("q") ?? "—"}</span>
+})
+const FoldWrapper = parton(function FoldWrapperRender(_: RenderArgs) {
+  return (
+    <div>
+      <FoldChild />
+    </div>
+  )
+})
 
 describe("parity — descendant fold", () => {
   it("holds for a wrapper whose tracked descendant's dep moved", async () => {

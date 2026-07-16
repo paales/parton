@@ -54,13 +54,10 @@ afterEach(() => {
   _clearInvalidationRegistry()
 })
 
-const Counter = parton(
-  async function InlineCounterRender(_: RenderArgs) {
-    const n = await localCell("n", { shape: "number", initial: 0 })
-    return <span data-testid="n">{String(n.value)}</span>
-  },
-  { selector: "#inline-counter" },
-)
+const Counter = parton(async function InlineCounterRender(_: RenderArgs) {
+  const n = await localCell("n", { shape: "number", initial: 0 })
+  return <span data-testid="n">{String(n.value)}</span>
+})
 
 describe("inline localCell — read path", () => {
   it("resolves the initial value on a storage miss", async () => {

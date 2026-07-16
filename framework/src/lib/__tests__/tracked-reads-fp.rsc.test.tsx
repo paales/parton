@@ -34,19 +34,23 @@ async function fpAt(url: string, node: React.ReactNode, id: string): Promise<str
 // Tracks ?q via the server-hook — the auto-tracked replacement for
 // `partition: ({search}) => ({q: search.q})`.
 const Tracked = parton(
-  function TrackedRender(_: RenderArgs) {
-    const q = searchParam("q")
-    return <span data-testid="tracked">{q ?? "—"}</span>
-  },
-  { selector: "#tracked-probe" },
+  Object.assign(
+    function TrackedRender(_: RenderArgs) {
+      const q = searchParam("q")
+      return <span data-testid="tracked">{q ?? "—"}</span>
+    },
+    { displayName: "tracked-probe" },
+  ),
 )
 
 // Reads nothing — the control. ?q must NOT move its fp.
 const Untracked = parton(
-  function UntrackedRender(_: RenderArgs) {
-    return <span data-testid="untracked" />
-  },
-  { selector: "#untracked-probe" },
+  Object.assign(
+    function UntrackedRender(_: RenderArgs) {
+      return <span data-testid="untracked" />
+    },
+    { displayName: "untracked-probe" },
+  ),
 )
 
 describe("tracked reads fold into the fingerprint (vary becomes implicit)", () => {
@@ -86,37 +90,40 @@ describe("tracked reads fold into the fingerprint (vary becomes implicit)", () =
 
 // ── descendant fold: an ancestor's fp reflects a nested spec's tracked read ──
 const TrackedChild = parton(
-  function TrackedChildRender(_: RenderArgs) {
-    return <span data-testid="desc-child">{searchParam("q") ?? "—"}</span>
-  },
-  { selector: "#desc-child" },
+  Object.assign(
+    function TrackedChildRender(_: RenderArgs) {
+      return <span data-testid="desc-child">{searchParam("q") ?? "—"}</span>
+    },
+    { displayName: "desc-child" },
+  ),
 )
 const WrapperOfTracked = parton(
-  function WrapperOfTrackedRender(_: RenderArgs) {
-    return (
-      <div>
-        <TrackedChild />
-      </div>
-    )
-  },
-  { selector: "#desc-wrapper" },
+  Object.assign(
+    function WrapperOfTrackedRender(_: RenderArgs) {
+      return (
+        <div>
+          <TrackedChild />
+        </div>
+      )
+    },
+    { displayName: "desc-wrapper" },
+  ),
 )
 
-const PlainChild = parton(
-  function PlainChildRender(_: RenderArgs) {
-    return <span data-testid="plain-child" />
-  },
-  { selector: "#plain-child" },
-)
+const PlainChild = parton(function PlainChildRender(_: RenderArgs) {
+  return <span data-testid="plain-child" />
+})
 const WrapperOfPlain = parton(
-  function WrapperOfPlainRender(_: RenderArgs) {
-    return (
-      <div>
-        <PlainChild />
-      </div>
-    )
-  },
-  { selector: "#plain-wrapper" },
+  Object.assign(
+    function WrapperOfPlainRender(_: RenderArgs) {
+      return (
+        <div>
+          <PlainChild />
+        </div>
+      )
+    },
+    { displayName: "plain-wrapper" },
+  ),
 )
 
 describe("descendant fold: tracked reads bubble into an ancestor's fp", () => {
@@ -155,16 +162,13 @@ describe("descendant fold: tracked reads bubble into an ancestor's fp", () => {
 })
 
 // ── match(): folds only the captured params, not the whole pathname ──
-const MatchProbe = parton(
-  function MatchProbeRender(_: RenderArgs) {
-    // No `match` OPTION → renders at any URL; the `match()` HOOK reads
-    // the pattern in the body (recorded on the dep set, folded by
-    // store-and-reread on the next render).
-    const m = match("/p/:slug")
-    return <span data-testid="match-probe">{m?.slug ?? "—"}</span>
-  },
-  { selector: "#match-probe" },
-)
+const MatchProbe = parton(function MatchProbeRender(_: RenderArgs) {
+  // No `match` OPTION → renders at any URL; the `match()` HOOK reads
+  // the pattern in the body (recorded on the dep set, folded by
+  // store-and-reread on the next render).
+  const m = match("/p/:slug")
+  return <span data-testid="match-probe">{m?.slug ?? "—"}</span>
+})
 
 describe("match(): varies on the captured param, not on every URL", () => {
   beforeEach(() => clearRegistry("all"))

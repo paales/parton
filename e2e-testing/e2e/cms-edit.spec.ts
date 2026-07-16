@@ -397,21 +397,17 @@ test.describe("CMS editor — smoke", () => {
   })
 
   // Regression: tree-click selection routes through
-  // `nav.navigate(href, { selector: "#cms-edit-tree #cms-edit-fields"
-  // })` (see `<CmsEditTreeLink>`). That keeps the URL in sync but
-  // restricts the refetch to the tree + field Partials — the preview
-  // never sees a navigation. Plain `<a href="?select=…">` would
-  // trigger a full page nav that re-streams the previewed page,
-  // which under startTransition can briefly empty the preview cell
-  // while React reconciles the new payload (the "ping-pong" the
-  // user reported).
-  //
-  // We assert by inspecting the RSC request URL: a selector-targeted
-  // refetch carries `?partials=cms-edit-tree,cms-edit-fields`. A
-  // full page nav would not.
-  test("clicking a tree entry fires a selector-targeted refetch (preview stays put)", async ({
-    page,
-  }) => {
+  // `nav.navigate(href, { history: "push" })` (see `<CmsEditTreeLink>`)
+  // — a whole-tree `url` statement on the channel, not a document
+  // load. Selecting an entry moves only the tree's and the field
+  // panel's tracked `?select=` read; every preview parton's
+  // fingerprint is unchanged, so the statement prunes them to
+  // placeholders and the client keeps their cached subtrees in place.
+  // A plain `<a href="?select=…">` would trigger a full page nav that
+  // re-streams the previewed page, which under startTransition can
+  // briefly empty the preview cell while React reconciles the new
+  // payload (the "ping-pong" the user reported).
+  test("clicking a tree entry updates the panels while the preview stays put", async ({ page }) => {
     await page.goto("/cms-demo")
     await waitForPageInteractive(page)
     await expect(page.getByTestId("page-shell")).toContainText("Welcome to the CMS demo")
@@ -422,30 +418,31 @@ test.describe("CMS editor — smoke", () => {
     // against).
     await waitForRscIdle(page)
 
-    // Observe the refetch on the CHANNEL. The selector-targeted nav is a
-    // `url` frame stating the page URL with a `?__force=` overlay (the
-    // whole-tree segment's forced targets), on a `/__parton/channel`
-    // envelope — the GET `_.rsc?partials=` transport is retired. A
-    // persistent recorder attached BEFORE the click catches the
-    // fire-and-forget envelope regardless of timing.
+    // Mark the preview's node from outside React. The mark rides the
+    // DOM node itself: it survives a statement the preview fp-skips
+    // through and vanishes the moment React replaces the subtree — a
+    // sharper "stays put" signal than reading the text back.
+    await page.getByTestId("page-shell").evaluate((el) => el.setAttribute("data-preview-mark", "1"))
+
+    // Watch the channel for targeted dispatches: a `url` frame whose
+    // statement carries a `?__force=` overlay. A persistent recorder
+    // attached BEFORE the click catches the fire-and-forget envelope
+    // regardless of timing.
     const dispatches = recordPartialDispatches(page)
     await page.getByTestId("cms-edit-tree-entry-composed-hero-1").click()
 
-    // The field panel ends up resolved to the clicked id — the refetch
-    // landed and reconciled.
+    // The field panel ends up resolved to the clicked id — the
+    // statement landed and reconciled.
     await expect(page.getByTestId("cms-edit-selected-id")).toContainText("composed-hero-1")
-    // Preview content stays put (the selector refetch didn't remount it).
+    // Preview content stays put, on the very node that was there
+    // before the click.
     await expect(page.getByTestId("page-shell")).toContainText("Welcome to the CMS demo")
+    await expect(page.getByTestId("page-shell")).toHaveAttribute("data-preview-mark", "1")
 
-    // Exactly the selector-targeted refetch fired: its `__force` overlay
-    // carries the tree + fields, NOT the preview pane or the previewed-
-    // page root.
-    const forced = dispatches.filter((d) => d.partials !== null)
-    expect(forced.length).toBeGreaterThan(0)
-    const requested = forced[0].partials!.split(",")
-    expect(requested).not.toContain("cms-demo-root")
-    expect(requested).toContain("cms-edit-tree")
-    expect(requested).toContain("cms-edit-fields")
+    // Nothing on the wire aims at partons: the click states the page
+    // URL whole-tree, and the panels come back because their tracked
+    // reads moved — not because the click targeted them.
+    expect(dispatches.filter((d) => d.partials !== null)).toHaveLength(0)
   })
 
   // Regression: editing a slot child whose previous draft override

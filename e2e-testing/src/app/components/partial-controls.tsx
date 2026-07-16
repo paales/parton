@@ -1,42 +1,42 @@
 "use client"
 
-import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { useState } from "react"
 import { Button } from "@parton/copies/components/ui/button"
+import { bumpTag } from "../pages/tag-demo-actions.ts"
 
 /**
- * Client component demonstrating partial-level re-fetching.
+ * Client component demonstrating tag-driven re-fetching.
  *
- * One button per partial id. Each button uses its own
- * `useNavigation().reload()` hook so its progress reflects only that
- * button's in-flight refetch — sibling buttons stay clickable while
- * one is loading. Multiple reloads in the same tick are still
- * batched into one RSC request by the navigation dispatcher.
+ * One button per tag. The detail partons subscribe by reading —
+ * `tag("hero")` / `tag("stats")` / `tag("species")` — and each button
+ * fires the `bumpTag` server action, whose `refreshSelector` wakes
+ * exactly that tag's reader.
  */
 export function PartialControls() {
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
-      <span className="text-xs text-muted-foreground">
-        reload({"{"}selector{"}"}):
-      </span>
-      {(["hero", "stats", "species"] as const).map((id) => (
-        <RefreshPartialButton key={id} id={id} />
+      <span className="text-xs text-muted-foreground">refreshSelector(tag):</span>
+      {(["hero", "stats", "species"] as const).map((name) => (
+        <BumpTagButton key={name} name={name} />
       ))}
     </div>
   )
 }
 
-function RefreshPartialButton({ id }: { id: "hero" | "stats" | "species" }) {
-  const [reload, { committed, finished }] = useNavigation().reload()
-  const pending = committed && !finished
+function BumpTagButton({ name }: { name: "hero" | "stats" | "species" }) {
+  const [pending, setPending] = useState(false)
   return (
     <Button
       type="button"
       size="sm"
       variant="outline"
-      onClick={() => reload({ selector: `#${id}` })}
+      onClick={() => {
+        setPending(true)
+        void bumpTag(name).finally(() => setPending(false))
+      }}
       disabled={pending}
     >
-      {pending ? "Refreshing..." : `Refresh ${id[0].toUpperCase()}${id.slice(1)}`}
+      {pending ? "Refreshing..." : `Refresh ${name[0].toUpperCase()}${name.slice(1)}`}
     </Button>
   )
 }

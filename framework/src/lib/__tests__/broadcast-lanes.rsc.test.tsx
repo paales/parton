@@ -45,6 +45,7 @@ import { localCell } from "../cell.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { clearRegistry } from "../partial-registry.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
+import { tag } from "../current-parton.ts"
 import { cookie, expires, session, time } from "../server-hooks.ts"
 
 // ── Fixtures ──────────────────────────────────────────────────────────
@@ -62,32 +63,40 @@ const renders = {
  *  partition) — the dep record is `cell:bcast-shared/value`, nothing
  *  per-viewer. */
 const SharedLeaf = parton(
-  async function SharedLeafRender(_: RenderArgs) {
-    renders.shared++
-    const v = await localCell("value", { shape: "number", initial: 0 })
-    return <span data-shared>{`shared-${renders.shared}-${String(v.value)}`}</span>
-  },
-  { selector: "bcast-shared" },
+  Object.assign(
+    async function SharedLeafRender(_: RenderArgs) {
+      renders.shared++
+      const v = await localCell("value", { shape: "number", initial: 0 })
+      return <span data-shared>{`shared-${renders.shared}-${String(v.value)}`}</span>
+    },
+    { displayName: "bcast-shared" },
+  ),
 )
 const SHARED_CELL_SELECTOR = buildCellSelector("bcast-shared/value", {})
 
 /** Ineligible: a `cookie()` read is a per-viewer axis. */
 const CookieLeaf = parton(
-  function CookieLeafRender(_: RenderArgs) {
-    renders.cookie++
-    const c = cookie("bcast_c") ?? ""
-    return <span>{`cookie-${renders.cookie}-${c}`}</span>
-  },
-  { selector: "bcast-cookie" },
+  Object.assign(
+    function CookieLeafRender(_: RenderArgs) {
+      tag("bcast-cookie") // the wake subscription the round's bump targets
+      renders.cookie++
+      const c = cookie("bcast_c") ?? ""
+      return <span>{`cookie-${renders.cookie}-${c}`}</span>
+    },
+    { displayName: "bcast-cookie" },
+  ),
 )
 
 /** Ineligible: a `session()` read is a per-viewer axis. */
 const SessionLeaf = parton(
-  function SessionLeafRender(_: RenderArgs) {
-    renders.session++
-    return <span>{`session-${renders.session}-${session().id}`}</span>
-  },
-  { selector: "bcast-session" },
+  Object.assign(
+    function SessionLeafRender(_: RenderArgs) {
+      tag("bcast-session") // the wake subscription the round's bump targets
+      renders.session++
+      return <span>{`session-${renders.session}-${session().id}`}</span>
+    },
+    { displayName: "bcast-session" },
+  ),
 )
 
 /** Ineligible: ephemeral storage is request/connection-scoped state. */
@@ -98,12 +107,14 @@ const ephemeralCell = localCell({
   storage: getEphemeralCellStorage,
 })
 const EphemeralLeaf = parton(
-  async function EphemeralLeafRender(_: RenderArgs) {
-    renders.ephemeral++
-    const v = await ephemeralCell.resolve({})
-    return <span>{`ephemeral-${renders.ephemeral}-${String(v.value)}`}</span>
-  },
-  { selector: "bcast-ephemeral" },
+  Object.assign(
+    async function EphemeralLeafRender(_: RenderArgs) {
+      renders.ephemeral++
+      const v = await ephemeralCell.resolve({})
+      return <span>{`ephemeral-${renders.ephemeral}-${String(v.value)}`}</span>
+    },
+    { displayName: "bcast-ephemeral" },
+  ),
 )
 
 /** Ineligible: a request-derived partition callback can bake a
@@ -115,23 +126,27 @@ const partitionedCell = localCell({
   partition: ({ session: s }) => ({ sid: s.id || "anon" }),
 })
 const PartitionedLeaf = parton(
-  async function PartitionedLeafRender(_: RenderArgs) {
-    renders.partitioned++
-    const v = await partitionedCell.resolve()
-    return <span>{`partitioned-${renders.partitioned}-${String(v.value)}`}</span>
-  },
-  { selector: "bcast-partitioned" },
+  Object.assign(
+    async function PartitionedLeafRender(_: RenderArgs) {
+      renders.partitioned++
+      const v = await partitionedCell.resolve()
+      return <span>{`partitioned-${renders.partitioned}-${String(v.value)}`}</span>
+    },
+    { displayName: "bcast-partitioned" },
+  ),
 )
 
 /** Expiry ticker with a STABLE fp (no tracked reads, no bumps): the
  *  fp-skip-preservation fixture. */
 const TickLeaf = parton(
-  function TickLeafRender(_: RenderArgs) {
-    renders.clock++
-    expires(time().in(80))
-    return <time data-clock>{`tick-${renders.clock}`}</time>
-  },
-  { selector: "bcast-clock" },
+  Object.assign(
+    function TickLeafRender(_: RenderArgs) {
+      renders.clock++
+      expires(time().in(80))
+      return <time data-clock>{`tick-${renders.clock}`}</time>
+    },
+    { displayName: "bcast-clock" },
+  ),
 )
 
 function pageOf(children: ReactNode): () => ReactNode {

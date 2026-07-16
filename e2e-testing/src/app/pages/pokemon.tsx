@@ -35,25 +35,23 @@ export function extractSprite(sprites: unknown): string | null {
   return s?.other?.["official-artwork"]?.front_default ?? s?.front_default ?? null
 }
 
-export const HeaderPartial = parton(
-  function HeaderRender({ showControls }: { showControls: boolean } & RenderArgs) {
-    // Tracked read: the header re-renders when the search dialog's URL
-    // presence flips. `?search=` (present, empty) and no `?search` at
-    // all fold distinctly — absence is a value.
-    const search = searchParam("search") ?? undefined
-    return (
-      <header className="mb-4">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
-          <SearchToggle urlOpen={search != null} />
-        </div>
-        {showControls && <PartialControls />}
-      </header>
-    )
-  },
-  // Explicit selector keeps the spec addressable (fp on the wire).
-  { selector: "#header" },
-)
+export const HeaderPartial = parton(function HeaderRender({
+  showControls,
+}: { showControls: boolean } & RenderArgs) {
+  // Tracked read: the header re-renders when the search dialog's URL
+  // presence flips. `?search=` (present, empty) and no `?search` at
+  // all fold distinctly — absence is a value.
+  const search = searchParam("search") ?? undefined
+  return (
+    <header className="mb-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">{new Date().toLocaleString()}</span>
+        <SearchToggle urlOpen={search != null} />
+      </div>
+      {showControls && <PartialControls />}
+    </header>
+  )
+})
 
 // ─── Search areas (page + frame scopes) ────────────────────────────────
 
@@ -165,64 +163,72 @@ function makeSearchArea(scope: "page" | "frame") {
   })
   const stageCell = (n: 1 | 2 | 3, q: string) => pokemonSearchCell.with(stageArgs(n, q))
 
-  // Stage 1 — call-site props.
+  // Stage 1 — call-site props. The factory mints one spec per scope,
+  // so each product names its Render — the name IS the identity.
   const Stage1 = parton(
-    function Stage1Render({
-      results,
-      q,
-    }: { results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string } & RenderArgs) {
-      const list = results.value?.pokemon_v2_pokemon ?? []
-      // `data-q` records the query this committed tree was rendered
-      // against; `data-count` the row count. A test reads them to prove
-      // the committed stage matches the latest keystroke (a stale fire
-      // clobbering a fresh one shows up as a `data-q` mismatch).
-      if (list.length === 0) {
-        // Empty box → prompt; a typed query that matched nothing → "No
-        // results" (an empty list with a non-empty `q` is a real
-        // zero-match, not the initial state).
+    Object.assign(
+      function Stage1Render({
+        results,
+        q,
+      }: { results: ResolvedCell<CellValue<typeof pokemonSearchCell>>; q: string } & RenderArgs) {
+        const list = results.value?.pokemon_v2_pokemon ?? []
+        // `data-q` records the query this committed tree was rendered
+        // against; `data-count` the row count. A test reads them to prove
+        // the committed stage matches the latest keystroke (a stale fire
+        // clobbering a fresh one shows up as a `data-q` mismatch).
+        if (list.length === 0) {
+          // Empty box → prompt; a typed query that matched nothing → "No
+          // results" (an empty list with a non-empty `q` is a real
+          // zero-match, not the initial state).
+          return (
+            <p
+              data-testid="stage-1"
+              data-q={q}
+              data-count={0}
+              className="mt-4 text-sm text-muted-foreground"
+            >
+              {q ? "No results" : "Start typing to search..."}
+            </p>
+          )
+        }
         return (
-          <p
-            data-testid="stage-1"
-            data-q={q}
-            data-count={0}
-            className="mt-4 text-sm text-muted-foreground"
-          >
-            {q ? "No results" : "Start typing to search..."}
-          </p>
+          <div data-testid="stage-1" data-q={q} data-count={list.length}>
+            <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant (props)</h3>
+            <PokemonCardGrid items={list} compact testId="stage-1-content" />
+          </div>
         )
-      }
-      return (
-        <div data-testid="stage-1" data-q={q} data-count={list.length}>
-          <h3 className="mt-4 text-xs text-muted-foreground">Stage 1 — instant (props)</h3>
-          <PokemonCardGrid items={list} compact testId="stage-1-content" />
-        </div>
-      )
-    },
-    { selector: `#${scope}-stage-1`, cache: {} },
+      },
+      { displayName: `${scope}-stage-1` },
+    ),
+    { cache: {} },
   )
 
   const Stage2 = parton(
-    async function Stage2Render(_: RenderArgs) {
-      // Tracked read: `q` folds into the fp — and the byte-cache key —
-      // and the cell resolves in the same breath. The frame-scope
-      // placement reads the FRAME's url (tracked hooks see the
-      // frame-resolved request).
-      const q = searchParam("q") ?? ""
-      if (!q) return null
-      const results = await pokemonSearchCell.resolve(stageArgs(2, q))
-      // Artificial delay — preserves the streaming-UX demo. Real
-      // loads run instantly when storage is warm.
-      await delay(1000)
-      const list = results.value?.pokemon_v2_pokemon ?? []
-      return (
-        <div data-testid="stage-2" data-q={q} data-count={list.length}>
-          <h3 className="text-xs text-muted-foreground">Stage 2 — 1s delay (tracked body read)</h3>
-          <PokemonCardGrid items={list} compact testId="stage-2-content" />
-        </div>
-      )
-    },
+    Object.assign(
+      async function Stage2Render(_: RenderArgs) {
+        // Tracked read: `q` folds into the fp — and the byte-cache key —
+        // and the cell resolves in the same breath. The frame-scope
+        // placement reads the FRAME's url (tracked hooks see the
+        // frame-resolved request).
+        const q = searchParam("q") ?? ""
+        if (!q) return null
+        const results = await pokemonSearchCell.resolve(stageArgs(2, q))
+        // Artificial delay — preserves the streaming-UX demo. Real
+        // loads run instantly when storage is warm.
+        await delay(1000)
+        const list = results.value?.pokemon_v2_pokemon ?? []
+        return (
+          <div data-testid="stage-2" data-q={q} data-count={list.length}>
+            <h3 className="text-xs text-muted-foreground">
+              Stage 2 — 1s delay (tracked body read)
+            </h3>
+            <PokemonCardGrid items={list} compact testId="stage-2-content" />
+          </div>
+        )
+      },
+      { displayName: `${scope}-stage-2` },
+    ),
     {
-      selector: `#${scope}-stage-2`,
       cache: {},
       fallback: (
         <div data-testid="stage-2-fallback" className="p-2 text-muted-foreground">
@@ -240,23 +246,25 @@ function makeSearchArea(scope: "page" | "frame") {
   // resolves the cell (the matched param drives identity, the read
   // drives data).
   const Stage3 = parton(
-    async function Stage3Render(_: RenderArgs) {
-      // Same tracked-read pattern as Stage 2 — the matched `:query`
-      // drives IDENTITY (matchKey); the tracked read drives DATA.
-      const q = searchParam("q") ?? ""
-      if (!q) return null
-      const results = await pokemonSearchCell.resolve(stageArgs(3, q))
-      await delay(2000)
-      const list = results.value?.pokemon_v2_pokemon ?? []
-      return (
-        <div data-testid="stage-3" data-q={q} data-count={list.length}>
-          <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay (match)</h3>
-          <PokemonCardGrid items={list} compact testId="stage-3-content" />
-        </div>
-      )
-    },
+    Object.assign(
+      async function Stage3Render(_: RenderArgs) {
+        // Same tracked-read pattern as Stage 2 — the matched `:query`
+        // drives IDENTITY (matchKey); the tracked read drives DATA.
+        const q = searchParam("q") ?? ""
+        if (!q) return null
+        const results = await pokemonSearchCell.resolve(stageArgs(3, q))
+        await delay(2000)
+        const list = results.value?.pokemon_v2_pokemon ?? []
+        return (
+          <div data-testid="stage-3" data-q={q} data-count={list.length}>
+            <h3 className="text-xs text-muted-foreground">Stage 3 — 2s delay (match)</h3>
+            <PokemonCardGrid items={list} compact testId="stage-3-content" />
+          </div>
+        )
+      },
+      { displayName: `${scope}-stage-3` },
+    ),
     {
-      selector: `#${scope}-stage-3`,
       cache: {},
       keepalive: false,
       // `match` runs against the PAGE url only. At page scope, name `q`
@@ -300,9 +308,13 @@ function makeSearchArea(scope: "page" | "frame") {
     )
   }
 
-  return parton(SearchBodyRender, {
-    selector: scope === "page" ? "#search-page .search-results" : "#search .search-results",
-  })
+  // Per-scope identity for the wrapper too — "search-page" on the page
+  // scope, "search" inside the frame.
+  return parton(
+    Object.assign(SearchBodyRender, {
+      displayName: scope === "page" ? "search-page" : "search",
+    }),
+  )
 }
 
 export const SearchAreaPage = makeSearchArea("page")
@@ -311,32 +323,36 @@ export const SearchAreaFrame = makeSearchArea("frame")
 // ─── Pokedex list pages ─────────────────────────────────────────────────
 
 function makeListPagePartial(page: number) {
+  // One spec per page window — the factory names each product
+  // (`page-1`, `page-2`, …); the name is the identity.
   return parton(
-    function PokemonListPageRender({
-      results,
-    }: {
-      results: ResolvedCell<CellValue<typeof pokemonListCell>>
-    } & RenderArgs) {
-      const isFirst = page === 1
-      const list = results.value?.pokemon_v2_pokemon ?? []
-      return (
-        <div>
-          <PageSentinel page={page} />
-          {isFirst && (
-            <>
-              <h1 className="mb-4 text-2xl font-semibold">Pokedex</h1>
-              <title>Pokedex</title>
-              <p className="mb-6 text-muted-foreground">
-                Browse pokemon from the PokeAPI GraphQL endpoint.
-              </p>
-            </>
-          )}
-          <PokemonCardGrid items={list} />
-        </div>
-      )
-    },
+    Object.assign(
+      function PokemonListPageRender({
+        results,
+      }: {
+        results: ResolvedCell<CellValue<typeof pokemonListCell>>
+      } & RenderArgs) {
+        const isFirst = page === 1
+        const list = results.value?.pokemon_v2_pokemon ?? []
+        return (
+          <div>
+            <PageSentinel page={page} />
+            {isFirst && (
+              <>
+                <h1 className="mb-4 text-2xl font-semibold">Pokedex</h1>
+                <title>Pokedex</title>
+                <p className="mb-6 text-muted-foreground">
+                  Browse pokemon from the PokeAPI GraphQL endpoint.
+                </p>
+              </>
+            )}
+            <PokemonCardGrid items={list} />
+          </div>
+        )
+      },
+      { displayName: `page-${page}` },
+    ),
     {
-      selector: `#page-${page}` as const,
       // Page N exists iff the URL admits it — a miss parks the cached
       // page (back/forward across a load-more boundary restores it).
       match: { searchParams: { pages: (v) => Math.max(1, Number(v) || 1) >= page } },
@@ -349,14 +365,10 @@ const ListPagePartials = Array.from({ length: MAX_LIST_PAGES }, (_, i) =>
   makeListPagePartial(i + 1),
 )
 
-const LoadMorePartial = parton(
-  function LoadMoreRender(_: RenderArgs) {
-    const nextPage = Math.max(1, Number(searchParam("pages")) || 1) + 1
-    return <LoadMoreClient nextPage={nextPage} />
-  },
-  // Explicit selector keeps the spec addressable (fp on the wire).
-  { selector: "#load-more" },
-)
+const LoadMorePartial = parton(function LoadMoreRender(_: RenderArgs) {
+  const nextPage = Math.max(1, Number(searchParam("pages")) || 1) + 1
+  return <LoadMoreClient nextPage={nextPage} />
+})
 
 // ─── Outer wrapper — matches /, composes the overview ─────────────────
 

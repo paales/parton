@@ -95,7 +95,7 @@ export const palette = localCell({
   initial: "dark",
 })
 
-const ProductHeader = parton(async function Render(_: RenderArgs) {
+const ProductHeader = parton(async function ProductHeaderRender(_: RenderArgs) {
   const p = await palette.resolve()
   return <header data-palette={p.value}>...</header>
 })
@@ -103,10 +103,11 @@ const ProductHeader = parton(async function Render(_: RenderArgs) {
 
 `resolve()` reads the stored value at the cell's request-derived
 partition (running the loader on a storage miss), records the
-partition-scoped `cell:` dependency on the rendering parton — a write
-re-renders it, and the label rides for selector refetch — and returns
-a Flight-portable `ResolvedCell<T>`. Pass explicit args to name the
-partition (`await cartLineCell.resolve({ uid })`).
+partition-scoped `cell:` dependency on the rendering parton — a
+write's `cell:<id>?<args>` bump matches the recorded label and
+re-renders it — and returns a Flight-portable `ResolvedCell<T>`. Pass
+explicit args to name the partition
+(`await cartLineCell.resolve({ uid })`).
 
 > **Empty session → ephemeral.** `session.id` is the empty string for
 > an anonymous request with no `__frame_sid` cookie. A persistent cell
@@ -125,7 +126,7 @@ where they're used via the inline `localCell(key, opts)` form:
 
 ```tsx
 const ProductPage = parton(
-  async function Render({ id }: { id: string } & RenderArgs) {
+  async function ProductPageRender({ id }: { id: string } & RenderArgs) {
     const notes = await localCell("notes", {
       shape: "string",
       initial: "",
@@ -165,12 +166,11 @@ function CartRender({ cart }) {
 }
 
 // Child reads the bound cell from its prop bag:
-const CartLine = parton(
-  function Render({ item }: { item: ResolvedCell<CartItem | null> } & RenderArgs) {
-    return <Line {...item.value} />
-  },
-  { selector: "cart-line" },
-)
+const CartLine = parton(function CartLineRender({
+  item,
+}: { item: ResolvedCell<CartItem | null> } & RenderArgs) {
+  return <Line {...item.value} />
+}) // id auto-derives from the Render's name → "cart-line"
 ```
 
 `cellHandle.with(args)` returns a `BoundCell<T>` descriptor. When the
@@ -410,7 +410,7 @@ one place, no binder/reader split:
 
 ```ts
 const Cart = parton(
-  async function Render(_: RenderArgs) {
+  async function CartRender(_: RenderArgs) {
     // cart_id cookie → the cart cell's partition. `cookie()` is a
     // tracked read, so the cookie folds into the fp AND names the
     // partition in the same breath.
@@ -484,7 +484,8 @@ naming it: `peek(partitionArgs)`.
    (`cell.resolve()`, inline `localCell`) and tracked reads record
    their deps onto the live set — the partition-scoped `cell:`
    selectors among them ride the dep record and the boundary's label
-   set, so they fold into the NEXT fp and answer selector refetch.
+   set, so they fold into the NEXT fp and a matching write wakes this
+   parton.
 
 ## Mutation patterns
 
@@ -875,11 +876,26 @@ What's NOT a cell:
   request), so it can't be an in-body read. Its role differs too: it
   derives the storage partition key from the request scope, not the
   parton's fingerprint.
-- **selector** — cells auto-stamp `cell:<id>` on the parton's
-  labels. Partition-scoped writes emit `cell:<id>?<args>`.
+- **invalidation labels** — cells auto-stamp `cell:<id>` on the
+  parton's labels. Partition-scoped writes emit `cell:<id>?<args>`.
 - **invalidation registry** — `cell.set` calls
   `refreshSelector("cell:" + id + "?" + args)` inside a transaction;
   fp folding reuses `queryMatchingTs(labels, matchParams ∪ boundArgs)`.
+- **`tag()`** — the event-shaped sibling. Where a cell is
+  state-shaped (the value IS the signal), a parton subscribes to an
+  event by READING `tag(name)` in its body, and a server-side
+  `refreshSelector(name)` wakes every reader. Tags fan out by name:
+  several partons reading one tag all re-render on one bump, and a
+  parton reading several re-renders on any of them. A tag name may
+  carry a constraint (`tag("price?sku=ABC")`), so
+  `refreshSelector("price")` fans out across every card while
+  `refreshSelector("price?sku=ABC")` hits exactly one. Cells and tags
+  are the two refresh signals — reach for a cell when the refresh
+  carries state, a tag when it carries only "this is stale now".
+  Worked examples: `e2e-testing/src/app/pages/tag-demo{.tsx,-actions.ts}`
+  (the fan-out families) and
+  `pages/magento/live-price{.tsx,-actions.ts}` (the constrained
+  per-SKU form).
 
 ## Related
 

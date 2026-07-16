@@ -54,7 +54,7 @@ embedAction("place-bid", async () => {
 })
 
 export const MagentoInteractivePanel = parton(
-  async function MagentoInteractivePanelRender(_: RenderArgs) {
+  async function InteractivePanelRender(_: RenderArgs) {
     const qty = await magentoQty.resolve()
     const bid = await magentoBid.resolve()
     return (
@@ -82,5 +82,5 @@ export const MagentoInteractivePanel = parton(
       </Box>
     )
   },
-  { selector: "interactive-panel", match: "/remote/interactive-panel" },
+  { match: "/remote/interactive-panel" },
 )

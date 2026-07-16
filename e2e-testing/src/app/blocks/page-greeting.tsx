@@ -47,7 +47,6 @@ export const PageGreetingBlock = block(
     )
   },
   {
-    selector: ".page-block",
     schema: ({ cms }) => ({
       headline: cms.text("headline"),
       body: cms.text("body"),

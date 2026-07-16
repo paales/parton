@@ -57,7 +57,7 @@ export const EconItemPage = parton(
       </section>
     )
   },
-  { match: "/econ-item", selector: "econ-item" },
+  { match: "/econ-item" },
 )
 
 const FRAME_COUNT = 8

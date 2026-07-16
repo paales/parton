@@ -39,6 +39,7 @@ import {
   takeConnectionCookieChanges,
 } from "../connection-session.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
+import { tag } from "../current-parton.ts"
 import { compileMatch } from "../match.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
@@ -46,22 +47,19 @@ import { cookie } from "../server-hooks.ts"
 
 const renders = { theme: 0, plain: 0 }
 
-const ThemeReader = parton(
-  function ThemeReaderRender(_: RenderArgs) {
-    renders.theme++
-    const theme = cookie("theme") ?? "none"
-    return <div data-theme>{`theme:${theme}:${renders.theme}`}</div>
-  },
-  { selector: "theme-reader" },
-)
+// The `cookie()` read is the dep this suite exercises; the tag read is
+// the bump surface the drive's shutdown wake rides.
+const ThemeReader = parton(function ThemeReaderRender(_: RenderArgs) {
+  tag("theme-reader")
+  renders.theme++
+  const theme = cookie("theme") ?? "none"
+  return <div data-theme>{`theme:${theme}:${renders.theme}`}</div>
+})
 
-const Plain = parton(
-  function PlainRender(_: RenderArgs) {
-    renders.plain++
-    return <div data-plain>{`plain:${renders.plain}`}</div>
-  },
-  { selector: "plain" },
-)
+const Plain = parton(function PlainRender(_: RenderArgs) {
+  renders.plain++
+  return <div data-plain>{`plain:${renders.plain}`}</div>
+})
 
 function Page(): ReactNode {
   return (

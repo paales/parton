@@ -34,7 +34,7 @@ import { PaintLeakWidget } from "./paint-leak-widget.tsx"
 const SELF_ORIGIN = process.env.MAGENTO_REMOTE_ORIGIN ?? "http://localhost:5181"
 
 export const MagentoPaintSummary = parton(
-  async function MagentoPaintSummaryRender(_: RenderArgs) {
+  async function PaintSummaryRender(_: RenderArgs) {
     const cap = getCapability()
     const currency = String(cap.currency ?? "EUR")
     const total = typeof cap.total === "number" ? cap.total : 127.45
@@ -75,11 +75,11 @@ export const MagentoPaintSummary = parton(
       </Box>
     )
   },
-  { selector: "paint-summary", match: "/remote/paint-summary" },
+  { match: "/remote/paint-summary" },
 )
 
 export const MagentoPaintMixed = parton(
-  async function MagentoPaintMixedRender(_: RenderArgs) {
+  async function PaintMixedRender(_: RenderArgs) {
     return (
       <Stack gap="sm" data-testid="paint-mixed">
         <Heading level={3}>Mixed surface</Heading>
@@ -94,5 +94,5 @@ export const MagentoPaintMixed = parton(
       </Stack>
     )
   },
-  { selector: "paint-mixed", match: "/remote/paint-mixed" },
+  { match: "/remote/paint-mixed" },
 )

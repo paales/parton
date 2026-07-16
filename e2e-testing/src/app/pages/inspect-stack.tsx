@@ -194,7 +194,6 @@ export const InspectBasePage = parton(
     )
   },
   {
-    selector: "#inspect-base",
     match: "/inspect{/*}?",
   },
 )
@@ -230,63 +229,60 @@ function PokemonGridCard({ raw }: { raw: FragmentOf<typeof InspectListFields> })
 
 // ─── Drawer 1 — pokemon overview ────────────────────────────────────────
 
-const PokemonOverviewContent = parton(
-  async function PokemonOverviewContentRender({ id }: { id: string } & RenderArgs) {
-    const pokemonId = Number(id)
-    if (!Number.isFinite(pokemonId)) return <p>Invalid pokemon id.</p>
-    const data = await client.request(InspectPokemonQuery, { id: pokemonId })
-    const p = data.pokemon_v2_pokemon[0]
-    if (!p) return <p>Pokemon not found.</p>
-    const sprite = extractSprite(p.pokemon_v2_pokemonsprites[0]?.sprites)
-    const types = p.pokemon_v2_pokemontypes.map((t) => ({
-      slot: t.slot,
-      name: t.pokemon_v2_type?.name ?? "",
-    }))
-    return (
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-3">
-          {sprite ? <img src={sprite} alt={p.name} className="h-32 w-32" /> : null}
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">#{p.id}</div>
-            <div className="text-2xl font-semibold capitalize">{p.name}</div>
-            <div className="flex flex-wrap gap-1">
-              {types.map((t) => (
-                <TypeBadge key={t.slot} type={t.name || "default"} />
-              ))}
-            </div>
+const PokemonOverviewContent = parton(async function PokemonOverviewContentRender({
+  id,
+}: { id: string } & RenderArgs) {
+  const pokemonId = Number(id)
+  if (!Number.isFinite(pokemonId)) return <p>Invalid pokemon id.</p>
+  const data = await client.request(InspectPokemonQuery, { id: pokemonId })
+  const p = data.pokemon_v2_pokemon[0]
+  if (!p) return <p>Pokemon not found.</p>
+  const sprite = extractSprite(p.pokemon_v2_pokemonsprites[0]?.sprites)
+  const types = p.pokemon_v2_pokemontypes.map((t) => ({
+    slot: t.slot,
+    name: t.pokemon_v2_type?.name ?? "",
+  }))
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-3">
+        {sprite ? <img src={sprite} alt={p.name} className="h-32 w-32" /> : null}
+        <div className="space-y-1">
+          <div className="text-sm text-muted-foreground">#{p.id}</div>
+          <div className="text-2xl font-semibold capitalize">{p.name}</div>
+          <div className="flex flex-wrap gap-1">
+            {types.map((t) => (
+              <TypeBadge key={t.slot} type={t.name || "default"} />
+            ))}
           </div>
         </div>
-        <dl className="grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-sm">
-          <div>
-            <dt className="text-xs uppercase text-muted-foreground">Height</dt>
-            <dd>{(p.height ?? 0) / 10} m</dd>
-          </div>
-          <div>
-            <dt className="text-xs uppercase text-muted-foreground">Weight</dt>
-            <dd>{(p.weight ?? 0) / 10} kg</dd>
-          </div>
-        </dl>
-        <a
-          href={`/inspect/p/${id}/moves`}
-          data-testid="drawer-1-view-moves"
-          className={cn(buttonVariants({ variant: "default" }))}
-        >
-          View Moves →
-        </a>
-        <p className="text-xs text-muted-foreground">
-          This drawer's URL is <code>/inspect/p/{id}</code>. The full-page version lives at{" "}
-          <a href={`/pokemon/${id}`} className="underline hover:text-foreground">
-            /pokemon/{id}
-          </a>{" "}
-          — same data, different chrome.
-        </p>
       </div>
-    )
-  },
-  {
-    selector: "#drawer-1-content",
-  },
-)
+      <dl className="grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-sm">
+        <div>
+          <dt className="text-xs uppercase text-muted-foreground">Height</dt>
+          <dd>{(p.height ?? 0) / 10} m</dd>
+        </div>
+        <div>
+          <dt className="text-xs uppercase text-muted-foreground">Weight</dt>
+          <dd>{(p.weight ?? 0) / 10} kg</dd>
+        </div>
+      </dl>
+      <a
+        href={`/inspect/p/${id}/moves`}
+        data-testid="drawer-1-view-moves"
+        className={cn(buttonVariants({ variant: "default" }))}
+      >
+        View Moves →
+      </a>
+      <p className="text-xs text-muted-foreground">
+        This drawer's URL is <code>/inspect/p/{id}</code>. The full-page version lives at{" "}
+        <a href={`/pokemon/${id}`} className="underline hover:text-foreground">
+          /pokemon/{id}
+        </a>{" "}
+        — same data, different chrome.
+      </p>
+    </div>
+  )
+}, {})
 
 export const InspectDrawer1 = parton(
   function InspectDrawer1Render({ id }: { id: string } & RenderArgs) {
@@ -311,7 +307,6 @@ export const InspectDrawer1 = parton(
     )
   },
   {
-    selector: "#drawer-1",
     match: "/inspect/p/:id{/*}?",
   },
 )
@@ -325,103 +320,95 @@ export const InspectDrawer1 = parton(
 // the same drawer; the back link returns to the list. Each step
 // pushes a real URL so browser back/forward + refresh still work.
 
-const PokemonMovesContent = parton(
-  async function PokemonMovesContentRender({ id }: { id: string } & RenderArgs) {
-    const pokemonId = Number(id)
-    if (!Number.isFinite(pokemonId)) return <p>Invalid pokemon id.</p>
-    const data = await client.request(InspectMovesQuery, { id: pokemonId })
-    if (data.pokemon_v2_pokemonmove.length === 0) {
-      return <p>No moves found for this pokemon.</p>
-    }
-    return (
-      <ul className="space-y-2">
-        {data.pokemon_v2_pokemonmove.map((entry) => {
-          const m = entry.pokemon_v2_move
-          if (!m) return null
-          return (
-            <li key={m.id}>
-              <a
-                href={`/inspect/p/${id}/moves/${m.id}`}
-                data-testid={`drawer-2-move-${m.id}`}
-                className="flex items-center justify-between rounded-md border bg-card p-3 transition-colors hover:bg-muted"
-              >
-                <div className="flex flex-col">
-                  <span className="capitalize">{m.name.replace(/-/g, " ")}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {m.pokemon_v2_movedamageclass?.name ?? "—"} · power {m.power ?? "—"} · pp{" "}
-                    {m.pp ?? "—"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <TypeBadge type={m.pokemon_v2_type?.name || "default"} />
-                  <span className="text-muted-foreground">→</span>
-                </div>
-              </a>
-            </li>
-          )
-        })}
-      </ul>
-    )
-  },
-  {
-    selector: "#drawer-2-list",
-  },
-)
+const PokemonMovesContent = parton(async function PokemonMovesContentRender({
+  id,
+}: { id: string } & RenderArgs) {
+  const pokemonId = Number(id)
+  if (!Number.isFinite(pokemonId)) return <p>Invalid pokemon id.</p>
+  const data = await client.request(InspectMovesQuery, { id: pokemonId })
+  if (data.pokemon_v2_pokemonmove.length === 0) {
+    return <p>No moves found for this pokemon.</p>
+  }
+  return (
+    <ul className="space-y-2">
+      {data.pokemon_v2_pokemonmove.map((entry) => {
+        const m = entry.pokemon_v2_move
+        if (!m) return null
+        return (
+          <li key={m.id}>
+            <a
+              href={`/inspect/p/${id}/moves/${m.id}`}
+              data-testid={`drawer-2-move-${m.id}`}
+              className="flex items-center justify-between rounded-md border bg-card p-3 transition-colors hover:bg-muted"
+            >
+              <div className="flex flex-col">
+                <span className="capitalize">{m.name.replace(/-/g, " ")}</span>
+                <span className="text-xs text-muted-foreground">
+                  {m.pokemon_v2_movedamageclass?.name ?? "—"} · power {m.power ?? "—"} · pp{" "}
+                  {m.pp ?? "—"}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <TypeBadge type={m.pokemon_v2_type?.name || "default"} />
+                <span className="text-muted-foreground">→</span>
+              </div>
+            </a>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}, {})
 
-const MoveDetailContent = parton(
-  async function MoveDetailContentRender({
-    id,
-    moveId,
-  }: { id: string; moveId: string } & RenderArgs) {
-    const numId = Number(moveId)
-    if (!Number.isFinite(numId)) return <p>Invalid move id.</p>
-    const data = await client.request(InspectMoveDetailQuery, { moveId: numId })
-    const move = data.pokemon_v2_move[0]
-    if (!move) return <p>Move not found.</p>
-    const effect = move.pokemon_v2_moveeffect?.pokemon_v2_moveeffecteffecttexts[0]
-    return (
-      <div className="space-y-4">
-        <DrawerBackLink
-          href={`/inspect/p/${id}/moves`}
-          label="Back to moves"
-          testId="drawer-2-back"
-        />
-        <header>
-          <div className="text-xs text-muted-foreground">Move #{move.id}</div>
-          <div className="text-2xl font-semibold capitalize">{move.name.replace(/-/g, " ")}</div>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <TypeBadge type={move.pokemon_v2_type?.name || "default"} />
-            {move.pokemon_v2_movedamageclass?.name ? (
-              <Badge variant="outline" className="text-[0.7rem]">
-                {move.pokemon_v2_movedamageclass.name}
-              </Badge>
-            ) : null}
-          </div>
-        </header>
-        <dl className="grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-sm">
-          <Stat label="Power" value={move.power} />
-          <Stat label="Accuracy" value={move.accuracy} suffix="%" />
-          <Stat label="PP" value={move.pp} />
-          <Stat label="Priority" value={move.priority} />
-        </dl>
-        {effect ? (
-          <section className="space-y-1.5">
-            <h3 className="text-sm font-semibold">Effect</h3>
-            <p className="text-sm text-muted-foreground">{effect.short_effect}</p>
-            {effect.effect && effect.effect !== effect.short_effect ? (
-              <p className="text-xs italic text-muted-foreground/80">
-                {effect.effect.replace(/\$effect_chance/g, "X")}
-              </p>
-            ) : null}
-          </section>
-        ) : null}
-      </div>
-    )
-  },
-  {
-    selector: "#drawer-2-detail",
-  },
-)
+const MoveDetailContent = parton(async function MoveDetailContentRender({
+  id,
+  moveId,
+}: { id: string; moveId: string } & RenderArgs) {
+  const numId = Number(moveId)
+  if (!Number.isFinite(numId)) return <p>Invalid move id.</p>
+  const data = await client.request(InspectMoveDetailQuery, { moveId: numId })
+  const move = data.pokemon_v2_move[0]
+  if (!move) return <p>Move not found.</p>
+  const effect = move.pokemon_v2_moveeffect?.pokemon_v2_moveeffecteffecttexts[0]
+  return (
+    <div className="space-y-4">
+      <DrawerBackLink
+        href={`/inspect/p/${id}/moves`}
+        label="Back to moves"
+        testId="drawer-2-back"
+      />
+      <header>
+        <div className="text-xs text-muted-foreground">Move #{move.id}</div>
+        <div className="text-2xl font-semibold capitalize">{move.name.replace(/-/g, " ")}</div>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <TypeBadge type={move.pokemon_v2_type?.name || "default"} />
+          {move.pokemon_v2_movedamageclass?.name ? (
+            <Badge variant="outline" className="text-[0.7rem]">
+              {move.pokemon_v2_movedamageclass.name}
+            </Badge>
+          ) : null}
+        </div>
+      </header>
+      <dl className="grid grid-cols-2 gap-2 rounded-md border bg-muted/30 p-3 text-sm">
+        <Stat label="Power" value={move.power} />
+        <Stat label="Accuracy" value={move.accuracy} suffix="%" />
+        <Stat label="PP" value={move.pp} />
+        <Stat label="Priority" value={move.priority} />
+      </dl>
+      {effect ? (
+        <section className="space-y-1.5">
+          <h3 className="text-sm font-semibold">Effect</h3>
+          <p className="text-sm text-muted-foreground">{effect.short_effect}</p>
+          {effect.effect && effect.effect !== effect.short_effect ? (
+            <p className="text-xs italic text-muted-foreground/80">
+              {effect.effect.replace(/\$effect_chance/g, "X")}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
+  )
+}, {})
 
 export const InspectDrawer2 = parton(
   function InspectDrawer2Render({ id }: { id: string } & RenderArgs) {
@@ -446,7 +433,6 @@ export const InspectDrawer2 = parton(
     )
   },
   {
-    selector: "#drawer-2",
     match: "/inspect/p/:id/moves{/*}?",
   },
 )
@@ -476,7 +462,6 @@ export const InspectDrawer3 = parton(
     )
   },
   {
-    selector: "#drawer-3",
     match: "/inspect/p/:id/moves/:moveId",
   },
 )

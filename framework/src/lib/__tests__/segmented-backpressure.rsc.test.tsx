@@ -19,6 +19,7 @@ import {
   TAG_SEGMENT_SETTLED,
   tryReadMarker,
 } from "../fp-trailer-marker.ts"
+import { tag } from "../current-parton.ts"
 import { wrapStreamWithFpTrailer } from "../fp-trailer.ts"
 import { PartialRoot, parton } from "../partial.tsx"
 import { bindAttachStatement } from "../connection-session.ts"
@@ -39,20 +40,20 @@ function renderReached(n: number): Promise<void> {
 }
 
 const PAD = "x".repeat(512)
-const PressureLane = parton(
-  function PressureLaneRender() {
-    renderState.count++
-    renderState.waiters = renderState.waiters.filter((w) => {
-      if (w.n <= renderState.count) {
-        w.resolve()
-        return false
-      }
-      return true
-    })
-    return <div data-render={renderState.count}>{`pressure-${renderState.count}-${PAD}`}</div>
-  },
-  { selector: "pressure-lane" },
-)
+// The lane subscribes to its wake signal by READING the tag —
+// `refreshSelector("pressure-lane")` wakes exactly its readers.
+const PressureLane = parton(function PressureLaneRender() {
+  tag("pressure-lane")
+  renderState.count++
+  renderState.waiters = renderState.waiters.filter((w) => {
+    if (w.n <= renderState.count) {
+      w.resolve()
+      return false
+    }
+    return true
+  })
+  return <div data-render={renderState.count}>{`pressure-${renderState.count}-${PAD}`}</div>
+})
 
 const SETTLED = buildMarker(TAG_SEGMENT_SETTLED, 0)
 const encoder = new TextEncoder()

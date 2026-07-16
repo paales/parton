@@ -115,10 +115,13 @@ describe("partition-scoped invalidation", () => {
     seedCell("test.partition.line", { itemId: "B" }, { qty: 2 })
 
     const Line = parton(
-      function Render({ item }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
-        return <span>{item.value?.qty ?? "—"}</span>
-      },
-      { selector: "cart-line", match: "/c" },
+      Object.assign(
+        function Render({ item }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
+          return <span>{item.value?.qty ?? "—"}</span>
+        },
+        { displayName: "cart-line" },
+      ),
+      { match: "/c" },
     )
 
     const aBefore = await flightAt("http://t/c", <Line item={cartItem.with({ itemId: "A" })} />)
@@ -145,10 +148,13 @@ describe("partition-scoped invalidation", () => {
       initial: null as { qty: number } | null,
     })
     const Line = parton(
-      function Render({ item }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
-        return <span>{item.value?.qty ?? "—"}</span>
-      },
-      { selector: "set-line", match: "/c" },
+      Object.assign(
+        function Render({ item }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
+          return <span>{item.value?.qty ?? "—"}</span>
+        },
+        { displayName: "set-line" },
+      ),
+      { match: "/c" },
     )
 
     // Initial render — A is empty, returns default null.
@@ -181,16 +187,19 @@ describe("constraint surface merges vary + bound args", () => {
     seedCell("test.constraints.item", { itemId: "A" }, { v: 0 })
 
     const Mixed = parton(
-      // `catId` is vary-derived (supplied by the framework from the
-      // route param); `item` is the bound-cell JSX prop. Both must be
-      // present on the Render type so it satisfies `R extends V &
-      // RenderArgs`.
-      function Render({
-        item,
-      }: { item: ResolvedCell<{ v: number } | null>; catId: string } & RenderArgs) {
-        return <span>{item.value?.v ?? "—"}</span>
-      },
-      { selector: "mixed", match: "/m/:catId" },
+      Object.assign(
+        // `catId` is vary-derived (supplied by the framework from the
+        // route param); `item` is the bound-cell JSX prop. Both must be
+        // present on the Render type so it satisfies `R extends V &
+        // RenderArgs`.
+        function Render({
+          item,
+        }: { item: ResolvedCell<{ v: number } | null>; catId: string } & RenderArgs) {
+          return <span>{item.value?.v ?? "—"}</span>
+        },
+        { displayName: "mixed" },
+      ),
+      { match: "/m/:catId" },
     )
 
     // Two placements: same itemId, different catId. Their fp differ
@@ -215,10 +224,13 @@ describe("BoundCell.hydrate — write storage without firing signal", () => {
       initial: null as { q: number } | null,
     })
     const Line = parton(
-      function Render({ item }: { item: ResolvedCell<{ q: number } | null> } & RenderArgs) {
-        return <span>{item.value?.q ?? "—"}</span>
-      },
-      { selector: "hydrate-line", match: "/h" },
+      Object.assign(
+        function Render({ item }: { item: ResolvedCell<{ q: number } | null> } & RenderArgs) {
+          return <span>{item.value?.q ?? "—"}</span>
+        },
+        { displayName: "hydrate-line" },
+      ),
+      { match: "/h" },
     )
 
     const before = await flightAt("http://t/h", <Line item={item.with({ id: "A" })} />)
@@ -317,7 +329,7 @@ describe("merged cart granularity — parent re-renders, only the touched line f
       }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
         return <span>{`qty ${item.value?.qty ?? "—"}`}</span>
       },
-      { selector: "gran-line", match: "/gc" },
+      { match: "/gc" },
     )
 
     const Cart = parton(
@@ -335,7 +347,6 @@ describe("merged cart granularity — parent re-renders, only the touched line f
         )
       },
       {
-        selector: "gran-cart",
         match: "/gc",
       },
     )

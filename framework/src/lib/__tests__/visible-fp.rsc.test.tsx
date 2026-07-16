@@ -49,27 +49,34 @@ async function fpAt(
 
 // Gated with the default seed (always in view cold) — the common case.
 const Culled = parton(
-  function CulledRender(_: RenderArgs) {
-    return <div data-testid="culled">full</div>
-  },
-  { selector: "#culled-probe", cull: { skeleton: SkelBox } },
+  Object.assign(
+    function CulledRender(_: RenderArgs) {
+      return <div data-testid="culled">full</div>
+    },
+    { displayName: "culled-probe" },
+  ),
+  { cull: { skeleton: SkelBox } },
 )
 
 // Never gated — the control. The measured set must not move its fp.
 const Plain = parton(
-  function PlainRender(_: RenderArgs) {
-    return <div data-testid="plain" />
-  },
-  { selector: "#plain-probe" },
+  Object.assign(
+    function PlainRender(_: RenderArgs) {
+      return <div data-testid="plain" />
+    },
+    { displayName: "plain-probe" },
+  ),
 )
 
 // Anchor-driven seed: in view cold iff `?anchor=` names it.
 const Anchored = parton(
-  function AnchoredRender(_: RenderArgs) {
-    return <div data-anchored>full</div>
-  },
+  Object.assign(
+    function AnchoredRender(_: RenderArgs) {
+      return <div data-anchored>full</div>
+    },
+    { displayName: "anchored-probe" },
+  ),
   {
-    selector: "#anchored-probe",
     cull: { skeleton: SkelBox, seed: () => searchParam("anchor") === "me" },
   },
 )

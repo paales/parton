@@ -35,21 +35,15 @@ async function flightAt(url: string, node: React.ReactNode): Promise<string> {
 // Tags a dynamic entity in its body. The read lands on the dep record
 // DURING Render — after the fp is computed — so it folds on the NEXT
 // render (store-and-reread); tests warm up once before comparing fps.
-const Tagged = parton(
-  function TagProbeRender(_: RenderArgs) {
-    tag("probe-entity:7")
-    return <span data-testid="tagged" />
-  },
-  { selector: "#tag-probe" },
-)
+const Tagged = parton(function TagProbeRender(_: RenderArgs) {
+  tag("probe-entity:7")
+  return <span data-testid="tagged" />
+})
 
 // Same shape, no tag — the control.
-const Untagged = parton(
-  function UntaggedProbeRender(_: RenderArgs) {
-    return <span data-testid="untagged" />
-  },
-  { selector: "#untagged-probe" },
-)
+const Untagged = parton(function UntaggedProbeRender(_: RenderArgs) {
+  return <span data-testid="untagged" />
+})
 
 describe("tag(): body-phase server-hook folds into the fingerprint", () => {
   beforeEach(() => {

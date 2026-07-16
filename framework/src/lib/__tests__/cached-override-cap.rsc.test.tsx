@@ -19,19 +19,20 @@ import {
   freshLiveScope,
   withLiveDrive,
 } from "../../test/live-drive.tsx"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { PartialRoot, parton } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 
 const renders = { cap: 0 }
 
-const CapLane = parton(
-  function CapLaneRender() {
-    renders.cap++
-    return <div data-cap-render={renders.cap}>{`cap-${renders.cap}`}</div>
-  },
-  { selector: "cap-lane" },
-)
+// The lane subscribes to its bump signal by READING the tag —
+// `refreshSelector("cap-lane")` wakes exactly the readers of that name.
+const CapLane = parton(function CapLaneRender() {
+  tag("cap-lane")
+  renders.cap++
+  return <div data-cap-render={renders.cap}>{`cap-${renders.cap}`}</div>
+})
 
 beforeEach(() => {
   _clearInvalidationRegistry()

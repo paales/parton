@@ -351,8 +351,8 @@ function decodeConstraintValue(raw: string): unknown {
   }
 }
 
-/** Parse a list of selector tokens — accepts string-with-whitespace
- *  or array form, mirrors `selector` on a spec. */
+/** Parse a list of invalidation selector tokens — accepts
+ *  string-with-whitespace or array form. */
 export function parseSelectors(spec: string | string[]): ParsedSelector[] {
   const tokens = Array.isArray(spec) ? spec : spec.split(/\s+/)
   const out: ParsedSelector[] = []
@@ -410,9 +410,10 @@ export function buildCellSelector(cellId: string, args: Record<string, unknown>)
  * the bump waits in the transaction's pending list until commit;
  * otherwise it writes to the registry immediately with a fresh `ts`.
  *
- * Accepts a single selector string (`"cart"`, `"cart?cart_id=1234"`),
- * or an array of them, or a `selector: ...` options bag — mirrors the
- * shape of `getServerNavigation(scope).reload({selector})`.
+ * Accepts a single selector string (`"cart"`, `"cart?cart_id=1234"`)
+ * or an array of them. A bare name matches the partons that READ that
+ * `tag(name)`; a `cell:<id>?<partition>` token matches the partons
+ * that resolved that cell partition.
  */
 export function refreshSelector(spec: string | string[]): void {
   const parsed = parseSelectors(spec)

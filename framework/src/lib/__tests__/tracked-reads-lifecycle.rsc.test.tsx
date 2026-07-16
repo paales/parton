@@ -55,11 +55,13 @@ const ROOT_MK = hash(stableStringify({}))
 // ── Cookie-reading spec — the lifecycle subject ───────────────────────
 
 const HooksCookie = parton(
-  function HooksCookieRender(_: RenderArgs) {
-    const pref = cookie("pref") ?? ""
-    return <span>{`hooks-cookie-body:${pref}`}</span>
-  },
-  { selector: "#atv-hooks-cookie" },
+  Object.assign(
+    function HooksCookieRender(_: RenderArgs) {
+      const pref = cookie("pref") ?? ""
+      return <span>{`hooks-cookie-body:${pref}`}</span>
+    },
+    { displayName: "atv-hooks-cookie" },
+  ),
 )
 
 /**
@@ -165,18 +167,24 @@ describe("cold-record gate: no snapshot → no skip for a hooks-only spec", () =
     // committed variants (this id HAS tracked reads) must decline the
     // skip.
     const GateTail = parton(
-      function GateTailRender(_: RenderArgs) {
-        return <span>{`gate-tail-body:${cookie("pref") ?? ""}`}</span>
-      },
-      { selector: "#atv-gate-tail", match: "/gate{/*}?" },
+      Object.assign(
+        function GateTailRender(_: RenderArgs) {
+          return <span>{`gate-tail-body:${cookie("pref") ?? ""}`}</span>
+        },
+        { displayName: "atv-gate-tail" },
+      ),
+      { match: "/gate{/*}?" },
     )
     // A sibling with a deeper match makes /gate vs /gate/p/3 distinct
     // route buckets (different matched-pattern sets).
     const GateDeep = parton(
-      function GateDeepRender(_: RenderArgs) {
-        return <span>deep</span>
-      },
-      { selector: "#atv-gate-deep", match: "/gate/p/:n" },
+      Object.assign(
+        function GateDeepRender(_: RenderArgs) {
+          return <span>deep</span>
+        },
+        { displayName: "atv-gate-deep" },
+      ),
+      { match: "/gate/p/:n" },
     )
     const tree = (
       <PartialRoot>
@@ -205,11 +213,13 @@ describe("cold-record gate: no snapshot → no skip for a hooks-only spec", () =
 // ── Absence is a value: `?flag=` (empty) ≠ no `?flag` at all ──────────
 
 const PresenceProbe = parton(
-  function PresenceProbeRender(_: RenderArgs) {
-    const flag = searchParam("flag")
-    return <span>{flag == null ? "presence-closed" : "presence-open"}</span>
-  },
-  { selector: "#atv-presence" },
+  Object.assign(
+    function PresenceProbeRender(_: RenderArgs) {
+      const flag = searchParam("flag")
+      return <span>{flag == null ? "presence-closed" : "presence-open"}</span>
+    },
+    { displayName: "atv-presence" },
+  ),
 )
 
 describe("dep fold distinguishes an absent read from an empty one", () => {
@@ -238,10 +248,12 @@ describe("dep fold distinguishes an absent read from an empty one", () => {
 // ── header(): a tracked request-header read ───────────────────────────
 
 const LangProbe = parton(
-  function LangProbeRender(_: RenderArgs) {
-    return <span>{`lang-body:${header("accept-language") ?? "none"}`}</span>
-  },
-  { selector: "#atv-lang" },
+  Object.assign(
+    function LangProbeRender(_: RenderArgs) {
+      return <span>{`lang-body:${header("accept-language") ?? "none"}`}</span>
+    },
+    { displayName: "atv-lang" },
+  ),
 )
 
 describe("header(): folds the header value into the fp", () => {
@@ -267,13 +279,16 @@ describe("header(): folds the header value into the fp", () => {
 // ── pathname(): whole-path dependence (the wildcard-tail escape) ──────
 
 const TailProbe = parton(
-  function TailProbeRender(_: RenderArgs) {
-    return <span>{`tail-body:${pathname()}`}</span>
-  },
+  Object.assign(
+    function TailProbeRender(_: RenderArgs) {
+      return <span>{`tail-body:${pathname()}`}</span>
+    },
+    { displayName: "atv-tail" },
+  ),
   // `match` with an anonymous tail — the named-params-only default
   // surface is identical across the tail values; `pathname()` is what
   // makes the tail a real dependency.
-  { selector: "#atv-tail", match: "/tail{/*}?" },
+  { match: "/tail{/*}?" },
 )
 
 describe("pathname(): folds the whole path into the fp", () => {
@@ -298,21 +313,25 @@ describe("pathname(): folds the whole path into the fp", () => {
 // ── Descendant fold: a hooks-only descendant un-skips its ancestor ────
 
 const FoldChild = parton(
-  function FoldChildRender(_: RenderArgs) {
-    return <span>{`fold-child-body:${cookie("pref") ?? ""}`}</span>
-  },
-  { selector: "#atv-fold-child" },
+  Object.assign(
+    function FoldChildRender(_: RenderArgs) {
+      return <span>{`fold-child-body:${cookie("pref") ?? ""}`}</span>
+    },
+    { displayName: "atv-fold-child" },
+  ),
 )
 const FoldWrapper = parton(
-  function FoldWrapperRender(_: RenderArgs) {
-    return (
-      <div>
-        <span>fold-wrapper-body</span>
-        <FoldChild />
-      </div>
-    )
-  },
-  { selector: "#atv-fold-wrapper" },
+  Object.assign(
+    function FoldWrapperRender(_: RenderArgs) {
+      return (
+        <div>
+          <span>fold-wrapper-body</span>
+          <FoldChild />
+        </div>
+      )
+    },
+    { displayName: "atv-fold-wrapper" },
+  ),
 )
 
 describe("descendant fold: a nested hooks-only spec's read change un-skips the wrapper", () => {

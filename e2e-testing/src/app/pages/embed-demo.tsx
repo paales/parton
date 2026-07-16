@@ -122,7 +122,7 @@ export const EmbedDuplicateDemoPage = parton(
         <header className="mb-4" data-testid="embed-duplicate-header">
           <h2 className="text-xl font-semibold">Duplicate embeds of one page</h2>
           <div className="mt-2">
-            <RemoteRefreshButton selector="remote-fast" label="Refresh both (label fan-out)" />
+            <RemoteRefreshButton name="remote-fast" label="Refresh both (tag fan-out)" />
           </div>
         </header>
         <section
@@ -157,7 +157,7 @@ export const EmbedRefetchDemoPage = parton(
         <header className="mb-4" data-testid="embed-refetch-header">
           <h2 className="text-xl font-semibold">Embed refetch</h2>
           <div className="mt-2">
-            <RemoteRefreshButton selector="remote-fast" label="Refresh embedded parton" />
+            <RemoteRefreshButton name="remote-fast" label="Refresh embedded parton" />
           </div>
         </header>
         <section

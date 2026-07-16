@@ -50,13 +50,12 @@ const Intro = parton(async function CacheDemoIntroRender({
 })
 
 // `Slow` self-sources `flavor` from the URL via a tracked
-// `searchParam` read, so a targeted `#slow` refetch (`?partials=slow`)
-// re-derives it against the current request — no parent-passed prop,
-// no refetch-time override. The cache keys on the spec's fingerprint,
-// which folds in the recorded read, so each flavor is a distinct cache
-// entry. (Contrast `Intro`, which takes `flavor` as a plain wrapper
-// prop — fine for a child that only ever re-renders with its parent,
-// never on its own refetch.)
+// `searchParam` read, so any refetch re-derives it against the current
+// request — no parent-passed prop, no refetch-time override. The cache
+// keys on the spec's fingerprint, which folds in the recorded read, so
+// each flavor is a distinct cache entry. (Contrast `Intro`, which
+// takes `flavor` as a plain wrapper prop — fine for a child that only
+// ever re-renders with its parent, never on its own refetch.)
 const Slow = parton(
   async function CacheDemoSlowRender(_: RenderArgs) {
     const flavor = searchParam("flavor") ?? "vanilla"
@@ -80,7 +79,6 @@ const Slow = parton(
     )
   },
   {
-    selector: "#slow",
     cache: { maxAge: 60 },
     fallback: <div data-testid="slow-fallback">Loading slow…</div>,
   },
@@ -97,22 +95,31 @@ const Clock = parton(
       </div>
     )
   },
-  { selector: "#clock", fallback: <div>Loading clock…</div> },
+  {
+    // Always fresh: never served from the client's fp cache — every
+    // request re-renders the timestamp.
+    fpSkip: false,
+    fallback: <div>Loading clock…</div>,
+  },
 )
 
-// Non-addressable (no selector/match) — re-renders inline with
-// its parent, which is enough to show the live render count: a
-// non-addressable spec has no fp on the wire, so nothing ever skips it.
-const Footer = parton(function CacheDemoFooterRender() {
-  return (
-    <div className="mt-8 text-xs text-muted-foreground">
-      Server <Code>slowRenderCount</Code>:{" "}
-      <span data-testid="server-render-count">{slowRenderCounts.get(getScope()) ?? 0}</span>
-      <br />
-      Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
-    </div>
-  )
-})
+// Re-renders inline with its parent whenever the wrapper's `?flavor`
+// read moves — enough to show the live render count. `fpSkip: false`
+// keeps the count honest on refetches whose fingerprint is otherwise
+// unchanged.
+const Footer = parton(
+  function CacheDemoFooterRender() {
+    return (
+      <div className="mt-8 text-xs text-muted-foreground">
+        Server <Code>slowRenderCount</Code>:{" "}
+        <span data-testid="server-render-count">{slowRenderCounts.get(getScope()) ?? 0}</span>
+        <br />
+        Try: change <Code>?flavor=</Code>, refetch the slow partial, reload.
+      </div>
+    )
+  },
+  { fpSkip: false },
+)
 
 // ─── Outer wrapper — matches /cache-demo, threads flavor down ─────────
 

@@ -1,18 +1,41 @@
-import { clearCaches, test, expect, recordPartialDispatches } from "./fixtures"
+import {
+  clearCaches,
+  test,
+  expect,
+  recordPartialDispatches,
+  type PartialDispatch,
+} from "./fixtures"
 
 /**
  * /defer-demo § 2,5 — dispatch behavior under concurrent activations.
  *
- *   § 2 Batched activation: two <WhenMounted> Partials activate in the
+ *   § 2 Batched activation: two <WhenMounted> partons activate in the
  *       same commit pass. The microtask-batched dispatch should
- *       coalesce them into ONE RSC request listing both ids in
- *       ?partials=.
+ *       coalesce them into ONE statement forcing both ids in its
+ *       `?__force=` overlay.
  *
- *   § 5 Streaming + defer race: a slow async Partial suspends on
- *       initial render; a neighboring deferred Partial activates
+ *   § 5 Streaming + defer race: a slow async parton suspends on
+ *       initial render; a neighboring deferred parton activates
  *       immediately on mount. The defer refetch must land (and its
- *       content render) before the slow Partial resolves.
+ *       content render) before the slow parton resolves.
+ *
+ * Every parton on this page is placed under the /defer-demo page
+ * parton, so its effective id carries the placement fold —
+ * `batch-a~<16 hex>`. `?__force=` states effective ids, so the
+ * assertions match a spec id against its folded instance.
  */
+
+/** The dispatch's stated targets — the `?__force=` overlay's effective ids. */
+function targets(dispatch: PartialDispatch): string[] {
+  return dispatch.partials?.split(",").filter(Boolean) ?? []
+}
+
+/** True when `id` is an instance of the spec named `specId`: a
+ *  root-level unframed placement keeps the bare id, any other folds
+ *  its ambient placement in as a trailing `~<16 hex>`. */
+function isInstanceOf(id: string, specId: string): boolean {
+  return id === specId || id.startsWith(`${specId}~`)
+}
 
 test.beforeEach(async ({ baseURL }) => {
   await clearCaches(baseURL)
@@ -34,13 +57,14 @@ test.describe("defer batching + race", () => {
       timeout: 10000,
     })
 
-    // One dispatch should list BOTH `batch-a` and `batch-b` in its
-    // stated targets. Separate dispatches (one per partial) would be
-    // the batching bug.
+    // One dispatch should force BOTH `batch-a` and `batch-b`. Separate
+    // dispatches (one per partial) would be the batching bug.
     const matches = rscCalls.filter((c) => {
-      if (!c.partials) return false
-      const ids = c.partials.split(",")
-      return ids.includes("batch-a") && ids.includes("batch-b")
+      const ids = targets(c)
+      return (
+        ids.some((id) => isInstanceOf(id, "batch-a")) &&
+        ids.some((id) => isInstanceOf(id, "batch-b"))
+      )
     })
     expect(
       matches.length,
@@ -51,16 +75,35 @@ test.describe("defer batching + race", () => {
 
     // And no one-off dispatches for either partial alone — those would
     // indicate un-batched fires.
-    const soloA = rscCalls.filter((c) => c.partials === "batch-a")
-    const soloB = rscCalls.filter((c) => c.partials === "batch-b")
-    expect(soloA.length, "batch-a should not be refetched alone").toBe(0)
-    expect(soloB.length, "batch-b should not be refetched alone").toBe(0)
+    const solo = (specId: string) =>
+      rscCalls.filter((c) => {
+        const ids = targets(c)
+        return ids.length === 1 && isInstanceOf(ids[0], specId)
+      })
+    expect(solo("batch-a").length, "batch-a should not be refetched alone").toBe(0)
+    expect(solo("batch-b").length, "batch-b should not be refetched alone").toBe(0)
   })
 
   test("deferred activation doesn't wait for a slow suspending sibling", async ({ page }) => {
+    // One settling load first, so the route's records carry the read
+    // sets their bodies make. An activation statement's forced targets
+    // lane AFTER its covering whole-tree segment, and against a cold
+    // registry that segment re-renders every parton on the route — the
+    // cold-record gate (over-fetch, never stale). On /defer-demo that
+    // is the 1200ms `concurrent-c`, which would gate the lane on a
+    // parton this test says nothing about. Warm, the covering segment
+    // fp-skips to placeholders and the lane is the first thing the
+    // statement renders — leaving the slow sibling as the only thing
+    // the activation could serialize behind, which is the claim.
+    await page.goto("/defer-demo")
+    await page.waitForSelector('[data-testid="slow-content"]', { timeout: 10000 })
+
     // `waitUntil: "commit"` lets us observe the streaming fallback
     // before the 1.5s slow partial resolves. Default `load` waits for
     // stream close, which hides the interleaving this test is about.
+    // The document render is a cold render either way — no manifest
+    // rides a fresh document — so the slow parton streams its full
+    // 1.5s here regardless of the settling load above.
     await page.goto("/defer-demo", { waitUntil: "commit" })
 
     // The slow partial streams its Suspense fallback first. race-defer

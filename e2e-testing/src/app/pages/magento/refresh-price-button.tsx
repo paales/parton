@@ -1,22 +1,18 @@
 "use client"
 
-import { useEffect, useRef } from "react"
-import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@parton/copies/components/ui/button"
+import { bumpPrice } from "./price-actions.ts"
 
 /**
- * Per-card refresh button. The `@self` selector token resolves to
- * the enclosing partial's effective id at fire time — the framework
- * reads it off `PartialIdContext` which `PartialErrorBoundary`
- * populates per instance. Each `<LivePrice sku=…/>` placement gets
- * a distinct id (auto-derived from `spec.id + hash(props)`), so the
- * refetch targets exactly the clicked card. The "refresh all"
- * companion button uses the class-level `.price` selector to fan
- * out across every instance.
+ * Per-card refresh button — fires the sku-constrained price bump
+ * (`refreshSelector("price?sku=<sku>")`). Each `<LivePrice sku=…/>`
+ * placement reads the matching constrained tag, so the bump lanes
+ * exactly the clicked card; the "refresh all" companion bumps the
+ * bare `price` name to fan out across every instance.
  */
 export function RefreshPriceButton({ sku }: { sku: string }) {
-  const [reload, { committed, finished }] = useNavigation().reload()
-  const pending = committed && !finished
+  const [pending, setPending] = useState(false)
   // Per-button hydration marker. The price cards stream in via
   // Suspense and hydrate progressively AFTER the page shell — until a
   // card's boundary has hydrated, its DOM is React-unowned: a commit
@@ -35,7 +31,10 @@ export function RefreshPriceButton({ sku }: { sku: string }) {
       size="icon-xs"
       variant="ghost"
       data-testid={`refresh-price-${sku}`}
-      onClick={() => reload({ selector: "@self" })}
+      onClick={() => {
+        setPending(true)
+        void bumpPrice(sku).finally(() => setPending(false))
+      }}
       disabled={pending}
       className="text-primary"
     >

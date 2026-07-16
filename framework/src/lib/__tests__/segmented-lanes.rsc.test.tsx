@@ -28,37 +28,43 @@ import {
   withLiveDrive,
 } from "../../test/live-drive.tsx"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
-import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
+import { PartialRoot, parton, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { expires, time } from "../server-hooks.ts"
+import { tag } from "../current-parton.ts"
 import { clearRegistry } from "../partial-registry.ts"
 
 // Module-scope render counters — bumped every time a Render body runs,
 // so assertions can distinguish "re-rendered" from "served placeholder".
 const renders = { fast: 0, slow: 0, wrapper: 0 }
 
+// Each leaf subscribes to an event tag by READING it — the bump signal
+// `refreshSelector("lane-fast")` wakes exactly the readers of that tag.
 const FastLane = parton(
-  function FastLaneRender() {
-    renders.fast++
-    return <div data-fast-render={renders.fast}>{`fast-${renders.fast}`}</div>
-  },
-  { selector: "lane-fast" },
+  Object.assign(
+    function FastLaneRender() {
+      tag("lane-fast")
+      renders.fast++
+      return <div data-fast-render={renders.fast}>{`fast-${renders.fast}`}</div>
+    },
+    { displayName: "lane-fast" },
+  ),
 )
 
 const SlowSibling = parton(
-  function SlowSiblingRender() {
-    renders.slow++
-    return <aside data-slow-render={renders.slow}>{`slow-${renders.slow}`}</aside>
-  },
-  { selector: "lane-slow" },
+  Object.assign(
+    function SlowSiblingRender() {
+      tag("lane-slow")
+      renders.slow++
+      return <aside data-slow-render={renders.slow}>{`slow-${renders.slow}`}</aside>
+    },
+    { displayName: "lane-slow" },
+  ),
 )
 
-const LaneWrapper = parton(
-  function LaneWrapperRender({ children }: RenderArgs) {
-    renders.wrapper++
-    return <section data-wrapper>{children}</section>
-  },
-  { selector: "lane-wrapper" },
-)
+const LaneWrapper = parton(function LaneWrapperRender({ children }: RenderArgs) {
+  renders.wrapper++
+  return <section data-wrapper>{children}</section>
+})
 
 function Page(): ReactNode {
   return (
@@ -76,13 +82,15 @@ function Page(): ReactNode {
 // content.
 const renders2 = { clock: 0 }
 const ExpiryClock = parton(
-  function ExpiryClockRender(_: RenderArgs) {
-    renders2.clock++
-    expires(time().in(80))
-    const tick = Math.floor(Date.now() / 100)
-    return <time data-clock>{`tick-${tick}-${renders2.clock}`}</time>
-  },
-  { selector: "lane-clock" },
+  Object.assign(
+    function ExpiryClockRender(_: RenderArgs) {
+      renders2.clock++
+      expires(time().in(80))
+      const tick = Math.floor(Date.now() / 100)
+      return <time data-clock>{`tick-${tick}-${renders2.clock}`}</time>
+    },
+    { displayName: "lane-clock" },
+  ),
 )
 
 beforeEach(() => {
@@ -122,7 +130,9 @@ describe("live segment driver — per-parton lanes", () => {
         if (second.done || second.value.kind !== "lanes") throw new Error("expected lanes segment")
         const laneIter = second.value.lanes[Symbol.asyncIterator]()
         const lane = (await laneIter.next()).value as DemuxedLane
-        expect(lane.partonId).toBe("lane-fast")
+        // The leaf is nested under the wrapper parton, so its id
+        // placement-folds (`lane-fast~<hash>`).
+        expect(stripPlacementFold(lane.partonId)).toBe("lane-fast")
 
         const { bodyText, fp } = await decodeLane(lane)
         // Fresh content for the bumped parton…
@@ -141,8 +151,9 @@ describe("live segment driver — per-parton lanes", () => {
         // an unscoped fold would re-ship both on every frame. Neither
         // rides the lane; the wrapper over-fetches on its next
         // whole-tree render, whose route-wide trailer heals it.
-        expect(fp?.["lane-wrapper"]).toBeUndefined()
-        expect(fp?.["lane-slow"]).toBeUndefined()
+        const trailerBases = Object.keys(fp ?? {}).map(stripPlacementFold)
+        expect(trailerBases).not.toContain("lane-wrapper")
+        expect(trailerBases).not.toContain("lane-slow")
 
         await h.shutdown("lane-fast")
       },
@@ -170,7 +181,7 @@ describe("live segment driver — per-parton lanes", () => {
 
         refreshSelector("lane-fast")
         const laneB = (await laneIter.next()).value as DemuxedLane
-        expect(laneB.partonId).toBe("lane-fast")
+        expect(stripPlacementFold(laneB.partonId)).toBe("lane-fast")
         expect((await decodeLane(laneB)).bodyText).toContain("fast-3")
         expect(renders.slow).toBe(1)
 

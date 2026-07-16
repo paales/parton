@@ -1,11 +1,11 @@
 "use client"
 
-import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { useState } from "react"
 import { Button } from "@parton/copies/components/ui/button"
+import { bumpAllPrices } from "./price-actions.ts"
 
 export function RefreshAllPricesButton() {
-  const [reload, { committed, finished }] = useNavigation().reload()
-  const pending = committed && !finished
+  const [pending, setPending] = useState(false)
   return (
     <Button
       // `data-hydrated`: React owns the button (onClick live) — the
@@ -16,7 +16,10 @@ export function RefreshAllPricesButton() {
       size="sm"
       variant="outline"
       data-testid="refresh-all-prices"
-      onClick={() => reload({ selector: ".price" })}
+      onClick={() => {
+        setPending(true)
+        void bumpAllPrices().finally(() => setPending(false))
+      }}
       disabled={pending}
       className="mb-4"
     >

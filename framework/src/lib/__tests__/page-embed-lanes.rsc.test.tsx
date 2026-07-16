@@ -3,10 +3,12 @@
  * path against a real drive.
  *
  * A host page embeds the SAME page twice (distinct placement
- * namespaces). A url statement with `?__force=<label>` must resolve
- * BOTH embedded ids by label fan-out and lane each one as a focused
- * re-embed (`?partials=<id>` at the embedded URL, stored namespace
- * replayed) — fresh bytes for both placements.
+ * namespaces). A url statement whose `?__force=` overlay names BOTH
+ * embedded ids must lane each one as a focused re-embed
+ * (`?partials=<id>` at the embedded URL, stored namespace replayed) —
+ * fresh bytes for both placements. Forces are effective parton ids:
+ * the framework-internal id-forcing protocol, resolved against the
+ * route's snapshots.
  */
 
 import type { ReactNode } from "react"
@@ -22,6 +24,7 @@ import {
   withLiveDrive,
 } from "../../test/live-drive.tsx"
 import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts"
+import { tag } from "../current-parton.ts"
 import { handleChannelPost } from "../connection-session.ts"
 import { renderServerToFlight } from "../../test/rsc-server.ts"
 import { rewriteFlightStream, type RowRewriter } from "../flight-rewrite.ts"
@@ -32,6 +35,7 @@ import {
   computeRouteKey,
   parton,
   partialFromSnapshot,
+  stripPlacementFold,
   type RenderArgs,
 } from "../partial.tsx"
 import {
@@ -46,13 +50,13 @@ import { wrapStreamWithSnapshotTrailer } from "../snapshot-trailer.ts"
 
 let producerRenders = 0
 
-const LaneWidget = parton(
-  async function PeLaneWidgetRender(_: RenderArgs) {
-    producerRenders++
-    return <div>{`lane-widget:${producerRenders}`}</div>
-  },
-  { selector: "pe-lane-widget" },
-)
+const LaneWidget = parton(async function PeLaneWidgetRender(_: RenderArgs) {
+  // The tag read subscribes this parton to the `pe-lane-widget` wake —
+  // what the harness's shutdown bump uses to release the parked drive.
+  tag("pe-lane-widget")
+  producerRenders++
+  return <div>{`lane-widget:${producerRenders}`}</div>
+})
 
 function ProducerRoot() {
   return (
@@ -67,19 +71,22 @@ function ProducerRoot() {
 }
 
 const LaneHostPage = parton(
-  function PeLaneHostRender(_: RenderArgs) {
-    return (
-      <section>
-        <Suspense fallback={null}>
-          <RemoteFrame url="/pe-lane-embedded" />
-        </Suspense>
-        <Suspense fallback={null}>
-          <RemoteFrame url="/pe-lane-embedded" />
-        </Suspense>
-      </section>
-    )
-  },
-  { match: "/pe-lane-host", selector: "#pe-lane-host-spec" },
+  Object.assign(
+    function PeLaneHostRender(_: RenderArgs) {
+      return (
+        <section>
+          <Suspense fallback={null}>
+            <RemoteFrame url="/pe-lane-embedded" />
+          </Suspense>
+          <Suspense fallback={null}>
+            <RemoteFrame url="/pe-lane-embedded" />
+          </Suspense>
+        </section>
+      )
+    },
+    { displayName: "pe-lane-host-spec" },
+  ),
+  { match: "/pe-lane-host" },
 )
 
 const LaneHostRoot = (): ReactNode => (
@@ -201,7 +208,7 @@ async function post(scope: string, envelope: ChannelEnvelope): Promise<number> {
 }
 
 describe("page-embed forced lanes", () => {
-  it("a __force label fans out to BOTH embedded placements as focused re-embeds", async () => {
+  it("a __force overlay lanes BOTH embedded placements as focused re-embeds", async () => {
     const scope = freshLiveScope("pe-lane")
     const { calls } = stubProducerFetch()
 
@@ -219,21 +226,27 @@ describe("page-embed forced lanes", () => {
         // Both embedded placements registered host-side under distinct
         // placement-prefixed ids.
         const routeKey = computeRouteKey("http://localhost/pe-lane-host")
+        // Each placement's key is its namespace over the folded spec
+        // id — the embedded page renders from inside the host parton,
+        // so its partons carry the host placement's fold too.
         const embedded = [..._readSnapshotsForRoute(scope, routeKey).keys()].filter(
-          (id) => stripEmbedNamespace(id) === "pe-lane-widget" && id !== "pe-lane-widget",
+          (id) =>
+            stripPlacementFold(stripEmbedNamespace(id)) === "pe-lane-widget" &&
+            id !== "pe-lane-widget",
         )
         expect(embedded.length).toBe(2)
 
         const embedFetches = calls.length
-        // Fire the refetch: a url statement with the LABEL as its
-        // one-shot force overlay, on the channel endpoint (the same
-        // envelope the client transport POSTs).
+        // Fire the refetch: a url statement carrying both effective
+        // ids as its one-shot force overlay, on the channel endpoint
+        // (the same envelope the client transport POSTs).
         const conn = h.connectionId()
         if (!conn) throw new Error("expected a connection id after segment 0")
+        const force = new URLSearchParams({ __force: embedded.join(",") })
         const status = await post(scope, {
           connection: conn,
           seq: 1,
-          frames: [{ kind: "url", url: "/pe-lane-host?__force=pe-lane-widget", intent: "silent" }],
+          frames: [{ kind: "url", url: `/pe-lane-host?${force}`, intent: "silent" }],
         })
         expect(status).toBe(204)
 

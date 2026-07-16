@@ -4,20 +4,14 @@ import type { ReactNode } from "react"
 import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
 
 /**
- * Selector-targeted nav link for the CMS editor's tree sidebar.
+ * Nav link for the CMS editor's tree sidebar.
  *
- * Plain `<a href="/cms-edit?select=…">` triggers a full page nav —
- * the entire `/cms-edit` route re-streams (outer chrome + preview
- * frame + field panel). Even with `startTransition` smoothing the
- * commit, the rerender re-derives the client template and reconciles
- * every Partial wrapper, which can produce a brief blank flash on
- * the preview pane while the new payload commits.
- *
- * Selecting a tree entry only needs the tree + the field panel to
- * change; the preview stays put. Routing the click through
- * `nav.navigate(href, { selector })` updates the URL AND restricts
- * the refetch to just `#cms-edit-tree` and `#cms-edit-fields`. The
- * preview Partial's snapshot is left alone — no rerender, no flash.
+ * Routes the click through `nav.navigate(href)` (a channel url
+ * statement, not a document load). Selecting a tree entry changes
+ * only the tree + field panels' tracked `?select=` read — every
+ * preview parton's fingerprint is unchanged, so the whole-tree
+ * statement prunes them to placeholders and the client keeps their
+ * cached subtrees in place: no preview rerender, no flash.
  */
 export function CmsEditTreeLink({
   href,
@@ -42,10 +36,7 @@ export function CmsEditTreeLink({
       return
     }
     e.preventDefault()
-    void navigate(href, {
-      history: "push",
-      selector: "#cms-edit-tree #cms-edit-fields",
-    })
+    void navigate(href, { history: "push" })
   }
   return (
     <a

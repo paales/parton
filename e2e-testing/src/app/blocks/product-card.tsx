@@ -42,7 +42,6 @@ export const ProductCardBlock = block(
     )
   },
   {
-    selector: ".group-item",
     schema: ({ cms }) => ({
       title: cms.text("title"),
       price: cms.number("price"),

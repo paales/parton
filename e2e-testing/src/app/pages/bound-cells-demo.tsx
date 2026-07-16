@@ -50,7 +50,7 @@ export const BoundCellsDemoPage = parton(
       </main>
     )
   },
-  { match: "/bound-cells-demo", selector: "#bound-cells-demo" },
+  { match: "/bound-cells-demo" },
 )
 
 /** The missing-required-binding section — its own parton so the
@@ -67,5 +67,5 @@ export const BoundCellsMissingSection = parton(
       </section>
     )
   },
-  { match: "/bound-cells-demo", selector: "#bound-cells-missing" },
+  { match: "/bound-cells-demo" },
 )

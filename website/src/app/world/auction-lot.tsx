@@ -22,29 +22,29 @@ import { BidButton } from "./bid-button.tsx"
  *  - The layer sits at PLANE coordinates, so all `?chunk=` geometries
  *    share the one set of lots.
  */
-export const AuctionLot = parton(
-  function AuctionLotRender({ lot, bid }: { lot: string; bid: ResolvedCell<LotBid> } & RenderArgs) {
-    // The render-count observable: validate-bidding.mjs counts these
-    // lines per amount to prove a bid fans to every watcher as ONE
-    // broadcast render, not one render per connection. A log is a side
-    // effect, not an output — the tracking invariant holds.
-    console.log(`[world] lot ${lot} render amount=${bid.value.amount}`)
-    return (
-      <div className="card card--lot" data-testid={`lot-${lot}`}>
-        <h1 className="card__title">LOT {lot}</h1>
-        <div className="lot__amount" data-testid={`lot-${lot}-amount`}>
-          {bid.value.amount}
-        </div>
-        <p className="lot__bids" data-testid={`lot-${lot}-bids`}>
-          {bid.value.bids} bids
-        </p>
-        <BidButton lot={lot} />
-        <p className="card__hint">one number, every viewer — concurrent bids compose</p>
+export const AuctionLot = parton(function AuctionLotRender({
+  lot,
+  bid,
+}: { lot: string; bid: ResolvedCell<LotBid> } & RenderArgs) {
+  // The render-count observable: validate-bidding.mjs counts these
+  // lines per amount to prove a bid fans to every watcher as ONE
+  // broadcast render, not one render per connection. A log is a side
+  // effect, not an output — the tracking invariant holds.
+  console.log(`[world] lot ${lot} render amount=${bid.value.amount}`)
+  return (
+    <div className="card card--lot" data-testid={`lot-${lot}`}>
+      <h1 className="card__title">LOT {lot}</h1>
+      <div className="lot__amount" data-testid={`lot-${lot}-amount`}>
+        {bid.value.amount}
       </div>
-    )
-  },
-  { selector: "#auction-lot" },
-)
+      <p className="lot__bids" data-testid={`lot-${lot}-bids`}>
+        {bid.value.bids} bids
+      </p>
+      <BidButton lot={lot} />
+      <p className="card__hint">one number, every viewer — concurrent bids compose</p>
+    </div>
+  )
+})
 
 /**
  * The district layer — a plain component (no define-time work) the

@@ -64,6 +64,7 @@ import {
   _recordDelivery,
   handleChannelPost,
 } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
@@ -86,76 +87,59 @@ const renders = {
   iso: 0,
 }
 
-const AckA = parton(
-  function AckARender(_: RenderArgs) {
-    renders.a++
-    return <div data-a>{`a:${renders.a}`}</div>
-  },
-  { selector: "ack-a" },
-)
-const AckB = parton(
-  function AckBRender(_: RenderArgs) {
-    renders.b++
-    return <div data-b>{`b:${renders.b}`}</div>
-  },
-  { selector: "ack-b" },
-)
-const WinA = parton(
-  function WinARender(_: RenderArgs) {
-    renders.win++
-    return <div data-win>{`win:${renders.win}`}</div>
-  },
-  { selector: "win-a" },
-)
-const WinB = parton(
-  function WinBRender(_: RenderArgs) {
-    renders.wib++
-    return <div data-wib>{`wib:${renders.wib}`}</div>
-  },
-  { selector: "win-b" },
-)
-const CadA = parton(
-  function CadARender(_: RenderArgs) {
-    renders.cad++
-    return <div data-cad>{`cad:${renders.cad}`}</div>
-  },
-  { selector: "cad-a" },
-)
-const SilA = parton(
-  function SilARender(_: RenderArgs) {
-    renders.sil++
-    return <div data-sil>{`sil:${renders.sil}`}</div>
-  },
-  { selector: "sil-a" },
-)
-const DegA = parton(
-  function DegARender(_: RenderArgs) {
-    renders.deg++
-    return <div data-deg>{`deg:${renders.deg}`}</div>
-  },
-  { selector: "deg-a" },
-)
-const RecA = parton(
-  function RecARender(_: RenderArgs) {
-    renders.rec++
-    return <div data-rec>{`rec:${renders.rec}`}</div>
-  },
-  { selector: "rec-a" },
-)
-const LayA = parton(
-  function LayARender(_: RenderArgs) {
-    renders.lay++
-    return <div data-lay>{`lay:${renders.lay}`}</div>
-  },
-  { selector: "lay-a" },
-)
-const IsoA = parton(
-  function IsoARender(_: RenderArgs) {
-    renders.iso++
-    return <div data-iso>{`iso:${renders.iso}`}</div>
-  },
-  { selector: "iso-a" },
-)
+// Each leaf subscribes to its bump signal by READING the tag —
+// `refreshSelector("ack-a")` wakes exactly the readers of `ack-a`. The
+// harness's `shutdown(id)` rides the same signal (its bump is what
+// forces the parked driver's final enqueue).
+const AckA = parton(function AckARender(_: RenderArgs) {
+  tag("ack-a")
+  renders.a++
+  return <div data-a>{`a:${renders.a}`}</div>
+})
+const AckB = parton(function AckBRender(_: RenderArgs) {
+  tag("ack-b")
+  renders.b++
+  return <div data-b>{`b:${renders.b}`}</div>
+})
+const WinA = parton(function WinARender(_: RenderArgs) {
+  tag("win-a")
+  renders.win++
+  return <div data-win>{`win:${renders.win}`}</div>
+})
+const WinB = parton(function WinBRender(_: RenderArgs) {
+  tag("win-b")
+  renders.wib++
+  return <div data-wib>{`wib:${renders.wib}`}</div>
+})
+const CadA = parton(function CadARender(_: RenderArgs) {
+  tag("cad-a")
+  renders.cad++
+  return <div data-cad>{`cad:${renders.cad}`}</div>
+})
+const SilA = parton(function SilARender(_: RenderArgs) {
+  tag("sil-a")
+  renders.sil++
+  return <div data-sil>{`sil:${renders.sil}`}</div>
+})
+const DegA = parton(function DegARender(_: RenderArgs) {
+  tag("deg-a")
+  renders.deg++
+  return <div data-deg>{`deg:${renders.deg}`}</div>
+})
+const RecA = parton(function RecARender(_: RenderArgs) {
+  tag("rec-a")
+  renders.rec++
+  return <div data-rec>{`rec:${renders.rec}`}</div>
+})
+const LayA = parton(function LayARender(_: RenderArgs) {
+  tag("lay-a")
+  renders.lay++
+  return <div data-lay>{`lay:${renders.lay}`}</div>
+})
+const IsoA = parton(function IsoARender(_: RenderArgs) {
+  renders.iso++
+  return <div data-iso>{`iso:${renders.iso}`}</div>
+})
 
 const PageAB = (): ReactNode => (
   <PartialRoot>
@@ -357,25 +341,29 @@ describe("the applied marker + retransmit idempotence", () => {
       expect(await post(scope, flip)).toBe(204)
       const lane1 = await nextLane(laneIter)
       expect(lane1.partonId).toBe("ack-b")
-      // The optimistic layer alone decides — NO ack has ever been
-      // received on this connection, yet the re-lane of unchanged
-      // content is the placeholder (the body never re-runs; the
-      // render counter is the wire-safe assertion — dev Flight row
-      // labels collide with content substrings).
-      expect((await decodeLane(lane1)).bodyText).toContain('"data-partial-id":"ack-b"')
-      expect(renders.b).toBe(1)
+      // The flip's first lane rides the cold→warm drift: segment 0's
+      // record predates the body's `tag("ack-b")` read, so the warm fp
+      // differs from the cold one the mirror holds and the body
+      // re-runs (over-fetch, never stale). The lane promotes the warm
+      // fp into the optimistic layer.
+      expect((await decodeLane(lane1)).bodyText).toContain("b:2")
+      expect(renders.b).toBe(2)
       await until(() => appliedEntries().length === 1, "the applied marker")
       expect(appliedEntries()).toEqual(["5"])
 
-      // The retransmit: byte-identical envelope, same seq. It
-      // applies per statement semantics (the flip re-queues, its
-      // re-lane fp-skips again), the session converges, and the
-      // watermark does NOT re-announce.
+      // The retransmit: byte-identical envelope, same seq. It applies
+      // per statement semantics (the flip re-queues), the session
+      // converges, and the watermark does NOT re-announce. Its re-lane
+      // is the zero-byte confirmation — the OPTIMISTIC layer alone
+      // decides, with NO ack ever received on this connection, and the
+      // body never re-runs (the render counter is the wire-safe
+      // assertion — dev Flight row labels collide with content
+      // substrings).
       expect(await post(scope, flip)).toBe(204)
       const lane2 = await nextLane(laneIter)
       expect(lane2.partonId).toBe("ack-b")
       expect((await decodeLane(lane2)).bodyText).toContain('"data-partial-id":"ack-b"')
-      expect(renders.b).toBe(1)
+      expect(renders.b).toBe(2)
       const session = _peekConnectionSession(conn)
       expect(session?.appliedSeq).toBe(5)
       expect(session?.lastSeq).toBe(5)

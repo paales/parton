@@ -64,7 +64,6 @@ export const GroupBlock = block(
     )
   },
   {
-    selector: ".page-block .group-item",
     schema: ({ cms }) => ({
       direction: cms.enum("direction", DIRECTIONS),
       align: cms.enum("align", ALIGN_VALUES),

@@ -26,7 +26,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Fragment, Suspense, type ReactNode } from "react"
-import { PartialRoot, computeRouteKey, parton, partialFromSnapshot } from "../partial.tsx"
+import {
+  PartialRoot,
+  computeRouteKey,
+  parton,
+  partialFromSnapshot,
+  stripPlacementFold,
+} from "../partial.tsx"
 import type { RenderArgs } from "../partial.tsx"
 import { RemoteFrame } from "../remote-frame.tsx"
 import {
@@ -48,6 +54,7 @@ import { wrapStreamWithCommitOnly } from "../fp-trailer.ts"
 import { rewriteFlightStream, type RowRewriter } from "../flight-rewrite.ts"
 import { wrapStreamWithSnapshotTrailer } from "../snapshot-trailer.ts"
 import { buildMarker } from "../fp-trailer-marker.ts"
+import { tag } from "../current-parton.ts"
 import { HEADER_RSC_RENDER } from "../../runtime/request.tsx"
 import { _captureCommitHandle, getRequest, runWithRequestAsync } from "../../runtime/context.ts"
 import { renderServerToFlight, type FlightBytes } from "../../test/rsc-server.ts"
@@ -162,10 +169,16 @@ async function RequestUrlProbe() {
  *  (PartialErrorBoundary's `partialId`) is what the placement
  *  namespace must move. */
 const EmbeddedWidget = parton(
-  async function EmbeddedWidgetRender(_: RenderArgs) {
-    return <div data-testid="embedded-widget">embedded-widget-content</div>
-  },
-  { selector: "pe-embedded-widget" },
+  Object.assign(
+    async function EmbeddedWidgetRender(_: RenderArgs) {
+      // The tag read is this parton's refetch label — what a
+      // class-level fan-out (and the host's namespaced prefixing of it)
+      // addresses across placements.
+      tag("pe-embedded-widget")
+      return <div data-testid="embedded-widget">embedded-widget-content</div>
+    },
+    { displayName: "pe-embedded-widget" },
+  ),
 )
 
 function EmbeddedRoot() {
@@ -188,16 +201,19 @@ function EmbeddedRoot() {
 }
 
 const HostPage = parton(
-  function PeHostRender(_: RenderArgs) {
-    return (
-      <section data-testid="embed-host">
-        <Suspense fallback={<div>loading embed…</div>}>
-          <RemoteFrame url="/embedded" />
-        </Suspense>
-      </section>
-    )
-  },
-  { match: "/pe-host", selector: "#pe-host-spec" },
+  Object.assign(
+    function PeHostRender(_: RenderArgs) {
+      return (
+        <section data-testid="embed-host">
+          <Suspense fallback={<div>loading embed…</div>}>
+            <RemoteFrame url="/embedded" />
+          </Suspense>
+        </section>
+      )
+    },
+    { displayName: "pe-host-spec" },
+  ),
+  { match: "/pe-host" },
 )
 
 function HostRoot() {
@@ -216,19 +232,22 @@ function HostRoot() {
 }
 
 const DuplicateHostPage = parton(
-  function PeDuplicateHostRender(_: RenderArgs) {
-    return (
-      <section data-testid="dup-host">
-        <Suspense fallback={null}>
-          <RemoteFrame url="/embedded" />
-        </Suspense>
-        <Suspense fallback={null}>
-          <RemoteFrame url="/embedded" />
-        </Suspense>
-      </section>
-    )
-  },
-  { match: "/pe-dup-host", selector: "#pe-dup-host-spec" },
+  Object.assign(
+    function PeDuplicateHostRender(_: RenderArgs) {
+      return (
+        <section data-testid="dup-host">
+          <Suspense fallback={null}>
+            <RemoteFrame url="/embedded" />
+          </Suspense>
+          <Suspense fallback={null}>
+            <RemoteFrame url="/embedded" />
+          </Suspense>
+        </section>
+      )
+    },
+    { displayName: "pe-dup-host-spec" },
+  ),
+  { match: "/pe-dup-host" },
 )
 
 function extractPartialIds(wire: string): string[] {
@@ -238,6 +257,16 @@ function extractPartialIds(wire: string): string[] {
   }
   return out
 }
+
+/**
+ * The spec id behind an effective id: strip the placement namespace an
+ * embed render prefixes, then the placement fold (`~<16 hex>`) a
+ * non-root placement mints. An embedded page rendered from inside a
+ * host parton inherits that host's placement, so its partons carry
+ * BOTH markers — the namespace is what separates the placements, the
+ * fold rides along and is identity, not attribution.
+ */
+const baseIdOf = (id: string): string => stripPlacementFold(stripEmbedNamespace(id))
 
 // ─── Tests ─────────────────────────────────────────────────────────────
 
@@ -356,21 +385,20 @@ describe("page embed — placement-scoped identity", () => {
     // Both embedded copies of the widget reach the wire under their
     // own placement-prefixed id.
     const widgetIds = new Set(
-      extractPartialIds(out).filter((id) => stripEmbedNamespace(id) === "pe-embedded-widget"),
+      extractPartialIds(out).filter((id) => baseIdOf(id) === "pe-embedded-widget"),
     )
     expect(widgetIds.size).toBe(2)
     expect(
-      [...widgetIds].every((id) => id.includes("~") && id.endsWith(":pe-embedded-widget")),
+      [...widgetIds].every(
+        (id) => id.includes("~") && stripPlacementFold(id).endsWith(":pe-embedded-widget"),
+      ),
     ).toBe(true)
   })
 
   it("a page embedding itself mints a distinct id per nesting level (the hydration fix)", async () => {
-    const SelfWidget = parton(
-      async function PeSelfWidgetRender(_: RenderArgs) {
-        return <div>self-widget</div>
-      },
-      { selector: "pe-self-widget" },
-    )
+    const SelfWidget = parton(async function PeSelfWidgetRender(_: RenderArgs) {
+      return <div>self-widget</div>
+    })
     function SelfRoot() {
       return (
         <PartialRoot>
@@ -388,9 +416,7 @@ describe("page embed — placement-scoped identity", () => {
     stubSelfServingFetch(() => <SelfRoot />)
     const out = await streamToText(await renderPageStream(<SelfRoot />, "http://t/pe-self-ids", {}))
 
-    const ids = new Set(
-      extractPartialIds(out).filter((id) => stripEmbedNamespace(id) === "pe-self-widget"),
-    )
+    const ids = new Set(extractPartialIds(out).filter((id) => baseIdOf(id) === "pe-self-widget"))
     // Host level (bare id) + one distinct prefixed id per embedded
     // level. Identical ids across levels are exactly what broke
     // hydration in the spike.
@@ -420,24 +446,33 @@ describe("page embed — registration + refetch routing (increment 2)", () => {
     const ns = calls[0].headers.get(EMBED_NS_HEADER)!
     const routeKey = computeRouteKey("http://t/pe-host")
     const snapshots = _readSnapshotsForRoute("default", routeKey)
-    const id = applyEmbedNamespace(ns, "pe-embedded-widget")
-    const snap = snapshots.get(id)
+    // The registered key is the id the embedded render actually minted:
+    // this placement's namespace over the folded spec id.
+    const id = [...snapshots.keys()].find(
+      (k) => k.startsWith(`${ns}:`) && baseIdOf(k) === "pe-embedded-widget",
+    )
+    expect(id).toBeDefined()
+    const snap = snapshots.get(id!)
     expect(snap).toBeDefined()
     expect(snap!.source).toEqual({ kind: "page", url: "http://t/embedded", ns })
-    // Labels stay bare without a human namespace — class-level fan-out.
+    // The label is the embedded parton's own tag subscription, carried
+    // through as shipped — a class-level fan-out target.
     expect(snap!.labels).toContain("pe-embedded-widget")
   })
 
-  it("prefixes labels with the human namespace when the call site passes one", async () => {
+  it("the human namespace prefixes the placement namespace; labels register as shipped", async () => {
     const NsHostPage = parton(
-      function PeNsHostRender(_: RenderArgs) {
-        return (
-          <Suspense fallback={null}>
-            <RemoteFrame url="/embedded" namespace="acme" />
-          </Suspense>
-        )
-      },
-      { match: "/pe-ns-host", selector: "#pe-ns-host-spec" },
+      Object.assign(
+        function PeNsHostRender(_: RenderArgs) {
+          return (
+            <Suspense fallback={null}>
+              <RemoteFrame url="/embedded" namespace="acme" />
+            </Suspense>
+          )
+        },
+        { displayName: "pe-ns-host-spec" },
+      ),
+      { match: "/pe-ns-host" },
     )
     function NsRoot() {
       return (
@@ -453,13 +488,25 @@ describe("page embed — registration + refetch routing (increment 2)", () => {
     const { calls } = stubSelfServingFetch(() => <EmbeddedRoot />)
     await streamToText(await renderPageStream(<NsRoot />, "http://t/pe-ns-host", {}))
 
+    // The human name is cosmetic: it prefixes the MINTED PLACEMENT
+    // NAMESPACE so registry/wire ids read `acme~<hash>:…` instead of
+    // `e~<hash>:…`. Identity never depends on it — the placement
+    // namespace disambiguates on its own.
     const ns = calls[0].headers.get(EMBED_NS_HEADER)!
     expect(ns).toMatch(/^acme~/)
     const snapshots = _readSnapshotsForRoute("default", computeRouteKey("http://t/pe-ns-host"))
-    const snap = snapshots.get(applyEmbedNamespace(ns, "pe-embedded-widget"))
+    const id = [...snapshots.keys()].find(
+      (k) => k.startsWith(`${ns}:`) && baseIdOf(k) === "pe-embedded-widget",
+    )
+    expect(id).toBeDefined()
+    const snap = snapshots.get(id!)
     expect(snap).toBeDefined()
-    expect(snap!.labels).toContain("acme:pe-embedded-widget")
-    expect(snap!.source).toMatchObject({ kind: "page", namespace: "acme" })
+    // Labels register AS SHIPPED — bare. They name the embedded
+    // parton's OWN cell/tag subscriptions, so a bump matching a tag
+    // the remote render read must keep matching them; a host-side
+    // prefix would break the producer's own fan-out.
+    expect(snap!.labels).toContain("pe-embedded-widget")
+    expect(snap!.source).toMatchObject({ kind: "page", url: "http://t/embedded", ns })
   })
 
   it("partialFromSnapshot on a page source re-embeds ?partials=<id> at the embedded URL", async () => {
@@ -525,14 +572,17 @@ describe("page embed — hardening", () => {
     })
 
     const BrokenHost = parton(
-      function PeBrokenHostRender(_: RenderArgs) {
-        return (
-          <Suspense fallback={null}>
-            <RemoteFrame url="/pe-broken" />
-          </Suspense>
-        )
-      },
-      { match: "/pe-broken-host", selector: "#pe-broken-host-spec" },
+      Object.assign(
+        function PeBrokenHostRender(_: RenderArgs) {
+          return (
+            <Suspense fallback={null}>
+              <RemoteFrame url="/pe-broken" />
+            </Suspense>
+          )
+        },
+        { displayName: "pe-broken-host-spec" },
+      ),
+      { match: "/pe-broken-host" },
     )
     const out = await streamToText(
       await renderPageStream(
@@ -552,7 +602,7 @@ describe("page embed — hardening", () => {
     // …and nothing registered from the junk trailer.
     const snapshots = _readSnapshotsForRoute("default", computeRouteKey("http://t/pe-broken-host"))
     const registered = [...snapshots.keys()].filter(
-      (id) => stripEmbedNamespace(id) === "pe-embedded-widget" && id !== "pe-embedded-widget",
+      (id) => baseIdOf(id) === "pe-embedded-widget" && id !== "pe-embedded-widget",
     )
     expect(registered).toEqual([])
   })

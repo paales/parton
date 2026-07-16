@@ -77,7 +77,6 @@ const CachedRegion = parton(
     )
   },
   {
-    selector: "cached-region",
     cache: {
       maxAge: 600,
       // Raw-bytes storage preserves Suspense structure end-to-end.

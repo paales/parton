@@ -43,7 +43,7 @@ test("blocked channel POSTs degrade the page; links become document loads", asyn
   // deliveries commit, but the first ack can never be said.
   await page.route("**/__parton/channel", (route) => route.abort("failed"))
 
-  await page.goto("/selector-demo")
+  await page.goto("/tag-demo")
   await waitForPageInteractive(page)
 
   // The first committed delivery drives the first ack flush; its
@@ -75,7 +75,7 @@ test("an attach that never establishes under an interaction completes it as a do
   // (an ad-blocked `/__parton/*` path).
   await page.route("**/__parton/live", (route) => route.abort("failed"))
 
-  await page.goto("/selector-demo")
+  await page.goto("/tag-demo")
   await waitForPageInteractive(page)
   await page.evaluate(() => {
     ;(window as unknown as { __realmMarker?: number }).__realmMarker = 42

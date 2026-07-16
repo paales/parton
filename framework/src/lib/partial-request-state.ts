@@ -43,8 +43,8 @@ export interface PartialRequestState {
    *  without a connection session. */
   ackedFingerprints?: ReadonlyMap<string, ReadonlySet<string>> | null
   /** Effective ids explicitly targeted this render (a url statement's
-   *  `__force` labels resolved to ids, a forced lane). Never skipped —
-   *  the refetch contract. */
+   *  `__force` ids, a forced lane). Never skipped — the refetch
+   *  contract. */
   explicitIds: Set<string>
   /** Effective ids seen this request — debug-only record of what
    *  rendered. Multiple placements of the same keyless spec are

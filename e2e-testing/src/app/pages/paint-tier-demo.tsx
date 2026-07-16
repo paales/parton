@@ -57,5 +57,5 @@ export const PaintTierDemoPage = parton(
       </>
     )
   },
-  { match: "/paint-tier-demo", selector: "#paint-tier-demo" },
+  { match: "/paint-tier-demo" },
 )

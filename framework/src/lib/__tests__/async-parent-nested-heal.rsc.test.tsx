@@ -28,7 +28,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest"
 import type { ReactElement, ReactNode } from "react"
-import { parton, PartialRoot, type RenderArgs } from "../partial.tsx"
+import { parton, PartialRoot, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { searchParam } from "../server-hooks.ts"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 import { consumePayload, type FlightBytes } from "../../test/rsc-server.ts"
@@ -45,27 +45,21 @@ import { deriveTemplate, renderTemplate } from "../partial-template.tsx"
 
 // ─── Fixture: async-body parent containing an addressable child ─────
 
-const Lot = parton(
-  function LotRender(_: RenderArgs) {
-    const v = searchParam("v") ?? "0"
-    return <span data-testid="lot-body">lot-v{v}</span>
-  },
-  { selector: "#lot" },
-)
+const Lot = parton(function LotRender(_: RenderArgs) {
+  const v = searchParam("v") ?? "0"
+  return <span data-testid="lot-body">lot-v{v}</span>
+})
 
-const AsyncParent = parton(
-  async function AsyncParentRender(_: RenderArgs) {
-    // The await is what makes the body's return value a genuinely
-    // pending Promise at wrap time — the outlined-row geometry.
-    await Promise.resolve()
-    return (
-      <div data-testid="parent-body">
-        <Lot />
-      </div>
-    )
-  },
-  { selector: "#async-parent" },
-)
+const AsyncParent = parton(async function AsyncParentRender(_: RenderArgs) {
+  // The await is what makes the body's return value a genuinely
+  // pending Promise at wrap time — the outlined-row geometry.
+  await Promise.resolve()
+  return (
+    <div data-testid="parent-body">
+      <Lot />
+    </div>
+  )
+})
 
 const tree = (
   <PartialRoot>
@@ -82,15 +76,18 @@ async function renderBoth(url: string): Promise<{ text: string; payload: ReactNo
   return { text, payload }
 }
 
-/** Harvest the child's emitted `(fingerprint, matchKey)` off the wire —
- *  the props ride the PEB wrapper in declaration order. */
-function lotWireIdentity(flight: string): { fp: string; mk: string } {
+/** Harvest the child's emitted `(id, fingerprint, matchKey)` off the
+ *  wire — the props ride the PEB wrapper in declaration order. The
+ *  child renders inside the parent, so its identity carries a
+ *  placement fold (`lot~<hex>`); the wire id is what every cache key,
+ *  commit, and manifest token has to name. */
+function lotWireIdentity(flight: string): { id: string; fp: string; mk: string } {
   const m =
-    /"partialId":"lot","partialFingerprint":"([0-9a-f]+)","partialMatchKey":"([0-9a-f]*)"/.exec(
+    /"partialId":"(lot(?:~[0-9a-f]{16})?)","partialFingerprint":"([0-9a-f]+)","partialMatchKey":"([0-9a-f]*)"/.exec(
       flight,
     )
   expect(m, "lot's wrapper props not found on the wire").not.toBeNull()
-  return { fp: m![1]!, mk: m![2]! }
+  return { id: m![1]!, fp: m![2]!, mk: m![3]! }
 }
 
 /** Await-based structural walk (TEST-side only): collect every text
@@ -196,7 +193,7 @@ describe("async-body parent — outlined promise children", () => {
     const cache = getCurrentPagePartials()
     expect(cache.get("async-parent"), "parent wrapper must be cached").toBeDefined()
     expect(
-      cache.get("lot"),
+      [...cache.keys()].find((k) => stripPlacementFold(k) === "lot"),
       "nested child behind the async parent's promise children must get its own cache entry",
     ).toBeDefined()
   })
@@ -211,20 +208,20 @@ describe("async-body parent — outlined promise children", () => {
     //    is the child's wrapper itself — lift it out of a v=2 decode
     //    and commit it the way the browser commits the lane.
     const r2 = await renderBoth("http://t/?v=2")
-    const lotLaneBody = await findWrapper(r2.payload, "lot")
+    const { id: lotId, fp, mk } = lotWireIdentity(r2.text)
+    const lotLaneBody = await findWrapper(r2.payload, lotId)
     expect(lotLaneBody, "the child's fresh wrapper must exist in the v=2 render").not.toBeNull()
-    _commitPartonLane(lotLaneBody, null, "lot")
-    const { fp, mk } = lotWireIdentity(r2.text)
-    const lotSlot = getCurrentPagePartials().get("lot")?.get(mk)
+    _commitPartonLane(lotLaneBody, null, lotId)
+    const lotSlot = getCurrentPagePartials().get(lotId)?.get(mk)
     expect(lotSlot, "the child's lane content must be in the cache").toBeDefined()
 
     // 3. The parent's lane commits around it: the server credits the
     //    child's fp (the client just committed those bytes), so the
     //    parent's fresh body carries the child as an fp-skip HOLE —
     //    inside the outlined promise row.
-    const r3 = await renderBoth(`http://t/?v=2&cached=lot:${mk}:${fp}`)
+    const r3 = await renderBoth(`http://t/?v=2&cached=${lotId}:${mk}:${fp}`)
     expect(r3.text, "the parent lane must fp-skip the child to a hole").toContain(
-      '"data-partial-id":"lot"',
+      `"data-partial-id":"${lotId}"`,
     )
     expect(r3.text).not.toContain("lot-v")
     _commitPartonLane(r3.payload, null, "async-parent")
@@ -244,6 +241,6 @@ describe("async-body parent — outlined promise children", () => {
     expect(
       seen.holes,
       "a bare un-substituted placeholder for the child survived into the rendered tree",
-    ).not.toContain("lot")
+    ).not.toContain(lotId)
   })
 })

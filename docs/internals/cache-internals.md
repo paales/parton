@@ -102,9 +102,9 @@ interface StoredHole {
 ```
 
 On a hit, `replayEntry` first `registerPartial`s each hole's snapshot,
-so the parton stays addressable for `reload({selector})` and
-isolated lane reads even though the cached spec's body was
-short-circuited. Each hole then renders via `partialFromSnapshot`
+so the parton keeps its registry record — invalidation wakes and
+isolated lane reads still resolve it — even though the cached spec's
+body was short-circuited. Each hole then renders via `partialFromSnapshot`
 (the same reconstruction an isolated lane render uses — right
 Component via the `type` fallback, parent from the snapshot, props
 replay, and `__instanceId` so the re-render keeps its per-instance
@@ -231,9 +231,9 @@ the mechanism lives entirely in `cacheImpl`'s miss handling:
   window, serve it directly (no attempt, no loader run, no event);
   past the window, run a BUFFERED attempt — hold the response until
   `settled`, serve fresh on success, serve last-known-good on
-  failure. The buffering cost is confined to exactly this path (miss
-  + prior good render). With no `lastGood`, stream the attempt as
-  today: the failure surfaces as the boundary card, but the retry
+  failure. The buffering cost is confined to exactly this path
+  (miss + prior good render). With no `lastGood`, stream the attempt
+  as today: the failure surfaces as the boundary card, but the retry
   boundary is already armed.
 - **The marker.** A stale serve wraps `replayEntry`'s tree in
   `<PartonStaleProvider stale={{since, attempts, retryAt}}>` (a

@@ -42,17 +42,17 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
   const frameEntryUrl = frameNav.currentEntry?.url
   const frameOpen = frameEntryUrl ? new URL(frameEntryUrl).searchParams.has("search") : false
 
-  // Open/close refetch BOTH the search-page region AND the header: the
-  // header's `SearchToggle` flips on `?search`, so excluding it left the
-  // toggle a step behind (overlay open but button still says "Search",
-  // or closed but still "Close"). `#header` is the HeaderPartial.
+  // Open/close is a plain navigate: the whole-tree statement
+  // re-evaluates the page, and fp-skip prunes everything except the
+  // `?search` readers — the search-page region and the header (its
+  // `SearchToggle` flips on the same param).
   function openUrl() {
     pageNavigate(
       (url) => {
         url.searchParams.set("search", "1")
         return url
       },
-      { history: "push", selector: ["#search-page", "#header"] },
+      { history: "push" },
     )
   }
 
@@ -63,7 +63,7 @@ export function SearchToggle({ urlOpen }: { urlOpen: boolean }) {
         url.searchParams.delete("q")
         return url
       },
-      { history: "push", selector: ["#search-page", "#header"] },
+      { history: "push" },
     )
   }
 
@@ -163,19 +163,16 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
   }, [open])
 
   function requestClose() {
+    // Page scope: a plain navigate — fp-skip narrows the re-render to
+    // the `?search` readers (search region + header). Frame scope: a
+    // frame nav refetches the frame subtree.
     navigate(
       (url) => {
         url.searchParams.delete("search")
         url.searchParams.delete("q")
         return url
       },
-      {
-        history: "push",
-        // Page scope: refetch the search region AND the header so the
-        // toggle flips back to "Search" (see SearchToggle). Frame scope:
-        // a frame nav refetches the whole frame subtree, no selector.
-        selector: nav.name === null ? ["#search-page", "#header"] : undefined,
-      },
+      { history: "push" },
     )
   }
 
@@ -202,13 +199,14 @@ export function SearchDialog({ open, children }: { open: boolean; children: Reac
 /**
  * Search input with live partial refetch — scope-agnostic.
  *
- * Fires `navigate({selector})` on every keystroke. Each keystroke is
- * an independent refetch of the ".search-results" section; superseded
- * fires are NOT aborted — they drain and commit, ordered by the
- * framework's monotonic commit guard (a late older fire can't clobber a
- * newer one), so the section converges on the latest-ISSUED query.
- * (Aborting a superseded fire would tear its in-flight Flight document
- * mid-decode and crash the page through the error boundary.)
+ * Fires `navigate()` on every keystroke — one channel statement whose
+ * whole-tree segment fp-skips everything except the `?q` readers (the
+ * search stages). Superseded fires are NOT aborted — they drain and
+ * commit, ordered by the framework's monotonic commit guard (a late
+ * older fire can't clobber a newer one), so the section converges on
+ * the latest-ISSUED query. (Aborting a superseded fire would tear its
+ * in-flight Flight document mid-decode and crash the page through the
+ * error boundary.)
  *
  * `progress.committed && !progress.streaming` is the spinner predicate:
  * "asked, no rows back yet" — it clears the moment the first row
@@ -231,7 +229,6 @@ export function SearchInput({ query }: { query: string }) {
       {
         history: "replace",
         streaming,
-        selector: ".search-results",
       },
     )
     // Superseded keystroke fires aren't aborted, so this normally just

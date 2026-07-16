@@ -6,9 +6,9 @@
  * `navigate` methods into hooks returning `[fire, progress]` tuples.
  * Also home to the client contexts the hooks read — the Flight-borne
  * page URL (`PageUrlContext`) and the enclosing partial id
- * (`PartialIdContext`, backing the `@self` selector token) — plus the
- * activator (`useActivate`) and scroll-restore (`useScrollRestore`)
- * building blocks.
+ * (`PartialIdContext`, the framework-internal self-refetch handle) —
+ * plus the activator (`useActivate`) and scroll-restore
+ * (`useScrollRestore`) building blocks.
  */
 
 import React, {
@@ -39,6 +39,7 @@ import {
 } from "../runtime/navigation-api.ts"
 import { NavigationError, toNavigationError } from "../runtime/navigation-error.ts"
 import { _channelIsDegraded, _channelWarm } from "./channel-client.ts"
+import { enqueueRefetch } from "./refetch.ts"
 import {
   buildFrameHandle,
   buildWindowNavigationHandle,
@@ -48,19 +49,17 @@ import {
   resolveWindowTarget,
   splitFramePath,
   _frame,
-  _windowNav,
 } from "./frame-client.tsx"
 
 // ─── Client contexts ──────────────────────────────────────────────
 
 /**
  * Enclosing partial instance id. Set by every spec's render via the
- * `<PartialIdContext.Provider>` wrapper around its body. Self-target
- * reload from a client descendant by writing the `@self` token —
- * `useNavigation().reload()` reads this context and substitutes:
- *
- *     const [reload] = useNavigation().reload()
- *     <Button onClick={() => reload({ selector: "@self" })} />
+ * `<PartialIdContext.Provider>` wrapper around its body.
+ * Framework-internal: the interactive-embed bridge reads it to
+ * address its post-write echo at the enclosing parton
+ * (`lib/embed-interactive.tsx`). Not an author surface — author
+ * refresh signals are cells and `tag()`.
  */
 export const PartialIdContext = createContext<string | null>(null)
 
@@ -98,66 +97,6 @@ export function PageUrlProvider({
   children: ReactNode
 }) {
   return <PageUrlContext value={url}>{children}</PageUrlContext>
-}
-
-// ─── @self token resolution ───────────────────────────────────────
-
-/**
- * Special selector token resolved at fire time to the enclosing
- * partial's id. The framework provides the id via `PartialIdContext`
- * (set by `PartialErrorBoundary`); the hook captures it at render
- * and substitutes here.
- *
- *   <Button onClick={() => reload({ selector: "@self" })} />
- *
- * Works in:
- *   - `selector: "@self"`             — single token
- *   - `selector: ["@self", ".price"]` — array form, mixed freely
- *   - `selector: "@self .price"`      — space-separated string
- *
- * If `@self` appears but the call site is outside any partial
- * (ambient id is null), throws a clear error rather than silently
- * dropping the token — almost always a wiring mistake worth
- * surfacing loudly.
- */
-const SELF_TOKEN = "@self"
-
-function containsSelfInSelector(s: string | string[] | undefined): boolean {
-  if (s == null) return false
-  if (Array.isArray(s)) return s.some((t) => typeof t === "string" && t.trim() === SELF_TOKEN)
-  return s.split(/\s+/).some((t) => t === SELF_TOKEN)
-}
-
-function replaceSelfInSelector(s: string | string[], id: string): string | string[] {
-  if (Array.isArray(s)) return s.map((t) => (t === SELF_TOKEN ? id : t))
-  return s
-    .split(/\s+/)
-    .map((t) => (t === SELF_TOKEN ? id : t))
-    .join(" ")
-}
-
-function resolveSelfInReloadOptions(
-  options: FrameworkReloadOptions | undefined,
-  ambientId: string | null,
-): FrameworkReloadOptions | undefined {
-  if (!options) return options
-  if (!containsSelfInSelector(options.selector)) return options
-  if (!ambientId) {
-    throw new Error(`"${SELF_TOKEN}" used outside a partial — no enclosing partial id is available`)
-  }
-  return { ...options, selector: replaceSelfInSelector(options.selector!, ambientId) }
-}
-
-function resolveSelfInNavigateOptions(
-  options: FrameworkNavigateOptions | undefined,
-  ambientId: string | null,
-): FrameworkNavigateOptions | undefined {
-  if (!options) return options
-  if (!containsSelfInSelector(options.selector)) return options
-  if (!ambientId) {
-    throw new Error(`"${SELF_TOKEN}" used outside a partial — no enclosing partial id is available`)
-  }
-  return { ...options, selector: replaceSelfInSelector(options.selector!, ambientId) }
 }
 
 // ─── Hook wrappers around the imperative handle ───────────────────
@@ -204,9 +143,9 @@ function classifyMilestoneError(err: unknown): NavigationError | null {
 }
 
 /**
- * Wrap a synchronously-thrown error from the fire body
- * (`resolveSelfIn…Options` validation, for instance) into a milestones
- * object whose three promises are all immediately rejected. The
+ * Wrap a synchronously-thrown error from the fire body into a
+ * milestones object whose three promises are all immediately
+ * rejected. The
  * watcher path then classifies and bubbles it the same way as a
  * mid-fetch rejection — sync and async failures share one channel.
  */
@@ -239,10 +178,6 @@ function rejectedMilestones(err: unknown): NavigationMilestones {
  */
 function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
   const [state, setState] = useState<InternalProgressState>(INITIAL_PROGRESS_STATE)
-  // Capture the enclosing partial id at render so the fire fn can
-  // resolve `@self` tokens. The id may be null outside a partial;
-  // resolveSelfInReloadOptions throws on use in that case.
-  const ambientPartialId = useContext(PartialIdContext)
   // `fireIdRef` survives across renders without re-triggering useMemo
   // deps, so the fire callback's identity stays stable for callers
   // passing it into effect deps. Each invocation bumps to the next
@@ -267,15 +202,14 @@ function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
       })
       let milestones: NavigationMilestones
       try {
-        const resolved = resolveSelfInReloadOptions(options, ambientPartialId)
-        milestones = imperative.reload(resolved)
+        milestones = imperative.reload(options)
       } catch (err) {
         milestones = rejectedMilestones(err)
       }
       attachMilestoneWatchers(milestones, myFireId, setState)
       return milestones
     },
-    [imperative, ambientPartialId],
+    [imperative],
   )
   return [
     fire,
@@ -293,7 +227,6 @@ function useReloadHook(imperative: ImperativeNavigation): ReloadStatus {
  */
 function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
   const [state, setState] = useState<InternalProgressState>(INITIAL_PROGRESS_STATE)
-  const ambientPartialId = useContext(PartialIdContext)
   const fireIdRef = useRef(0)
   if (state.error) throw state.error
   const fire = useMemo<Navigate>(
@@ -309,15 +242,14 @@ function useNavigateHook(imperative: ImperativeNavigation): NavigateStatus {
       })
       let milestones: NavigationMilestones
       try {
-        const resolved = resolveSelfInNavigateOptions(options, ambientPartialId)
-        milestones = imperative.navigate(target, resolved)
+        milestones = imperative.navigate(target, options)
       } catch (err) {
         milestones = rejectedMilestones(err)
       }
       attachMilestoneWatchers(milestones, myFireId, setState)
       return milestones
     },
-    [imperative, ambientPartialId],
+    [imperative],
   )
   return [
     fire,
@@ -484,16 +416,16 @@ function wrapWithHooks(imperative: ImperativeNavigation): FrameworkNavigation {
  * them during render to get back `[fire, progress]`. Calling the
  * fire fn from an event handler triggers the navigation:
  *
- *   const [reload, { committed, finished }] = useNavigation().reload()
+ *   const [navigate, { committed, finished }] = useNavigation().navigate()
  *   <Button
- *     onClick={() => reload({ selector: "#cart" })}
+ *     onClick={() => navigate("/cart")}
  *     disabled={committed && !finished}
  *   />
  *
  * The fire returns `NavigationMilestones` synchronously, so callers
  * can also await individual milestones:
  *
- *   reload({ selector: "#cart" }).finished
+ *   navigate("/cart").finished
  *
  * Always returns a handle — never throws.
  */
@@ -571,10 +503,9 @@ export function useNavigation(name?: string): FrameworkNavigation {
  *     return () => obs.disconnect();
  *   });
  *
- * `fire()` triggers a targeted reload by sending the Partial's
- * effective id as a `#`-token — server-side, the direct-lookup pass
- * on `resolveSelectorToIds` hits the effective id even for anonymous
- * Partials (`__anon:.foo`) or multi-`#` compound ids (`a,b`). Calling
+ * `fire()` triggers a targeted refetch of the Partial's effective id
+ * — the framework-internal id-forcing protocol (`?__force=<id>` on a
+ * channel statement; a framed activator refetches its frame). Calling
  * `fire` more than once is a no-op by default (one-shot activation).
  * Pass `{once: false}` if you need an activator that can fire repeatedly.
  *
@@ -615,12 +546,16 @@ export function useActivate(
   const fireReload = useEffectEvent(() => {
     if (once && firedRef.current) return
     firedRef.current = true
-    // Funnel activator-driven refetches through the same imperative `reload`
-    // surface other triggers use — one path, batched by the same microtask
-    // coalescer. AbortError / NavigationError surface via the public hook
-    // layer; an activator-internal fire is fire-and-forget so we don't await.
-    const handle = framePath.length > 0 ? _frame(framePath) : _windowNav()
-    void handle.reload({ selector: [`#${partialId}`] })
+    // A framed activator refetches its frame (the frame statement's
+    // whole-frame segment covers the target); a window-scoped one
+    // forces the parton's effective id through the batched dispatcher
+    // (one `?__force=` statement per microtask). Fire-and-forget —
+    // errors surface through the channel layer.
+    if (framePath.length > 0) {
+      void _frame(framePath).reload()
+    } else {
+      enqueueRefetch({ ids: [partialId], streaming: false })
+    }
   })
 
   useEffect(() => {

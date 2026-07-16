@@ -15,9 +15,8 @@ export const PageComposedBlock = block(
     )
   },
   {
-    selector: ".page-block",
     schema: ({ cms }) => ({
-      body: cms.blocks("body", ".demo-block"),
+      body: cms.blocks("body"),
     }),
   },
 )

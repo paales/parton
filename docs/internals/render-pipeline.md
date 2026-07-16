@@ -57,11 +57,16 @@ wrapper (`createSpecComponent` in `partial.tsx`):
 
 1. **Identity.** The identity ladder mints the effective id:
    `__instanceId` (slot wiring / snapshot replay) verbatim; else the
-   spec id plus a call-site props hash; AUTO-derived ids additionally
-   fold the ambient placement — parent path + frame chain (`~<hash>`
-   — one instance per placement; explicit-selector ids stay unfolded
-   and assert singularity). `__parent` (isolated renders) or server
-   context supplies the parent. See registry-internals.md §
+   spec id — the kebab-cased Render name — plus a call-site props
+   hash; an id minted from the spec additionally folds the ambient
+   placement — parent path + frame chain (`~<hash>` — one instance
+   per placement; a caller-supplied `__instanceId` stays unfolded).
+   `__parent` (isolated renders) or server
+   context supplies the parent. The id the Render receives back as
+   `__instanceId` is this key UNDECORATED — no embed prefix, no
+   placement fold — so per-instance work inside a Render (a `block()`'s
+   CMS content key) resolves identically on a streaming render and a
+   snapshot replay. See registry-internals.md §
    Effective-id identity.
 2. **Frame + match gate.** The request is frame-resolved through
    the parent's frame chain; the compiled gate (`compileMatch` in
@@ -115,7 +120,7 @@ placeholder instead of the body only when ALL of these hold:
   connection's ACKED layer (fps whose delivering emission the client
   committed), consulted on an optimistic miss;
 - the id is not an explicit target (a `url` statement's `?__force=`
-  label resolved to it, a forced lane) — an explicit refetch must
+  named it, a forced lane) — an explicit refetch must
   re-render. A culling flip's lane is NOT explicit: its fp-skip
   placeholder is the restore-with-zero-bytes confirmation, stamped
   `data-partial-confirm` on a MEASURED verdict — see _Cull-to-park_;
@@ -186,20 +191,20 @@ stays the one import path.
 
 Server pipeline:
 
-| Module                                                                               | Owns                                                                                                                                                                                                               |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `partial.tsx`                                                                        | `parton()`, `createSpecComponent` (the wrapper pipeline), `PartialBoundary`, `PartialRoot`, `partialFromSnapshot`, `computeRouteKey`, the descendant fold + per-pass fold scratch.                                 |
-| `match.ts`                                                                           | `compileMatch` — the request gate (URLPattern strings + per-value predicates), `TRANSPORT_PARAMS` stripping, gate signatures for routeKey hashing.                                                                 |
-| `partial-registry.ts`                                                                | Snapshot store + hint table + `_seq` freshness guard + per-request registry ALS. See [`registry-internals.md`](./registry-internals.md).                                                                           |
-| `partial-request-state.ts`                                                           | The per-request partial state: the parsed cached manifest (`cachedFingerprints`, `cachedMatchKeys`) and the explicit-target set (`explicitIds` — `?__force=` labels resolved to ids, forced lanes; never skipped). |
-| `current-parton.ts`                                                                  | The parton self-context (`getCurrentParton`, `tag`) on the rendering ALS frame — read-your-own, not inherited.                                                                                                     |
-| `server-hooks.ts`                                                                    | Tracked reads (`cookie`, `searchParam`, `header`, `pathname`, `match`, `session`, `visible`), wake hints (`expires`, `staleUntil`, `time`), `registerDepKind`, and `evalDepKeys` (the store-and-reread evaluator). |
-| `spec-catalog.ts`                                                                    | The `id → {Component, match, labels}` catalog snapshot reconstruction (`partialFromSnapshot`) and the descendant fold resolve specs from.                                                                          |
-| `cache.tsx` / `cache-options.ts` / `flight-graph.ts`                                 | The byte cache (strip-on-store / splice-on-hit). See [`cache-internals.md`](./cache-internals.md).                                                                                                                 |
-| `cell.ts` / `cell-gql.ts`                                                            | Cell handles, `resolveCellValue`, `atomic()`'s ALS storage overlay, fragment auto-hydration. Write endpoints live in `runtime/cell-actions.ts`. See [`cell-internals.md`](./cell-internals.md).                    |
-| `frame.tsx` / `remote-frame.tsx` / `snapshot-trailer.ts` / `flight-rewrite.ts`       | `<Frame>` scope opening; cross-origin parton embedding + its wire-level snapshot sidecar and line-level Flight rewriter.                                                                                           |
-| `server-context.ts` / `partial-context.ts`                                           | The server-context primitive + the `ParentContext` consumer. See [`server-context.md`](./server-context.md).                                                                                                       |
-| `flight-runtime.ts` / `multipart.ts` / `hash.ts` / `stable-stringify.ts` / `time.ts` | Vendored Flight entry points; GraphQL `@defer` multipart parsing; the 64-bit hash + canonical stringify; the render clock.                                                                                         |
+| Module                                                                               | Owns                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `partial.tsx`                                                                        | `parton()`, `createSpecComponent` (the wrapper pipeline), `PartialBoundary`, `PartialRoot`, `partialFromSnapshot`, `computeRouteKey`, the descendant fold + per-pass fold scratch.                                                                   |
+| `match.ts`                                                                           | `compileMatch` — the request gate (URLPattern strings + per-value predicates), `TRANSPORT_PARAMS` stripping, gate signatures for routeKey hashing.                                                                                                   |
+| `partial-registry.ts`                                                                | Snapshot store + hint table + `_seq` freshness guard + per-request registry ALS. See [`registry-internals.md`](./registry-internals.md).                                                                                                             |
+| `partial-request-state.ts`                                                           | The per-request partial state: the parsed cached manifest (`cachedFingerprints`, `cachedMatchKeys`) and the explicit-target set (`explicitIds` — a `?__force=` statement's ids resolved against the route's snapshots, forced lanes; never skipped). |
+| `current-parton.ts`                                                                  | The parton self-context (`getCurrentParton`, `tag`) on the rendering ALS frame — read-your-own, not inherited.                                                                                                                                       |
+| `server-hooks.ts`                                                                    | Tracked reads (`cookie`, `searchParam`, `header`, `pathname`, `match`, `session`, `visible`), wake hints (`expires`, `staleUntil`, `time`), `registerDepKind`, and `evalDepKeys` (the store-and-reread evaluator).                                   |
+| `spec-catalog.ts`                                                                    | The `id → {Component, match, …}` catalog — the id claim + its same-generation collision gate — that snapshot reconstruction (`partialFromSnapshot`) and the descendant fold resolve specs from.                                                      |
+| `cache.tsx` / `cache-options.ts` / `flight-graph.ts`                                 | The byte cache (strip-on-store / splice-on-hit). See [`cache-internals.md`](./cache-internals.md).                                                                                                                                                   |
+| `cell.ts` / `cell-gql.ts`                                                            | Cell handles, `resolveCellValue`, `atomic()`'s ALS storage overlay, fragment auto-hydration. Write endpoints live in `runtime/cell-actions.ts`. See [`cell-internals.md`](./cell-internals.md).                                                      |
+| `frame.tsx` / `remote-frame.tsx` / `snapshot-trailer.ts` / `flight-rewrite.ts`       | `<Frame>` scope opening; cross-origin parton embedding + its wire-level snapshot sidecar and line-level Flight rewriter.                                                                                                                             |
+| `server-context.ts` / `partial-context.ts`                                           | The server-context primitive + the `ParentContext` consumer. See [`server-context.md`](./server-context.md).                                                                                                                                         |
+| `flight-runtime.ts` / `multipart.ts` / `hash.ts` / `stable-stringify.ts` / `time.ts` | Vendored Flight entry points; GraphQL `@defer` multipart parsing; the 64-bit hash + canonical stringify; the render clock.                                                                                                                           |
 
 Wire layer (trailers, segments, lanes — see
 [`streaming.md`](./streaming.md)):
@@ -221,9 +226,9 @@ Client merge layer:
 | `partial-cache.ts`                               | The tree walks: wrapper/placeholder detection, `harvestPartialIds`, `cacheFromStreamingChildren`, `substituteNested` (its wrapper-rooted sub-walks are memoized per (wrapper element, skipKey) in a WeakMap — the walk is pure over element structure + `cacheLookup` results, so each wrapper records every lookup it performed (misses included) as (id, matchKey) → the returned node, and a memo is valid iff every recorded lookup still returns the IDENTICAL node: overwrites, deletes (`pruneToLive`, pool-cap) and late fills all invalidate with no store-side hook; a hit returns the previous walk's result element, exactly what the unmemoized walk returns when nothing changed, so React's bail-out is untouched and a clean template re-render costs O(deps) map reads instead of a full spine traversal, while a dirty commit rebuilds only the dirty id's spine path. The one exclusion: a walk that saw `LAZY_PENDING` is NEVER stored — deferred chunks resolve without a cache write, so no dep could invalidate the entry — and the poison propagates to every enclosing wrapper's walk), `unwrapLazy` + the `LAZY_PENDING` sentinel — covering BOTH deferred Flight forms: `$L` lazies AND `$@` outlined promise rows, the shape every ASYNC Render body's children take (the walk reads the decoded chunk's own settlement record, `status`/`value` — the Flight client's chunk protocol, which is also the instrumentation `use()` writes onto plain thenables — descending fulfilled chunks so nested wrappers and holes behind an async body stay inside the merge layer's reach; fuzz ledger F8); pending chunks' settlement signals are captured into `LazyWalkStats.thenables` so `PartialsClient` and the lane commits can arrange a re-walk when they land, `treeHasPendingLazy`, the per-parton lane commit (`_commitPartonLane` — synchronous cache walk + fp updates + the notify that re-renders `PartialsClient`, plus a generation-guarded re-walk of the same payload per captured-chunk settlement; `_commitPartonLaneProgressive` delegates to it — a producer body is just the always-pending-at-first-walk case; see [streaming.md](./streaming.md)) and the fp-trailer DOM scan. |
 | `partial-template.tsx`                           | `deriveTemplate` + `renderTemplate`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `cull-key.ts` / `cull-park.ts` / `cull-pair.tsx` | Cull-to-park (see the section below): the registry-internal `~cull` variant-key grammar; the client pool state (reported viewport per id, the parked-by-culling LRU + `CULL_PARK_CAP`, the drop-on-drift generation + `parkedSince`, the observer refcount); the `CullPair` client component (a content `<Activity>` slot that parks + a conditionally-rendered inline skeleton in one component — display from the reported state, content presence read off the slot's child via `contentIsReal`, display-state priming, per-slot observers).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `refetch.ts`                                     | `enqueueRefetch` (microtask-batched targeted refetch → one channel `url` statement: the page URL with the labels as its one-shot `?__force=` overlay, intent "silent"), selector parsing, the silent-navigation info brand.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `refetch.ts`                                     | `enqueueRefetch` — framework-internal id-forcing (the defer activators' `useActivate`, the interactive-embed bridge's post-write echo; authors never target partons), microtask-batched into one channel `url` statement: the page URL with the effective ids as its one-shot `?__force=` overlay, intent "silent" — and the silent-navigation info brand.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `frame-client.tsx`                               | The frames tree on the nav entry (read/write + the write serialiser), `FrameNameProvider`, frame refetch dispatch, and the window/frame imperative handle builders.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `use-navigation.tsx`                             | The `useNavigation()` hook layer (`[fire, progress]` tuples, `@self` resolution, preload), `useActivate`, `useScrollRestore`, `PageUrlContext`, `PartialIdContext`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `use-navigation.tsx`                             | The `useNavigation()` hook layer (`[fire, progress]` tuples, preload), `useActivate`, `useScrollRestore`, `PageUrlContext`, `PartialIdContext` (the enclosing parton's effective id — what the interactive-embed bridge forces).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `cell-client.tsx`                                | `useCell` + the client-side write batcher (see [`cell-internals.md`](./cell-internals.md)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `channel-client.ts`                              | The channel's client transport ([`channel.md`](./channel.md)): envelope assembly + per-connection seq, rAF-coalesced serialized flushes over registered producers, the delivery-failure hand-back, connection lifecycle (`_channelWireEntry` establishment from the stream's `conn` handshake, the presence-only `data-parton-live` marker), and the `pagehide` detach frame.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `live-page-heartbeat.tsx`                        | The held connection's keeper (mounted by `bootBrowser`) — each fire is the ATTACH: a `POST /__parton/live` whose JSON body is the full client statement, carrying the measured visible seed (the first fire waits for the first viewport measurement when cullable observers are mounted), the uncapped manifest, and the take-once catch-up anchor from the document ([`channel.md`](./channel.md) §The attach). Its ~5s interval tick is the reattach loop — a no-op while a connection is open, the recovery path after a transient tear. Connection ids are server-minted; establishment rides the stream's `conn` entry, not this component (see [`streaming.md`](./streaming.md)).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -235,7 +240,7 @@ settle-trailer sink, `markConnectionLive`, deferred-commit flags),
 `request.tsx` (`parseRenderRequest`, `stripFrameworkParams`,
 `HEADER_RSC_RENDER`), `invalidation-registry.ts` (`refreshSelector`
 bumps + `queryMatchingTs` + transactions), `server-navigation.ts`
-(`getServerNavigation().reload/navigate`), `session.ts` (frame-URL
+(`getServerNavigation().navigate`), `session.ts` (frame-URL
 session store), `cell-actions.ts` / `cell-storage.ts` /
 `cell-write-delay.ts` (cell writes), `navigation-api.ts` /
 `navigation-error.ts` / `error-boundary.tsx` / `redirect-client.tsx`
@@ -365,7 +370,7 @@ attach, and a stale hint is worth less than none.
 interface PartialSnapshot {
   type: string // spec catalog tag
   fallback: ReactNode
-  labels: string[] // refetch labels (selector)
+  labels: string[] // invalidation subscriptions: cell:<id> per resolved cell + bare tag() names
   cache?: CacheOptions
   framePath: readonly string[]
   parentFrameChain: readonly string[] // for isolated reconstruction
@@ -417,17 +422,21 @@ bounds — see [`registry-internals.md`](./registry-internals.md).
 
 ## Refetch addressing
 
-Targeted work is addressed on the CHANNEL, not the URL. A selector
-refetch (`reload({selector})` / `navigate({selector})`) is a `url`
-statement — the page URL with the labels as its one-shot `?__force=`
-overlay, intent "silent". The driver resolves the labels against the
-route's snapshots (direct id match plus any snapshot whose label list
-contains a wanted token — cosmetic `#`/`.` stripped), renders a
-whole-tree segment (the URL may have moved with the fire, and fp-skip
-prunes the unchanged to placeholders), and lanes each named target
-EXPLICIT — forced past fp-skip. The overlay never enters request
-state; a statement that fired pre-establishment latches and rides the
-attach it triggers.
+Targeted work is addressed on the CHANNEL, not the URL — and by
+EFFECTIVE PARTON ID, which is framework-internal wire protocol
+(`enqueueRefetch`'s callers are the defer activators' `useActivate`
+and the interactive-embed bridge's post-write echo). Authors never
+target a parton: their refresh signals are cells and `tag()`.
+
+An id-forced refetch is a `url` statement — the page URL with the ids
+as its one-shot `?__force=` overlay, intent "silent". The driver
+resolves each stated id against the route's snapshots
+(`resolveForcedIds` in `segmented-response.ts` — an exact effective-id
+match, no fan-out), renders a whole-tree segment (the URL may have
+moved with the fire, and fp-skip prunes the unchanged to
+placeholders), and lanes each resolved target EXPLICIT — forced past
+fp-skip. The overlay never enters request state; a statement that
+fired pre-establishment latches and rides the attach it triggers.
 
 The URL params that remain:
 
@@ -447,12 +456,13 @@ presented back on channel envelopes; it is never a URL param.) The
 resolved visibility is still a real request dimension — the cull gate
 reads the connection session and the resolved state folds into fps.
 
-After a server function commits, refetch routing is driven entirely by
+After a server function commits, refresh routing is driven entirely by
 the invalidation registry — cell writes fire their `cell:` selectors
 (batched inside `atomic()`), and a function can call
-`getServerNavigation().reload({selector})` in-body (queued inside the
+`refreshSelector(name)` in-body (queued inside the
 invalidation transaction); the response render computes fresh fps for
-any partial whose selector matches. Cold clients (an empty manifest)
+every parton whose labels match — the `cell:<id>` its body resolved,
+the `tag()` its body read. Cold clients (an empty manifest)
 receive the full root tree; warm clients get fp-skip placeholders for
 everything unchanged. No URL-rewrite step in between.
 
@@ -572,9 +582,9 @@ seed(props)` BEFORE schema/cell resolution, records
   IntersectionObserver callback re-reports) and never cancels a
   pending flip.
 
-## Selector-refetch commit ordering
+## Refetch commit ordering
 
-Selector refetches ride the held stream, so ordering is structural:
+Refetches ride the held stream, so ordering is structural:
 responses arrive in STREAM ORDER — a newer fire's covering segment is
 emitted after the older's, so a late older response clobbering a
 newer one cannot happen on the wire. The remaining staleness class is
@@ -683,46 +693,32 @@ The fp folds in:
 The full gate list for when a matching fp actually skips is the
 _Skip decision_ above.
 
-## Addressable gate
+## Every parton is addressable
 
-A spec is _externally addressable_ iff the author explicitly
-declared `selector` or `match`. Specs declaring neither are
-non-addressable: they have no external refetch handle
-(`reload({selector})` requires a declared selector, URL-driven
-variant carve-out requires `match`). Auto-derived selectors from
-`Render.name` don't count — they only exist to give the spec
-catalog a unique id.
+Addressability is not a declaration — there is no gate on the fp
+emission. Every placement of a `parton(...)` component ships its
+fingerprint, so the whole four-step fp cycle runs for all of them:
 
-Non-addressable specs **don't emit a `partialFingerprint` on the
-wire**. The four-step fp cycle is collapsed for them:
-
-- `<PartialErrorBoundary>` is emitted via conditional spread
-  (`{...fpProp}`) so the prop is omitted from Flight's
-  serialized prop bag rather than appearing as the
-  `"$undefined"` sentinel. Wire bytes drop accordingly.
-- `PartialBoundary`'s `emittedFp` is `undefined`, so
-  `computeFpUpdates` in `fp-trailer.ts` (which already skips
-  `!snap.emittedFp`) omits the spec from the trailer.
-- `registerClientPartial` is guarded by
-  `if (this.props.partialFingerprint)`, so no entry lands in
-  `_currentPageFingerprints` for the id.
+- `<PartialErrorBoundary>` always carries `partialFingerprint`, and
+  `registerClientPartial` lands the entry in
+  `_currentPageFingerprints` under the id + matchKey;
+- `PartialBoundary` always records `emittedFp` on the snapshot, so
+  `computeFpUpdates` in `fp-trailer.ts` ships the spec's cold→warm
+  drift (below);
 - the manifest accessors (`getAllCachedPartialTokens` /
-  `getCachedPartialIds`) therefore produce no `id:matchKey:fp`
-  triple for the spec.
+  `getCachedPartialIds`) therefore produce an `id:matchKey:fp` triple
+  for every parton on the page.
 
-Critically, **the descendant fold still folds non-addressable
-specs in**. Snapshots are recorded unconditionally
-(`registerPartial` runs from every `<PartialBoundary>`), so the
-parent's `computeDescendantFold` picks up the child's `varyKey` +
-dep-record contributions. The parent's wire fp moves
-whenever a non-addressable child's deps would have moved — so
-fp-skipping the parent never serves a stale child. The gate
-only collapses the _wire identity_, never the structural one.
+A bare `parton(Render)` — no `match`, no ancestor parton — fp-skips
+across navigations exactly like a match-gated one, refetches as its
+own lane, and byte-caches on its own key. `match` gates EXISTENCE;
+it says nothing about addressing.
 
-The gate is computed once at spec construction time
-(`addressable = options.selector !== undefined ||
-options.match !== undefined`) and read in the render path as
-`spec.addressable`.
+The structural half is unconditional too: snapshots are recorded from
+every `<PartialBoundary>`, so a parent's `computeDescendantFold` picks
+up each child's `varyKey` + dep-record contributions and the parent's
+wire fp moves whenever a child's deps move — fp-skipping the parent
+never serves a stale child.
 
 ## Cold → warm fp drift and the trailer
 

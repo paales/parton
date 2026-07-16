@@ -12,7 +12,6 @@ export const RichTextBlock = block(
     )
   },
   {
-    selector: ".demo-block .composed-rich-text",
     schema: ({ cms }) => ({ body: cms.richText("body") }),
   },
 )

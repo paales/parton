@@ -68,7 +68,7 @@ const Flaky = parton(
     if (flakyMode === "fail") throw new Error("er-flaky loader down")
     return <span>{`er-flaky:render#${flakySeq}`}</span>
   },
-  { selector: "#er-flaky", cache: { maxAge: 0.05 } },
+  { cache: { maxAge: 0.05 } },
 )
 const flakyTree = (
   <PartialRoot>
@@ -84,7 +84,7 @@ const Sentinel = parton(
     if (sentinelMode === "not-found") notFound()
     return <span>{`er-sentinel:render#${sentinelSeq}`}</span>
   },
-  { selector: "#er-sentinel", cache: { maxAge: 0.05 } },
+  { cache: { maxAge: 0.05 } },
 )
 const sentinelTree = (
   <PartialRoot>
@@ -98,7 +98,7 @@ const Cold = parton(
     if (coldMode === "fail") throw new Error("er-cold loader down")
     return <span>{`er-cold:ok`}</span>
   },
-  { selector: "#er-cold", cache: { maxAge: 0.05 } },
+  { cache: { maxAge: 0.05 } },
 )
 const coldTree = (
   <PartialRoot>
@@ -109,12 +109,15 @@ const coldTree = (
 let optOutMode: "ok" | "fail" = "ok"
 let optOutSeq = 0
 const OptOut = parton(
-  async function ErOptOutRender(_: RenderArgs) {
-    optOutSeq++
-    if (optOutMode === "fail") throw new Error("er-optout loader down")
-    return <span>{`er-optout:render#${optOutSeq}`}</span>
-  },
-  { selector: "#er-optout", cache: { maxAge: 0.05, staleIfError: false } },
+  Object.assign(
+    async function ErOptOutRender(_: RenderArgs) {
+      optOutSeq++
+      if (optOutMode === "fail") throw new Error("er-optout loader down")
+      return <span>{`er-optout:render#${optOutSeq}`}</span>
+    },
+    { displayName: "er-optout" },
+  ),
+  { cache: { maxAge: 0.05, staleIfError: false } },
 )
 const optOutTree = (
   <PartialRoot>

@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest"
 import { flightToString, renderServerToFlight, renderWithRequest } from "../../test/rsc-server.ts"
-import { parton, type RenderArgs } from "../partial.tsx"
+import { parton, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { getCurrentParton } from "../current-parton.ts"
 
 type Phase = "top" | "after"
@@ -24,15 +24,12 @@ const idOf = (tag: string, phase: Phase): string | undefined =>
   seen.find((s) => s.tag === tag && s.phase === phase)?.id
 
 // ── own id, stable across an await ───────────────────────────────────────
-const Leaf = parton(
-  async function CpLeafRender(_: RenderArgs) {
-    record("leaf", "top")
-    await new Promise((r) => setTimeout(r, 5)) // read AFTER an await
-    record("leaf", "after")
-    return <span data-leaf />
-  },
-  { selector: ".cp-leaf" },
-)
+const Leaf = parton(async function CpLeafRender(_: RenderArgs) {
+  record("leaf", "top")
+  await new Promise((r) => setTimeout(r, 5)) // read AFTER an await
+  record("leaf", "after")
+  return <span data-leaf />
+})
 
 describe("current-parton: a parton reads its own id", () => {
   it("reads the same own id before AND after an await", async () => {
@@ -61,68 +58,72 @@ describe("current-parton: a parton reads its own id", () => {
 })
 
 // ── each parton stamps its own — a child sees the child, not the parent ──
-const Child = parton(
-  async function CpChildRender(_: RenderArgs) {
-    record("child", "top")
-    await new Promise((r) => setTimeout(r, 3))
-    record("child", "after")
-    return <span data-child />
-  },
-  { selector: ".cp-child" },
-)
-const Parent = parton(
-  async function CpParentRender(_: RenderArgs) {
-    record("parent", "top")
-    await new Promise((r) => setTimeout(r, 3))
-    record("parent", "after")
-    return (
-      <div>
-        <Child />
-      </div>
-    )
-  },
-  { selector: ".cp-parent" },
-)
+const Child = parton(async function CpChildRender(_: RenderArgs) {
+  record("child", "top")
+  await new Promise((r) => setTimeout(r, 3))
+  record("child", "after")
+  return <span data-child />
+})
+const Parent = parton(async function CpParentRender(_: RenderArgs) {
+  record("parent", "top")
+  await new Promise((r) => setTimeout(r, 3))
+  record("parent", "after")
+  return (
+    <div>
+      <Child />
+    </div>
+  )
+})
 
 describe("current-parton: each parton stamps its own identity", () => {
   it("a nested child reads the child's id, the parent reads the parent's", async () => {
     seen.length = 0
     const { stream } = await renderWithRequest("http://t/x", <Parent />)
     await flightToString(stream)
+    // The parent is a root-level placement — its id stays bare. The
+    // child is placed UNDER a parton, so its id folds the ambient
+    // placement (`~<hex>` of parent path + frame chain); the fold is
+    // identity, not attribution, so strip it to read the spec id.
     expect(idOf("parent", "top")).toBe("cp-parent")
     expect(idOf("parent", "after")).toBe("cp-parent")
-    expect(idOf("child", "top")).toBe("cp-child") // NOT "cp-parent"
-    expect(idOf("child", "after")).toBe("cp-child")
+    expect(stripPlacementFold(idOf("child", "top")!)).toBe("cp-child") // NOT "cp-parent"
+    expect(stripPlacementFold(idOf("child", "after")!)).toBe("cp-child")
   })
 })
 
 // ── sibling isolation under staggered awaits (the drift case) ────────────
 const SibA = parton(
-  async function CpSibARender(_: RenderArgs) {
-    record("A", "top")
-    await new Promise((r) => setTimeout(r, 20)) // longest — resumes last
-    record("A", "after")
-    return <span data-a />
-  },
-  { selector: ".cp-a" },
+  Object.assign(
+    async function CpSibARender(_: RenderArgs) {
+      record("A", "top")
+      await new Promise((r) => setTimeout(r, 20)) // longest — resumes last
+      record("A", "after")
+      return <span data-a />
+    },
+    { displayName: "cp-a" },
+  ),
 )
 const SibB = parton(
-  async function CpSibBRender(_: RenderArgs) {
-    record("B", "top")
-    await new Promise((r) => setTimeout(r, 5))
-    record("B", "after")
-    return <span data-b />
-  },
-  { selector: ".cp-b" },
+  Object.assign(
+    async function CpSibBRender(_: RenderArgs) {
+      record("B", "top")
+      await new Promise((r) => setTimeout(r, 5))
+      record("B", "after")
+      return <span data-b />
+    },
+    { displayName: "cp-b" },
+  ),
 )
 const SibC = parton(
-  async function CpSibCRender(_: RenderArgs) {
-    record("C", "top")
-    await new Promise((r) => setTimeout(r, 12))
-    record("C", "after")
-    return <span data-c />
-  },
-  { selector: ".cp-c" },
+  Object.assign(
+    async function CpSibCRender(_: RenderArgs) {
+      record("C", "top")
+      await new Promise((r) => setTimeout(r, 12))
+      record("C", "after")
+      return <span data-c />
+    },
+    { displayName: "cp-c" },
+  ),
 )
 
 describe("current-parton: siblings stay isolated across interleaved awaits", () => {

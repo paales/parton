@@ -57,12 +57,15 @@ afterEach(() => {
 describe("scoped cell — compound id + registered handle", () => {
   it("finalizes into a registered CellInterface with compound id `<partonId>/<key>`", async () => {
     const Page = parton(
-      async function Render(_: RenderArgs) {
-        const counter = await localCell("counter", { shape: "number", initial: 0 })
-        const flag = await localCell("flag", { shape: "boolean", initial: false })
-        return <span>{`${counter.value}:${String(flag.value)}`}</span>
-      },
-      { selector: "my-parton", match: "/x" },
+      Object.assign(
+        async function Render(_: RenderArgs) {
+          const counter = await localCell("counter", { shape: "number", initial: 0 })
+          const flag = await localCell("flag", { shape: "boolean", initial: false })
+          return <span>{`${counter.value}:${String(flag.value)}`}</span>
+        },
+        { displayName: "my-parton" },
+      ),
+      { match: "/x" },
     )
     await flightAt("http://t/x", <Page />)
 
@@ -75,11 +78,14 @@ describe("scoped cell — compound id + registered handle", () => {
 
   it("validate uses the compound id in error messages", async () => {
     const Page = parton(
-      async function Render(_: RenderArgs) {
-        const flag = await localCell("flag", { shape: "boolean", initial: false })
-        return <span>{String(flag.value)}</span>
-      },
-      { selector: "my-parton-b", match: "/x" },
+      Object.assign(
+        async function Render(_: RenderArgs) {
+          const flag = await localCell("flag", { shape: "boolean", initial: false })
+          return <span>{String(flag.value)}</span>
+        },
+        { displayName: "my-parton-b" },
+      ),
+      { match: "/x" },
     )
     await flightAt("http://t/x", <Page />)
 
@@ -92,11 +98,14 @@ describe("scoped cell — compound id + registered handle", () => {
 describe("scoped cell — in-body resolution in a parton", () => {
   it("resolves the default value on a storage miss", async () => {
     const Page = parton(
-      async function Render(_: RenderArgs) {
-        const notes = await localCell("notes", { shape: "string", initial: "" })
-        return <span data-testid="notes">{notes.value || "(default)"}</span>
-      },
-      { selector: "scoped-miss", match: "/page" },
+      Object.assign(
+        async function Render(_: RenderArgs) {
+          const notes = await localCell("notes", { shape: "string", initial: "" })
+          return <span data-testid="notes">{notes.value || "(default)"}</span>
+        },
+        { displayName: "scoped-miss" },
+      ),
+      { match: "/page" },
     )
     const out = await flightAt("http://t/page", <Page />)
     expect(out).toContain('"children":"(default)"')
@@ -104,15 +113,18 @@ describe("scoped cell — in-body resolution in a parton", () => {
 
   it("partitions storage by a placement-derived partition (match param)", async () => {
     const Page = parton(
-      async function Render({ id }: { id: string } & RenderArgs) {
-        const notes = await localCell("notes", {
-          shape: "string",
-          initial: "",
-          partition: { id },
-        })
-        return <span data-testid="notes">{notes.value || "(empty)"}</span>
-      },
-      { selector: "scoped-default-partition", match: "/p/:id" },
+      Object.assign(
+        async function Render({ id }: { id: string } & RenderArgs) {
+          const notes = await localCell("notes", {
+            shape: "string",
+            initial: "",
+            partition: { id },
+          })
+          return <span data-testid="notes">{notes.value || "(empty)"}</span>
+        },
+        { displayName: "scoped-default-partition" },
+      ),
+      { match: "/p/:id" },
     )
 
     seedCell("scoped-default-partition/notes", { id: "A" }, "A-notes")
@@ -126,20 +138,23 @@ describe("scoped cell — in-body resolution in a parton", () => {
 
   it("a narrowed partition shares values across other request dimensions", async () => {
     const Page = parton(
-      async function Render({ id }: { id: string } & RenderArgs) {
-        // Narrowed: the partition names only the product dimension —
-        // one slot per product, shared across every other request
-        // dimension (the `?lang=` read below never enters the
-        // partition).
-        searchParam("lang", "en")
-        const sharedNotes = await localCell("sharedNotes", {
-          shape: "string",
-          initial: "",
-          partition: { productId: id },
-        })
-        return <span>{sharedNotes.value || "(empty)"}</span>
-      },
-      { selector: "scoped-narrow", match: "/p/:id" },
+      Object.assign(
+        async function Render({ id }: { id: string } & RenderArgs) {
+          // Narrowed: the partition names only the product dimension —
+          // one slot per product, shared across every other request
+          // dimension (the `?lang=` read below never enters the
+          // partition).
+          searchParam("lang", "en")
+          const sharedNotes = await localCell("sharedNotes", {
+            shape: "string",
+            initial: "",
+            partition: { productId: id },
+          })
+          return <span>{sharedNotes.value || "(empty)"}</span>
+        },
+        { displayName: "scoped-narrow" },
+      ),
+      { match: "/p/:id" },
     )
 
     // One stored value at {productId: "A"} — both locales should
@@ -161,16 +176,19 @@ describe("scoped cell — in-body resolution in a parton", () => {
     })
 
     const Page = parton(
-      async function Render(_: RenderArgs) {
-        const p = await palette.resolve()
-        const notes = await localCell("notes", { shape: "string", initial: "" })
-        return (
-          <span>
-            <em>{p.value}</em>:<i>{notes.value || "(empty)"}</i>
-          </span>
-        )
-      },
-      { selector: "scoped-coexist", match: "/mixed" },
+      Object.assign(
+        async function Render(_: RenderArgs) {
+          const p = await palette.resolve()
+          const notes = await localCell("notes", { shape: "string", initial: "" })
+          return (
+            <span>
+              <em>{p.value}</em>:<i>{notes.value || "(empty)"}</i>
+            </span>
+          )
+        },
+        { displayName: "scoped-coexist" },
+      ),
+      { match: "/mixed" },
     )
 
     seedCell("test.coexist.palette", {}, "dark")
@@ -183,11 +201,14 @@ describe("scoped cell — in-body resolution in a parton", () => {
 
   it("peek reads stored state, not the declared default", async () => {
     const Page = parton(
-      async function Render(_: RenderArgs) {
-        const notes = await localCell("notes", { shape: "string", initial: "(default)" })
-        return <span>{notes.value}</span>
-      },
-      { selector: "peek-parton", match: "/x" },
+      Object.assign(
+        async function Render(_: RenderArgs) {
+          const notes = await localCell("notes", { shape: "string", initial: "(default)" })
+          return <span>{notes.value}</span>
+        },
+        { displayName: "peek-parton" },
+      ),
+      { match: "/x" },
     )
     // One render finalizes + registers the handle.
     await flightAt("http://t/x", <Page />)
@@ -211,15 +232,18 @@ describe("scoped cell — in-body resolution in a parton", () => {
 
   it("peek(args) reads the partitioned slot the render resolved against", async () => {
     const Page = parton(
-      async function Render({ id }: { id: string } & RenderArgs) {
-        const notes = await localCell("notes", {
-          shape: "string",
-          initial: "",
-          partition: { id },
-        })
-        return <span>{notes.value || "(empty)"}</span>
-      },
-      { selector: "scoped-peek", match: "/p/:id" },
+      Object.assign(
+        async function Render({ id }: { id: string } & RenderArgs) {
+          const notes = await localCell("notes", {
+            shape: "string",
+            initial: "",
+            partition: { id },
+          })
+          return <span>{notes.value || "(empty)"}</span>
+        },
+        { displayName: "scoped-peek" },
+      ),
+      { match: "/p/:id" },
     )
 
     seedCell("scoped-peek/notes", { id: "A" }, "A-notes")
@@ -242,11 +266,14 @@ describe("scoped cell — in-body resolution in a parton", () => {
 
   it("peek falls back to the default when the stored value fails shape validation", async () => {
     const Page = parton(
-      async function Render(_: RenderArgs) {
-        const count = await localCell("count", { shape: "number", initial: 7 })
-        return <span>{count.value}</span>
-      },
-      { selector: "peek-invalid", match: "/x" },
+      Object.assign(
+        async function Render(_: RenderArgs) {
+          const count = await localCell("count", { shape: "number", initial: 7 })
+          return <span>{count.value}</span>
+        },
+        { displayName: "peek-invalid" },
+      ),
+      { match: "/x" },
     )
     await flightAt("http://t/x", <Page />)
     const handle = getCellById("peek-invalid/count")
@@ -262,16 +289,19 @@ describe("scoped cell — in-body resolution in a parton", () => {
   it("resolved scoped cell carries partition for the client batcher", async () => {
     let capturedPartition: Record<string, unknown> | undefined = undefined
     const Page = parton(
-      async function Render({ id }: { id: string } & RenderArgs) {
-        const notes = await localCell("notes", {
-          shape: "string",
-          initial: "",
-          partition: { id },
-        })
-        capturedPartition = notes.partition
-        return <span>{notes.value || "x"}</span>
-      },
-      { selector: "scoped-wire-partition", match: "/p/:id" },
+      Object.assign(
+        async function Render({ id }: { id: string } & RenderArgs) {
+          const notes = await localCell("notes", {
+            shape: "string",
+            initial: "",
+            partition: { id },
+          })
+          capturedPartition = notes.partition
+          return <span>{notes.value || "x"}</span>
+        },
+        { displayName: "scoped-wire-partition" },
+      ),
+      { match: "/p/:id" },
     )
     await flightAt("http://t/p/42", <Page />)
     expect(capturedPartition).toEqual({ id: "42" })
@@ -284,16 +314,19 @@ describe("scoped cell — in-body resolution in a parton", () => {
     // its own slot — no clobber across sessions.
     let captured: ResolvedCell<string> | undefined = undefined
     const Page = parton(
-      async function Render(_: RenderArgs) {
-        const draft = await localCell("draft", {
-          shape: "string",
-          initial: "",
-          partition: ({ session }) => ({ sid: session.id }),
-        })
-        captured = draft
-        return <span>{draft.value || "(empty)"}</span>
-      },
-      { selector: "session-draft", match: "/x" },
+      Object.assign(
+        async function Render(_: RenderArgs) {
+          const draft = await localCell("draft", {
+            shape: "string",
+            initial: "",
+            partition: ({ session }) => ({ sid: session.id }),
+          })
+          captured = draft
+          return <span>{draft.value || "(empty)"}</span>
+        },
+        { displayName: "session-draft" },
+      ),
+      { match: "/x" },
     )
 
     // Alice's render bakes {sid: "alice"} into her set ref.

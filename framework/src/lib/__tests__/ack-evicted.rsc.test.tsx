@@ -36,23 +36,33 @@ import {
   _recordDelivery,
   handleChannelPost,
 } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 
 const renders = { evi: 0 }
 
-const EviA = parton(
-  function EviARender(_: RenderArgs) {
-    renders.evi++
-    return <div data-evi>{`evi:${renders.evi}`}</div>
-  },
-  { selector: "evi-a" },
-)
+// The parton under test subscribes to NOTHING: its fp must move only
+// when the credit layers say it does, which is the claim below.
+const EviA = parton(function EviARender(_: RenderArgs) {
+  renders.evi++
+  return <div data-evi>{`evi:${renders.evi}`}</div>
+})
+
+// The drive's shutdown handle. The parked driver only observes the torn
+// controller on its next enqueue, and a bump wakes exactly the readers
+// of that tag — so the wake rides a dedicated parton rather than
+// `evi-a`, whose fp the test pins.
+const Waker = parton(function WakerRender(_: RenderArgs) {
+  tag("evi-wake")
+  return <div data-waker />
+})
 
 const Page = (): ReactNode => (
   <PartialRoot>
     <EviA />
+    <Waker />
   </PartialRoot>
 )
 
@@ -241,7 +251,7 @@ describe("evicted — credit revocation re-ships on the wire", () => {
       expect((await decodeLane(lane2)).bodyText).toContain("evi:2")
       expect(renders.evi).toBe(2)
 
-      await h.shutdown("evi-a")
+      await h.shutdown("evi-wake")
     })
   })
 })

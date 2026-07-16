@@ -7,11 +7,6 @@
  * slots — instead of fighting over one identity (which used to mean a
  * hydration mismatch on every document load, a one-variantKey route
  * hint flip, and a churning fp-trailer heal per navigation).
- *
- * Explicit-selector ids are the deliberate opposite: an author-declared
- * id asserts singularity, and a second same-request placement is an
- * authoring error (`registerPartial`'s gate — DEV throw naming both
- * parent paths).
  */
 
 import { beforeEach, describe, expect, it } from "vitest"
@@ -23,7 +18,7 @@ import { searchParam } from "../server-hooks.ts"
 import { wrapStreamWithFpTrailer } from "../fp-trailer.ts"
 import { splitAtFpTrailer } from "../fp-trailer-split.ts"
 import { runWithRequestAsync, _captureCommitHandle } from "../../runtime/context.ts"
-import { renderServerToFlight, renderWithRequest, type FlightBytes } from "../../test/rsc-server.ts"
+import { renderServerToFlight } from "../../test/rsc-server.ts"
 
 // ─── Fixture: the examples/minimal shape ─────────────────────────────
 
@@ -268,41 +263,5 @@ describe("duplicate placement — one spec in two frames", () => {
         .filter((id) => id.startsWith("frame-badge")),
     )
     expect(placeholders).toEqual(new Set([a.id]))
-  })
-})
-
-// ─── Explicit ids assert singularity ─────────────────────────────────
-
-describe("duplicate placement — explicit-selector id", () => {
-  it("a second same-request placement of an explicit id throws, naming both parent paths", async () => {
-    const Banner = parton(
-      function ExplicitBannerRender(_: RenderArgs) {
-        return <span>banner</span>
-      },
-      { selector: "explicit-banner", match: "/" },
-    )
-    const Host = parton(function ExplicitHostRender(_: RenderArgs) {
-      return (
-        <div>
-          <Banner />
-        </div>
-      )
-    }, "/")
-
-    const tree = (
-      <PartialRoot>
-        <html lang="en">
-          <body>
-            <Host />
-            <Banner />
-          </body>
-        </html>
-      </PartialRoot>
-    )
-    const { stream } = await renderWithRequest("http://t/", tree, { onError: () => {} })
-    const text = await new Response(stream as FlightBytes).text()
-    expect(text).toContain("explicit-selector id rendered at two placements in one request")
-    expect(text).toContain("explicit-banner")
-    expect(text).toContain("explicit-host")
   })
 })

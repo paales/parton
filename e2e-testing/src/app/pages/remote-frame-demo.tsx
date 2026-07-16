@@ -17,12 +17,13 @@
  * 4. An embedded parton with `cache: { maxAge }` — the second embed
  *    of its page replays the producer-side byte cache.
  *
- * 5. A refresh button driving `nav.reload({selector: "..."})` —
- *    the snapshot's `source: {kind: "page", url}` stamp routes the
- *    refetch back through `?partials=` at the embedded URL.
+ * 5. A refresh button driving `refreshSelector(tag)` — the embedded
+ *    parton reads that tag, and the snapshot's `source: {kind:
+ *    "page", url}` stamp routes the refetch back through `?partials=`
+ *    at the embedded URL.
  */
 
-import { parton, RemoteFrame, type RenderArgs } from "@parton/framework"
+import { parton, tag, RemoteFrame, type RenderArgs } from "@parton/framework"
 import { Suspense } from "react"
 import { Card, CardContent } from "@parton/copies/components/ui/card"
 import { Button } from "@parton/copies/components/ui/button"
@@ -35,6 +36,8 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 const RemoteFastGreeting = parton(
   async function RemoteFastGreetingRender(_: RenderArgs) {
+    // The host's refresh button bumps this tag (see RemoteRefreshButton).
+    tag("remote-fast")
     // Render interval stamped into the DOM: the parallel-streaming
     // e2e spec proves the remotes render CONCURRENTLY from interval
     // overlap (`started(slow) < finished(fast)`) — a server-clock
@@ -52,11 +55,12 @@ const RemoteFastGreeting = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-fast", match: "/remote/remote-fast" },
+  { match: "/remote/remote-fast" },
 )
 
 const RemoteMidGreeting = parton(
   async function RemoteMidGreetingRender(_: RenderArgs) {
+    tag("remote-mid")
     await delay(600)
     return (
       <RemoteCard tone="amber" testid="remote-mid">
@@ -64,11 +68,12 @@ const RemoteMidGreeting = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-mid", match: "/remote/remote-mid" },
+  { match: "/remote/remote-mid" },
 )
 
 const RemoteSlowGreeting = parton(
   async function RemoteSlowGreetingRender(_: RenderArgs) {
+    tag("remote-slow")
     // See RemoteFastGreeting — the pair's stamped intervals prove
     // parallel rendering by overlap.
     const startedAt = Date.now()
@@ -84,11 +89,12 @@ const RemoteSlowGreeting = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-slow", match: "/remote/remote-slow" },
+  { match: "/remote/remote-slow" },
 )
 
 const RemoteCounter = parton(
   async function RemoteCounterRender(_: RenderArgs) {
+    tag("remote-counter")
     await delay(300)
     return (
       <RemoteCard tone="violet" testid="remote-counter">
@@ -104,11 +110,12 @@ const RemoteCounter = parton(
       </RemoteCard>
     )
   },
-  { selector: "remote-counter", match: "/remote/remote-counter" },
+  { match: "/remote/remote-counter" },
 )
 
 const RemoteCachedGreeting = parton(
   async function RemoteCachedGreetingRender(_: RenderArgs) {
+    tag("remote-cached")
     // Without cache, this would delay 500ms every call. With cache,
     // only the first call pays the cost; subsequent fetches replay
     // stored bytes immediately.
@@ -124,7 +131,6 @@ const RemoteCachedGreeting = parton(
     )
   },
   {
-    selector: "remote-cached",
     match: "/remote/remote-cached",
     cache: { maxAge: 60 },
   },
@@ -182,11 +188,11 @@ export const RemoteFrameDemoPage = parton(
         </header>
 
         <div className="mb-3 flex flex-wrap gap-2" data-testid="rfd-controls">
-          <RemoteRefreshButton selector="remote-fast" label="Refresh fast" />
-          <RemoteRefreshButton selector="remote-mid" label="Refresh mid" />
-          <RemoteRefreshButton selector="remote-slow" label="Refresh slow" />
-          <RemoteRefreshButton selector="remote-counter" label="Refresh counter" />
-          <RemoteRefreshButton selector="remote-cached" label="Refresh cached" />
+          <RemoteRefreshButton name="remote-fast" label="Refresh fast" />
+          <RemoteRefreshButton name="remote-mid" label="Refresh mid" />
+          <RemoteRefreshButton name="remote-slow" label="Refresh slow" />
+          <RemoteRefreshButton name="remote-counter" label="Refresh counter" />
+          <RemoteRefreshButton name="remote-cached" label="Refresh cached" />
         </div>
 
         <Suspense fallback={<RemoteFallback label="fast" testid="remote-fast" />}>
@@ -215,7 +221,7 @@ export const RemoteFrameDemoPage = parton(
           when its remote spec resolves. Click any refresh button to re-fetch that frame's content
           via{" "}
           <code className="rounded bg-muted px-1.5 py-0.5 text-[0.85em] font-mono">
-            nav.reload(&#123;selector&#125;)
+            refreshSelector(tag)
           </code>
           .
         </footer>

@@ -21,7 +21,7 @@ interface CartShape {
 }
 
 export const MagentoCartNote = parton(
-  async function MagentoCartNoteRender(_: RenderArgs) {
+  async function CartNoteRender(_: RenderArgs) {
     const bound = getBoundCells()
     const cart = (bound.cart ?? null) as CartShape | null
     const locale = typeof bound.locale === "string" ? bound.locale : "en"
@@ -42,7 +42,6 @@ export const MagentoCartNote = parton(
     )
   },
   {
-    selector: "cart-note",
     match: "/remote/cart-note",
     cells: { cart: { required: true }, locale: {} },
   },

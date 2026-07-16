@@ -18,14 +18,20 @@ import { _clearInvalidationRegistry } from "../../runtime/invalidation-registry.
 import { drainPayloadSegment, freshLiveScope, withLiveDrive } from "../../test/live-drive.tsx"
 import { CHANNEL_ENDPOINT } from "../channel-protocol.ts"
 import { handleChannelPost } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 
+// The tag read is the drive's shutdown handle: `refreshSelector`ing the
+// name wakes this parton so the parked driver observes the torn stream.
 const Rebind = parton(
-  function RebindRender(_: RenderArgs) {
-    return <div data-rebind>content</div>
-  },
-  { selector: "rebind-a" },
+  Object.assign(
+    function RebindRender(_: RenderArgs) {
+      tag("rebind-a")
+      return <div data-rebind>content</div>
+    },
+    { displayName: "rebind-a" },
+  ),
 )
 
 function Page(): ReactNode {

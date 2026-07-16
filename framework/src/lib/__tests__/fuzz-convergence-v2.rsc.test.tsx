@@ -64,8 +64,11 @@ describe("v2 fixture geometry", () => {
     const text = await new Response(stream).text()
     expect(text).toMatch(/"children":"\$@[0-9a-f]+"/)
     // The nested addressable child rides INSIDE the async parent's
-    // promise row on a cold render.
-    expect(text).toContain('"partialId":"fz-async-inner"')
+    // promise row on a cold render — under its PLACEMENT-FOLDED id
+    // (`~<16 hex>`), the wire identity a placement under another parton
+    // mints. The fuzzer addresses it by that id; a bare `fz-async-inner`
+    // here would mean the fold stopped applying to nested placements.
+    expect(text).toMatch(/"partialId":"fz-async-inner~[0-9a-f]{16}"/)
   })
 })
 

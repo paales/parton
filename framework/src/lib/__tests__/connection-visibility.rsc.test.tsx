@@ -56,7 +56,7 @@
  */
 
 import type { ReactNode } from "react"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { _clearInvalidationRegistry, refreshSelector } from "../../runtime/invalidation-registry.ts"
 import { runWithRequestAsync } from "../../runtime/context.ts"
 import {
@@ -65,6 +65,7 @@ import {
   freshLiveScope,
   withLiveDrive,
 } from "../../test/live-drive.tsx"
+import { renderWithRequest } from "../../test/rsc-server.ts"
 import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts"
 import {
   _closeConnectionSession,
@@ -73,6 +74,7 @@ import {
   reportConnectionVisibility,
   takeConnectionFlips,
 } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
@@ -84,20 +86,27 @@ import { SkelBox } from "./cull-skeleton-fixture.tsx"
 // content renders exactly.
 const renders = { a: 0, b: 0 }
 
+// Each cullable subscribes to its bump signal by READING the tag —
+// `refreshSelector("cull-a")` wakes exactly the readers of that name.
+// The read lives in the BODY, so it rides the content snapshot only: a
+// culled parton records the gate's reads alone and stays dark to
+// invalidation until it flips back in (the wake surface claim below).
 const CullA = parton(
   function CullARender(_: RenderArgs) {
+    tag("cull-a")
     renders.a++
     return <div data-a>{`a:full:${renders.a}`}</div>
   },
-  { selector: "cull-a", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 const CullB = parton(
   function CullBRender(_: RenderArgs) {
+    tag("cull-b")
     renders.b++
     return <div data-b>{`b:full:${renders.b}`}</div>
   },
-  { selector: "cull-b", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 function Page(): ReactNode {
@@ -120,7 +129,7 @@ const CullPulse = parton(
     expires(time().in(120))
     return <div data-pulse>{`pulse:full:${renders3.pulse}`}</div>
   },
-  { selector: "cull-pulse", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 // Parent/child pair for the deferral probe: the child only exists in
@@ -131,11 +140,12 @@ const CullChildLate = parton(
   function CullChildLateRender(_: RenderArgs) {
     return <div data-child>child:full</div>
   },
-  { selector: "cull-child-late", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 const CullParent = parton(
   function CullParentRender(_: RenderArgs) {
+    tag("cull-parent")
     return (
       <div data-parent>
         parent-full
@@ -143,7 +153,7 @@ const CullParent = parton(
       </div>
     )
   },
-  { selector: "cull-parent", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 function NestedPage(): ReactNode {
@@ -153,6 +163,25 @@ function NestedPage(): ReactNode {
     </PartialRoot>
   )
 }
+
+/** The child's wire id. Placed under another parton, its id folds with
+ *  the placement suffix (`cull-child-late~<hex>`), and THAT is the id a
+ *  client names in a `visible` frame — the pair's id on the wire.
+ *  Discovered from an unmeasured render (no viewport statement → the
+ *  cull gate's seed resolves visible), the one pass that materializes
+ *  the child without a statement naming it. */
+let childId = ""
+
+beforeAll(async () => {
+  const { stream } = await renderWithRequest("http://localhost/world", <NestedPage />, {
+    headers: { "x-test-scope": freshLiveScope("conn-vis-probe") },
+  })
+  const flight = await new Response(stream).text()
+  const found = /"partialId":"(cull-child-late~[0-9a-f]{16})"/.exec(flight)
+  if (!found) throw new Error("expected the child's placement-folded id on the wire")
+  childId = found[1]
+  clearRegistry("all")
+})
 
 beforeEach(() => {
   _clearInvalidationRegistry()
@@ -349,13 +378,7 @@ describe("connection-session visibility", () => {
         // races the very render (the parent's lane) that will
         // materialize it.
         expect(
-          await postVisible(
-            scope,
-            conn,
-            1,
-            ["cull-parent", "cull-child-late"],
-            ["cull-parent", "cull-child-late"],
-          ),
+          await postVisible(scope, conn, 1, ["cull-parent", childId], ["cull-parent", childId]),
         ).toBe(204)
         const second = await h.segments.next()
         if (second.done || second.value.kind !== "lanes") throw new Error("expected lanes segment")
@@ -378,9 +401,9 @@ describe("connection-session visibility", () => {
         // cheap confirmation placeholder — fp-skip as the precise
         // stale-detector.
         const childLane = await nextLane(laneIter)
-        expect(childLane.partonId).toBe("cull-child-late")
+        expect(childLane.partonId).toBe(childId)
         const childBody = (await decodeLane(childLane)).bodyText
-        expect(childBody).toContain('"data-partial-id":"cull-child-late"')
+        expect(childBody).toContain(`"data-partial-id":"${childId}"`)
         expect(childBody).toContain('"data-partial-confirm":true')
 
         await h.shutdown("cull-parent")
@@ -404,31 +427,36 @@ describe("connection-session visibility", () => {
         conn = h.connectionId() ?? ""
         expect(conn).not.toBe("")
         expect(seg0).toContain("a:full:1")
-        expect(renders.b).toBe(0)
+        expect(seg0).toContain("b:full:1")
+
+        // Park b. Its content snapshot — tag read included — survives
+        // the park (an out-flip lanes nothing, so nothing re-renders),
+        // which is what keeps b bump-reachable while parked.
+        expect(await postVisible(scope, conn, 1, ["cull-b"], ["cull-a"])).toBe(204)
 
         // The sync: no flips, just the client's full measured set —
         // the shape a measurement passenger contributes when another
         // statement drives the envelope. It must lane NOTHING at
         // statement time: the next lane on the wire is a's bump.
-        expect(await postVisible(scope, conn, 1, [], ["cull-a", "cull-b"])).toBe(204)
+        expect(await postVisible(scope, conn, 2, [], ["cull-a", "cull-b"])).toBe(204)
         refreshSelector("cull-a")
         const second = await h.segments.next()
         if (second.done || second.value.kind !== "lanes") throw new Error("expected lanes segment")
         const laneIter = second.value.lanes[Symbol.asyncIterator]()
         const laneA = await nextLane(laneIter)
         expect(laneA.partonId).toBe("cull-a")
-        expect(renders.b).toBe(0)
+        expect(renders.b).toBe(1)
 
         // …but the SET took the statement: b is unparked, so a bump
         // now lanes it — the parking honesty the sync exists for.
         refreshSelector("cull-b")
         const laneB = await nextLane(laneIter)
         expect(laneB.partonId).toBe("cull-b")
-        expect((await decodeLane(laneB)).bodyText).toContain("b:full:1")
+        expect((await decodeLane(laneB)).bodyText).toContain("b:full:2")
 
         await h.shutdown("cull-b")
       },
-      { attach: { cached: [], since: null, visible: ["cull-a"] } },
+      { attach: { cached: [], since: null, visible: ["cull-a", "cull-b"] } },
     )
   })
 
@@ -544,10 +572,8 @@ describe("connection-session visibility", () => {
         // The child flips in while it has no snapshot (parent culled →
         // it never rendered) — the flip defers. Then an explicit
         // out-flip lands for it: the deferred in-flip must cancel.
-        expect(await postVisible(scope, conn, 1, ["cull-child-late"], ["cull-child-late"])).toBe(
-          204,
-        )
-        expect(await postVisible(scope, conn, 2, ["cull-child-late"], [])).toBe(204)
+        expect(await postVisible(scope, conn, 1, [childId], [childId])).toBe(204)
+        expect(await postVisible(scope, conn, 2, [childId], [])).toBe(204)
 
         // The parent's flip-in materializes the child's snapshot (as a
         // culled pair — the session set holds only the parent). If the

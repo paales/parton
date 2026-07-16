@@ -25,7 +25,7 @@ describe("parton — match + skip", () => {
       function ParamPageRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="param-out">id={id}</span>
       },
-      { match: "/pokemon/:id", selector: "#param-page" },
+      { match: "/pokemon/:id" },
     )
     const out = await flightAt("http://t/pokemon/42", <Page />)
     // Flight serializes JSX children as an array `["id=", "42"]`.
@@ -35,10 +35,13 @@ describe("parton — match + skip", () => {
 
   it("emits nothing on a pattern miss", async () => {
     const Page = parton(
-      function MissTargetRender({}: RenderArgs) {
-        return <span data-testid="should-not-appear">x</span>
-      },
-      { match: "/pokemon/:id", selector: "#match-miss-test" },
+      Object.assign(
+        function MissTargetRender({}: RenderArgs) {
+          return <span data-testid="should-not-appear">x</span>
+        },
+        { displayName: "match-miss-test" },
+      ),
+      { match: "/pokemon/:id" },
     )
     const out = await flightAt("http://t/cache-demo", <Page />)
     expect(out).not.toContain("should-not-appear")
@@ -46,12 +49,14 @@ describe("parton — match + skip", () => {
 
   it("emits nothing when a match predicate misses", async () => {
     const Page = parton(
-      function ParkedTargetRender({}: RenderArgs) {
-        return <span data-testid="parked-target">x</span>
-      },
+      Object.assign(
+        function ParkedTargetRender({}: RenderArgs) {
+          return <span data-testid="parked-target">x</span>
+        },
+        { displayName: "parked-spec" },
+      ),
       {
         match: { pathname: "/x", searchParams: { on: "1" } },
-        selector: "#parked-spec",
       },
     )
     const off = await flightAt("http://t/x", <Page />)
@@ -68,7 +73,7 @@ describe("parton — match + skip", () => {
       function FramedMatchRender({}: RenderArgs) {
         return <span data-testid="framed-open">open</span>
       },
-      { match: "/sub/open", selector: "#framed-match" },
+      { match: "/sub/open" },
     )
     // Same page URL in both; only the frame URL differs.
     const open = await flightAt(
@@ -92,11 +97,14 @@ describe("parton — match + skip", () => {
 describe("parton — tracked reads + render", () => {
   it("a body's tracked read IS the request surface", async () => {
     const Page = parton(
-      function FlavorPageRender({}: RenderArgs) {
-        const flavor = searchParam("flavor", "vanilla")
-        return <span data-testid="flavor">{flavor}</span>
-      },
-      { match: "/flavors", selector: "#flavor-spec" },
+      Object.assign(
+        function FlavorPageRender({}: RenderArgs) {
+          const flavor = searchParam("flavor", "vanilla")
+          return <span data-testid="flavor">{flavor}</span>
+        },
+        { displayName: "flavor-spec" },
+      ),
+      { match: "/flavors" },
     )
     const v = await flightAt("http://t/flavors?flavor=chocolate", <Page />)
     expect(v).toContain("chocolate")
@@ -106,10 +114,13 @@ describe("parton — tracked reads + render", () => {
 
   it("auto-flows match params to Render with no vary", async () => {
     const Page = parton(
-      function MatchParamRender({ slug }: { slug: string } & RenderArgs) {
-        return <span data-testid="slug-out">{slug}</span>
-      },
-      { match: "/p/:slug", selector: "#match-only-spec" },
+      Object.assign(
+        function MatchParamRender({ slug }: { slug: string } & RenderArgs) {
+          return <span data-testid="slug-out">{slug}</span>
+        },
+        { displayName: "match-only-spec" },
+      ),
+      { match: "/p/:slug" },
     )
     const out = await flightAt("http://t/p/hello-world", <Page />)
     expect(out).toContain("hello-world")
@@ -117,17 +128,19 @@ describe("parton — tracked reads + render", () => {
 
   it("merges match params + tracked body reads", async () => {
     const Page = parton(
-      function MergedRender({ slug }: { slug: string } & RenderArgs) {
-        const page = Number(searchParam("page", "1"))
-        return (
-          <span data-testid="merged">
-            {slug}/{page}
-          </span>
-        )
-      },
+      Object.assign(
+        function MergedRender({ slug }: { slug: string } & RenderArgs) {
+          const page = Number(searchParam("page", "1"))
+          return (
+            <span data-testid="merged">
+              {slug}/{page}
+            </span>
+          )
+        },
+        { displayName: "merged-spec" },
+      ),
       {
         match: "/p/:slug",
-        selector: "#merged-spec",
       },
     )
     const out = await flightAt("http://t/p/x?page=3", <Page />)
@@ -137,8 +150,8 @@ describe("parton — tracked reads + render", () => {
   })
 })
 
-describe("parton — selector & id derivation", () => {
-  it("auto-derives selector from Render.name", async () => {
+describe("parton — id derivation", () => {
+  it("auto-derives the id from Render.name", async () => {
     function MyAutoSelectedRender({}: RenderArgs) {
       return <i data-testid="auto-selector-output">ok</i>
     }
@@ -151,9 +164,8 @@ describe("parton — selector & id derivation", () => {
     function MyHeaderPage({}: RenderArgs) {
       return <i data-partial-id="auto-header-id">x</i>
     }
-    // Even though the function ends in `Page`, the selector should
-    // strip it. We can't easily inspect the selector from outside,
-    // but we can verify the rendered partial wrapper carries the
+    // Even though the function ends in `Page`, the id derivation
+    // strips it. We verify the rendered partial wrapper carries the
     // expected id by reaching into the Flight payload.
     const Page = parton(MyHeaderPage, { match: "/strip-suffix-test" })
     const out = await flightAt("http://t/strip-suffix-test", <Page />)
@@ -164,15 +176,18 @@ describe("parton — selector & id derivation", () => {
 describe("parton — children passthrough", () => {
   it("forwards `children` from the spec component to Render", async () => {
     const Wrapper = parton(
-      function WrapperRender({ children }: RenderArgs) {
-        return (
-          <div data-testid="wrapper">
-            <span data-testid="wrapper-marker">w</span>
-            {children}
-          </div>
-        )
-      },
-      { match: "/wrapper-test", selector: "#wrapper-spec" },
+      Object.assign(
+        function WrapperRender({ children }: RenderArgs) {
+          return (
+            <div data-testid="wrapper">
+              <span data-testid="wrapper-marker">w</span>
+              {children}
+            </div>
+          )
+        },
+        { displayName: "wrapper-spec" },
+      ),
+      { match: "/wrapper-test" },
     )
     const out = await flightAt(
       "http://t/wrapper-test",
@@ -187,23 +202,18 @@ describe("parton — children passthrough", () => {
 
 describe("parton — call-site prop pass-through", () => {
   it("forwards JSX call-site props to Render alongside tracked body reads", async () => {
-    const Inner = parton(
-      function PassthroughInnerRender({
-        pokemonId,
-      }: {
-        pokemonId: number
-      } & RenderArgs) {
-        const flavor = searchParam("flavor", "vanilla")
-        return (
-          <span data-testid="passthrough-out">
-            {pokemonId}/{flavor}
-          </span>
-        )
-      },
-      {
-        selector: "#passthrough-inner",
-      },
-    )
+    const Inner = parton(function PassthroughInnerRender({
+      pokemonId,
+    }: {
+      pokemonId: number
+    } & RenderArgs) {
+      const flavor = searchParam("flavor", "vanilla")
+      return (
+        <span data-testid="passthrough-out">
+          {pokemonId}/{flavor}
+        </span>
+      )
+    })
     // Outer wrapper: parses :id from URL, passes pokemonId as a JSX
     // prop to Inner. Inner gets `flavor` from its own tracked body
     // read and `pokemonId` from the call-site prop.
@@ -211,7 +221,7 @@ describe("parton — call-site prop pass-through", () => {
       function PassthroughOuterRender({ id }: { id: string } & RenderArgs) {
         return <Inner pokemonId={Number(id)} />
       },
-      { match: "/p/:id", selector: "#passthrough-outer" },
+      { match: "/p/:id" },
     )
     const out = await flightAt("http://t/p/9?flavor=mint", <Outer />)
     expect(out).toContain("passthrough-out")
@@ -222,17 +232,16 @@ describe("parton — call-site prop pass-through", () => {
   it("inner spec receives props directly from the call site", async () => {
     // Zero declaration ceremony: Outer's match parses the URL, Inner
     // just takes pokemonId as a prop.
-    const Inner = parton(
-      function NoVaryInnerRender({ pokemonId }: { pokemonId: number } & RenderArgs) {
-        return <span data-testid="no-vary-inner">id-{pokemonId}</span>
-      },
-      { selector: "#no-vary-inner" },
-    )
+    const Inner = parton(function NoVaryInnerRender({
+      pokemonId,
+    }: { pokemonId: number } & RenderArgs) {
+      return <span data-testid="no-vary-inner">id-{pokemonId}</span>
+    })
     const Outer = parton(
       function NoVaryOuterRender({ id }: { id: string } & RenderArgs) {
         return <Inner pokemonId={Number(id)} />
       },
-      { match: "/no-vary/:id", selector: "#no-vary-outer" },
+      { match: "/no-vary/:id" },
     )
     const out = await flightAt("http://t/no-vary/77", <Outer />)
     expect(out).toContain("no-vary-inner")
@@ -246,7 +255,7 @@ describe("parton — two-step builder", () => {
     // before the Render exists — the single-step form can't do that
     // because `const S = partial(R, opts)` + `function R(p: typeof
     // S.props)` hits a circular initializer.
-    const Builder = parton({ match: "/builder/:slug", selector: "#two-step" })
+    const Builder = parton({ match: "/builder/:slug" })
     function BuilderRender(p: typeof Builder.props) {
       return <span data-testid="two-step-out">{p.slug}</span>
     }
@@ -257,10 +266,7 @@ describe("parton — two-step builder", () => {
   })
 
   it("builder threads tracked body reads through the same way single-step does", async () => {
-    const Builder = parton({
-      match: "/builder/:slug",
-      selector: "#two-step-vary",
-    })
+    const Builder = parton({ match: "/builder/:slug" })
     function BuilderVaryRender(p: typeof Builder.props) {
       const variant = searchParam("variant", "default")
       return (
@@ -278,14 +284,17 @@ describe("parton — two-step builder", () => {
 describe("parton — match grammar inference", () => {
   it("optional `:foo?` flows through as optional prop", async () => {
     const Page = parton(
-      function OptionalParamRender({ slug, page }: { slug: string; page?: string } & RenderArgs) {
-        return (
-          <span data-testid="opt-out">
-            {slug}/{page ?? "none"}
-          </span>
-        )
-      },
-      { match: "/opt/:slug{/:page}?", selector: "#opt-spec" },
+      Object.assign(
+        function OptionalParamRender({ slug, page }: { slug: string; page?: string } & RenderArgs) {
+          return (
+            <span data-testid="opt-out">
+              {slug}/{page ?? "none"}
+            </span>
+          )
+        },
+        { displayName: "opt-spec" },
+      ),
+      { match: "/opt/:slug{/:page}?" },
     )
     const withPage = await flightAt("http://t/opt/x/2", <Page />)
     expect(withPage).toContain('"x","/","2"')
@@ -299,13 +308,10 @@ describe("<Frame> — scope opener", () => {
     // <Frame> writes its initialUrl to session if absent; the inner
     // partial's resolveFrameRequest then reads that URL via session,
     // and `pathname()` sees it instead of the page URL.
-    const Inner = parton(
-      function FramedInnerRender({}: RenderArgs) {
-        const framePath = pathname()
-        return <span data-testid="frame-pathname">{framePath}</span>
-      },
-      { selector: "#framed-inner" },
-    )
+    const Inner = parton(function FramedInnerRender({}: RenderArgs) {
+      const framePath = pathname()
+      return <span data-testid="frame-pathname">{framePath}</span>
+    })
     const out = await flightAt(
       "http://t/frame-host",
       <Frame name="drawer-test" initialUrl="/drawer/initial">
@@ -320,23 +326,26 @@ describe("<Frame> — scope opener", () => {
 describe("parton — cookie() sees mid-request setCookie writes", () => {
   // The cart pattern (e2e-testing/src/app/pages/magento/cart-actions.ts):
   // an action calls `setCookie("cart_id", X)` to persist a freshly-
-  // created cart, then `getServerNavigation().reload({selector: "cart"})`.
-  // The re-rendered cart spec reads `cookie("cart_id")` — without the
-  // overlay it sees the stale request header (undefined / old value),
-  // and the cart badge stays at 0 until the next nav. With the overlay,
-  // the immediate re-render sees the new id, hits Magento, and the
-  // badge updates as the reload intended.
+  // created cart, then writes the cart cell (`cartCell.with({cartId}).
+  // invalidate()`), which wakes any cart placement rendering under the
+  // new cookie. The re-rendered cart spec reads `cookie("cart_id")` —
+  // without the overlay it sees the stale request header (undefined /
+  // old value), and the cart badge stays at 0 until the next nav. With
+  // the overlay, the immediate re-render sees the new id, hits Magento,
+  // and the badge updates as the cell write intended.
   it("setCookie before a descendant spec is visible to that spec's cookie() read", async () => {
     function CookiePreloader({ children }: { children: React.ReactNode }) {
       setCookie("cart_id", "fresh-cart-123")
       return children
     }
     const CartBadge = parton(
-      function CartBadgeRender({}: RenderArgs) {
-        const cartId = cookie("cart_id")
-        return <span data-testid="cart-id-out">cart={cartId ?? "none"}</span>
-      },
-      { selector: "#cart-vary-cookies" },
+      Object.assign(
+        function CartBadgeRender({}: RenderArgs) {
+          const cartId = cookie("cart_id")
+          return <span data-testid="cart-id-out">cart={cartId ?? "none"}</span>
+        },
+        { displayName: "cart-vary-cookies" },
+      ),
     )
     const out = await flightAt(
       "http://t/",
@@ -355,11 +364,13 @@ describe("parton — cookie() sees mid-request setCookie writes", () => {
       return children
     }
     const Themed = parton(
-      function ThemedRender({}: RenderArgs) {
-        const theme = cookie("theme") ?? "light"
-        return <span data-testid="theme-out">theme={theme}</span>
-      },
-      { selector: "#themed-vary-cookies" },
+      Object.assign(
+        function ThemedRender({}: RenderArgs) {
+          const theme = cookie("theme") ?? "light"
+          return <span data-testid="theme-out">theme={theme}</span>
+        },
+        { displayName: "themed-vary-cookies" },
+      ),
     )
     const { stream } = await renderWithRequest(
       "http://t/",
@@ -386,7 +397,7 @@ describe("multi-variant pool", () => {
       function MultiVariantTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="variant-body">id={id}</span>
       },
-      { match: "/pokemon/:id", selector: "#multi-variant-test" },
+      { match: "/pokemon/:id" },
     )
     const tree = (
       <PartialRoot>
@@ -421,7 +432,7 @@ describe("multi-variant pool", () => {
       function NoSiblingTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="no-sibling">id={id}</span>
       },
-      { match: "/pokemon/:id", selector: "#no-sibling-test" },
+      { match: "/pokemon/:id" },
     )
     const tree = (
       <PartialRoot>
@@ -453,17 +464,16 @@ describe("multi-variant pool", () => {
     // matchKey. So a child of `/pokemon/:id` gets a distinct matchKey
     // per `:id` value — different cache slots, no cross-variant
     // clobbering.
-    const Inner = parton(
-      function InheritedMatchKeyInnerRender({ id }: { id: string } & RenderArgs) {
-        return <span data-testid="inner-body">inner-id={id}</span>
-      },
-      { selector: "#inherited-match-key-inner" },
-    )
+    const Inner = parton(function InheritedMatchKeyInnerRender({
+      id,
+    }: { id: string } & RenderArgs) {
+      return <span data-testid="inner-body">inner-id={id}</span>
+    })
     const Outer = parton(
       function InheritedMatchKeyOuterRender({ id }: { id: string } & RenderArgs) {
         return <Inner id={id} />
       },
-      { match: "/pokemon/:id", selector: "#inherited-match-key-outer" },
+      { match: "/pokemon/:id" },
     )
     const tree = (
       <PartialRoot>
@@ -503,7 +513,7 @@ describe("multi-variant pool", () => {
       function ParkedMultiTestRender({ id }: { id: string } & RenderArgs) {
         return <span data-testid="parked-multi">id={id}</span>
       },
-      { match: "/pokemon/:id", selector: "#parked-multi-test" },
+      { match: "/pokemon/:id" },
     )
     const tree = (
       <PartialRoot>

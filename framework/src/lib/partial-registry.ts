@@ -48,17 +48,11 @@ export interface PartialSnapshot {
    *  Component when the effective id was per-instance, e.g. slot
    *  blocks rendered with a content-key override). */
   type: string
-  /** This registration's id is an author-declared (explicit-selector)
-   *  singleton. Explicit ids are never placement-folded, so a second
-   *  same-request registration under a DIFFERENT placement is two
-   *  placements fighting over one identity — `registerPartial`
-   *  rejects it (DEV throw; prod structured log + last-wins).
-   *  Server-only, registration-time — never serialized. */
-  explicitId?: boolean
   fallback: ReactNode
-  /** Refetch labels carried by this rendered instance. Selectors are
-   *  flat — `reload({selector: "foo"})` hits every snapshot whose
-   *  `labels` contains "foo" (or whose id is "foo"). */
+  /** Invalidation labels carried by this rendered instance — the bump
+   *  names that can touch it (`cell:<id>` per resolved cell, bare
+   *  `tag()` names). `refreshSelector(name)` hits every snapshot whose
+   *  `labels` contains `name` (subject to constraint subset match). */
   labels: string[]
   cache?: CacheOptions
   /** The frame chain this spec was rendered under — populated from
@@ -124,7 +118,7 @@ export interface PartialSnapshot {
    *  and new fps to the client so the next visit fp-skips against the
    *  warm value rather than mismatching against the cold one. */
   emittedFp?: string
-  /** Origin annotation for selector-targeted refetch routing.
+  /** Origin annotation for targeted-refetch routing.
    *
    *  Default (`undefined`) — the snapshot was registered by a
    *  local render; `partialFromSnapshot` looks up the spec
@@ -134,7 +128,7 @@ export interface PartialSnapshot {
    *  by `<RemoteFrame>` from an embedded page's snapshot trailer.
    *  `partialFromSnapshot` re-embeds `url` with `?partials=<id>`
    *  (the ordinary protocol at the embedded URL), replaying the
-   *  placement namespace + capability off the stamp, so refetch
+   *  placement namespace + capability off the stamp, so a refetch
    *  routes back through the embedded page rather than rendering
    *  locally. Server-only field; not serialized over the wire —
    *  each hop of a nested embed chain re-stamps with ITS fetch
@@ -205,9 +199,6 @@ export type PageSnapshotSource = {
    *  refetch's embed-ns header so the focused render's descendants
    *  mint the same prefixed ids the whole-page embed did. */
   ns: string
-  /** Human namespace (typed bindings' install name) — replayed so the
-   *  refetched snapshot's labels re-register with the same prefix. */
-  namespace?: string
   capability?: Record<string, unknown>
   /** Grant set the placement declared (`<RemoteFrame grant>`) —
    *  replayed on refetch so a granted placement can never re-fetch
@@ -465,36 +456,6 @@ export function registerPartial(id: string, snapshot: PartialSnapshot): void {
   const variantKey = variantKeyOf(snapshot)
   const ctx = registryAls.getStore()
   if (ctx) {
-    // Explicit-singleton gate: an author-declared selector id rendered
-    // at TWO placements in one request. Exact, not heuristic — the
-    // pending sets are this request's own registrations (skip-path
-    // passes register per-placement; match-miss parks never register),
-    // and a same-placement re-registration compares equal (cull-state
-    // twins differ only by the `~cull` suffix, normalized away by
-    // `baseKey`). Duplicated AUTO ids never reach here: they
-    // placement-fold into distinct ids at mint time.
-    if (snapshot.explicitId) {
-      const priorVk = ctx.pendingHints.get(id)
-      if (priorVk !== undefined && baseKey(priorVk) !== baseKey(variantKey)) {
-        const prior = ctx.pendingWrites.get(id)
-        const fmt = (p?: readonly string[]) => (p && p.length > 0 ? p.join(" > ") : "(root)")
-        if (import.meta.env.DEV) {
-          throw new Error(
-            `parton "${id}": explicit-selector id rendered at two placements in one request — ` +
-              `under [${fmt(prior?.parentPath)}] and under [${fmt(snapshot.parentPath)}]. ` +
-              `An author-declared selector asserts a singleton; drop one placement, or drop ` +
-              `the selector so each placement mints its own placement-folded id.`,
-          )
-        }
-        // Prod: degrade, never block a render — last-wins, loudly.
-        console.error(
-          `[parton] duplicate-explicit-placement ${JSON.stringify({
-            id,
-            parentPaths: [prior?.parentPath ?? null, snapshot.parentPath],
-          })}`,
-        )
-      }
-    }
     ctx.invalidations.delete(id)
     ctx.pendingWrites.set(id, snapshot)
     ctx.pendingHints.set(id, variantKey)

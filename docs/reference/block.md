@@ -20,7 +20,6 @@ const HeroBlock = block(
     )
   },
   {
-    selector: "page-block composed-hero",
     schema: ({ cms }) => ({
       headline: cms.text("headline"),
       subhead: cms.text("subhead"),
@@ -34,15 +33,12 @@ A block is internally a partial — same fingerprint pipeline, same
 refetch path. Differences:
 
 - **Slot-placeable, type-catalog-registered.** Registered under its
-  spec id (see [Spec id](#spec-id--the--rule) below; `HeroRender` →
-  `"hero"`); slots look it up via `cms.blocks("body", "page-block")`
-  calls in their host's `schema`.
-- **`selector` declares refetch labels.** Same grammar as `parton`'s
-  selector; the labels are matched by `nav.reload({selector: "…"})`
-  and by slot-allow filters. Multiple labels per spec are allowed.
-- **Singleton CMS binding falls out of the spec's id.** A singleton
+  type (see [Identity](#identity--the-render-functions-name) below;
+  `HeroRender` → `"hero"`); slots look it up by that type via
+  `cms.blocks("body")` calls in their host's `schema`.
+- **Singleton CMS binding falls out of the spec's type.** A singleton
   block placed directly via JSX reads the CMS storage row matching
-  its spec id.
+  its type.
 - **Content changes move the fingerprint via a tracked dep.** The
   block wrapper records a `cms:<contentKey>` dependency for the
   instance's content row; every fingerprint fold re-reads the row's
@@ -50,40 +46,37 @@ refetch path. Differences:
   so a CMS edit re-renders exactly the blocks that read the edited
   row.
 
-## Spec id — the `#` rule
+## Identity — the Render function's name
 
-A block's spec id (catalog type, and for singletons the CMS storage
-key) comes from exactly one of two places:
+A block's type — the `type` slot entries name in the content store,
+the catalog key slot lookups resolve, and for singleton placements the
+CMS storage key — is its `Render` function's name, kebab-cased, with
+ONE trailing `Render` / `Page` / `Block` / `Partial` / `Component`
+suffix stripped:
 
-- **A leading-`#` selector token pins it.** `selector: "#app-nav"` →
-  id `"app-nav"`.
-- **Otherwise it auto-derives from `Render.name`** (`HeroRender` →
-  `"hero"`, `Page`/`Block`/`Render`/`Partial`/`Component` suffixes
-  stripped, kebab-cased).
+```tsx
+block(function HeroRender() {…})         // type "hero"
+block(function ProductCardRender() {…})  // type "product-card"
+block(function AppNavRender() {…})       // type "app-nav", CMS row "app-nav"
+```
 
-Unprefixed labels (and `.`-prefixed ones) are refetch labels only —
-they never set the id. `selector: "page-block composed-hero"` on
-`HeroRender` gives id `"hero"` with labels
-`["hero", "page-block", "composed-hero"]`. This differs from
-`parton`, where the first label (prefix-stripped) IS the id.
+The derivation is `parton`'s, and so are its rules — the `displayName`
+override, the anonymous-Render throw, and the collision gate that
+rejects two distinct specs claiming one id. See
+[partial.md § Identity](./partial.md#identity--the-render-functions-name).
 
-Block ids ride the same catalog collision gate as `parton` ids: two
-distinct specs claiming one id throw at construct time (see
-[partial.md § Selector grammar](./partial.md#selector-grammar)). A
-block's id is always explicit at the partial layer (the block wrapper
-pins it as the first label), so it is never placement-folded and a
-singleton block placed directly at two spots in one request is
-rejected as an authoring error — slot-placed instances are exempt,
-each rendering under its CMS row id via `__instanceId`.
+The **content row** a block instance reads is its own axis, separate
+from the effective render id (which is placement-scoped — props hash,
+placement fold):
+
+- **Slot-placed** — the slot entry's id. The framework threads it in
+  internally; the instance renders under it and reads that row.
+- **Singleton** — the spec's type.
 
 ## Options
 
 ```ts
 interface BlockOptions<V, S> {
-  /** Refetch labels. A leading-`#` token pins the spec id; other
-   *  tokens are fan-out labels. Id auto-derives from `Render.name`
-   *  when no `#` token is present. */
-  selector?: SelectorTokens
   /** CMS reads + child slot composition. Result is merged into
    *  Render's prop bag alongside the match params. */
   schema?: (scope: { cms: CmsReadSurface }) => S
@@ -97,7 +90,6 @@ interface BlockOptions<V, S> {
 
 | Option                                             | Notes                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `selector`                                         | Refetch labels; `#` pins the id (see above). Slot-allow filters and `nav.reload({selector: "…"})` match any label.                                                                                                                                                                                                                                                                                                                  |
 | `schema`                                           | Sync. Receives `{ cms }` — the CMS read surface, nothing else. Returns content reads (`cms.text(...)`, `cms.enum(...)`) and child slot compositions (`cms.blocks(...)`, `cms.block(...)`); both flow into Render as props. Request-dimension deps come from the tracked server-hooks (`searchParam()`, `cookie()`, …) read in the Render body, same as on `parton` — rare on blocks, whose content side lives on the `cms` surface. |
 | `match`, `cache`, `defer`, `fallback`, `keepalive` | Same as [`parton`](./partial.md#options).                                                                                                                                                                                                                                                                                                                                                                                           |
 
@@ -106,17 +98,16 @@ interface BlockOptions<V, S> {
 The `cms` argument is the read surface bound to the block's effective
 CMS content row. Field getters (`text`, `richText`, `number`,
 `boolean`, `enum`, `image`, `reference`) return values resolved from
-the row's config cascade; `block(slot, selector?)` /
-`blocks(slot, selector?)` return ReactNode for the block's slot
-children. All sync; the full getter table with return types and
-empty-row defaults is in [`cms.md`](./cms.md#read-surface).
+the row's config cascade; `block(slot)` / `blocks(slot)` return
+ReactNode for the block's slot children. All sync; the full getter
+table with return types and empty-row defaults is in
+[`cms.md`](./cms.md#read-surface).
 
-`cms.blocks(slot, selector?)` resolves the slot's entries against the
-selector (label filter, e.g. `"page-block"`), looks each entry up by
-its `type` in the catalog, and renders the matching block. The
-returned ReactNode is dropped into the Render's JSX position.
-`cms.block(slot, selector?)` is the singular variant — renders at
-most one entry, returns `null` when the slot is empty.
+`cms.blocks(slot)` resolves the slot's entries, looks each one up by
+its `type` in the catalog, and renders the matching block in stored
+order. The returned ReactNode is dropped into the Render's JSX
+position. `cms.block(slot)` is the singular variant — renders at most
+one entry, returns `null` when the slot is empty.
 
 The framework binds the surface to the block's content row internally
 — the schema never threads any of it.
@@ -137,75 +128,67 @@ const PageRoot = block(
   },
   {
     schema: ({ cms }) => ({
-      body: cms.blocks("body", "page-block"),
+      body: cms.blocks("body"),
     }),
   },
 )
 ```
 
-Each slot entry's id becomes its rendered effective id; refetch by
-`reload({selector: "<entry-id>"})` works.
+Each slot entry's id becomes its rendered effective id, the CMS row it
+reads, and the `cms:<entry-id>` tag an editor write fires to wake it.
 
 ### 2. By direct JSX (singleton)
 
-A singleton block is constructed once and placed once. Its CMS
-content row matches its spec id — pin it with a `#` token (or rely on
-the `Render.name` derivation):
+A singleton block is constructed once and placed once. Its CMS content
+row matches its type, derived from the Render name:
 
 ```tsx
-const AppNav = block(NavRootRender, {
-  selector: "#app-nav",                                   // id "app-nav"
-  schema: ({ cms }) => ({ links: cms.blocks("links", "nav-item") }),
-})
+const AppNavBlock = block(
+  function AppNavRender({ links }) {
+    return <nav>{links}</nav>
+  },
+  {
+    schema: ({ cms }) => ({ links: cms.blocks("links") }),
+  },
+)
 
-<AppNav/>
+<AppNavBlock/>
 ```
 
-The spec reads from CMS row `"app-nav"`. External code refetches via
-`nav.reload({selector: "app-nav"})` (or the cosmetic `"#app-nav"`).
+`AppNavRender` → type `"app-nav"`, so the spec reads from CMS row
+`"app-nav"` (`e2e-testing/src/app/blocks/nav-root.tsx`, whose links
+slot is the `"app-nav"` row in `cms/data/content.json`). Rename the
+Render to move the row.
 
-### 3. By direct JSX (non-CMS, fan-out only)
+### 3. By direct JSX (non-CMS)
 
 A spec without CMS binding doesn't need `block` at all — use
-`parton`. The spec gets a refetch label via `selector`;
-multiple placements share the label and refetch together:
+[`parton`](./partial.md). Each placement with distinct call-site props
+is a distinct instance, and refreshes on the cells and tags its own
+body reads:
 
 ```tsx
-const LivePrice = parton(LivePriceRender, { selector: "price" })
+const LivePrice = parton(async function LivePriceRender({ sku }: { sku: string }) {
+  tag(`price?sku=${encodeURIComponent(sku)}`)
+  return <Price value={await fetchPrice(sku)} />
+})
 
 {
-  products.map((p) => <LivePrice key={p.sku} sku={p.sku} basePrice={p.price} />)
+  products.map((p) => <LivePrice key={p.sku} sku={p.sku} />)
 }
 ```
 
-`nav.reload({selector: "price"})` fans out across every placement.
+## Refresh signals
 
-## Self-refresh from inside an instance
-
-Client components inside a block's render can refetch their enclosing
-instance via the `@self` selector token — resolved at fire time to
-the instance's effective id (the slot entry id for slot-placed
-blocks, the spec id for singletons), so per-instance addressing needs
-no threading:
-
-```tsx
-"use client"
-import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
-
-export function RefreshSelfButton() {
-  const [reload, { committed, finished }] = useNavigation().reload()
-  const pending = committed && !finished
-  return (
-    <button onClick={() => reload({ selector: "@self" })} disabled={pending}>
-      Refresh
-    </button>
-  )
-}
-```
-
-Full `@self` semantics — mixing with other labels, the loud failure
-when fired outside any partial — are in
-[`frames-navigation.md`](./frames-navigation.md#self--refetch-the-enclosing-partial).
+A block re-renders on the same two body-read signals as any parton —
+cells and `tag()`, covered in
+[partial.md § Refresh signals](./partial.md#refresh-signals--cells-and-tags).
+The block wrapper adds one of its own for free: it reads
+`tag("cms:<contentKey>")` for the instance's content row, so an
+editor write's `refreshSelector("cms:<row>")` wakes exactly the
+instances bound to the edited row. The `cms:<contentKey>` tracked dep
+covers freshness (the fold re-reads the row's hash); the tag covers
+delivery to a held connection.
 
 ## Editor catalog manifest
 
@@ -213,31 +196,34 @@ when fired outside any partial — are in
 catalog prerender invokes each block type's `schema` once with a
 tracking CMS surface and records the field reads and slot
 declarations into the `BlockManifest` that drives the editor's field
-panel and slot-allow filtering. Pure runtime — no static analysis, no
-JSX walking. Details in
+panel. Pure runtime — no static analysis, no JSX walking. Details in
 [`cms.md`](./cms.md#catalog-prerender).
 
 ## Sharp edges
 
 - **There is no `id` JSX prop.** A block's CMS row is determined
   by placement: slot wiring carries the entry's id internally;
-  singletons read from the row matching their spec id. Don't try to
+  singletons read from the row matching their type. Don't try to
   override CMS bindings from a JSX call site.
-- **There is no public per-instance id override.** If you place the
-  same spec multiple times in JSX with no slot wiring, all placements
-  share the spec's labels and fan out under refetch (placements with
-  distinct call-site props get distinct render ids — see
-  [`partial.md`](./partial.md#selector-grammar)). To get
-  per-instance CMS rows, route through a slot.
-- **Refetch addressing is by label OR by id.** Both work the same.
-  `reload({selector: "app-nav"})` matches the singleton; the same
-  call matches every spec whose `selector` includes `"app-nav"` as
-  a label.
+- **A singleton's row tracks its call-site props.** Props at the call
+  site mint a per-instance render id, and the block reads its content
+  from that id's row — place a singleton bare (`<AppNav/>`) to keep
+  it on the row matching its type.
+- **Placement moves the render id, never the row.** A bare singleton
+  placed under two different parents or frames mints two distinct
+  render ids (the placement fold), but both read the ONE row matching
+  their type — placement discriminates instances, not content. Give
+  two placements distinct content by giving them distinct props (the
+  bullet above) or by making them slot entries.
+- **There is no public per-instance id override.** Placements with
+  distinct call-site props, and placements under different parents or
+  frames, already get distinct render ids (see
+  [partial.md § Identity](./partial.md#identity--the-render-functions-name)).
+  To get per-instance CMS rows, route through a slot.
 
 ## Related
 
-- [`partial.md`](./partial.md) — the base addressable-render-unit
-  constructor.
+- [`partial.md`](./partial.md) — the base render-unit constructor.
 - [`cms.md`](./cms.md) — content store, draft/published model, match
   clauses on configs, the `cms` getter table.
 - [`frames-navigation.md`](./frames-navigation.md) — `<Frame>` scope

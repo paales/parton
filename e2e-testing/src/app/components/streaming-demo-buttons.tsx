@@ -9,8 +9,8 @@ import { pushSeq } from "../pages/streaming-demo-actions.ts"
  * from `BumpCounter`'s schema. `.value` is the snapshot from the
  * server's last render; `.set` is the bound server-action ref
  * (`__cellWrite.bind(null, "demo.bumps")`). On commit, the action
- * fires `getServerNavigation().reload({selector: "cell:demo.bumps"})`
- * which refetches every parton carrying that label.
+ * fires `refreshSelector("cell:demo.bumps")`, which re-renders every
+ * parton that resolved that cell.
  */
 export function BumpButton({ bumps }: { bumps: ResolvedCell<number> }) {
   return (

@@ -76,9 +76,8 @@ const CartLine = parton(
       </Card>
     )
   },
-  // No selector: the auto-id from `CartLineRender` ("cart-line") is the
-  // same, and refetch is driven by the per-line `cell:magento.cart-item`
-  // label (stamped by the prop binding), not a selector reload.
+  // Refetch is driven by the per-line `cell:magento.cart-item` label,
+  // stamped by the prop binding.
 )
 
 // One parton: derives cartId from the cookie (a tracked read), resolves

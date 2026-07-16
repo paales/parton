@@ -61,8 +61,11 @@ import { buildTimeScope } from "../lib/time.ts"
 import { createSessionReadSurface } from "./session.ts"
 import { getCellStorage, type CellStorage } from "./cell-storage.ts"
 import { _recordCellWrite, getRequest, getScope, parseCookies } from "./context.ts"
-import { _setInvalidationTsBridge, buildCellSelector } from "./invalidation-registry.ts"
-import { getServerNavigation } from "./server-navigation.ts"
+import {
+  _setInvalidationTsBridge,
+  buildCellSelector,
+  refreshSelector,
+} from "./invalidation-registry.ts"
 
 // ─── The registry ↔ cell-storage ts bridge ────────────────────────────
 //
@@ -261,7 +264,7 @@ export function writeOneCell(
  *  fire the partition-scoped invalidation bump. */
 function publishCellWrite(cell: CellInterface<unknown>, args: Record<string, unknown>): void {
   _recordCellWrite(cell.deferred === true)
-  getServerNavigation().reload({ selector: buildCellSelector(cell.id, args) })
+  refreshSelector(buildCellSelector(cell.id, args))
 }
 
 /** Mirror of `resolveCellValue`'s warm-read coercion: a stored value

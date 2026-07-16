@@ -171,7 +171,7 @@ describe("host — doorbell, drop, re-read", () => {
         const current = await bid.resolve()
         return <div data-testid="rc-reader">rc-bid:{current.value}</div>
       },
-      { match: "/rc-page", selector: "rc-reader" },
+      { match: "/rc-page" },
     )
     const url = "http://host.t/rc-page"
     const { result: wire } = await runWithRequestAsync(new Request(url), async () => {

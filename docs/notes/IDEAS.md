@@ -76,17 +76,17 @@ When tab A runs a server action that invalidates `["cart"]`, tab B is stale — 
 
 Persist `latestSentByCell` to `sessionStorage` (or IndexedDB for larger payloads) keyed by cell id + partition key, with a short TTL. On mount, hydrate the optimistic map from storage. Only persist entries with `pendingByCell[id] > 0` — once a write settles, drop the persisted entry. Open questions: cross-tab coherence (two tabs both write the same cell — last-write-wins?), and whether to surface the persisted state to the renderer differently from a fresh in-flight write.
 
-### Sharp edge: `reload({selector})` is too broad by default
+### Sharp edge: a bare `refreshSelector(name)` is too broad by default
 
-Today `getServerNavigation().reload({ selector: "cart" })` with no constraints bumps **every** cart-tagged parton across every connected viewer. The grammar supports per-request scoping via query-string constraints (`cart?cart_id=${cartId}`, matched as a subset of the parton's constraint surface — match params + bound cell args), but the safe pattern is opt-in: forget the constraint and one user's cart mutation causes every other viewer's cart to refetch on their next nav. Silent footgun — the caller sees correct local behaviour; the cross-user fan-out only shows up under load.
+Today `refreshSelector("cart")` with no constraints bumps **every** parton that reads `tag("cart")`, across every connected viewer. The grammar supports per-request scoping via query-string constraints (`cart?cart_id=${cartId}`, matched as a subset of the parton's constraint surface — match params + bound cell args), but the safe pattern is opt-in: forget the constraint and one user's cart mutation causes every other viewer's cart to refetch on their next nav. Silent footgun — the caller sees correct local behaviour; the cross-user fan-out only shows up under load.
 
 Cells mitigate twice: partition-scoped writes (`cell.set` bumps `cell:<id>?<args>`, never the bare label) and storage-as-authoritative reads (a bare-bump re-render reads cell storage, so no upstream round-trip unless the loader misses). But the registry walk + re-render still happens per viewer, and any non-cell loader in the re-rendered body is a real upstream round-trip.
 
 Possible directions:
 
-- **Syntactic sugar.** `reload({ selector: "cart", scope: { cart_id: cartId } })` as a readable alternative to query-string interpolation. Same semantics; easier to read for multi-key cases.
+- **Syntactic sugar.** `refreshSelector("cart", { scope: { cart_id: cartId } })` as a readable alternative to query-string interpolation. Same semantics; easier to read for multi-key cases.
 - **Auto-scope from declared read keys.** If the framework tracks which `readCookie` / `readHeader` calls happened during the action body, fold those into default constraints. Render bodies already get this for free (the read is the dependency — tracked hooks fold into the fp via dep records); action bodies have no equivalent instrumentation yet. Small cost, large ergonomic win — the action says what it touched without naming each axis.
-- **Dev warning on bare bumps.** Warn when a `reload({selector})` would match >1 distinct constraint tuple in the current registry snapshot. Catches the footgun in development; ships nothing to production.
+- **Dev warning on bare bumps.** Warn when a `refreshSelector(name)` would match >1 distinct constraint tuple in the current registry snapshot. Catches the footgun in development; ships nothing to production.
 
 Not urgent: the cart action is the only real per-user mutation in-tree today; CMS draft is process-global; cells absorb the bare-bump cost via fp-skip. Real pressure arrives when a multi-user app ships several per-user mutating actions and the upstream round-trips start showing in flame graphs.
 

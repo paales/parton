@@ -39,8 +39,9 @@ import {
 import { localCell } from "../cell.ts"
 import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts"
 import { handleChannelPost } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
-import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
+import { PartialRoot, parton, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { searchParam } from "../server-hooks.ts"
 
@@ -65,24 +66,31 @@ const curACell = localCell({ id: "cur-a-cell", shape: "number", initial: 0 })
 const curBCell = localCell({ id: "cur-b-cell", shape: "number", initial: 0 })
 
 // ── Half 1 fixture: reader + stalling sibling, both step-dependent so
-// the navigation render re-runs their bodies (no fp-skip).
+// the navigation render re-runs their bodies (no fp-skip). Each reader
+// reads its own wake tag — the drive's `shutdown` wake is a
+// `refreshSelector` bump on that name, and only a tag READER answers it.
 const CurAReader = parton(
-  async function CurAReaderRender(_: RenderArgs) {
-    const step = searchParam("step") ?? ""
-    const v = await curACell.resolve()
-    renders.aReader++
-    onAReaderRender(v.value)
-    return <div>{`cur-a-reader:${step}:${v.value}`}</div>
-  },
-  { selector: "cur-a-reader" },
+  Object.assign(
+    async function CurAReaderRender(_: RenderArgs) {
+      tag("cur-a-reader")
+      const step = searchParam("step") ?? ""
+      const v = await curACell.resolve()
+      renders.aReader++
+      onAReaderRender(v.value)
+      return <div>{`cur-a-reader:${step}:${v.value}`}</div>
+    },
+    { displayName: "cur-a-reader" },
+  ),
 )
 const CurASlow = parton(
-  async function CurASlowRender(_: RenderArgs) {
-    const step = searchParam("step") ?? ""
-    await gate
-    return <div>{`cur-a-slow:${step}`}</div>
-  },
-  { selector: "cur-a-slow" },
+  Object.assign(
+    async function CurASlowRender(_: RenderArgs) {
+      const step = searchParam("step") ?? ""
+      await gate
+      return <div>{`cur-a-slow:${step}`}</div>
+    },
+    { displayName: "cur-a-slow" },
+  ),
 )
 const PageA = (): ReactNode => (
   <PartialRoot>
@@ -94,27 +102,32 @@ const PageA = (): ReactNode => (
 // ── Half 2 fixture: the reader nested in a stalling WRAPPER, so the
 // write can land before the reader's wrapper (and its fp fold) runs.
 const CurBReader = parton(
-  async function CurBReaderRender(_: RenderArgs) {
-    const step = searchParam("step") ?? ""
-    const v = await curBCell.resolve()
-    renders.bReader++
-    return <div>{`cur-b-reader:${step}:${v.value}`}</div>
-  },
-  { selector: "cur-b-reader" },
+  Object.assign(
+    async function CurBReaderRender(_: RenderArgs) {
+      tag("cur-b-reader")
+      const step = searchParam("step") ?? ""
+      const v = await curBCell.resolve()
+      renders.bReader++
+      return <div>{`cur-b-reader:${step}:${v.value}`}</div>
+    },
+    { displayName: "cur-b-reader" },
+  ),
 )
 const CurBWrap = parton(
-  async function CurBWrapRender(_: RenderArgs) {
-    const step = searchParam("step") ?? ""
-    onBWrapStart()
-    await gate
-    return (
-      <div>
-        {`cur-b-wrap:${step}`}
-        <CurBReader />
-      </div>
-    )
-  },
-  { selector: "cur-b-wrap" },
+  Object.assign(
+    async function CurBWrapRender(_: RenderArgs) {
+      const step = searchParam("step") ?? ""
+      onBWrapStart()
+      await gate
+      return (
+        <div>
+          {`cur-b-wrap:${step}`}
+          <CurBReader />
+        </div>
+      )
+    },
+    { displayName: "cur-b-wrap" },
+  ),
 )
 const PageB = (): ReactNode => (
   <PartialRoot>
@@ -280,11 +293,13 @@ describe("covering-segment coverage cursor", () => {
       const reopened = await h.segments.next()
       if (reopened.done || reopened.value.kind !== "lanes")
         throw new Error("expected the reopened lanes region")
+      // The reader sits inside the wrapper, so its wire id carries the
+      // placement fold — its base identity is what the assertions name.
       const laneIter = reopened.value.lanes[Symbol.asyncIterator]()
       const lane = await nextLane(laneIter)
-      expect(lane.partonId).toBe("cur-b-reader")
+      expect(stripPlacementFold(lane.partonId)).toBe("cur-b-reader")
       const decoded = await decodeLane(lane)
-      expect(decoded.bodyText).toContain('"data-partial-id":"cur-b-reader"')
+      expect(decoded.bodyText).toMatch(/"data-partial-id":"cur-b-reader(~[0-9a-f]{16})?"/)
       expect(decoded.bodyText).not.toContain("cur-b-reader:2:1")
       expect(renders.bReader).toBe(2)
 

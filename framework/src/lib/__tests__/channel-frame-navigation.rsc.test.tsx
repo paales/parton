@@ -44,9 +44,10 @@ import {
 } from "../../test/live-drive.tsx"
 import { CHANNEL_ENDPOINT, type ChannelEnvelope } from "../channel-protocol.ts"
 import { _peekConnectionSession, handleChannelPost } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { Frame } from "../frame.tsx"
-import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
+import { PartialRoot, parton, stripPlacementFold, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { _reserveActionConsequences } from "../segmented-response.ts"
 import { pathname } from "../server-hooks.ts"
@@ -70,35 +71,37 @@ function armProducerGate(): void {
 }
 
 const WindowShared = parton(
-  function WindowSharedRender(_: RenderArgs) {
-    renders.shared++
-    return <div data-shared>{`shared:${renders.shared}`}</div>
-  },
-  { selector: "win-shared" },
+  Object.assign(
+    function WindowSharedRender(_: RenderArgs) {
+      renders.shared++
+      return <div data-shared>{`shared:${renders.shared}`}</div>
+    },
+    { displayName: "win-shared" },
+  ),
 )
 
 // Frame-scoped parton. Its body follows the FRAME url: `/panel/slow`
 // stalls (the cancel test's in-flight render), `/panel/stream` is a
 // PRODUCER (marks live and awaits the producer gate — the chat's
 // ChunkSlot shape), anything else renders synchronously.
-const FramePanel = parton(
-  async function FramePanelRender(_: RenderArgs) {
-    renders.panel++
-    const p = pathname()
-    if (p === "/panel/slow") {
-      await slowGate
-      return <div data-panel>{`panel-slow:${renders.panel}`}</div>
-    }
-    if (p === "/panel/stream") {
-      renders.producer++
-      markConnectionLive()
-      await producerGate
-      return <div data-panel>{`panel-produced:${renders.producer}`}</div>
-    }
-    return <div data-panel>{`panel:${p}:${renders.panel}`}</div>
-  },
-  { selector: "frame-panel" },
-)
+// The tag read is the drive's shutdown handle — the frame's lanes
+// themselves ride url statements, never a bump.
+const FramePanel = parton(async function FramePanelRender(_: RenderArgs) {
+  tag("frame-panel")
+  renders.panel++
+  const p = pathname()
+  if (p === "/panel/slow") {
+    await slowGate
+    return <div data-panel>{`panel-slow:${renders.panel}`}</div>
+  }
+  if (p === "/panel/stream") {
+    renders.producer++
+    markConnectionLive()
+    await producerGate
+    return <div data-panel>{`panel-produced:${renders.producer}`}</div>
+  }
+  return <div data-panel>{`panel:${p}:${renders.panel}`}</div>
+})
 
 const PageFramed = (): ReactNode => (
   <PartialRoot>
@@ -109,13 +112,20 @@ const PageFramed = (): ReactNode => (
   </PartialRoot>
 )
 
-// A window route pair for the reservation-void test.
+// A window route pair for the reservation-void test. Each subscribes to
+// its own bump signal by READING the tag — `refreshSelector("cons-a")`
+// reaches exactly that parton, which is what the action's reservation
+// resolves against.
 const NavA = parton(
-  function ConsANavRender(_: RenderArgs) {
-    renders.shared++
-    return <div data-a>consequence-a</div>
-  },
-  { match: "/cons-a", selector: "cons-a" },
+  Object.assign(
+    function ConsANavRender(_: RenderArgs) {
+      tag("cons-a")
+      renders.shared++
+      return <div data-a>consequence-a</div>
+    },
+    { displayName: "cons-a" },
+  ),
+  { match: "/cons-a" },
 )
 // Test-only stall switch: the parton stalls only while the flag is
 // up, so the void test can park ONE lane render on the gate and still
@@ -123,10 +133,11 @@ const NavA = parton(
 let stallCons = false
 const ConsSlow = parton(
   async function ConsSlowRender(_: RenderArgs) {
+    tag("cons-slow")
     if (stallCons) await slowGate
     return <div data-slow>cons-slow</div>
   },
-  { match: "/cons-a", selector: "cons-slow" },
+  { match: "/cons-a" },
 )
 const PageCons = (): ReactNode => (
   <PartialRoot>
@@ -233,8 +244,11 @@ describe("frame url frames lane frame-scoped", () => {
         // The covering lane arrives ON the open region — no region
         // tear, no whole-tree segment — rendered against the NEW
         // frame URL, explicit (the refetch contract).
+        // A framed parton's id folds with its placement; the wire keys
+        // every entry below on that folded id.
         const lane = await nextLane(laneIter)
-        expect(lane.partonId).toBe("frame-panel")
+        expect(stripPlacementFold(lane.partonId)).toBe("frame-panel")
+        const fid = lane.partonId
         expect((await decodeLane(lane)).bodyText).toContain("panel:/panel/b:2")
         // Window partons untouched — frame scoping held.
         expect(renders.shared).toBe(1)
@@ -253,10 +267,11 @@ describe("frame url frames lane frame-scoped", () => {
         // its nav flag, rendered as-of the consumed statement.
         const seqEntry = await waitForEntry(
           h.entries,
-          (e) => e.tag === "seq" && e.body.startsWith("frame-panel\n"),
+          (e) => e.tag === "seq" && e.body.startsWith(`${fid}\n`),
           "frame lane seq entry",
         )
-        expect(seqEntry.body).toBe("frame-panel\n2 2 nav=2")
+        expect(seqEntry.body).toBe(`${fid}\n2 2 nav=2`)
+        // The consumed-nav seq keys on the FRAME path, not the parton id.
         expect(_peekConnectionSession(conn)?.consumedFrameNavSeqs.get("frame-panel")).toBe(2)
 
         // Retransmit idempotence: the same statement again latches
@@ -327,7 +342,8 @@ describe("frame url frames lane frame-scoped", () => {
           ),
         ).toBe(204)
         const stalled = await nextLane(laneIter)
-        expect(stalled.partonId).toBe("frame-panel")
+        expect(stripPlacementFold(stalled.partonId)).toBe("frame-panel")
+        const fid = stalled.partonId
 
         // The superseding statement: cancel + url in ONE envelope,
         // cancel first (the in-order pass applies cancel-then-url).
@@ -359,13 +375,13 @@ describe("frame url frames lane frame-scoped", () => {
 
         // Exactly one settled covering lane — the newest statement's.
         const covering = await nextLane(laneIter)
-        expect(covering.partonId).toBe("frame-panel")
+        expect(stripPlacementFold(covering.partonId)).toBe("frame-panel")
         expect((await decodeLane(covering)).bodyText).toContain("panel:/panel/c:")
         const navFlagged = h.entries.filter(
-          (e) => (e.tag === "seq" || e.tag === "muxlive") && e.body.startsWith("frame-panel\n"),
+          (e) => (e.tag === "seq" || e.tag === "muxlive") && e.body.startsWith(`${fid}\n`),
         )
         expect(navFlagged).toHaveLength(1)
-        expect(navFlagged[0].body).toMatch(/^frame-panel\n\d+ 4 nav=4$/)
+        expect(navFlagged[0].body).toMatch(new RegExp(`^${fid}\\n\\d+ 4 nav=4$`))
         // A replayed cancel (same seq) is a no-op: the covering lane's
         // render was started by a NEWER statement and stands.
         expect(
@@ -428,16 +444,17 @@ describe("producer lanes", () => {
         ).toBe(204)
 
         const lane = await nextLane(laneIter)
-        expect(lane.partonId).toBe("frame-panel")
+        expect(stripPlacementFold(lane.partonId)).toBe("frame-panel")
+        const fid = lane.partonId
 
         // The producer announcement lands WHILE the producer await
         // still stalls the body — the gate has not been released.
         const live = await waitForEntry(
           h.entries,
-          (e) => e.tag === "muxlive" && e.body.startsWith("frame-panel\n"),
+          (e) => e.tag === "muxlive" && e.body.startsWith(`${fid}\n`),
           "muxlive announcement",
         )
-        expect(live.body).toMatch(/^frame-panel\n\d+ 5 nav=5$/)
+        expect(live.body).toMatch(new RegExp(`^${fid}\\n\\d+ 5 nav=5$`))
         expect(renders.producer).toBe(1)
 
         // Producer resolves → the body drains and muxends. No
@@ -446,7 +463,7 @@ describe("producer lanes", () => {
         releaseProducer()
         expect((await decodeLane(lane)).bodyText).toContain("panel-produced:1")
         expect(
-          h.entries.filter((e) => e.tag === "seq" && e.body.startsWith("frame-panel\n")),
+          h.entries.filter((e) => e.tag === "seq" && e.body.startsWith(`${fid}\n`)),
         ).toHaveLength(0)
 
         await h.shutdown("frame-panel")

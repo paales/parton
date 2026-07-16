@@ -41,6 +41,7 @@ import {
 } from "../../test/live-drive.tsx"
 import { CHANNEL_ENDPOINT } from "../channel-protocol.ts"
 import { _peekConnectionSession, handleChannelPost } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
@@ -48,21 +49,18 @@ import { SkelBox } from "./cull-skeleton-fixture.tsx"
 
 const renders = { healA: 0, healB: 0, alias: 0 }
 
-const HealA = parton(
-  function HealARender(_: RenderArgs) {
-    renders.healA++
-    return <div data-heal-a>{`heal-a:${renders.healA}`}</div>
-  },
-  { selector: "heal-a" },
-)
+// The bump target reads its wake tag — `refreshSelector("heal-a")`
+// lanes exactly its readers.
+const HealA = parton(function HealARender(_: RenderArgs) {
+  tag("heal-a")
+  renders.healA++
+  return <div data-heal-a>{`heal-a:${renders.healA}`}</div>
+})
 
-const HealB = parton(
-  function HealBRender(_: RenderArgs) {
-    renders.healB++
-    return <div data-heal-b>{`heal-b:${renders.healB}`}</div>
-  },
-  { selector: "heal-b" },
-)
+const HealB = parton(function HealBRender(_: RenderArgs) {
+  renders.healB++
+  return <div data-heal-b>{`heal-b:${renders.healB}`}</div>
+})
 
 const DropPage = (): ReactNode => (
   <PartialRoot>
@@ -78,11 +76,12 @@ let openGate: (() => void) | null = null
 
 const AliasCull = parton(
   async function AliasCullRender(_: RenderArgs) {
+    tag("alias-cull")
     renders.alias++
     if (gate) await gate
     return <div data-alias>{`alias:${renders.alias}`}</div>
   },
-  { selector: "alias-cull", cull: { skeleton: SkelBox } },
+  { cull: { skeleton: SkelBox } },
 )
 
 const AliasPage = (): ReactNode => (

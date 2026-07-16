@@ -37,14 +37,11 @@ import { expires, time } from "../server-hooks.ts"
 // A live ticker: content changes every render, wake declared in-body —
 // so a lane arrives from the expiry boundary alone, no bump needed.
 const renders = { n: 0 }
-const WtClock = parton(
-  function WtClockRender(_: RenderArgs) {
-    renders.n++
-    expires(time().in(80))
-    return <time data-wt-clock>{`wt-tick-${renders.n}`}</time>
-  },
-  { selector: "wt-clock" },
-)
+const WtClock = parton(function WtClockRender(_: RenderArgs) {
+  renders.n++
+  expires(time().in(80))
+  return <time data-wt-clock>{`wt-tick-${renders.n}`}</time>
+})
 
 /**
  * A fake WebTransport bidirectional stream as a pair of TransformStreams:

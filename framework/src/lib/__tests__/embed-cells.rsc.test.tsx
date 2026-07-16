@@ -25,15 +25,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Suspense, type ReactNode } from "react"
-import { PartialRoot, computeRouteKey, parton, partialFromSnapshot } from "../partial.tsx"
+import {
+  PartialRoot,
+  computeRouteKey,
+  parton,
+  partialFromSnapshot,
+  stripPlacementFold,
+} from "../partial.tsx"
 import type { RenderArgs } from "../partial.tsx"
 import { RemoteFrame } from "../remote-frame.tsx"
 import {
   EMBED_CELLS_HEADER,
   EMBED_DEPTH_HEADER,
   EMBED_NS_HEADER,
-  applyEmbedNamespace,
   embedNamespaceOf,
+  stripEmbedNamespace,
 } from "../page-embed.ts"
 import { localCell } from "../cell.ts"
 import { getBoundCells } from "../server-hooks.ts"
@@ -160,7 +166,6 @@ const EcCartNote = parton(
     )
   },
   {
-    selector: "ec-cart-note",
     match: "/ec/cart-note",
     cells: { cart: { required: true }, locale: {} },
   },
@@ -179,17 +184,20 @@ function EmbeddedRoot() {
 }
 
 const EcHostPage = parton(
-  async function EcHostRender(_: RenderArgs) {
-    const cart = await ecCart.resolve()
-    return (
-      <section data-testid="ec-host">
-        <Suspense fallback={null}>
-          <RemoteFrame url="/ec/cart-note" cells={{ cart }} />
-        </Suspense>
-      </section>
-    )
-  },
-  { match: "/ec-host", selector: "#ec-host-spec" },
+  Object.assign(
+    async function EcHostRender(_: RenderArgs) {
+      const cart = await ecCart.resolve()
+      return (
+        <section data-testid="ec-host">
+          <Suspense fallback={null}>
+            <RemoteFrame url="/ec/cart-note" cells={{ cart }} />
+          </Suspense>
+        </section>
+      )
+    },
+    { displayName: "ec-host-spec" },
+  ),
+  { match: "/ec-host" },
 )
 
 function hostRoot(children: ReactNode): ReactNode {
@@ -225,14 +233,17 @@ describe("bound cells — wire shape", () => {
 
   it("no bindings keeps the embed a GET with no cells header", async () => {
     const NoCellsHost = parton(
-      function EcNoCellsHostRender(_: RenderArgs) {
-        return (
-          <Suspense fallback={null}>
-            <RemoteFrame url="/ec/free-page" />
-          </Suspense>
-        )
-      },
-      { match: "/ec-nocells-host", selector: "#ec-nocells-host-spec" },
+      Object.assign(
+        function EcNoCellsHostRender(_: RenderArgs) {
+          return (
+            <Suspense fallback={null}>
+              <RemoteFrame url="/ec/free-page" />
+            </Suspense>
+          )
+        },
+        { displayName: "ec-nocells-host-spec" },
+      ),
+      { match: "/ec-nocells-host" },
     )
     const { calls } = stubSelfServingFetch(() => (
       <PartialRoot>
@@ -252,10 +263,13 @@ describe("bound cells — wire shape", () => {
 
   it("rejects non-resolved bindings with the resolve-in-body guidance", async () => {
     const BadHost = parton(
-      function EcBadHostRender(_: RenderArgs) {
-        return <RemoteFrame url="/ec/cart-note" cells={{ cart: ecCart as never }} />
-      },
-      { match: "/ec-bad-host", selector: "#ec-bad-host-spec" },
+      Object.assign(
+        function EcBadHostRender(_: RenderArgs) {
+          return <RemoteFrame url="/ec/cart-note" cells={{ cart: ecCart as never }} />
+        },
+        { displayName: "ec-bad-host-spec" },
+      ),
+      { match: "/ec-bad-host" },
     )
     stubSelfServingFetch(() => <EmbeddedRoot />)
     const out = await streamToText(
@@ -334,9 +348,16 @@ describe("bound cells — dep recording + refetch re-resolution", () => {
     )
     expect(calls).toHaveLength(1)
     const ns = calls[0].headers.get(EMBED_NS_HEADER)!
-    const id = applyEmbedNamespace(ns, "ec-cart-note")
     const snapshots = _readSnapshotsForRoute("default", computeRouteKey("http://t/ec-host"))
-    const snap = snapshots.get(id)
+    // The placement's key is the id the embedded render minted: this
+    // placement's namespace over the folded spec id (the embedded page
+    // renders from inside the host parton, inheriting its placement).
+    const id = [...snapshots.keys()].find(
+      (k) =>
+        k.startsWith(`${ns}:`) && stripPlacementFold(stripEmbedNamespace(k)) === "ec-cart-note",
+    )
+    expect(id).toBeDefined()
+    const snap = snapshots.get(id!)
     expect(snap).toBeDefined()
     const source = snap!.source as PageSnapshotSource
     expect(source.cells).toEqual({ cart: { cellId: "ec.cart" } })
@@ -348,7 +369,7 @@ describe("bound cells — dep recording + refetch re-resolution", () => {
 
     const out = await streamToText(
       await renderPageStream(
-        <>{partialFromSnapshot(id, snap!)}</>,
+        <>{partialFromSnapshot(id!, snap!)}</>,
         "http://t/ec-refetch-host",
         {},
         null,

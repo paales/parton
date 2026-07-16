@@ -15,9 +15,10 @@ export interface WhenVisibleProps extends ActivatorProps {
  * Activator: fires the enclosing Partial's refetch when the fallback
  * enters the viewport.
  *
- *   <Partial selector="#feed" fallback={<Skel/>} defer={<WhenVisible rootMargin="200px"/>}>
- *     <Feed/>
- *   </Partial>
+ *   const Feed = parton(FeedRender, {
+ *     fallback: <Skel/>,
+ *     defer: <WhenVisible rootMargin="200px"/>,
+ *   })
  *
  * `partialId` and `children` are INJECTED by `<Partial defer=…>`. If
  * you need to render `<WhenVisible>` outside a `defer` slot (you

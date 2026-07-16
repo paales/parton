@@ -27,11 +27,13 @@ const flavor = localCell({
 })
 
 const InBody = parton(
-  async function InBodyRender(_: RenderArgs) {
-    const c = await counter.resolve()
-    return <span>{`in-body-count:${c.value}`}</span>
-  },
-  { selector: "#cell-resolve" },
+  Object.assign(
+    async function InBodyRender(_: RenderArgs) {
+      const c = await counter.resolve()
+      return <span>{`in-body-count:${c.value}`}</span>
+    },
+    { displayName: "cell-resolve" },
+  ),
 )
 
 async function flightAt(url: string, node: React.ReactNode): Promise<string> {

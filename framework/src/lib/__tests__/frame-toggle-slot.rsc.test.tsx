@@ -31,23 +31,22 @@ import { pathname } from "../server-hooks.ts"
 
 // The frame's top-level parton — the statement's explicit target.
 const Panel = parton(
-  function PanelRender(_: RenderArgs) {
-    return (
-      <div data-panel>
-        <InnerTab />
-      </div>
-    )
-  },
-  { selector: "menu-panel" },
+  Object.assign(
+    function PanelRender(_: RenderArgs) {
+      return (
+        <div data-panel>
+          <InnerTab />
+        </div>
+      )
+    },
+    { displayName: "menu-panel" },
+  ),
 )
 // Nested, constant matchKey, content from a tracked read — the shape
 // whose slot the toggle cycles.
-const InnerTab = parton(
-  function InnerTabRender(_: RenderArgs) {
-    return <div data-tab>{`tab:${pathname()}`}</div>
-  },
-  { selector: "inner-tab" },
-)
+const InnerTab = parton(function InnerTabRender(_: RenderArgs) {
+  return <div data-tab>{`tab:${pathname()}`}</div>
+})
 const Page = (): ReactNode => (
   <PartialRoot>
     <Frame name="menu-panel" initialUrl="/general">

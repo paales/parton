@@ -34,7 +34,6 @@ export const HeroBlock = block(
     )
   },
   {
-    selector: ".demo-block .composed-hero",
     schema: ({ cms }) => ({
       headline: cms.text("headline"),
       subhead: cms.text("subhead"),

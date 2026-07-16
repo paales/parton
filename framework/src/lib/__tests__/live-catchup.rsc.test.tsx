@@ -36,26 +36,25 @@ import {
   withLiveDrive,
 } from "../../test/live-drive.tsx"
 import { renderWithRequest } from "../../test/rsc-server.ts"
+import { tag } from "../current-parton.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 
 const renders = { a: 0, b: 0 }
 
-const LiveA = parton(
-  function LiveARender(_: RenderArgs) {
-    renders.a++
-    return <div data-a>{`a:${renders.a}`}</div>
-  },
-  { selector: "live-a" },
-)
+// Each parton subscribes to its bump signal by READING the tag — the
+// catch-up's `refreshSelector("live-b")` reaches exactly its readers.
+const LiveA = parton(function LiveARender(_: RenderArgs) {
+  tag("live-a")
+  renders.a++
+  return <div data-a>{`a:${renders.a}`}</div>
+})
 
-const LiveB = parton(
-  function LiveBRender(_: RenderArgs) {
-    renders.b++
-    return <div data-b>{`b:${renders.b}`}</div>
-  },
-  { selector: "live-b" },
-)
+const LiveB = parton(function LiveBRender(_: RenderArgs) {
+  tag("live-b")
+  renders.b++
+  return <div data-b>{`b:${renders.b}`}</div>
+})
 
 function Page(): ReactNode {
   return (

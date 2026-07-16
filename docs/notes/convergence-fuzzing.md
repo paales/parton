@@ -49,13 +49,13 @@ Actions are the client-side moves a real page can make on a held live
 connection, generated from a seeded PRNG (mulberry32 — the seed fully
 determines the sequence):
 
-| Action     | Wire form                                                                           | Exercises                                                                            |
-| ---------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `navigate` | window `url` frame, intent `push`                                                   | navigation consume, lane tear, mirror survival, match-gate park/restore, as-of drops |
-| `write`    | `cell.set` through a real request scope                                             | invalidation fan-out, the wake index, lane rendering, fp heals                       |
-| `flip`     | `visible` frame with `changed` + wholesale set + the model's actual `cached` tokens | cull gates, park/unpark, flip-in revalidation, fp-skip confirms, deferred flips      |
-| `refetch`  | window `url` frame, intent `silent`, same URL + `?__force=<label>`                  | forced lanes, fold exclusion, the covering segment                                   |
-| `settle`   | drain to quiescence (below)                                                         | coalescing boundaries — actions between settles race each other and the driver       |
+| Action     | Wire form                                                                                                      | Exercises                                                                            |
+| ---------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `navigate` | window `url` frame, intent `push`                                                                              | navigation consume, lane tear, mirror survival, match-gate park/restore, as-of drops |
+| `write`    | `cell.set` through a real request scope                                                                        | invalidation fan-out, the wake index, lane rendering, fp heals                       |
+| `flip`     | `visible` frame with `changed` + wholesale set + the model's actual `cached` tokens                            | cull gates, park/unpark, flip-in revalidation, fp-skip confirms, deferred flips      |
+| `refetch`  | window `url` frame, intent `silent`, same URL + `?__force=<id>` (the label's WIRE id — see the id bases below) | forced lanes, fold exclusion, the covering segment                                   |
+| `settle`   | drain to quiescence (below)                                                                                    | coalescing boundaries — actions between settles race each other and the driver       |
 
 Actions between two settles form a BURST: they are issued without
 reading the wire, so they interleave with the driver's own concurrent
@@ -128,6 +128,42 @@ rows (to recognize `#CullPair`), and classifies: fresh PEB emissions
 (`partialId`/`partialFingerprint`/`partialMatchKey`), holes vs
 confirms (`data-partial-confirm`), cull pairs (`culled` prop), parked
 context (`<Activity mode="hidden">` subtrees), and stamps.
+
+### Two id bases, one translation seam
+
+A parton's WIRE id folds its placement: a spec placed under another
+parton (or inside a `<Frame>`) mints `<id>~<16 hex>`; a root-level
+placement stays bare. So `fz-inner`, nested under `fz-wrap`, crosses
+the wire — and keys the registry, the client cache, and the `?cached=`
+tokens — as `fz-inner~9ab1…`, while the fixture (`universeIds`,
+`parentOf`, `cullableIds`, `refetchLabels`) and the `[S|<id>|…]` stamps
+a body writes name it bare.
+
+Both harnesses hold exactly one seam between the two:
+
+- wire → bare (`stripFoldedIds`) for everything the oracle compares, so
+  the cold-render expectation and the incremental-merge actual sit on
+  the SAME basis;
+- bare → wire (`wireIdOf`) for everything the protocol addresses by id:
+  the `?__force=` overlay, the visibility statement, the `?cached=`
+  tokens, the snapshot lookup a lane render starts from, the client
+  cache lookups the honesty oracle probes.
+
+The map is LEARNED from the server's own payloads — the fold hashes the
+ambient placement, which only the render knows, so reconstructing it
+harness-side would be a guess. An id no payload has taught resolves to
+itself: a root placement is its own wire id, and a nested one that has
+never rendered has no snapshot to address. Cullable ids must therefore
+be root-level placements: the attach statement seeds visibility before
+any payload has taught the harness anything.
+
+A force that misses is SILENT (the driver resolves `__force` against the
+route's snapshots and drops what it can't find), so a stale bare label
+here costs no failure — it costs coverage. Same for the drive's
+shutdown wake: `refreshSelector` reaches a parton only through the
+labels it subscribes to (its cells and its `tag()` reads), so the
+sentinel `tag()`s its own id — without that subscription the parked
+driver never wakes and shutdown waits out the keepalive backstop.
 
 ### Quiescence — the driver's own signals, never timing
 
@@ -267,11 +303,12 @@ flipped parton) re-render one parton from its registry snapshot
 (`partialFromSnapshot` under a lane-shaped partial state,
 `flushScopeId` trailer — the production lane pipeline) and commit
 through the real `_commitPartonLane` / `_commitPartonLaneProgressive`
-+ `_applyFpUpdates`. The fp-skip verdicts deciding who ships bytes
-and who confirms are the real server verdicts against the client's
-real advertised manifest. Module-level client state persists across
-steps and resets per trial (`_resetClientStateForTest`,
-`_resetLaneCommitStateForTest`).
+
+- `_applyFpUpdates`. The fp-skip verdicts deciding who ships bytes
+  and who confirms are the real server verdicts against the client's
+  real advertised manifest. Module-level client state persists across
+  steps and resets per trial (`_resetClientStateForTest`,
+  `_resetLaneCommitStateForTest`).
 
 **Interleaving as fuzz dimensions, causally.** Each action carries a
 `DeliveryPlan`: `hold` withholds tail Flight rows at commit time (the
@@ -816,8 +853,7 @@ node+rsc suites are untouched by them.
   held write lanes). **Fix:** the harvest reports pendingness and a
   pending-blocked pass DEFERS the prune (over-retention, never
   blanking — the same discipline the pending-RENDER guard always had;
-  the live-tree eviction exemption still refreshes). Pinned seed
-  90072.
+  the live-tree eviction exemption still refreshes). Pinned seed 90072.
 
 - **F12 — FIXED: a torn progressive delivery kept advertising — and
   displaying — bytes it could not complete (ghost confirm +
@@ -846,7 +882,7 @@ node+rsc suites are untouched by them.
   client's parked copy (held inside the culled ancestor's content)
   with a state it does not carry. The next flip-in's verdict then
   legitimately CONFIRMED the mis-tagged copy: `[flip out wrap,
-  navigate cross-state, flip in wrap]` showed the pre-nav descendant
+navigate cross-state, flip in wrap]` showed the pre-nav descendant
   state (~0.2% of v2 trials; seeds 77/50507/50925 all shrink to this
   shape). Fix: the culled-ancestor sibling of the F2 discipline ("a
   snapshot that did not render here gets NO warm fp") in

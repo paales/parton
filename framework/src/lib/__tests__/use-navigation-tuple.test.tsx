@@ -8,11 +8,9 @@ import {
   _channelNavPoint,
   _channelNavSegmentCommitted,
   _channelNavSegmentSettled,
-  _channelNavSubsumedByAttach,
   _resetChannelClient,
 } from "../channel-client.ts"
 import { PartialIdContext, useNavigation } from "../partial-client.tsx"
-import { NavigationError } from "../../runtime/navigation-error.ts"
 import type { NavigationProgress } from "../../runtime/navigation-api.ts"
 
 /**
@@ -32,11 +30,11 @@ import type { NavigationProgress } from "../../runtime/navigation-api.ts"
  *
  * Tests wrap `Probe` in a `TestBoundary` to capture both the per-render
  * progress booleans (via `cap.states`) AND the thrown error (via
- * `cap.caughtByBoundary`). The transport is the channel: a selector
- * reload is a `?__force=` url statement whose milestones resolve at the
- * covering segment's commit/settle — the tests drive those moments
- * directly (`_channelNavSegmentCommitted` / `Settled`) and read the
- * statement's content off the attach subsume's folded intent.
+ * `cap.caughtByBoundary`). The transport is the channel: a streaming
+ * reload (`reload({ streaming: true })`) is an in-place `?__force=` url
+ * statement whose milestones resolve at the covering segment's
+ * commit/settle — the tests drive those moments directly
+ * (`_channelNavSegmentCommitted` / `Settled`).
  */
 
 let container: HTMLElement
@@ -62,7 +60,7 @@ afterEach(() => {
 })
 
 interface FireOpts {
-  selector?: string | string[]
+  streaming?: boolean
   signal?: AbortSignal
 }
 
@@ -103,12 +101,12 @@ class TestBoundary extends React.Component<
   }
 }
 
-async function render(capture: Capture, partialId: string | null = null) {
+async function render(capture: Capture) {
   await act(async () => {
     root = createRoot(container)
     root.render(
       <TestBoundary capture={capture}>
-        <PartialIdContext.Provider value={partialId}>
+        <PartialIdContext.Provider value={null}>
           <Probe capture={capture} />
         </PartialIdContext.Provider>
       </TestBoundary>,
@@ -118,24 +116,6 @@ async function render(capture: Capture, partialId: string | null = null) {
 
 function newCapture(): Capture {
   return { fire: null, states: [], caughtByBoundary: null }
-}
-
-/** The labels the most recent fire stated, read off the attach
- *  subsume's folded intent (`?__force=` on the pending statement's
- *  URL). Also re-anchors the pending records at 0 — `settleAll`
- *  resolves them. */
-function statedForce(): string | null {
-  const intent = _channelNavSubsumedByAttach()
-  if (intent.url === null) return null
-  return new URL(intent.url, "http://t").searchParams.get("__force")
-}
-
-/** Resolve every pending record (post-subsume, as-of 0 covers all). */
-async function settleAll(): Promise<void> {
-  await act(async () => {
-    _channelNavSegmentCommitted(0)
-    _channelNavSegmentSettled(0)
-  })
 }
 
 const ALL_FALSE: NavigationProgress = {
@@ -163,10 +143,11 @@ describe("useNavigation().reload() progress tuple", () => {
 
     let firePromise!: Promise<unknown>
     await act(async () => {
-      firePromise = cap.fire!({ selector: "#hero" })
+      firePromise = cap.fire!({ streaming: true })
     })
-    // For a selector reload, committed resolves immediately (no URL
-    // change), but streaming + finished await the covering segment.
+    // For an in-place streaming reload, committed resolves immediately
+    // (no browser reload), but streaming + finished await the covering
+    // segment.
     expect(cap.states[cap.states.length - 1]).toMatchObject({
       committed: true,
       streaming: false,
@@ -200,75 +181,20 @@ describe("useNavigation().reload() progress tuple", () => {
 
     const controller = new AbortController()
     await act(async () => {
-      const p = cap.fire!({ selector: "#hero", signal: controller.signal })
+      const p = cap.fire!({ streaming: true, signal: controller.signal })
       controller.abort()
       await p.catch(() => {})
     })
 
     const last = cap.states[cap.states.length - 1]
     // Abort still lands the lifecycle — finished flips true.
-    // committed flips true because the URL didn't change. streaming
-    // stays false because the abort came before the covering segment.
+    // committed flips true because the reload is in-place (no browser
+    // reload). streaming stays false because the abort came before the
+    // covering segment.
     expect(last.finished).toBe(true)
     expect(last.committed).toBe(true)
     expect(last.streaming).toBe(false)
     // The bubbler never receives an abort.
     expect(cap.caughtByBoundary).toBeNull()
-  })
-})
-
-describe('"@self" token resolution', () => {
-  it('substitutes "@self" with the ambient partial id in selector', async () => {
-    const cap = newCapture()
-    await render(cap, "hero:abc")
-
-    await act(async () => {
-      void cap.fire!({ selector: "@self" })
-    })
-    expect(statedForce()).toBe("hero:abc")
-    await settleAll()
-  })
-
-  it('substitutes "@self" inside an array selector alongside other labels', async () => {
-    const cap = newCapture()
-    await render(cap, "card:xyz")
-
-    await act(async () => {
-      void cap.fire!({ selector: ["@self", ".price"] })
-    })
-    const labels = (statedForce() ?? "").split(",")
-    expect(labels).toContain("card:xyz")
-    expect(labels).toContain("price")
-    await settleAll()
-  })
-
-  it("throws a NavigationError to the boundary when @self is used outside a partial", async () => {
-    const cap = newCapture()
-    await render(cap, null)
-
-    let caught: unknown
-    await act(async () => {
-      caught = await cap.fire!({ selector: "@self" }).catch((e) => e)
-    })
-    // Errors thrown synchronously from the fire body (resolveSelfIn…
-    // throws on missing partial id) get wrapped into a
-    // NavigationError and surface through the milestone-rejection /
-    // render-throw bubbler path.
-    expect(caught).toBeInstanceOf(NavigationError)
-    expect((caught as NavigationError).message).toContain("@self")
-    // Nothing was stated — no pending statement folds into an attach.
-    expect(statedForce()).toBeNull()
-    expect(cap.caughtByBoundary).toBeInstanceOf(NavigationError)
-  })
-
-  it("leaves selectors without @self untouched even when ambient id is set", async () => {
-    const cap = newCapture()
-    await render(cap, "hero:abc")
-
-    await act(async () => {
-      void cap.fire!({ selector: "#cart" })
-    })
-    expect(statedForce()).toBe("cart")
-    await settleAll()
   })
 })

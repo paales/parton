@@ -14,7 +14,7 @@
  * Any other path returns `null` so the caller can fall through to
  * its normal page handler.
  *
- * The manifest lists every addressable spec; specs whose `match`
+ * The manifest lists every spec; specs whose `match`
  * carries a STATIC pathname (a literal URLPattern — no params, no
  * wildcards) additionally advertise it as `path`: the page a typed
  * binding embeds. The classification reads the compiled pattern's
@@ -81,12 +81,10 @@ const MANIFEST_PATH = "/__remote/manifest.json"
 const TYPES_PATH = "/__remote/types.d.ts"
 
 export interface RemoteManifestSpec {
-  /** Canonical spec id (the first refetch label). */
+  /** Canonical spec id (auto-derived from the Render name). */
   selector: string
   /** PascalCase export name the CLI will use in generated bindings. */
   exportName: string
-  /** Refetch labels (first is `selector`). */
-  labels: string[]
   /** The embeddable page path for this spec — its `match`'s static
    *  pathname — or null when the spec has no single fixed page (no
    *  match, params, wildcards). The CLI generates bindings only for
@@ -122,11 +120,9 @@ function staticPathOf(match: CompiledMatch | undefined): string | null {
 
 export function buildRemoteManifest(name: string, origin: string): RemoteManifest {
   const specs = listSpecs()
-    .filter((s) => s.addressable !== false)
     .map<RemoteManifestSpec>((s) => ({
       selector: s.id,
       exportName: pascalCase(s.id),
-      labels: s.labels,
       path: staticPathOf(s.match),
       capabilityType: s.capabilityType ?? null,
       cells: s.cells

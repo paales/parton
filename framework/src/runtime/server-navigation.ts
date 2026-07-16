@@ -2,18 +2,17 @@
  * Server-side navigation handle.
  *
  * Symmetric to the client's `useNavigation()` / `getNavigation()` but
- * runs inside a request context. Two operations:
- *
- *   - `.reload({selector})` — server-side equivalent of the client's
- *     targeted refetch. Queues a bump into the invalidation registry
- *     so partials carrying the selector's labels re-render with a new
- *     fingerprint on the next render.
+ * runs inside a request context. One operation:
  *
  *   - `.navigate(url, options)` — push a URL change. For the window
  *     scope, this mutates the server's request URL (next segment's
  *     vary reads the new URL) AND queues a `url`-tagged trailer entry
  *     so the client applies the same URL update to the browser URL
  *     bar via the Navigation API.
+ *
+ * Content freshness is NOT a navigation concern: a server-side write
+ * refreshes its readers through cells (`cell.set` — state-shaped) or
+ * `refreshSelector(name)` against a `tag()` read (event-shaped).
  *
  * Scope parameter:
  *
@@ -23,25 +22,17 @@
  *                       client). NOT yet wired — falls back to window
  *                       scope for now.
  *
- *   // In a server action
- *   await cart.addItem(...)
- *   getServerNavigation().reload({ selector: "cart" })
- *
  *   // From a server-side stream producer
  *   getServerNavigation().navigate(`?cursor=${n+1}`, { history: "replace" })
  */
 
 import { _mergeUrlUpdate, getRequest, setRequest } from "./context.ts"
-import { refreshSelector } from "./invalidation-registry.ts"
 
 export interface ServerNavigateOptions {
   history?: "push" | "replace"
 }
 
 export interface ServerNavigation {
-  /** Queue a refresh of partials matching the selector. */
-  reload(options: { selector: string | string[] }): void
-
   /** Push a URL change. Window-scoped (no `scope` argument): mutates
    *  the request URL so subsequent renders in this connection read
    *  the new URL, and queues a `url`-tagged trailer entry for the
@@ -59,9 +50,6 @@ export interface ServerNavigation {
 export function getServerNavigation(scope?: string | null): ServerNavigation {
   void scope
   return {
-    reload({ selector }) {
-      refreshSelector(selector)
-    },
     navigate(target, options) {
       const currentUrl = getRequest().url
       const resolved =

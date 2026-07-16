@@ -38,12 +38,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 // the declaration can end the entry's life.
 let renderSeq = 0
 const CachedBeat = parton(
-  function CachedBeatRender(_: RenderArgs) {
-    renderSeq++
-    expires(time().in(150))
-    return <span>{`cached-beat:render#${renderSeq}`}</span>
-  },
-  { selector: "#cache-expires-clamp", cache: { maxAge: 60 } },
+  Object.assign(
+    function CachedBeatRender(_: RenderArgs) {
+      renderSeq++
+      expires(time().in(150))
+      return <span>{`cached-beat:render#${renderSeq}`}</span>
+    },
+    { displayName: "cache-expires-clamp" },
+  ),
+  { cache: { maxAge: 60 } },
 )
 
 const tree = (

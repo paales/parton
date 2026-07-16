@@ -41,6 +41,7 @@ import { renderServerToFlight } from "../../test/rsc-server.ts"
 import { DRAIN_REFUSAL_HEADER } from "../channel-protocol.ts"
 import { type ChannelSocket, driveChannelSocket } from "../channel-server.ts"
 import { _peekConnectionSession } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import { buildMarker, TAG_DRAIN } from "../fp-trailer-marker.ts"
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
@@ -48,36 +49,31 @@ import { clearRegistry } from "../partial-registry.ts"
 
 const renders = { a: 0, slow: 0, hang: 0 }
 
-const DrainA = parton(
-  function DrainARender(_: RenderArgs) {
-    renders.a++
-    return <div data-a>{`a:${renders.a}`}</div>
-  },
-  { selector: "drain-a" },
-)
+const DrainA = parton(function DrainARender(_: RenderArgs) {
+  renders.a++
+  return <div data-a>{`a:${renders.a}`}</div>
+})
 
 /** Fast on the initial whole-tree render, ~80ms on lane re-renders —
  *  the in-flight-lane fixture (a loader the settle phase must wait
- *  out). */
-const SlowA = parton(
-  async function SlowARender(_: RenderArgs) {
-    renders.slow++
-    if (renders.slow > 1) await sleep(80)
-    return <div data-slow>{`slow:${renders.slow}`}</div>
-  },
-  { selector: "slow-a" },
-)
+ *  out). Reads its wake tag: `refreshSelector("slow-a")` opens its
+ *  lane. */
+const SlowA = parton(async function SlowARender(_: RenderArgs) {
+  tag("slow-a")
+  renders.slow++
+  if (renders.slow > 1) await sleep(80)
+  return <div data-slow>{`slow:${renders.slow}`}</div>
+})
 
 /** Fast on the initial render, NEVER resolves on lane re-renders — the
- *  wedged-loader fixture the deadline force-closes. */
-const HangA = parton(
-  async function HangARender(_: RenderArgs) {
-    renders.hang++
-    if (renders.hang > 1) await new Promise(() => {})
-    return <div data-hang>{`hang:${renders.hang}`}</div>
-  },
-  { selector: "hang-a" },
-)
+ *  wedged-loader fixture the deadline force-closes. Reads its wake
+ *  tag: `refreshSelector("hang-a")` opens its lane. */
+const HangA = parton(async function HangARender(_: RenderArgs) {
+  tag("hang-a")
+  renders.hang++
+  if (renders.hang > 1) await new Promise(() => {})
+  return <div data-hang>{`hang:${renders.hang}`}</div>
+})
 
 const PageA = (): ReactNode => (
   <PartialRoot>

@@ -41,39 +41,30 @@ import {
 
 // ─── The async shapes ────────────────────────────────────────────────
 
-const AsyncLeaf = parton(
-  async function FzAsyncLeafRender(_: RenderArgs) {
-    // The await is what makes the body's return value a genuinely
-    // pending Promise at wrap time — the outlined-row ($@) geometry.
-    await Promise.resolve()
-    const b = await fzCellB.resolve()
-    return <div>{`[S|fz-async-leaf|b=${b.value}]`}</div>
-  },
-  { selector: "fz-async-leaf" },
-)
+const AsyncLeaf = parton(async function FzAsyncLeafRender(_: RenderArgs) {
+  // The await is what makes the body's return value a genuinely
+  // pending Promise at wrap time — the outlined-row ($@) geometry.
+  await Promise.resolve()
+  const b = await fzCellB.resolve()
+  return <div>{`[S|fz-async-leaf|b=${b.value}]`}</div>
+})
 
-const AsyncInner = parton(
-  async function FzAsyncInnerRender(_: RenderArgs) {
-    const q = searchParam("q") ?? ""
-    const b = await fzCellB.resolve()
-    return <div>{`[S|fz-async-inner|q=${q}.b=${b.value}]`}</div>
-  },
-  { selector: "fz-async-inner" },
-)
+const AsyncInner = parton(async function FzAsyncInnerRender(_: RenderArgs) {
+  const q = searchParam("q") ?? ""
+  const b = await fzCellB.resolve()
+  return <div>{`[S|fz-async-inner|q=${q}.b=${b.value}]`}</div>
+})
 
-const AsyncWrap = parton(
-  async function FzAsyncWrapRender(_: RenderArgs) {
-    await Promise.resolve()
-    const a = await fzCellA.resolve()
-    return (
-      <div>
-        {`[S|fz-async-wrap|a=${a.value}]`}
-        <AsyncInner />
-      </div>
-    )
-  },
-  { selector: "fz-async-wrap" },
-)
+const AsyncWrap = parton(async function FzAsyncWrapRender(_: RenderArgs) {
+  await Promise.resolve()
+  const a = await fzCellA.resolve()
+  return (
+    <div>
+      {`[S|fz-async-wrap|a=${a.value}]`}
+      <AsyncInner />
+    </div>
+  )
+})
 
 function FuzzPageV2(): ReactNode {
   return (

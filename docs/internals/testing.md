@@ -185,10 +185,9 @@ import { parton, PartialRoot } from "../partial.tsx"
 import { searchParam } from "../server-hooks.ts"
 import { renderWithRequest } from "../../test/rsc-server.ts"
 
-const TestPartial = parton(
-  () => <span>{searchParam("v", "")}</span>,
-  { selector: "#test" },
-)
+const TestPartial = parton(function TestPartialRender() {
+  return <span>{searchParam("v", "")}</span>
+})
 
 const { stream } = await renderWithRequest(
   "http://localhost/?v=hello",

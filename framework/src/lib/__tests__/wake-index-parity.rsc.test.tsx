@@ -21,25 +21,28 @@ import {
 import type { DemuxedLane } from "../fp-trailer-split.ts"
 import { clearRegistry } from "../partial-registry.ts"
 import { PartialRoot, parton } from "../partial.tsx"
+import { tag } from "../current-parton.ts"
 import { _setWakeParityCheck } from "../segment-relevance.ts"
 
 const renders = { a: 0, b: 0 }
 
-const ParityA = parton(
-  function ParityARender() {
-    renders.a++
-    return <div>{`pa-${renders.a}`}</div>
-  },
-  { selector: "parity-a parity-shared" },
-)
+// Each parton subscribes by READING tags — its own name-tag plus the
+// shared fan-out tag. `refreshSelector("parity-a")` wakes ParityA
+// alone; `refreshSelector("parity-shared")` fans out to both. The
+// parton id is the Render name (`ParityARender` → "parity-a").
+const ParityA = parton(function ParityARender() {
+  tag("parity-a")
+  tag("parity-shared")
+  renders.a++
+  return <div>{`pa-${renders.a}`}</div>
+})
 
-const ParityB = parton(
-  function ParityBRender() {
-    renders.b++
-    return <div>{`pb-${renders.b}`}</div>
-  },
-  { selector: "parity-b parity-shared" },
-)
+const ParityB = parton(function ParityBRender() {
+  tag("parity-b")
+  tag("parity-shared")
+  renders.b++
+  return <div>{`pb-${renders.b}`}</div>
+})
 
 function Page() {
   return (

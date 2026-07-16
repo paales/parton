@@ -36,20 +36,17 @@ const pingsCell = localCell({
   deferred: true,
 })
 
-const DeferredBroadcast = parton(
-  async function DeferredBroadcastRender(_: RenderArgs) {
-    const pings = await pingsCell.resolve()
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="font-mono text-sm" data-testid="deferred-pings">
-          Pings: {pings.value}
-        </div>
-        <PingButton pings={pings} />
+const DeferredBroadcast = parton(async function DeferredBroadcastRender(_: RenderArgs) {
+  const pings = await pingsCell.resolve()
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="font-mono text-sm" data-testid="deferred-pings">
+        Pings: {pings.value}
       </div>
-    )
-  },
-  { selector: "deferred-broadcast" },
-)
+      <PingButton pings={pings} />
+    </div>
+  )
+})
 
 export const DeferredDemoPage = parton(
   function DeferredDemoRender() {

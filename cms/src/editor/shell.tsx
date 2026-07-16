@@ -11,9 +11,9 @@
  *
  * Tweaks (palette / surface / attachment / device) live in
  * session-partitioned cells (see `./state.ts`). Tree and field panels
- * are partials with the `#cms-edit-tree` and `#cms-edit-fields`
- * selectors — selector-targeted refetch on a tree click only re-runs
- * those two, never the preview.
+ * are partons reading the `cms-edit-tree` / `cms-edit-fields` tags —
+ * an editor write's `refreshSelector` on those names re-runs exactly
+ * those two; the preview's blocks read their own `cms:<row>` tags.
  */
 
 import {
@@ -24,6 +24,7 @@ import {
   getCurrentParton,
   pathname,
   searchParam,
+  tag,
   getCatalogManifest,
   getRouteSnapshots,
   getSlotBlockMeta,
@@ -102,18 +103,21 @@ function derivePreviewUrl(currentUrl: URL): string {
 }
 
 function renderedCmsIdsForPreviewedPage(): string[] {
-  // The editor tree's roots are the CMS rows the previewed page
-  // bound to. After the partial.tsx ↔ cms-block.ts split, snapshots
-  // no longer carry a `contentKey` field — instead we cross-check
-  // each snapshot's `type` against the slot-block meta side-table
-  // (only block specs land there). The snapshot id of a CMS-bound
-  // instance IS the CMS row key (singleton spec id, or the slot
-  // entry's id from the `__instanceId` channel).
+  // The editor tree's roots are the CMS rows the previewed page bound
+  // to. The block wrapper records each instance's content row as a
+  // `cms:<key>` tracked dep, so the snapshot's dep set carries the
+  // row key explicitly — the render ids themselves are placement-
+  // scoped effective ids (props-hash / placement fold) and are NOT
+  // row keys.
   const ids = new Set<string>()
   const snapshots = getRouteSnapshots()
   if (snapshots) {
-    for (const [id, snap] of snapshots) {
-      if (snap.type && getSlotBlockMeta(snap.type)) ids.add(id)
+    for (const [, snap] of snapshots) {
+      if (!snap.type || !getSlotBlockMeta(snap.type)) continue
+      if (!snap.deps) continue
+      for (const dep of snap.deps) {
+        if (dep.startsWith("cms:")) ids.add(dep.slice("cms:".length))
+      }
     }
   }
   return [...ids]
@@ -196,7 +200,10 @@ function readMultiTabs(currentUrl: URL): string[] {
 // ─── Tree pane ─────────────────────────────────────────────────────────
 
 export const EditorTreePartial = parton(
-  async function EditorTreeRender(_: RenderArgs) {
+  async function CmsEditTreeRender(_: RenderArgs) {
+    // The editor actions' refresh signal — a structural write fires
+    // `refreshSelector("cms-edit-tree")` and this parton re-renders.
+    tag("cms-edit-tree")
     // Tracked reads: selection + page identity, plus the URL
     // dimensions the row hrefs embed (`config`/`tabs` ride through
     // `cmsEditHref`). The full URL is a derived output for
@@ -267,21 +274,11 @@ export const EditorTreePartial = parton(
             )
           }
           if (entry.kind === "slot-add") {
-            const parentType = parentTypeById.get(entry.parentId!)
-            const parentManifest = parentType ? catalog[parentType] : undefined
-            const allow = parentManifest?.childSlots[entry.slotName!]?.allow ?? null
-            const filteredTypes =
-              allow == null || isWildcardAllow(allow)
-                ? blockTypes
-                : blockTypes.filter((type) => {
-                    const m = catalog[type]
-                    if (!m) return false
-                    return blockLabelsSatisfyAllow(m.labels, allow)
-                  })
-            const options = filteredTypes.map((type) => ({
+            // Every registered block type is placeable in every slot —
+            // the palette is the whole catalog.
+            const options = blockTypes.map((type) => ({
               type,
               displayName: camelToSpace(type),
-              labels: catalog[type]?.labels ?? [],
               action: addBlockToSlot.bind(null, entry.parentId!, entry.slotName!, type),
             }))
             return (
@@ -447,7 +444,6 @@ export const EditorTreePartial = parton(
     )
   },
   {
-    selector: "#cms-edit-tree",
     // Editor chrome is always authoritative — never served from the
     // client's fp cache (its links embed the full URL).
     fpSkip: false,
@@ -456,52 +452,52 @@ export const EditorTreePartial = parton(
 
 // ─── Settings pane (left panel — Settings tab) ─────────────────────────
 
-export const EditorSettingsPartial = parton(
-  function EditorSettingsRender(_: RenderArgs) {
-    const path = pathname()
-    return (
-      <div className="cms-panel-body">
-        <div className="cms-section-head" style={{ marginTop: 6 }}>
-          Page
-        </div>
-        <div className="cms-row">
-          <span className="cms-row-label">Title</span>
-          <span className="cms-wf-field">Home page</span>
-        </div>
-        <div className="cms-row">
-          <span className="cms-row-label">Handle</span>
-          <span
-            className="cms-wf-field"
-            style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}
-          >
-            {path}
-          </span>
-        </div>
-        <div className="cms-row">
-          <span className="cms-row-label">Visible</span>
-          <span className="cms-wf-toggle" data-on />
-        </div>
-        <div className="cms-section-head">SEO</div>
-        <div className="cms-row">
-          <span className="cms-row-label">Meta</span>
-          <span className="cms-wf-field" style={{ color: "var(--cms-ink-3)" }}>
-            (not configured)
-          </span>
-        </div>
-        <div className="cms-row">
-          <span className="cms-row-label">Indexable</span>
-          <span className="cms-wf-toggle" data-on />
-        </div>
+export const EditorSettingsPartial = parton(function CmsEditSettingsRender(_: RenderArgs) {
+  const path = pathname()
+  return (
+    <div className="cms-panel-body">
+      <div className="cms-section-head" style={{ marginTop: 6 }}>
+        Page
       </div>
-    )
-  },
-  { selector: "#cms-edit-settings" },
-)
+      <div className="cms-row">
+        <span className="cms-row-label">Title</span>
+        <span className="cms-wf-field">Home page</span>
+      </div>
+      <div className="cms-row">
+        <span className="cms-row-label">Handle</span>
+        <span
+          className="cms-wf-field"
+          style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}
+        >
+          {path}
+        </span>
+      </div>
+      <div className="cms-row">
+        <span className="cms-row-label">Visible</span>
+        <span className="cms-wf-toggle" data-on />
+      </div>
+      <div className="cms-section-head">SEO</div>
+      <div className="cms-row">
+        <span className="cms-row-label">Meta</span>
+        <span className="cms-wf-field" style={{ color: "var(--cms-ink-3)" }}>
+          (not configured)
+        </span>
+      </div>
+      <div className="cms-row">
+        <span className="cms-row-label">Indexable</span>
+        <span className="cms-wf-toggle" data-on />
+      </div>
+    </div>
+  )
+})
 
 // ─── Field panel ───────────────────────────────────────────────────────
 
 export const EditorFieldPanelPartial = parton(
-  async function EditorFieldPanelRender(_: RenderArgs) {
+  async function CmsEditFieldsRender(_: RenderArgs) {
+    // The editor actions' refresh signal — a field write fires
+    // `refreshSelector("cms-edit-fields")` and this parton re-renders.
+    tag("cms-edit-fields")
     // Tracked reads: selection, requested config tab, open tabs (the
     // panel hrefs embed them), page identity — plus the selected
     // node's content row (`cms:` dep), which is what moves
@@ -637,7 +633,6 @@ export const EditorFieldPanelPartial = parton(
     )
   },
   {
-    selector: "#cms-edit-fields",
     // Editor chrome is always authoritative — never served from the
     // client's fp cache (its links embed the full URL).
     fpSkip: false,
@@ -755,22 +750,6 @@ function formatScalar(name: string, clause: ScalarOrIn): string {
 function shortKey(key: string): string {
   const match = key.match(/:([^/]+)$/)
   return match ? match[1] : key
-}
-
-function isWildcardAllow(allow: string): boolean {
-  return allow.split(/\s+/).some((t) => t.trim() === "*")
-}
-
-function blockLabelsSatisfyAllow(labels: readonly string[], allow: string): boolean {
-  const tokens = allow
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .map((t) => (t.startsWith("#") || t.startsWith(".") ? t.slice(1) : t))
-  for (const token of tokens) {
-    if (labels.includes(token)) return true
-  }
-  return false
 }
 
 interface FieldSpec {
@@ -1305,8 +1284,6 @@ export const EditorShell = parton(
     )
   },
   {
-    // Explicit selector keeps the spec addressable (fp on the wire).
-    selector: "#editor-shell",
     // Editor chrome is always authoritative — never served from the
     // client's fp cache (its links embed the full URL).
     fpSkip: false,

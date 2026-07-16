@@ -18,10 +18,6 @@ import {
 
 export interface BlockManifest {
   readonly type: string
-  /** Refetch labels carried by the spec (excluding the spec's own id,
-   *  which the editor identifies separately via `type`). The editor's
-   *  slot-allow filter matches against these. */
-  readonly labels: readonly string[]
   readonly contentFields: Record<string, ContentFieldKind>
   readonly references: Record<string, string>
   readonly childSlots: Record<string, SlotSpec>
@@ -65,12 +61,12 @@ function trackingCms(): {
       references.set(name, type)
       return null
     },
-    block(slot, selector) {
-      childSlots.set(slot, { multi: false, allow: selector })
+    block(slot) {
+      childSlots.set(slot, { multi: false })
       return null
     },
-    blocks(slot, selector) {
-      childSlots.set(slot, { multi: true, allow: selector })
+    blocks(slot) {
+      childSlots.set(slot, { multi: true })
       return null
     },
   }
@@ -78,8 +74,8 @@ function trackingCms(): {
 }
 
 export async function prerenderBlock(type: string): Promise<BlockManifest | null> {
-  // Block-specific schema lives in slotBlockMeta; refetch labels
-  // live on the framework spec catalog entry. Both lookups are by id.
+  // Block-specific schema lives in slotBlockMeta; the framework spec
+  // catalog entry proves the block is registered. Both lookups are by id.
   const meta = getSlotBlockMeta(type)
   const spec = getSpecById(type)
   if (!spec) return null
@@ -93,13 +89,8 @@ export async function prerenderBlock(type: string): Promise<BlockManifest | null
       // reads it did before throwing.
     }
   }
-  // Skip the first label (== spec.id == catalog type). The editor
-  // already keys blocks by `type`; the remaining labels are the
-  // fan-out targets a slot's `allow` filter may match against.
-  const labels = spec.labels.slice(1)
   return {
     type,
-    labels,
     contentFields: Object.fromEntries(tracker.contentFields),
     references: Object.fromEntries(tracker.references),
     childSlots: Object.fromEntries(tracker.childSlots),

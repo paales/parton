@@ -11,22 +11,34 @@ import {
 /**
  * /defer-demo — exercises the activation shapes of `<Partial defer>`:
  *
- *   1. `defer={true}` — button-triggered manual activation via
- *      `useNavigation().reload({ selector })`.
+ *   1. `defer={<WhenClicked/>}` — a button in the dormant slot fires
+ *      the activation on click.
  *   2. `defer={<WhenVisible/>}` — IntersectionObserver-triggered
  *      activation when the fallback enters the viewport.
  *
  * Activators are pure triggers — no data crosses the wire. Each
  * section's activated content renders a server timestamp, so a change
  * in that text proves the RSC refetch round-tripped.
+ *
+ * Every activator fires the framework-internal id-forcing protocol:
+ * the parton's effective id becomes a statement's `?__force=` overlay.
+ * These partons sit under the /defer-demo page parton, so that id
+ * carries the placement fold — `manual~<16 hex>`.
  */
+
+/** True when `id` is an instance of the spec named `specId`: a
+ *  root-level unframed placement keeps the bare id, any other folds
+ *  its ambient placement in as a trailing `~<16 hex>`. */
+function isInstanceOf(id: string, specId: string): boolean {
+  return id === specId || id.startsWith(`${specId}~`)
+}
 
 test.beforeEach(async ({ baseURL }) => {
   await clearCaches(baseURL)
 })
 
 test.describe("Partial defer demo", () => {
-  test("defer={true}: button click activates via useNavigation.reload()", async ({ page }) => {
+  test("<WhenClicked>: button click activates the Partial", async ({ page }) => {
     // Transport-agnostic: attached, the activation refetch rides the
     // channel; pre-attach it goes discrete.
     const dispatches = recordPartialDispatches(page)
@@ -43,8 +55,8 @@ test.describe("Partial defer demo", () => {
       timeout: 5000,
     })
 
-    const hits = dispatches.filter(
-      (c) => c.partials != null && c.partials.split(",").includes("manual"),
+    const hits = dispatches.filter((c) =>
+      (c.partials?.split(",") ?? []).some((id) => isInstanceOf(id, "manual")),
     )
     expect(
       hits.length,

@@ -69,7 +69,7 @@ describe("selector ↔ partition-key type agreement", () => {
       }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
         return <span>{item.value?.qty ?? "—"}</span>
       },
-      { selector: "asym-line", match: "/c" },
+      { match: "/c" },
     )
 
     const before = await flightAt("http://t/c", <Line item={line.with({ uid: "123" })} />)
@@ -104,7 +104,7 @@ describe("selector ↔ partition-key type agreement", () => {
       }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
         return <span>{item.value?.qty ?? "—"}</span>
       },
-      { selector: "asym-num", match: "/c" },
+      { match: "/c" },
     )
 
     const before = await flightAt("http://t/c", <Line item={line.with({ uid: 123 })} />)
@@ -133,7 +133,7 @@ describe("selector ↔ partition-key type agreement", () => {
       }: { item: ResolvedCell<{ qty: number } | null> } & RenderArgs) {
         return <span>{item.value?.qty ?? "—"}</span>
       },
-      { selector: "asym-bare", match: "/c" },
+      { match: "/c" },
     )
 
     const before = await flightAt("http://t/c", <Line item={line.with({ uid: "123" })} />)

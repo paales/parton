@@ -124,27 +124,10 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    */
   streaming?: boolean
   /**
-   * CSS-style selector naming the Partials to refetch. Space-separated
-   * (or array) list of tokens; each token starts with `#` (unique) or
-   * `.` (shared). Union semantics across all tokens:
-   *
-   *   selector: "#cart"            — just #cart
-   *   selector: ".price"           — every Partial with .price
-   *   selector: "#cart .price"     — #cart AND every .price
-   *   selector: ["#cart", ".price"] — array form, same meaning
-   *
-   * When set alongside a navigate, the URL is updated but only the
-   * matching Partials are re-rendered — the page-level intercept is
-   * skipped. Ignored on frame handles (frame navigation always
-   * refetches the whole frame subtree).
-   */
-  selector?: string | string[]
-  /**
    * Update the URL without triggering ANY refetch. Useful for
    * bookmarkability-only URL sync (infinite scroll's `?pages=`) where
-   * no server work needs to happen. If `selector` is also set,
-   * `silent` wins and the refetch is skipped. Ignored on frame
-   * handles (frame navigation always refetches the frame).
+   * no server work needs to happen. Ignored on frame handles (frame
+   * navigation always refetches the frame).
    */
   silent?: boolean
   /**
@@ -172,19 +155,18 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
 
 /**
  * Superset of the browser's `NavigationReloadOptions` with the
- * framework's targeted-refetch knobs. `reload({ selector: "#cart" })`
- * refetches a single Partial; `reload({ selector: ".price" })` refetches
- * every Partial carrying the `.price` label.
+ * framework's render-mode knob. Content freshness is not a reload
+ * concern: state-shaped updates ride cell writes, event-shaped ones
+ * ride `tag()` + `refreshSelector` — both re-render exactly the
+ * partons that read them, no reload call needed.
  *
  * No `cookies` here — cookie writes live on `navigate` only (see
  * `FrameworkNavigateOptions.cookies`). To refetch with new cookies,
- * call `navigate(currentUrl, {cookies, selector?})`; with
- * `history: "auto"` the URL-unchanged case resolves to a replace,
- * which is functionally the same refetch as `reload()` plus the
- * cookie write.
+ * call `navigate(currentUrl, {cookies})`; with `history: "auto"` the
+ * URL-unchanged case resolves to a replace, which is functionally the
+ * same refetch as `reload()` plus the cookie write.
  */
 export interface FrameworkReloadOptions extends NavigationReloadOptions {
-  selector?: string | string[]
   /** See `FrameworkNavigateOptions.streaming`. */
   streaming?: boolean
   /** Caller-supplied abort signal. Aborting before the reload
@@ -291,12 +273,12 @@ export type NavigateStatus = readonly [Navigate, NavigationProgress]
  *   - `navigate()` is a **React hook** (call during render). Returns
  *     `[navigate, progress]`. The `navigate` fn accepts a string /
  *     URL / URL-updater and the same options bag as the imperative
- *     form (selector, silent, streaming, …). `progress` is a
+ *     form (silent, streaming, cookies, …). `progress` is a
  *     `NavigationProgress` triple of booleans tracking the most
  *     recent fire.
  *   - `reload()` is the same shape: `[reload, progress]`.
  *     `reload()` with no args reloads the whole page; with
- *     `{ selector }` it's a targeted refetch.
+ *     `{ streaming: true }` it's an in-place progressive refetch.
  *
  * The handle returned by `useNavigation()` is memoized — calling
  * `.reload()` / `.navigate()` repeatedly across renders runs the
@@ -353,8 +335,7 @@ export interface FrameworkNavigation extends Omit<
  * `NavigationMilestones` synchronously — three promises (`committed`,
  * `streaming`, `finished`) tracking the navigation lifecycle. Each
  * rejects with `NavigationError` on failure or `AbortError` on
- * supersede (per-selector in-flight queue aborts predecessors when a
- * newer fire's `streaming` lands).
+ * supersede (a newer fire's `streaming` aborts its predecessors).
  *
  * App code should always reach navigation through `useNavigation()`.
  * This shape is `@internal` and not re-exported through the public

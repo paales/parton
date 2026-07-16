@@ -14,11 +14,23 @@ import {
  * maintained by the connection's mirror) keeps advertising them so
  * the server emits the parked shell on every covering render. This
  * test pins the client half of that invariant: after a same-document
- * nav, the prior route's addressable partons are still mounted
- * (hidden) in the DOM — the round-trip that would lose `useState` /
- * `useRef` never happens — and a defer activation on the new route
- * dispatches cleanly against the parked world.
+ * nav, the prior route's partons are still mounted (hidden) in the
+ * DOM — the round-trip that would lose `useState` / `useRef` never
+ * happens — and a defer activation on the new route dispatches
+ * cleanly against the parked world.
+ *
+ * The activation states the parton's effective id in its `?__force=`
+ * overlay. `manual` sits under the /defer-demo page parton, so that id
+ * carries the placement fold — `manual~<16 hex>`.
  */
+
+/** True when `id` is an instance of the spec named `specId`: a
+ *  root-level unframed placement keeps the bare id, any other folds
+ *  its ambient placement in as a trailing `~<16 hex>`. */
+function isInstanceOf(id: string, specId: string): boolean {
+  return id === specId || id.startsWith(`${specId}~`)
+}
+
 test.beforeEach(async ({ baseURL }) => {
   await clearCaches(baseURL)
 })
@@ -41,7 +53,7 @@ test("client-side nav from /pokemon/1 to /defer-demo keeps prior-route partons p
   await expect(page.locator('[data-testid="manual-fallback"]')).toBeVisible()
   await waitForPageInteractive(page)
 
-  // The prior route's addressable partons are PARKED, not pruned:
+  // The prior route's partons are PARKED, not pruned:
   // their subtrees are still in the DOM under hidden Activity slots
   // (the detail page's hero heading — its match missed, so its
   // variant parked).
@@ -56,8 +68,8 @@ test("client-side nav from /pokemon/1 to /defer-demo keeps prior-route partons p
   // own target (on whichever carrier is up), against the parked world.
   await page.locator('[data-testid="activate-manual"]').click()
   await expect(page.locator('[data-testid="manual-fallback"]')).toHaveCount(0)
-  const manualDispatches = dispatches.filter(
-    (d) => d.partials != null && d.partials.split(",").includes("manual"),
+  const manualDispatches = dispatches.filter((d) =>
+    (d.partials?.split(",") ?? []).some((id) => isInstanceOf(id, "manual")),
   )
   expect(manualDispatches.length).toBeGreaterThanOrEqual(1)
 })

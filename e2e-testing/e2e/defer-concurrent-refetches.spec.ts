@@ -1,20 +1,15 @@
-import {
-  clearCaches,
-  test,
-  expect,
-  recordPartialDispatches,
-  waitForPageInteractive,
-} from "./fixtures"
+import { clearCaches, test, expect, waitForPageInteractive } from "./fixtures"
 
 /**
  * /defer-demo § 6 — concurrent refetch behavior.
  *
  * Three Partials `concurrent-a/b/c` each suspend for 400/800/1200ms
- * server-side. Clicking the three refetch buttons in rapid succession
- * should result in:
+ * server-side and subscribe by reading `tag("concurrent-<x>")`. Each
+ * refetch button fires the `bumpTag` server action, so a click is an
+ * invalidation that wakes exactly that one reader and lanes it on the
+ * held stream. Clicking the three in rapid succession should result in:
  *
- *   - Three separate RSC requests (click handlers are distinct event
- *     tasks → distinct microtasks → no batching).
+ *   - Three bumps, each waking its own reader's lane.
  *   - Server handles them in parallel (request-scoped state via ALS).
  *   - Total wall time ≈ max(delays) = ~1200ms, not sum = 2400ms.
  *
@@ -45,12 +40,12 @@ test.describe("concurrent refetches", () => {
   test("a streaming refetch's milestones settle promptly — the button doesn't hang loading", async ({
     page,
   }) => {
-    // `refresh-concurrent-a` fires `reload({selector, streaming: true})`.
-    // `streaming` is a CLIENT commit-mode switch (progressive reveal).
-    // The fire's `finished` resolves at the covering segment's settle
-    // on the held stream — the button, whose label is "…" while
-    // `committed && !finished`, must leave its loading state at the
-    // roundtrip, never ride the connection's 20s keepalive.
+    // `refresh-concurrent-a` fires the `bumpTag` server action, and
+    // holds its "…" label until that action's promise settles. The
+    // action resolves at its own roundtrip — the invalidation is
+    // recorded and fans out to the tag's readers on the held stream —
+    // so the button must leave its loading state there, never ride the
+    // connection's 20s keepalive.
     await page.goto("/defer-demo")
     await page.waitForSelector('[data-testid="concurrent-a"]', {
       timeout: 10000,
@@ -72,8 +67,7 @@ test.describe("concurrent refetches", () => {
     await expect(btn).toHaveText("refetch a", { timeout: 6000 })
   })
 
-  test("three distinct-id refetches run in parallel server-side", async ({ page }) => {
-    const rscCalls = recordPartialDispatches(page)
+  test("three distinct-tag refetches run in parallel server-side", async ({ page }) => {
     page.on("console", (msg) => {
       if (["error", "warning"].includes(msg.type())) {
         console.log(`BROWSER ${msg.type()}: ${msg.text()}`)
@@ -101,12 +95,10 @@ test.describe("concurrent refetches", () => {
       c: document.querySelector('[data-testid="concurrent-c"]')?.textContent ?? "",
     }))
 
-    rscCalls.length = 0
-
-    // Fire three refetches in sequence (awaiting each click). Click
-    // handlers fire on separate event tasks — each dispatch lands in
-    // its own microtask, so separate RSC requests fire and overlap on
-    // the server.
+    // Fire three bumps in sequence (awaiting each click). Each bump is
+    // its own action roundtrip invalidating one tag, so the three
+    // wakes reach the server as distinct fan-outs and their lane
+    // renders overlap.
     await page.locator('[data-testid=\"refresh-concurrent-a\"][data-hydrated]').click()
     await page.locator('[data-testid=\"refresh-concurrent-b\"][data-hydrated]').click()
     await page.locator('[data-testid=\"refresh-concurrent-c\"][data-hydrated]').click()
@@ -128,17 +120,6 @@ test.describe("concurrent refetches", () => {
         b: expect.not.stringContaining(before.b),
         c: expect.not.stringContaining(before.c),
       } as any)
-
-    // Every target was STATED — successive statements restate the
-    // union of uncovered forces, so across the dispatch log all three
-    // ids appear (however many envelopes carried them).
-    console.log(`dispatches after concurrent clicks:`, JSON.stringify(rscCalls))
-    const statedIds = new Set(rscCalls.flatMap((c) => c.partials?.split(",").filter(Boolean) ?? []))
-    for (const id of ["concurrent-a", "concurrent-b", "concurrent-c"]) {
-      expect([...statedIds], `expected ${id} to be stated`).toContainEqual(
-        expect.stringContaining(id),
-      )
-    }
 
     // Parallelism check from the SERVER's own render intervals: each
     // concurrent partial stamps `data-started-at` / `data-finished-at`

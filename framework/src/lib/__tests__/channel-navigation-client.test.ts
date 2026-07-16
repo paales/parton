@@ -466,12 +466,9 @@ describe("connection loss under pending navigations", () => {
 })
 
 describe("the refetch dispatcher", () => {
-  it("states a selector batch as a ?__force= url statement", async () => {
+  it("states an id batch as a ?__force= url statement", async () => {
     _channelEstablished("c1")
-    const fire = enqueueRefetch({
-      labels: ["cart"],
-      streaming: false,
-    })
+    const fire = enqueueRefetch({ ids: ["cart"], streaming: false })
     await settle()
     raf()
     await settle()
@@ -493,12 +490,12 @@ describe("the refetch dispatcher", () => {
 
   it("a statement superseding an uncovered batch restates its targets — the union", async () => {
     _channelEstablished("c1")
-    const first = enqueueRefetch({ labels: ["cart"], streaming: false })
+    const first = enqueueRefetch({ ids: ["cart"], streaming: false })
     await settle()
     // The second batch flushes while the first is uncovered — the
     // transport keeps one pending url frame (newest wins), so the
     // newer statement must carry BOTH forces.
-    const second = enqueueRefetch({ labels: ["price"], streaming: false })
+    const second = enqueueRefetch({ ids: ["price"], streaming: false })
     await settle()
     raf()
     await settle()
@@ -519,7 +516,7 @@ describe("the refetch dispatcher", () => {
     expect(p1.done()).toBe(true)
     expect(p2.done()).toBe(true)
     // A batch AFTER the settle restates nothing stale.
-    enqueueRefetch({ labels: ["badge"], streaming: false })
+    enqueueRefetch({ ids: ["badge"], streaming: false })
     await settle()
     raf()
     await settle()
@@ -534,7 +531,7 @@ describe("the refetch dispatcher", () => {
   it("resolves as a no-op in document-nav mode — document loads are its renders", async () => {
     await fallToDocumentNav()
     expect(_channelNavAvailable()).toBe(false)
-    const fire = enqueueRefetch({ labels: ["cart"], streaming: false })
+    const fire = enqueueRefetch({ ids: ["cart"], streaming: false })
     const finished = probe(fire.finished)
     await settle()
     expect(finished.done()).toBe(true)

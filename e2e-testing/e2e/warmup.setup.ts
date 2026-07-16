@@ -33,7 +33,7 @@ const ROUTES = [
   "/cache-streaming-demo",
   "/defer-demo",
   "/deferred-demo",
-  "/selector-demo",
+  "/tag-demo",
   "/sentinels-demo",
   "/frames-demo",
   "/inspect",

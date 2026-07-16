@@ -337,14 +337,14 @@ const PaintPage = parton(
       </Stack>
     )
   },
-  { selector: "tr-paint-page", match: "/embedded" },
+  { match: "/embedded" },
 )
 
 const OtherPage = parton(
   async function TrOtherPageRender(_: RenderArgs) {
     return <Text>other-page-content</Text>
   },
-  { selector: "tr-other-page", match: "/elsewhere" },
+  { match: "/elsewhere" },
 )
 
 function EmbeddedRoot() {
@@ -460,7 +460,7 @@ describe("host — <RemoteFrame grant='paint'>", () => {
           </Stack>
         )
       },
-      { selector: "tr-mixed-page", match: "/mixed" },
+      { match: "/mixed" },
     )
     function MixedRoot() {
       return (
@@ -493,14 +493,17 @@ describe("host — <RemoteFrame grant='paint'>", () => {
     )
 
     const HostPage = parton(
-      function TrHostRender(_: RenderArgs) {
-        return (
-          <Suspense fallback={null}>
-            <RemoteFrame url="/mixed" grant="paint" />
-          </Suspense>
-        )
-      },
-      { match: "/tr-host", selector: "#tr-host-spec" },
+      Object.assign(
+        function TrHostRender(_: RenderArgs) {
+          return (
+            <Suspense fallback={null}>
+              <RemoteFrame url="/mixed" grant="paint" />
+            </Suspense>
+          )
+        },
+        { displayName: "tr-host-spec" },
+      ),
+      { match: "/tr-host" },
     )
     const out = await streamToText(
       await renderPageStream(

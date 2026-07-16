@@ -34,14 +34,11 @@ import { expires, time } from "../server-hooks.ts"
 // A live ticker: content changes every render, wake declared in-body —
 // so a lane arrives from the expiry boundary alone, no bump needed.
 const renders = { n: 0 }
-const WsClock = parton(
-  function WsClockRender(_: RenderArgs) {
-    renders.n++
-    expires(time().in(80))
-    return <time data-ws-clock>{`ws-tick-${renders.n}`}</time>
-  },
-  { selector: "ws-clock" },
-)
+const WsClock = parton(function WsClockRender(_: RenderArgs) {
+  renders.n++
+  expires(time().in(80))
+  return <time data-ws-clock>{`ws-tick-${renders.n}`}</time>
+})
 
 /** Adapt a `ws` server socket to the transport-agnostic ChannelSocket
  *  the tunnel drives — the shape the Vite plugin builds in production. */

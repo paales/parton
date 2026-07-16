@@ -91,11 +91,14 @@ describe("cell — in-body resolution", () => {
       initial: 0,
     })
     const Page = parton(
-      async function CounterRender(_: RenderArgs) {
-        const c = await counter.resolve()
-        return <span data-testid="counter">{c.value}</span>
-      },
-      { match: "/counter", selector: "counter-spec" },
+      Object.assign(
+        async function CounterRender(_: RenderArgs) {
+          const c = await counter.resolve()
+          return <span data-testid="counter">{c.value}</span>
+        },
+        { displayName: "counter-spec" },
+      ),
+      { match: "/counter" },
     )
 
     // In-body reads land on the dep record DURING Render — after the

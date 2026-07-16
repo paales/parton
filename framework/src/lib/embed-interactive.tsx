@@ -35,20 +35,23 @@
  *    a time and only the latest value ever sends.
  *  - A Button holds `data-pending` (vocabulary CSS dims + inerts it)
  *    for the hop, preventing double-fire.
- *  - The SERVER echo is one coalesced `reload({selector: "@self"})`
- *    after the queue drains: the enclosing host parton re-renders,
- *    the RemoteFrame re-embeds, and the fresh remote render replaces
- *    the spliced content in place (uncontrolled inputs at stable
- *    positions keep the user's DOM value through the swap).
+ *  - The SERVER echo is one coalesced self-refetch after the queue
+ *    drains: the bridge forces the enclosing host parton's effective
+ *    id (read from `PartialIdContext` — the framework-internal
+ *    id-forcing protocol), the RemoteFrame re-embeds, and the fresh
+ *    remote render replaces the spliced content in place
+ *    (uncontrolled inputs at stable positions keep the user's DOM
+ *    value through the swap).
  *
- * Placement rule this implies: an interactive embed must sit inside
- * an ADDRESSABLE host parton — `@self` is the refresh target. Outside
- * one, interactions still write/invoke but the echo cannot land; the
- * `@self` resolution throws its standard wiring error.
+ * Placement rule this implies: an interactive embed must sit inside a
+ * host parton — its effective id is the refresh target. Outside one,
+ * interactions still write/invoke but the echo cannot land; the
+ * bridge throws its standard wiring error.
  */
 
-import { useEffect, useEffectEvent, useRef, type ReactNode, type Ref } from "react"
-import { useNavigation } from "./use-navigation.tsx"
+import { useContext, useEffect, useEffectEvent, useRef, type ReactNode, type Ref } from "react"
+import { PartialIdContext } from "./use-navigation.tsx"
+import { enqueueRefetch } from "./refetch.ts"
 import {
   CAPABILITY_HEADER_NAME,
   REMOTE_ACTION_INVOKE_PATH,
@@ -75,7 +78,8 @@ export function EmbedInteractiveBridge({
   children?: ReactNode
 }) {
   const hostRef = useRef<HTMLElement | null>(null)
-  const [reload] = useNavigation().reload()
+  // The enclosing host parton's effective id — the echo's target.
+  const hostPartonId = useContext(PartialIdContext)
   // (cellId + partition) → queue entry.
   const queuesRef = useRef(new Map<string, WriteQueueEntry>())
   const refreshScheduledRef = useRef(false)
@@ -96,8 +100,8 @@ export function EmbedInteractiveBridge({
     }
   })
 
-  // The coalesced server echo: at most one @self reload per settled
-  // burst, fired only when every write queue drained (a reload while
+  // The coalesced server echo: at most one self-refetch per settled
+  // burst, fired only when every write queue drained (an echo while
   // a newer value is still queued would echo the OLDER server state).
   const scheduleRefresh = useEffectEvent(() => {
     if (refreshScheduledRef.current) return
@@ -107,7 +111,13 @@ export function EmbedInteractiveBridge({
       for (const entry of queuesRef.current.values()) {
         if (entry.inflight || entry.pending !== null) return
       }
-      reload({ selector: "@self" })
+      if (hostPartonId === null) {
+        throw new Error(
+          "EmbedInteractiveBridge: no enclosing parton — the interactive " +
+            "embed's post-write echo needs a host parton to re-render.",
+        )
+      }
+      enqueueRefetch({ ids: [hostPartonId], streaming: false })
     })
   })
 

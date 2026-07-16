@@ -60,13 +60,12 @@ one pipeline:
    fp is unchanged, and the client paints the cached subtree from its
    client-side partial cache.
 4. **Per-parton wire.** After first paint the page holds ONE channel
-   connection; navigations, selector refetches (`selector` labels),
-   and frame moves are `url` frames on it, and every rendered
-   consequence rides the held stream — whole-tree segments for
-   navigations, per-parton lanes for targeted work, each parton at
-   its own cadence. Independently re-renderable: a lane re-runs only
-   its parton's body, never its ancestors; the client merges lanes
-   and segments into a persisted template.
+   connection; navigations and frame moves are `url` frames on it,
+   and every rendered consequence rides the held stream — whole-tree
+   segments for navigations, per-parton lanes for targeted work, each
+   parton at its own cadence. Independently re-renderable: a lane
+   re-runs only its parton's body, never its ancestors; the client
+   merges lanes and segments into a persisted template.
 5. **Writes.** Plain `"use server"` functions that import cells and
    call `.set`, wrapped in `atomic(fn)` for one transactional commit;
    invalidation fans back out to every parton that read the cell.

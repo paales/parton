@@ -34,9 +34,10 @@ import { _peekConnectionSession, handleChannelPost } from "../lib/connection-ses
 import type { DemuxedLane, Segment } from "../lib/fp-trailer-split.ts"
 import { splitAtFpTrailer, splitSegments } from "../lib/fp-trailer-split.ts"
 import { wrapStreamWithFpTrailer } from "../lib/fp-trailer.ts"
+import { stripPlacementFold } from "../lib/partial.tsx"
 import { withLiveDrive, freshLiveScope } from "./live-drive.tsx"
 import { renderServerToFlight } from "./rsc-server.ts"
-import { extractPartonView, type ExtractedPayload } from "./fuzz-wire.ts"
+import { extractPartonView, stripFoldedIds, type ExtractedPayload } from "./fuzz-wire.ts"
 
 // ─── PRNG ────────────────────────────────────────────────────────────
 
@@ -58,12 +59,23 @@ export function pick<T>(rand: () => number, items: readonly T[]): T {
 
 // ─── Fixture + action surface ────────────────────────────────────────
 
+/**
+ * The fixture names its partons on the BARE id basis — a spec's id
+ * without the placement fold the wire carries for a nested placement
+ * (`fz-inner` → `fz-inner~<16 hex>`). The harness learns each bare id's
+ * actual wire id from the payloads and translates at the protocol
+ * boundary, so every field here (and the `[S|<id>|…]` stamps the bodies
+ * write) stays authored in spec terms.
+ */
 export interface FuzzFixture {
   /** The page the drive renders. */
   page: () => ReactNode
   /** Every parton id under oracle comparison (sentinel included). */
   universeIds: readonly string[]
-  /** Ids that carry a `cull` gate — the flip-action candidates. */
+  /** Ids that carry a `cull` gate — the flip-action candidates. Placed
+   *  at ROOT level: the attach statement's seed visibility is stated
+   *  before any payload has taught the harness a wire id, so a cullable
+   *  must be its own wire id (bare) to be stateable at attach. */
   cullableIds: readonly string[]
   /** Cullable ids in view at attach time (the seed statement). */
   initialVisible: readonly string[]
@@ -79,7 +91,10 @@ export interface FuzzFixture {
   foldDriftAllowed: ReadonlySet<string>
   /** The quiescence sentinel: id + a bump that writes a unique tick
    *  through a real request (a cell write), and the stamp payload its
-   *  body renders for that tick. */
+   *  body renders for that tick. Its body must `tag(sentinelId)` — the
+   *  drive's shutdown wakes the parked driver with
+   *  `refreshSelector(sentinelId)`, which reaches a parton only through
+   *  its subscribed labels (its cells and its `tag()` reads). */
   sentinelId: string
   bumpSentinel: (scope: string, url: string, tick: number) => Promise<void>
   sentinelStampFor: (tick: number) => string
@@ -213,6 +228,26 @@ export async function runSequence(
 ): Promise<SequenceResult> {
   isolate()
   const scope = freshLiveScope("fuzz")
+
+  // ── The id basis. A parton's WIRE id folds its placement: a spec
+  // nested under another parton (or inside a `<Frame>`) mints
+  // `<id>~<16 hex>`; a root-level placement stays bare. The fixture's
+  // bookkeeping and the bodies' stamps are bare, so the model and both
+  // oracle sides live on the BARE basis, and every id the PROTOCOL
+  // carries — the `?__force=` overlay, the visibility statement's ids,
+  // the `?cached=` tokens — resolves through the map the wire itself
+  // taught us. An unlearned id resolves to itself: a root placement is
+  // its own wire id, and a nested one that has never crossed the wire
+  // has no snapshot to address anyway.
+  const wireIds = new Map<string, string>()
+  const wireIdOf = (bare: string): string => wireIds.get(bare) ?? bare
+  const readPayload = (text: string): ExtractedPayload => {
+    const ex = extractPartonView(text)
+    for (const obs of ex.observations) wireIds.set(stripPlacementFold(obs.id), obs.id)
+    for (const [id] of ex.pairs) wireIds.set(stripPlacementFold(id), id)
+    return stripFoldedIds(ex)
+  }
+
   const model = new Map<string, ModelEntry>()
   const entry = (id: string): ModelEntry => {
     let e = model.get(id)
@@ -291,7 +326,9 @@ export async function runSequence(
               // inside their own bodies, never through this hook).
               if (segRecords.length === 0) segRecords.push({ seq: null, asof: null, fps: [] })
               const rec = segRecords[segRecords.length - 1]
-              for (const [id, pair] of Object.entries(map)) rec.fps.push([id, pair])
+              for (const [id, pair] of Object.entries(map)) {
+                rec.fps.push([stripPlacementFold(id), pair])
+              }
             } else if (e.tag === "seqvoid") {
               for (const tok of e.body.split(" ")) {
                 const n = Number(tok)
@@ -380,9 +417,17 @@ export async function runSequence(
               const announced = q !== undefined && q.length > 0 ? q.shift()! : null
               return {
                 kind: "lane",
-                id: lane.partonId,
-                ex: extractPartonView(bodyText),
-                fpUpdates: fpMap !== null ? Object.entries(fpMap) : [],
+                id: stripPlacementFold(lane.partonId),
+                ex: readPayload(bodyText),
+                fpUpdates:
+                  fpMap !== null
+                    ? Object.entries(fpMap).map(
+                        ([id, pair]): [string, { from: string; to: string }] => [
+                          stripPlacementFold(id),
+                          pair,
+                        ],
+                      )
+                    : [],
                 seq: announced?.seq ?? null,
                 asof: announced?.asof ?? null,
               }
@@ -402,7 +447,7 @@ export async function runSequence(
             const rec = segConsumed < segRecords.length ? segRecords[segConsumed++] : null
             return {
               kind: "segment",
-              ex: extractPartonView(text),
+              ex: readPayload(text),
               fpUpdates: rec?.fps ?? [],
               seq: rec?.seq ?? null,
               asof: rec?.asof ?? null,
@@ -650,20 +695,31 @@ export async function runSequence(
                   // flip's lane confirms or replaces it.
                   const e = model.get(id)
                   if (e?.fp != null && e.matchKey != null) {
-                    cached.push(`${id}:${e.matchKey}:${e.fp}`)
+                    cached.push(`${wireIdOf(id)}:${e.matchKey}:${e.fp}`)
                   }
                 }
+                // The statement addresses partons by their WIRE ids —
+                // the model's are bare.
                 await postEnvelope([
-                  { kind: "visible", changed, visible: [...statedVisible], cached },
+                  {
+                    kind: "visible",
+                    changed: changed.map(wireIdOf),
+                    visible: [...statedVisible].map(wireIdOf),
+                    cached,
+                  },
                 ])
                 break
               }
               case "refetch": {
                 const sep = currentUrl.includes("?") ? "&" : "?"
+                // `__force` targets by effective id: a nested label's
+                // force must carry its placement fold, or the driver
+                // resolves it against the route's snapshots, finds
+                // nothing, and silently drops the refetch.
                 navPoint = await postEnvelope([
                   {
                     kind: "url",
-                    url: `${currentUrl}${sep}__force=${action.label}`,
+                    url: `${currentUrl}${sep}__force=${wireIdOf(action.label)}`,
                     intent: "silent",
                   },
                 ])
@@ -739,7 +795,8 @@ async function oracleColdRender(
     const text = await new Response(seg.value.body).text()
     await seg.value.trailers
     await iter.return?.()
-    const ex = extractPartonView(text)
+    // The oracle compares on the bare basis the model keeps.
+    const ex = stripFoldedIds(extractPartonView(text))
     // Heal cold fps to warm — the same trailer discipline the client
     // applies (`from` must match to move).
     const warm = new Map<string, string>()
@@ -747,7 +804,8 @@ async function oracleColdRender(
       if (!obs.parked && obs.kind === "fresh" && obs.fp !== null) warm.set(obs.id, obs.fp)
     }
     for (const [id, { from, to }] of fpHeals) {
-      if (warm.get(id) === from) warm.set(id, to)
+      const bare = stripPlacementFold(id)
+      if (warm.get(bare) === from) warm.set(bare, to)
     }
     const states = new Map<string, OracleState>()
     for (const id of fixture.universeIds) {

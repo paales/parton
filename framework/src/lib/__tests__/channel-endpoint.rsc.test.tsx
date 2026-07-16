@@ -43,15 +43,21 @@ import {
   _openConnectionSession,
   handleChannelPost,
 } from "../connection-session.ts"
+import { tag } from "../current-parton.ts"
 import { PartialRoot, parton, type RenderArgs } from "../partial.tsx"
 import { clearRegistry } from "../partial-registry.ts"
 import { SkelBox } from "./cull-skeleton-fixture.tsx"
 
+// The tag read is the bump surface the drive's shutdown wake rides.
 const Cullable = parton(
-  function CullableRender(_: RenderArgs) {
-    return <div data-x>x:full</div>
-  },
-  { selector: "chan-x", cull: { skeleton: SkelBox } },
+  Object.assign(
+    function CullableRender(_: RenderArgs) {
+      tag("chan-x")
+      return <div data-x>x:full</div>
+    },
+    { displayName: "chan-x" },
+  ),
+  { cull: { skeleton: SkelBox } },
 )
 
 function Page(): ReactNode {

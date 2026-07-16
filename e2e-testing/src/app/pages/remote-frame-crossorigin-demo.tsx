@@ -35,25 +35,22 @@ import {
  *  other frames. The frame URL is the navigation axis; the parton's
  *  tracked `searchParam` read is the bridge.
  */
-const RemoteCheckoutFrame = parton(
-  function RemoteCheckoutFrameRender(_: RenderArgs) {
-    const step = searchParam("step", "shipping")
-    return (
-      <Suspense
-        fallback={
-          <Card className="mb-2 p-4" data-testid="rfxd-checkout-fallback">
-            <CardContent className="px-0 italic text-muted-foreground">
-              Loading checkout step…
-            </CardContent>
-          </Card>
-        }
-      >
-        <MagentoCheckoutStep searchParams={{ step }} />
-      </Suspense>
-    )
-  },
-  { selector: "remote-checkout-frame" },
-)
+const RemoteCheckoutFrame = parton(function RemoteCheckoutFrameRender(_: RenderArgs) {
+  const step = searchParam("step", "shipping")
+  return (
+    <Suspense
+      fallback={
+        <Card className="mb-2 p-4" data-testid="rfxd-checkout-fallback">
+          <CardContent className="px-0 italic text-muted-foreground">
+            Loading checkout step…
+          </CardContent>
+        </Card>
+      }
+    >
+      <MagentoCheckoutStep searchParams={{ step }} />
+    </Suspense>
+  )
+})
 
 export const RemoteFrameCrossOriginDemoPage = parton(
   function RemoteFrameCrossOriginDemoRender() {
@@ -61,14 +58,8 @@ export const RemoteFrameCrossOriginDemoPage = parton(
       <>
         <header className="mb-4" data-testid="rfxd-header">
           <div className="mb-2 flex flex-wrap gap-2">
-            <RemoteRefreshButton
-              selector="magento:magento-stocks"
-              label="Refresh stocks (cross-origin)"
-            />
-            <RemoteRefreshButton
-              selector="magento:magento-payment-summary"
-              label="Refresh payment"
-            />
+            <RemoteRefreshButton name="magento-stocks" label="Refresh stocks (cross-origin)" />
+            <RemoteRefreshButton name="magento-payment-summary" label="Refresh payment" />
           </div>
           <h1 className="text-2xl font-semibold">Cross-Origin Remote Frame Demo</h1>
           <p className="text-sm text-muted-foreground">

@@ -7,9 +7,7 @@ import type { ActivatorProps } from "@parton/framework"
 /**
  * Activator: fires immediately when the enclosing Partial mounts.
  *
- *   <Partial selector="#live" defer={<WhenMounted/>}>
- *     <LiveData/>
- *   </Partial>
+ *   const Live = parton(LiveDataRender, { defer: <WhenMounted/> })
  *
  * Useful when the Partial's content is too expensive to include in the
  * initial payload but should activate as soon as the page commits —

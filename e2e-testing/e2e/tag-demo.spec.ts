@@ -1,18 +1,31 @@
-import { clearCaches, test, expect, waitForPageInteractive } from "./fixtures"
+import {
+  clearCaches,
+  test,
+  expect,
+  waitForLiveConnection,
+  waitForPageInteractive,
+} from "./fixtures"
 
 /**
- * /selector-demo — verify selector-based refetch semantics.
+ * /tag-demo — verify tag-driven refresh semantics (the event-shaped
+ * author signal: `tag(name)` subscribes, `refreshSelector(name)`
+ * wakes every reader).
  *
- *   {selector: ".product"}  → one anonymous Partial (.product label)
- *   {selector: ".price"}    → three (#price-a, #price-b, #price-c)
- *   {selector: ".featured"} → two (#price-b, #price-c)
- *   {selector: "#price-a"}  → single Partial
+ *   bump "tag-demo:product"  → one reader (the product parton)
+ *   bump "tag-demo:price"    → three (price-a, price-b, price-c)
+ *   bump "tag-demo:featured" → two (price-b, price-c)
+ *   bump "tag-demo:price-a"  → single reader
  *
- * Selector → id resolution runs server-side against the route-scoped
- * partial registry (`partial.tsx:resolveSelectorToIds`). Each Partial
- * renders a server timestamp. After refetch, only the targeted
- * timestamps should change; untargeted ones stay pinned.
+ * Each parton renders a server timestamp. After a bump, only the
+ * subscribed timestamps should change; non-readers stay pinned.
  */
+
+// A tag name is a process-wide address: a bump wakes its readers on
+// every page held open in the process, so two of these tests running
+// at once against their own /tag-demo pages would each see the other's
+// fanout. Serial mode gives each bump the page to itself — the demo
+// page's `tag-demo:` prefix keeps the rest of the suite out.
+test.describe.configure({ mode: "serial" })
 
 test.beforeEach(async ({ baseURL }) => {
   await clearCaches(baseURL)
@@ -30,15 +43,23 @@ async function readTimestamps(page: import("@playwright/test").Page) {
   })
 }
 
-test.describe("selector-based refetch", () => {
-  test("`.product` refetches only the id-less product Partial", async ({ page }) => {
-    await page.goto("/selector-demo")
-    await waitForPageInteractive(page)
+/** Load the demo with its live subscription provably open — a bump
+ *  reaches its readers over the held connection, so firing one before
+ *  the subscription is established has nothing to wake. */
+async function openTagDemo(page: import("@playwright/test").Page) {
+  await page.goto("/tag-demo")
+  await waitForPageInteractive(page)
+  await waitForLiveConnection(page)
+}
+
+test.describe("tag-driven refresh", () => {
+  test("bumping `product` refreshes only its one reader", async ({ page }) => {
+    await openTagDemo(page)
 
     const before = await readTimestamps(page)
     // Ensure enough time passes so a fresh render produces a different ISO string.
     await page.waitForTimeout(50)
-    await page.locator('[data-testid=\"refresh-product\"][data-hydrated]').click()
+    await page.locator('[data-testid="refresh-product"][data-hydrated]').click()
     // Wait until the "product" timestamp text changes.
     await expect.poll(async () => (await readTimestamps(page))["product"]).not.toBe(before.product)
     const after = await readTimestamps(page)
@@ -50,13 +71,12 @@ test.describe("selector-based refetch", () => {
     expect(after["price-c"]).toBe(before["price-c"])
   })
 
-  test("`.price` refetches all three price Partials", async ({ page }) => {
-    await page.goto("/selector-demo")
-    await waitForPageInteractive(page)
+  test("bumping `price` refreshes all three readers", async ({ page }) => {
+    await openTagDemo(page)
 
     const before = await readTimestamps(page)
     await page.waitForTimeout(50)
-    await page.locator('[data-testid=\"refresh-price\"][data-hydrated]').click()
+    await page.locator('[data-testid="refresh-price"][data-hydrated]').click()
     await expect
       .poll(async () => (await readTimestamps(page))["price-a"])
       .not.toBe(before["price-a"])
@@ -65,17 +85,16 @@ test.describe("selector-based refetch", () => {
     expect(after["price-a"]).not.toBe(before["price-a"])
     expect(after["price-b"]).not.toBe(before["price-b"])
     expect(after["price-c"]).not.toBe(before["price-c"])
-    // The id-less `product` Partial was NOT targeted — stays pinned.
+    // The product parton doesn't read `price` — stays pinned.
     expect(after.product).toBe(before.product)
   })
 
-  test("`.price.featured` refetches only the two featured ones", async ({ page }) => {
-    await page.goto("/selector-demo")
-    await waitForPageInteractive(page)
+  test("bumping `featured` refreshes only the two featured readers", async ({ page }) => {
+    await openTagDemo(page)
 
     const before = await readTimestamps(page)
     await page.waitForTimeout(50)
-    await page.locator('[data-testid=\"refresh-price-featured\"][data-hydrated]').click()
+    await page.locator('[data-testid="refresh-price-featured"][data-hydrated]').click()
     await expect
       .poll(async () => (await readTimestamps(page))["price-b"])
       .not.toBe(before["price-b"])
@@ -83,18 +102,17 @@ test.describe("selector-based refetch", () => {
 
     expect(after["price-b"]).not.toBe(before["price-b"])
     expect(after["price-c"]).not.toBe(before["price-c"])
-    // price-a lacks the `featured` tag, stays pinned.
+    // price-a doesn't read `featured`, stays pinned.
     expect(after["price-a"]).toBe(before["price-a"])
     expect(after.product).toBe(before.product)
   })
 
-  test("`#price-a` refetches a single id", async ({ page }) => {
-    await page.goto("/selector-demo")
-    await waitForPageInteractive(page)
+  test("bumping `price-a` refreshes a single reader", async ({ page }) => {
+    await openTagDemo(page)
 
     const before = await readTimestamps(page)
     await page.waitForTimeout(50)
-    await page.locator('[data-testid=\"refresh-price-a\"][data-hydrated]').click()
+    await page.locator('[data-testid="refresh-price-a"][data-hydrated]').click()
     await expect
       .poll(async () => (await readTimestamps(page))["price-a"])
       .not.toBe(before["price-a"])

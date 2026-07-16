@@ -14,21 +14,18 @@ const SLUG_LINKS: ReadonlyArray<[href: string, label: string]> = [
   ["/cms-demo/zulu", "zulu (unmatched)"],
 ]
 
-export const PageSlugNavBlock = block(
-  function PageSlugNavRender({}: RenderArgs) {
-    return (
-      <nav
-        className="mb-6 flex flex-wrap gap-1"
-        aria-label="CMS demo slugs"
-        data-testid="cms-demo-slug-nav-block"
-      >
-        {SLUG_LINKS.map(([href, label]) => (
-          <a key={href} href={href} className={buttonVariants({ variant: "ghost", size: "sm" })}>
-            {label}
-          </a>
-        ))}
-      </nav>
-    )
-  },
-  { selector: ".page-block" },
-)
+export const PageSlugNavBlock = block(function PageSlugNavRender({}: RenderArgs) {
+  return (
+    <nav
+      className="mb-6 flex flex-wrap gap-1"
+      aria-label="CMS demo slugs"
+      data-testid="cms-demo-slug-nav-block"
+    >
+      {SLUG_LINKS.map(([href, label]) => (
+        <a key={href} href={href} className={buttonVariants({ variant: "ghost", size: "sm" })}>
+          {label}
+        </a>
+      ))}
+    </nav>
+  )
+})

@@ -40,12 +40,14 @@ const ROOT_MK = hash(stableStringify({}))
 
 const renders = { tagged: 0 }
 const TaggedSpec = parton(
-  function TaggedRender(_: RenderArgs) {
-    renders.tagged++
-    tag("product:42")
-    return <span>{`tagged-body-${renders.tagged}`}</span>
-  },
-  { selector: "#tag-ride" },
+  Object.assign(
+    function TaggedRender(_: RenderArgs) {
+      renders.tagged++
+      tag("product:42")
+      return <span>{`tagged-body-${renders.tagged}`}</span>
+    },
+    { displayName: "tag-ride" },
+  ),
 )
 
 beforeEach(() => {
@@ -103,13 +105,10 @@ describe("registered dep kinds + hook overloads", () => {
 
   it("searchParam(name, fallback) defaults ABSENT params only", async () => {
     const seen: Array<string | null> = []
-    const Probe = parton(
-      function SearchDefaultRender(_: RenderArgs) {
-        seen.push(searchParam("q", "dflt"), searchParam("q"))
-        return <span>probe</span>
-      },
-      { selector: "#search-default" },
-    )
+    const Probe = parton(function SearchDefaultRender(_: RenderArgs) {
+      seen.push(searchParam("q", "dflt"), searchParam("q"))
+      return <span>probe</span>
+    })
     const tree = (
       <PartialRoot>
         <Probe />

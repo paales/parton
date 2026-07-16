@@ -41,10 +41,10 @@ _recordCellWrite(            ← tallies this write (and whether the cell
   cell.deferred === true)      is `deferred`) on the request store, for
                                the deferred-commit decision (below)
 ↓
-getServerNavigation()        ← bumps the invalidation registry with
-  .reload({selector:           the partition-scoped selector
-    buildCellSelector(          ("cell:<id>?<argsEncoded>",
-      id, args)})               constraints as the query fragment)
+refreshSelector(             ← bumps the invalidation registry with
+  buildCellSelector(           the partition-scoped selector
+    id, args))                 ("cell:<id>?<argsEncoded>",
+                               constraints as the query fragment)
 ↓  (at bump COMMIT — inside `commitOne`, after the value landed)
 tsBridge.stamp(name, key, ts) ← persists the committed invalidation ts
                                onto the stored row (`CellStorage.stampTs`),
@@ -246,10 +246,10 @@ args (a bound-cell prop) instead carries a `partition` field and a
 `set` bound to `__scopedCellWrite` with those args baked, so client
 invocations land on the right partition regardless of URL changes
 between render and call. The action returns
-`Promise<void>`; refetch is driven by
-`getServerNavigation().reload({selector: "cell:<id>"})` inside
-the action, which bumps the invalidation registry and shifts the
-fp of every parton reading the cell on the next render.
+`Promise<void>`; the re-render is driven by
+`refreshSelector("cell:<id>")` inside the action, which bumps the
+invalidation registry and shifts the fp of every parton reading the
+cell on the next render.
 
 The cell module handle (the module-singleton thing constructed via
 `localCell(...)`, `gqlCell(...)`, or `fragmentCell(...)`) is
@@ -363,8 +363,9 @@ set on the snapshot; `evalDepKeys`'s `cell:` branch re-reads the
 selector's invalidation timestamp on every fold (store-and-reread),
 and `PartialBoundary` surfaces the bare `cell:` name as a refetch
 label with its constraints merged into the constraint surface. So a
-write re-renders the reading parton and selector refetch finds it —
-same wire ids, partitions, and labels as the prop-resolution path.
+write re-renders the reading parton, and a `refreshSelector` bump
+matches it — same wire ids, partitions, and labels as the
+prop-resolution path.
 
 The wrapper is `async`. Cold-load paths await; hot paths (storage
 warm) settle in a microtask — sync-equivalent in practice.

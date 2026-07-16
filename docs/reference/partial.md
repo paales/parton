@@ -4,13 +4,22 @@ The framework's base addressable-render-unit constructor. A spec is
 constructed once at module scope from a `Render` function and an
 options object; the call returns a placeable React component. The
 constructor declares placement and replay — which instance exists
-(`match`), how it's addressed (`selector`), how it's served (`cache`,
-`defer`, `fallback`, `keepalive`, `fpSkip`). Everything else happens
-in the body: every request dependency the spec has — search params,
-cookies, headers, session — is whatever its `Render` actually reads
-through the tracked server-hooks (`searchParam()`, `cookie()`, …),
-and its data is whatever cells it resolves there: the read IS the
-dependency, recorded per render and folded into the fingerprint.
+(`match`), how it's served (`cache`, `defer`, `fallback`,
+`keepalive`, `fpSkip`). Everything else happens in the body: every
+request dependency the spec has — search params, cookies, headers,
+session — is whatever its `Render` actually reads through the tracked
+server-hooks (`searchParam()`, `cookie()`, …), and its data is
+whatever cells it resolves there: the read IS the dependency,
+recorded per render and folded into the fingerprint.
+
+**Every parton is addressable.** There is no opt-in: a spec always
+ships its fingerprint on the wire, registers a snapshot, and joins the
+client's cached manifest. Its identity is its `Render` function's name
+(see [Identity](#identity--the-render-functions-name)). A bare
+`parton(Render)` with no `match` and no ancestor parton is a
+first-class unit — it fp-skips across navigations exactly like a
+match-gated surface, and its only dependencies are what its body reads
+(worked fixture: `e2e-testing/src/app/pages/bare-root-parton.tsx`).
 
 > **Three constructors, one engine.** `parton` is the base case.
 > Slot-placeable CMS-driven units use [`block`](./block.md);
@@ -87,7 +96,7 @@ resolution surface.
 ```ts
 interface PartialOptions {
   match?: MatchPattern // request gate (string or MatchInit)
-  selector?: SelectorTokens // auto-derived from Render.name
+  cull?: CullConfig // viewport gate
   cache?: CacheOptions
   defer?: true | ReactElement<ActivatorProps>
   fallback?: ReactNode
@@ -100,7 +109,7 @@ interface PartialOptions {
 | Option           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `match`          | The request gate. A URLPattern pathname string (`/p/:slug`, `/inspect/*` — descendants only, `/inspect{/*}?` — bare + descendants), or a `MatchInit` object gating any request dimension — URL components, search params, cookies, headers — with per-value predicates. Gate miss → the spec parks (or emits nothing when the client has no cached variant). See [The match gate](#the-match-gate--gating-the-request). Anonymous `*` captures don't fold into the fingerprint — only named groups (`:foo`) do; a spec that genuinely depends on the wildcard tail reads `pathname()` explicitly.                                                                                                                                                                                                                                                                     |
-| `selector`       | One or more refetch labels. Plain strings; leading `#` / `.` are cosmetic and stripped on parse (`"#hero"` and `"hero"` are equivalent). Defaults to `<kebab-cased Render.name minus Page/Block/Render/Partial suffix>`. An anonymous Render (an inline arrow gets no inferred name) has nothing stable to derive an id from and throws at construct time — name the function or pass a selector. The first label is the spec's catalog id; additional labels are extra fan-out targets. Multiple placements of the same spec share their labels; `nav.reload({selector: "label"})` hits every carrier.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `cull`           | The viewport gate — makes the parton cullable: a culled instance's body never runs and the wire carries its client-rendered `skeleton` + props. See [View culling](#view-culling--the-cull-gate).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `cache`          | See [`cache.md`](./cache.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `defer`          | `true` for app-driven, an activator element to wire automatically.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `fallback`       | React node rendered while the partial's body is suspended.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -247,9 +256,9 @@ they're no-ops returning the empty value.
 
 `cookie()` overlays any in-request `setCookie()` writes on top of the
 request header — so a partial re-rendered immediately after a server
-function calls `setCookie("cart_id", X) + getServerNavigation().reload({
-selector: "cart" })` reads the new value (consistent with
-`readCookie`). `Max-Age=0` follows browser deletion semantics and
+function calls `setCookie("cart_id", X)` reads the new value
+(consistent with `readCookie`). `Max-Age=0` follows browser deletion
+semantics and
 removes the cookie from the overlay; a non-zero `Max-Age` with an
 empty value reads as the empty string. (Match `cookies` gates
 deliberately bypass this overlay — see
@@ -438,8 +447,9 @@ const FormsDemoPage = parton(
 
 `await handle.resolve(args?)` reads the value (running the loader on
 a storage miss), records the partition-scoped `cell:` dependency on
-the rendering parton — a write re-renders it, and the label rides for
-selector refetch — and returns a Flight-portable `ResolvedCell<T>`.
+the rendering parton — a write to that cell re-renders exactly the
+partons that read it — and returns a Flight-portable
+`ResolvedCell<T>`.
 The inline `localCell("key", {…})` form declares a cell owned by the
 calling parton (wire id `<partonId>/<key>`). Cells can also be bound
 at a JSX call site (`<CartLine item={cartItemCell.with({uid})} />`) —
@@ -604,8 +614,8 @@ Call-site props are part of the fingerprint automatically — and part
 of the render identity: a placement with call-site props gets a
 per-instance id (`<spec-id>:<props-hash>`), so `<LivePrice sku="A" />`
 and `<LivePrice sku="B" />` are distinct registry entries with
-independent snapshots and cache slots, while both still carry the
-spec's labels for fan-out refetch. The framework captures the
+independent snapshots and cache slots, each subscribed to whatever its
+own body read. The framework captures the
 call-site props in the snapshot so an isolated re-render (a lane's
 `partialFromSnapshot` reconstruction) can re-invoke the child without
 going through its parent and still receive the same props.
@@ -615,45 +625,52 @@ going through its parent and still receive the same props.
 Slot composition is a block-spec concern. A parton has no `cms`
 surface and can't read CMS slot entries — if you need a unit that
 hosts CMS-managed children, use [`block`](./block.md) and declare the
-slot via `cms.blocks(slot, selector?)` / `cms.block(slot, selector?)`
-inside its `schema`. A partial that happens to render a singleton
-block can still place it directly via JSX (`<SomeBlock />`); the
-block's CMS row falls out of its spec id (a `#`-pinned selector
-label, or `Render.name`-derived — see [`block.md`](./block.md)).
+slot via `cms.blocks(slot)` / `cms.block(slot)` inside its `schema`.
+A partial that happens to render a singleton block can still place it
+directly via JSX (`<SomeBlock />`); the block's CMS row falls out of
+its spec id, derived from `Render.name` like any parton's — see
+[`block.md`](./block.md).
 
-## Selector grammar
+## Identity — the Render function's name
 
-A flat list of labels — whitespace-separated tokens, OR an array. Each
-label is a refetch target; `nav.reload({selector: "label"})` matches
-every spec whose label list includes `"label"` (or whose catalog id
-equals it).
+**The name IS the identity.** A spec's catalog id (the wire `id`, the
+snapshot key, the cache/fp key) is its `Render` function's name,
+kebab-cased, with ONE trailing `Render` / `Page` / `Block` /
+`Partial` / `Component` suffix stripped:
 
-```ts
-selector: "hero" // one label
-selector: "page-block hero" // two labels
-selector: ["page-block", "hero"] // same
+```tsx
+parton(function PokemonHeroRender() {…})   // id: "pokemon-hero"
+parton(function AppNavRender() {…})        // id: "app-nav"
+parton(async function ProductCard() {…})   // id: "product-card"
 ```
 
-Leading `#` and `.` are stripped on parse — cosmetic on `parton`.
-`"#hero"`, `".hero"`, and `"hero"` are equivalent. (On `block`, a
-leading `#` pins the spec id — see [`block.md`](./block.md).)
+`displayName` wins over `name` — the explicit override, set with
+`Object.assign(fn, { displayName })`. That's how a FACTORY minting one
+spec per variant / geometry names each product:
 
-The **first label** is also the spec's catalog id (the wire `id`,
-the snapshot key, the id that `selector: "@self"` resolves to from
-inside the partial).
+```tsx
+const chunkSpec = (geo: Geometry) =>
+  parton(Object.assign(async function ChunkRender() {…}, { displayName: geo.chunkSpecId }))
+```
 
-Auto-derived from `Render.name` when omitted: `PokemonHeroRender` →
-`"pokemon-hero"`.
+(Worked factories: `e2e-testing/src/app/pages/pokemon.tsx`,
+`website/src/app/world/chunk.tsx`.)
+
+An **anonymous Render throws at construct time** — a bare arrow
+carries nothing stable to derive an id from, and any fallback (a
+shared `"anon"`, a definition counter) would either collide or
+reshuffle across builds, serving one spec's cached bytes for another.
+Name the function, or set `displayName`.
 
 **Catalog ids are unique per spec — enforced.** Two distinct specs
-claiming one id (two Render functions sharing a name, or two specs
-declaring the same selector) throw at construct time, naming both
-definition sites. In dev the gate is generation-keyed so HMR module
-re-evaluation replaces cleanly; in prod a duplicate id fails at module
-init (deploy time) instead of split-braining at runtime — whole-tree
-renders would run each placement's own closure while every catalog
-consumer (isolated refetch, lanes, the descendant fold) resolved only
-the last definition.
+claiming one id (two Render functions sharing a name) throw at
+construct time, naming both definition sites. In dev the gate is
+generation-keyed so HMR module re-evaluation replaces cleanly; in prod
+a duplicate id fails at module init (deploy time) instead of
+split-braining at runtime — whole-tree renders would run each
+placement's own closure while every catalog consumer (isolated
+refetch, lanes, the descendant fold) resolved only the last
+definition.
 
 **Placement identity.** Each on-page placement renders under an
 effective id derived by the identity ladder:
@@ -663,27 +680,70 @@ effective id derived by the identity ladder:
 2. `<spec-id>:<props-hash>` when the call site passes JSX props —
    `<LivePrice sku="A"/>` and `<LivePrice sku="B"/>` are distinct
    instances;
-3. composed on top of 2 for AUTO-derived ids, a placement fold
-   `~<hash(parent path + frame chain)>` — two placements of one spec
-   under different parents, or inside different `<Frame>`s, are
-   distinct instances even with identical props (both hydrate
-   cleanly, fp-skip independently, and never substitute each other's
-   content). Sibling position is deliberately not folded: two
-   same-props placements under the same parent and frame chain share
-   an id — give them distinguishing props;
-4. the bare spec id (root-level singleton).
+3. composed on top of 2, a placement fold `~<16 hex>` hashing the
+   parent id path + frame chain — two placements of one spec under
+   different parents, or inside different `<Frame>`s, are distinct
+   instances even with identical props (both hydrate cleanly, fp-skip
+   independently, and never substitute each other's content). Sibling
+   position is deliberately not folded: two same-props placements
+   under the same parent and frame chain share an id — give them
+   distinguishing props;
+4. the bare spec id — a root-level unframed placement (both axes
+   empty) stays unfolded, which is what lets same-placement chrome
+   share one identity byte-for-byte across routes and fp-skip through
+   navigation.
 
-Multiple placements of the same spec share their LABELS and fan out
-under refetch (`reload({selector})`, `?partials=<label>`) — labels are
-never placement-folded; each placement stays individually addressable
-via its effective id (`@self`, view culling).
+`~` is framework-reserved in ids, so the fold is a protocol signal
+rather than a guess; app ids must not use it.
 
-An **explicit `selector` id is never placement-folded** — an
-author-declared addressable id asserts singularity. Rendering it at
-two placements in one request is an authoring error: dev throws,
-naming both parent paths; prod logs a structured
-`duplicate-explicit-placement` line and last-wins. Want multiple
-placements? Pass distinct props (leg 2) or drop the selector (leg 3).
+## Refresh signals — cells and tags
+
+Two signals re-render a parton after its first paint, and both are
+BODY READS: the read is the subscription. There is no imperative
+targeted-refresh call.
+
+**Cells are the state-shaped signal** — [`cells.md`](./cells.md). A
+parton resolves a cell in its body (`await cell.resolve(args)`, inline
+`localCell(key, opts)`, `.with(args)` bound on a JSX prop); a write
+(`cell.set` / `cell.update` / `.invalidate()`) fans out by
+`cell:<id>?<partition>` and wakes exactly the partons that read it.
+Reach for a cell when the thing that changed IS the state.
+
+**`tag()` is the event-shaped signal** — for "this changed
+upstream, re-read it" where no cell owns the value. A parton
+subscribes by READING `tag(name)` in its body; a server-side
+`refreshSelector(name)` wakes every reader:
+
+```tsx
+export const LivePricePartial = parton(async function LivePriceRender({ sku }: { sku: string }) {
+  tag(`price?sku=${encodeURIComponent(sku)}`) // the read IS the subscription
+  const price = await fetchPrice(sku)
+  return <Price value={price} />
+})
+```
+
+```ts
+"use server"
+import { refreshSelector } from "@parton/framework"
+
+export async function bumpPrice(sku: string) {
+  refreshSelector(`price?sku=${encodeURIComponent(sku)}`) // one card
+}
+export async function bumpAllPrices() {
+  refreshSelector("price") // every card
+}
+```
+
+Tags fan out by name: several partons reading one tag all re-render on
+one bump; a parton reading several tags re-renders on any of them. A
+name may carry a constraint (`tag("price?sku=ABC")`), so the bare
+`refreshSelector("price")` fans out across every card while
+`refreshSelector("price?sku=ABC")` hits exactly one — the constraint
+is matched against the parton's effective surface (match params ∪
+bound cell args). Worked demos:
+`e2e-testing/src/app/pages/tag-demo{.tsx,-actions.ts}` and
+`e2e-testing/src/app/pages/magento/live-price.tsx` +
+`price-actions.ts`.
 
 ## Skip semantics
 
@@ -846,9 +906,9 @@ checks the URL against that set; if no pattern matches, it calls
 import { parton, getRegisteredMatchPatterns, getCurrentParton, notFound } from "@parton/framework"
 
 export const NotFoundFallback = parton(function NotFoundFallbackRender() {
-  // Non-addressable gate: it declares no selector/match, so it never
-  // fp-skips — the check re-evaluates on every render pass, no dep
-  // to record.
+  // A gate, not a varying surface: it reads no tracked dimension, so
+  // there's no dep to record — the check re-evaluates on every render
+  // pass (every page render runs it).
   const url = getCurrentParton()?.request.url
   if (url) {
     for (const pattern of getRegisteredMatchPatterns()) {
@@ -869,9 +929,9 @@ The set is populated as a side-effect of every `parton(…,
 ## Sharp edges
 
 - **Slot-placeable units use `block`.** `parton`
-  produces non-slot-placeable specs — they're placed by JSX, addressed
-  by selector. Slots look up their entries through the type catalog,
-  which only `block`-constructed specs register in. See
+  produces non-slot-placeable specs — they're placed by JSX. Slots
+  look up their entries through the type catalog, which only
+  `block`-constructed specs register in. See
   [`block.md`](./block.md).
 - **CMS reads live on blocks, not partials.** The tracked hooks are
   strictly request-dimensions (URL / cookies / headers / session). To
@@ -892,5 +952,8 @@ The set is populated as a side-effect of every `parton(…,
   (manual threading from a parent spec).
 - **Spec metadata doesn't cross the RSC boundary.** Spec components
   are server-only — don't import a spec into a client component to
-  reach for its `id`. Reload calls stay stringly-typed
-  (`reload({ selector: "hero" })`).
+  reach for its `id`.
+- **Refreshing a parton is a write, not a call.** A client that wants
+  a parton to re-render mutates what that parton READ — a cell write,
+  or a server action calling `refreshSelector` on a name it reads via
+  `tag()`. See [Refresh signals](#refresh-signals--cells-and-tags).

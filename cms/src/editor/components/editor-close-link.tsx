@@ -36,7 +36,6 @@ export function EditorCloseLink({
     void navigate(window.location.pathname + window.location.search, {
       history: "replace",
       cookies: { [EDITOR_COOKIE]: "" },
-      selector: "#editor-shell",
     })
   }
   return (

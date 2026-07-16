@@ -55,16 +55,16 @@ export function _routeMatchingBumpIds(
 
 /**
  * The nearest snapshot that can actually CARRY a lane — one with an
- * `emittedFp`, an addressable client identity the client can swap in
- * place. A matched parton without one (a selector-less spec: a layout
- * wrapper, or a cell-bound child like a cart line) has no client slot,
- * so its own lane would render but commit to nothing; the update must
- * ride its nearest addressable ancestor's lane instead — whose render
- * re-renders the subtree containing it, exactly as a whole-tree segment
- * does on the non-lane path. `parentPath` is root-first ending at the
- * immediate parent, so the nearest ancestor is at the tail. Returns
- * `null` when neither the id nor any ancestor is addressable (nothing
- * can carry the update — the caller drops it).
+ * `emittedFp`, the client identity the client can swap in place. A
+ * locally rendered parton always emits one; a record that does not
+ * (an embed-sourced snapshot replayed from a trailer) has no client
+ * slot, so its own lane would render but commit to nothing, and the
+ * update rides its nearest fp-bearing ancestor's lane instead — whose
+ * render re-renders the subtree containing it, exactly as a whole-tree
+ * segment does on the non-lane path. `parentPath` is root-first ending
+ * at the immediate parent, so the nearest ancestor is at the tail.
+ * Returns `null` when neither the id nor any ancestor bears an fp
+ * (nothing can carry the update — the caller drops it).
  */
 function laneCarrierFor(
   id: string,
@@ -82,8 +82,8 @@ function laneCarrierFor(
 }
 
 /** Map matched ids to their lane carriers (`laneCarrierFor`), dropping
- *  the uncarriable and deduping — several non-addressable children of
- *  one addressable ancestor collapse to a single ancestor lane, so its
+ *  the uncarriable and deduping — several fp-less children of one
+ *  fp-bearing ancestor collapse to a single ancestor lane, so its
  *  one render re-renders them all. First-occurrence order is preserved
  *  (delivery order for the driver's lane pass). Exported for the
  *  driver's bump drain: the pending set holds MATCHED ids; the drain

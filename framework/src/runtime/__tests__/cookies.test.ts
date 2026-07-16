@@ -10,7 +10,7 @@
  * `store.cookies` first).
  *
  * Without the overlay, the cart pattern `setCookie("cart_id", X) +
- * getServerNavigation().reload({selector: "cart"})` leaves the
+ * a cell write that wakes the cart parton leaves the
  * immediate re-render reading `cookies.cart_id === undefined` — the
  * cart spec skips its data fetch and the badge stays at 0 until the
  * next nav.
@@ -37,7 +37,7 @@ describe("parseCookies", () => {
   it("setCookie writes override matching request-header values", async () => {
     // The cart pattern: action receives request with stale cart_id (or none),
     // creates a new cart, setCookie("cart_id", newId), then
-    // getServerNavigation().reload({selector: "cart"}). The re-rendered
+    // a cell write that wakes the cart parton. The re-rendered
     // cart spec's vary must see the NEW cart_id.
     const req = new Request("http://t/", { headers: { cookie: "theme=light" } })
     const { result } = await runWithRequestAsync(req, async () => {

@@ -1,20 +1,18 @@
 "use client"
 
-import { useNavigation } from "@parton/framework/lib/partial-client.tsx"
+import { useState } from "react"
 import { Button } from "@parton/copies/components/ui/button"
+import { bumpTag } from "../pages/tag-demo-actions.ts"
 
 /**
- * Targets a specific remote frame by its spec selector and fires a
- * targeted reload. The host's refetch machinery picks the matching
- * snapshot and re-renders it — in same-origin v1 this round-trips
- * through the host's local copy of the spec (the remote endpoint
- * isn't re-hit). v2 cross-origin will need an explicit "this id is
- * hosted at <origin>" annotation on the snapshot so the refetch is
- * routed to the remote.
+ * Refreshes embedded remote content by bumping the tag the remote
+ * parton reads (`tag("<name>")` in the producer's Render). The bump
+ * matches the embed's host-registered snapshot labels; the wake lanes
+ * a focused re-embed (`?partials=<id>` back at the embedded URL).
+ * Several embeds reading one tag fan out on one bump.
  */
-export function RemoteRefreshButton({ selector, label }: { selector: string; label: string }) {
-  const [reload, { committed, finished }] = useNavigation().reload()
-  const pending = committed && !finished
+export function RemoteRefreshButton({ name, label }: { name: string; label: string }) {
+  const [pending, setPending] = useState(false)
   return (
     <Button
       // `data-hydrated`: React owns the button (onClick live) — the
@@ -24,9 +22,12 @@ export function RemoteRefreshButton({ selector, label }: { selector: string; lab
       type="button"
       size="sm"
       variant="outline"
-      onClick={() => reload({ selector })}
+      onClick={() => {
+        setPending(true)
+        void bumpTag(name).finally(() => setPending(false))
+      }}
       disabled={pending}
-      data-testid={`rfd-refresh-${selector}`}
+      data-testid={`rfd-refresh-${name}`}
     >
       {pending ? "…" : label}
     </Button>

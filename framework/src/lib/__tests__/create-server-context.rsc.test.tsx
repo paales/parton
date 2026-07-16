@@ -73,12 +73,9 @@ describe("createServerContext / getServerContext", () => {
 // ── threading through a parton (the shared-channel payoff) ───────────────
 const Locale = createServerContext<string>("en")
 
-const LocaleProbe = parton(
-  async function LocaleProbeRender(_: RenderArgs) {
-    return <span data-testid="locale">{getServerContext(Locale)}</span>
-  },
-  { selector: ".locale-probe" },
-)
+const LocaleProbe = parton(async function LocaleProbeRender(_: RenderArgs) {
+  return <span data-testid="locale">{getServerContext(Locale)}</span>
+})
 
 describe("createServerContext: threads through a parton", () => {
   it("a parton's Render reads a context provided above it", async () => {
