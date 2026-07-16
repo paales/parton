@@ -9,6 +9,50 @@ keeping for context).
 
 ---
 
+## Known issues
+
+Confirmed bugs and debt awaiting a lane — measured, not yet fixed.
+
+### ResolvedCell into a client component from a matchless parton hangs
+
+Passing a ResolvedCell (an in-body `localCell(...)` result) as a prop
+to a `"use client"` component from a parton with no `match` hangs the
+render 30–40s (dev AND prod; seen on `/remote-frame-demo` +
+`/embed-demo`, and it is exactly the `<CellCheckbox cell={loader} />`
+shape in `examples/minimal`). Bisected:
+
+| variant | result |
+|---|---|
+| bare parton, no cell/client | 1.07s OK |
+| bare + `localCell`, no client comp | 1.07s OK |
+| bare + plain client comp | 2.07s OK |
+| bare + client comp taking a **ResolvedCell prop** | **30–40s HANG** |
+
+A matchless parton renders inside EVERY embed, so this blocks the
+embed surface too. High priority; deserves its own lane.
+
+### Test-infra: `refreshSelector` bumps cross Playwright workers
+
+Invalidation-timestamp bumps are process-global, not partitioned by
+`x-test-scope` — a tag bump in one worker's spec wakes partons in
+another's. Two spec files run `mode: "serial"` as a workaround while
+the playwright config still claims workers>1 is safe. Needs real
+scoping or a documented ownership rule.
+
+### `laneCarrierFor` ancestor escalation may be dead code
+
+Every local render now sets `emittedFp`, so the escalation path may be
+unreachable outside embed-sourced snapshots. Reported during the
+every-parton-addressable work; not ripped out pending a real trace.
+
+### Interactive-Chrome `/__parton/channel` POST 503s
+
+Real browser tabs occasionally wedge with 503s on the channel POST;
+Playwright doesn't reproduce it. Unfiled beyond this note —
+investigation lane when convenient.
+
+---
+
 ## Backlog
 
 ### Scoped selectors / module-scoped auto-ids
