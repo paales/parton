@@ -309,52 +309,31 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
   const windowReload = (options?: FrameworkReloadOptions): NavigationMilestones => {
     const m = makeMilestoneDeferreds()
 
-    // Streaming opt-in (`reload({streaming: true})`) reaches the
-    // in-place refetch path (no browser reload): the client commits
-    // the response progressively — a render-mode switch stated on the
-    // channel, not a browser reload.
-    //
-    // Only a bare `reload()` (no streaming) falls through to
-    // `nav.reload()` — that's the user-facing "reload this URL"
-    // command and IS supposed to do a real browser reload.
-    if (options?.streaming === true) {
-      m.committed.resolve(nav.currentEntry!)
-      void (async () => {
-        try {
-          // Supersede ordering is the channel's — a newer statement's
-          // covering segment resolves older fires too. Only the
-          // caller's own `options.signal` cancels a fire.
-          const refetch = enqueueRefetch({
-            ids: [],
-            streaming: true,
-            signal: options?.signal,
-          })
-          await refetch.streaming
-          m.streaming.resolve()
-          await refetch.finished
-          m.finished.resolve(nav.currentEntry!)
-        } catch (err) {
-          m.streaming.reject(err)
-          m.finished.reject(err)
-        }
-      })()
-      return {
-        committed: m.committed.promise,
-        streaming: m.streaming.promise,
-        finished: m.finished.promise,
-      }
-    }
-
-    const result = nav.reload({ state: options?.state, info: options?.info })
+    // `reload()` re-evaluates the whole page in place — a whole-tree
+    // `?__force=`-less url statement on the channel; every parton
+    // re-reads the current URL and fp-skip prunes the unchanged to
+    // placeholders, so the DOM never tears down. A bare `reload()`
+    // commits the response atomically; `reload({streaming: true})`
+    // commits it progressively (a render-mode switch stated on the
+    // channel). Neither is a browser document load — a caller that
+    // genuinely wants to drop the JS realm and reload the document uses
+    // the ambient `window.navigation.reload()` directly.
+    m.committed.resolve(nav.currentEntry!)
     void (async () => {
       try {
-        await awaitCommitted(result)
-        m.committed.resolve(nav.currentEntry!)
-        await awaitFinished(result)
+        // Supersede ordering is the channel's — a newer statement's
+        // covering segment resolves older fires too. Only the caller's
+        // own `options.signal` cancels a fire.
+        const refetch = enqueueRefetch({
+          ids: [],
+          streaming: options?.streaming === true,
+          signal: options?.signal,
+        })
+        await refetch.streaming
         m.streaming.resolve()
+        await refetch.finished
         m.finished.resolve(nav.currentEntry!)
       } catch (err) {
-        m.committed.reject(err)
         m.streaming.reject(err)
         m.finished.reject(err)
       }

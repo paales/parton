@@ -120,19 +120,23 @@ Common spinner predicates:
 
 Fire functions:
 
-- `reload()` — reload the current URL. On the window handle a bare
-  call is a real browser reload: the user-facing "reload this page"
-  command, document and all.
-- `reload({ streaming: true })` — the in-place progressive refetch.
-  The page re-renders against the current URL over the held stream,
-  no document load.
+- `reload()` — re-render the current URL IN PLACE. The whole page
+  re-evaluates against the current URL over the held stream (fp-skip
+  prunes the unchanged), the DOM is never torn down, and the response
+  commits atomically. Never a browser document load — a caller that
+  genuinely wants to drop the JS realm and reload the document calls
+  the ambient `window.navigation.reload()` directly.
+- `reload({ streaming: true })` — the same in-place refetch, committed
+  PROGRESSIVELY (Suspense fallbacks paint, Flight chunks land per row)
+  rather than as one atomic swap.
 - `navigate(target)` — push a new URL.
 - `navigate(target, options)` — URL update + refetch.
 
 `target` is a string, a `URL`, or an updater function
-`(url: URL) => URL | string`. On a frame handle every `reload()` is
-in-place: the frame re-renders against its own current URL and the
-document is untouched.
+`(url: URL) => URL | string`. Every `reload()` — window or frame — is
+in-place; a frame reload re-renders against its own current URL, a
+window reload against the page URL, and the document is untouched
+either way.
 
 ### Updating a single query param
 
