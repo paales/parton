@@ -21,6 +21,7 @@ import {
   _selectorMatchesSurface,
   _setWakeSubscriptionEntry,
   _removeWakeSubscriptionEntry,
+  parseSelector,
   type CompiledSurfaceQuery,
   type ParsedSelector,
   type WakeSubscriberContext,
@@ -28,6 +29,49 @@ import {
 } from "../runtime/invalidation-registry.ts"
 import type { BroadcastRouteHandle } from "./broadcast.ts"
 import { effectiveExpiresAt, type PartialSnapshot } from "./partial-registry.ts"
+
+/**
+ * The snapshot's wake-index label set: the registration-time `labels`
+ * UNIONED with the `cell:` / `tag:` invalidation names in its live
+ * `deps`.
+ *
+ * `labels` is frozen when `PartialBoundary` registers — but a cell (or
+ * tag) resolved in the RENDER BODY records its selector into the live
+ * `deps` set only AFTER that registration (a cold `await` — e.g. a
+ * `remoteCell` network read — lands post-registration). The fp already
+ * folds those post-await deps through store-and-reread; the wake index
+ * must match them too, or a body-resolved cell is DARK to invalidation
+ * until a warm re-render re-freezes its labels. A full attach's initial
+ * segment IS that re-render; a catch-up attach skips it, so the wake
+ * label set has to come from the deps the fp reads, not the frozen
+ * `labels` — the subscription then follows from the deps, not from which
+ * render variant last froze the labels.
+ *
+ * The union is idempotent for schema-phase cells (already in both), and
+ * carries the same name grammar `PartialBoundary` produces
+ * (`cell:<id>` verbatim; a `tag:<name>` dep becomes the bare `<name>`).
+ * Memoised per snapshot: a snapshot is immutable except this live `deps`
+ * ref, which is complete by the time the driver reads it (it syncs
+ * post-drain, matches at bump time — both after the render settled).
+ */
+const wakeLabelsCache = new WeakMap<PartialSnapshot, string[]>()
+export function _wakeLabelsOf(snap: PartialSnapshot): string[] {
+  let labels = wakeLabelsCache.get(snap)
+  if (labels === undefined) {
+    if (!snap.deps || snap.deps.size === 0) {
+      labels = snap.labels
+    } else {
+      const set = new Set(snap.labels)
+      for (const d of snap.deps) {
+        if (d.startsWith("cell:")) set.add(parseSelector(d).name)
+        else if (d.startsWith("tag:")) set.add(parseSelector(d.slice("tag:".length)).name)
+      }
+      labels = set.size === snap.labels.length ? snap.labels : [...set]
+    }
+    wakeLabelsCache.set(snap, labels)
+  }
+  return labels
+}
 
 /**
  * The ids whose snapshots a bump with `ts > sinceTs` touched, mapped
@@ -48,7 +92,7 @@ export function _routeMatchingBumpIds(
 ): string[] {
   const ids: string[] = []
   for (const [id, snap] of snapshots) {
-    if (_queryCompiledMatchingTs(snap.labels, surfaceQueryOf(snap)) > sinceTs) ids.push(id)
+    if (_queryCompiledMatchingTs(_wakeLabelsOf(snap), surfaceQueryOf(snap)) > sinceTs) ids.push(id)
   }
   return _escalateToLaneCarriers(ids, snapshots)
 }
@@ -112,8 +156,9 @@ export function _routeMatchingSelectorIds(
   const ids: string[] = []
   for (const [id, snap] of snapshots) {
     const surface = surfaceQueryOf(snap).surface
+    const labels = _wakeLabelsOf(snap)
     const hit = selectors.some(
-      (s) => snap.labels.includes(s.name) && _selectorMatchesSurface(s.constraints, surface),
+      (s) => labels.includes(s.name) && _selectorMatchesSurface(s.constraints, surface),
     )
     if (hit) ids.push(id)
   }
@@ -425,8 +470,9 @@ export function _syncRouteWakeSubscription(
     if (rws.registered.get(id) === snap) continue
     const query = surfaceQueryOf(snap)
     const carrier = laneCarrierFor(id, snapshots)
+    const labels = _wakeLabelsOf(snap)
     _setWakeSubscriptionEntry(rws.sub, id, {
-      labels: snap.labels,
+      labels,
       query,
       carrier,
       carrierParkGates: carrier === null ? null : carrierParkGates(carrier, snapshots),
@@ -436,7 +482,7 @@ export function _syncRouteWakeSubscription(
     // boundary is its next wake — insert/move (a re-render's box read
     // is final by sync time: the driver only syncs post-drain).
     _scheduleDeadline(rws.wheel, id, effectiveExpiresAt(snap))
-    if (_queryCompiledMatchingTs(snap.labels, query) > coveredTs) {
+    if (_queryCompiledMatchingTs(labels, query) > coveredTs) {
       _seedWakeSubscriptionPending(rws.sub, id)
     }
   }
