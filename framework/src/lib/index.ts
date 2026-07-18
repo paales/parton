@@ -27,6 +27,19 @@ export {
 // CMS block constructor — composes around `parton`.
 export { block, type BlockOptions, type SchemaScope } from "../runtime/cms-block.ts"
 
+// Windowed-collection constructor — the interval tree over item
+// space, composed around `parton` + cull.
+export {
+  scroller,
+  scrollerDepthFor,
+  type ScrollerAnchor,
+  type ScrollerOptions,
+  type ScrollerRange,
+  type ScrollerShellProps,
+  type ScrollerSlice,
+  type ScrollerWindow,
+} from "./scroller.tsx"
+
 // Server context — `createServerContext(default)` returns a provider
 // component (`<Ctx value={…}>…</Ctx>`) plus the handle for
 // `getServerContext(Ctx)`, readable anywhere in a Server Component's render.

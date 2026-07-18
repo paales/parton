@@ -62,5 +62,6 @@ export { reportTelemetry } from "./lib/telemetry.ts"
 // module reaches for the same barrel for its types as for its hooks,
 // rather than crossing to the server barrel for a type alone.
 export type { RenderArgs, ActivatorProps } from "./lib/partial.tsx"
+export type { ScrollerShellProps } from "./lib/scroller.tsx"
 export type { ResolvedCell, LocalCell, CellPartitionScope } from "./lib/cell.ts"
 export type { Navigate, FrameworkNavigation } from "./runtime/navigation-api.ts"
