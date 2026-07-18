@@ -135,52 +135,6 @@ quiet moment between arcs, never mid-arc.
 session from `?__frame=&__frameUrl=` URL params on every request.
 Two paths into one store — worth checking if they can collapse.
 
-### RemoteFrame v2 — signed capability tokens
-
-Today the capability header is trust-the-network: the remote
-believes whatever the host puts in `x-parton-capability`. For
-real third-party deployments, the remote needs to verify the
-host's claims (this cart-id actually exists, this user actually
-owns it, this total is what was quoted). HMAC-signed tokens
-with an expiration and an issuer are the obvious shape — pick
-JWT or PASETO depending on team taste. Full design cut in
-[`remote-frame-design.md`](./remote-frame-design.md) §6.
-
-The signing key lives at the host; the verification key is
-either the host's public key (asymmetric) or a shared secret
-(symmetric, simpler but harder to rotate). For Stripe-style
-"third-party serves a checkout widget" the signature is
-non-optional; for "Adobe-vetted module in a trusted deployment"
-it's overkill.
-
-### RemoteFrame — same-origin batching
-
-Today every `<RemoteFrame>` placement fires its own fetch — N
-placements against the same origin are N separate requests
-(even identical `(url, capability)` copies). Common case in commerce: a checkout
-page with three Stripe remotes (payment-method picker, summary,
-upsells) — three round-trips to Stripe instead of one.
-
-Batching design: the host collects same-origin RemoteFrame
-placements within a microtask window, issues one
-`GET <origin>/__remote/?ids=a,b,c`, the remote returns a
-length-prefixed multi-payload response. Each placement's Flight
-payload + snapshot trailer is split out and decoded
-independently.
-
-Capability complication: each placement can carry its own
-capability. The batched request must transport per-id
-capabilities — probably an envelope like
-`X-Parton-Capabilities: { id: cap, ... }` on the request and
-matching per-id sections in the response. Without per-id caps,
-batching would have to fall back to one-fetch-per-distinct-cap,
-which still helps when caps are uniform.
-
-Open: how the remote endpoint structures the batched response.
-Length-prefixed sections (like the existing snapshot trailer)
-keep parsing simple; a multipart shape compresses better with
-HTTP/2 frame coalescing but adds a content-type parser.
-
 ### `<PartialForm>` as a composed primitive
 
 A higher-level form primitive combining cells (per-field draft, via
