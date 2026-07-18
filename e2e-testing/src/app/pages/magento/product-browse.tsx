@@ -1,21 +1,18 @@
 /**
  * /magento/browse — the catalog as a `scroller()` collection.
  *
- * The interval tree windows the catalog: leaf partons cover
- * `PAGE_SIZE` products and resolve their slice only while in view
- * (the fetch is gated by culling); culled regions collapse to shells
- * (per-item placeholders at leaf counts, one estimated block deeper),
- * so the document holds O(viewport + log catalog) partons, not one
- * section per page.
+ * One CSS grid (`.browse-grid` — the app stylesheet owns
+ * `--scroller-cols` / `--scroller-row`): a placed span of cull-gated
+ * leaf partons around the `?page=` anchor, reservation shells
+ * covering the rest of the catalog with CSS arithmetic. Leaves fetch
+ * their slice only in view; a scrollbar jump self-materializes
+ * skeleton cells client-side and moves the span with one replace
+ * navigation.
  *
  * Order and content are split: `browseProductsCell` (the slice) owns
  * which products in what order; each card is its OWN parton bound to
  * `browseCardCell` (the entity, keyed by uid) — a product's content
  * invalidates per entity, wherever it appears.
- *
- * Pagination is a projection: `?page=N` is the scroller's anchor —
- * the cold seed a deep link paints at, and the bookmarkable shadow
- * scrolling mirrors into. No page is ever a render unit.
  */
 
 import { Card, CardContent } from "@parton/copies/components/ui/card"
@@ -26,18 +23,22 @@ import {
   type CellValue,
   type RenderArgs,
   type ResolvedCell,
-  type ScrollerSlice,
 } from "@parton/framework"
-import { CARD_ROW_PX, COLS, GRID, PAGE_SIZE } from "./browse-constants.ts"
-import { BrowseShell } from "./browse-shell.tsx"
 import { browseCardCell, browseProductsCell } from "./products-cell.ts"
 
 type CardItem = CellValue<typeof browseCardCell>
 
+/** Items per leaf parton — also the slice fetch size and the derived
+ *  page size of the `?page=` projection. The one geometry number that
+ *  is NOT CSS (counts, not pixels). */
+const LEAF = 12
+
 // One product card — the ENTITY parton. Its only dependency is the
 // card cell it's bound to, so it re-renders on that product's
 // invalidation and fp-skips through everything else (a re-sorted
-// slice moves placements, not card bytes).
+// slice moves placements, not card bytes). The card is one grid cell:
+// height comes from the grid's `--scroller-row`; the bottom margin is
+// the visual row spacing (row-gap stays 0 by the scroller contract).
 const BrowseCard = parton(function BrowseCardRender({
   item,
 }: { item: ResolvedCell<CardItem> } & RenderArgs) {
@@ -45,7 +46,10 @@ const BrowseCard = parton(function BrowseCardRender({
   if (!p) return null
   const price = p.price_range.minimum_price.regular_price
   return (
-    <Card className="h-full overflow-hidden p-4" data-testid={`browse-card-${p.sku ?? p.uid}`}>
+    <Card
+      className="mb-3 h-[240px] overflow-hidden p-4"
+      data-testid={`browse-card-${p.sku ?? p.uid}`}
+    >
       <CardContent className="flex h-full flex-col gap-1 px-0">
         {p.small_image?.url && (
           <img
@@ -64,37 +68,22 @@ const BrowseCard = parton(function BrowseCardRender({
   )
 })
 
-// The collection — leaf Render is the layout renderer: it lays the
-// slice out and places each item's parton. The scroller owns
-// windowing, existence, and the `?page=` anchor.
-const BrowseGrid = scroller(
-  function BrowseGridRender({ items }: ScrollerSlice<BoundCell<CardItem>> & RenderArgs) {
-    return (
-      <div className={GRID}>
-        {items.map((item) => (
-          <BrowseCard key={String(item.args.uid)} item={item} />
-        ))}
-      </div>
+const BrowseGrid = scroller({
+  name: "browse-grid",
+  range: async ({ offset, limit }) => {
+    const res = await browseProductsCell.resolve({
+      pageSize: limit,
+      currentPage: offset / limit + 1,
+    })
+    const items = (res.value?.products?.items ?? []).filter(
+      (it): it is BoundCell<CardItem> => it != null,
     )
+    return { items, total: res.value?.products?.total_count ?? 0 }
   },
-  {
-    range: async ({ offset, limit }) => {
-      const res = await browseProductsCell.resolve({
-        pageSize: limit,
-        currentPage: offset / limit + 1,
-      })
-      const items = (res.value?.products?.items ?? []).filter(
-        (it): it is BoundCell<CardItem> => it != null,
-      )
-      return { items, total: res.value?.products?.total_count ?? 0 }
-    },
-    shell: BrowseShell,
-    estimate: (n) => Math.ceil(n / COLS) * CARD_ROW_PX,
-    leaf: PAGE_SIZE,
-    fanout: 4,
-    anchor: { param: "page", pageSize: PAGE_SIZE },
-  },
-)
+  item: (cell) => <BrowseCard key={String(cell.args.uid)} item={cell} />,
+  leaf: LEAF,
+  className: "browse-grid",
+})
 
 export const ProductBrowsePage = parton(
   function ProductBrowseRender(_: RenderArgs) {

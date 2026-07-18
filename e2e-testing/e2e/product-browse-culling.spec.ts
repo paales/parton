@@ -36,25 +36,41 @@ async function wheelDown(page: Page, notches: number, dy = 400) {
   return ys
 }
 
-// The anchor page derived from the deepest interval marker crossing
-// the viewport's vertical center — the same rule the anchor-sync
-// mirror uses.
+// The anchor page under the viewport's center — the mirror's own
+// rule: hit test, then the containing interval. Leaf markers are
+// `display: contents`, so position comes from the hit cell; a hit
+// inside a reservation derives from its rect arithmetic.
 async function centeredPage(page: Page) {
   return page.evaluate(
     ({ sel, ps }) => {
       const cy = window.innerHeight / 2
-      let best: HTMLElement | null = null
-      for (const el of document.querySelectorAll<HTMLElement>(sel)) {
-        const r = el.getBoundingClientRect()
-        if (!(r.top <= cy && r.bottom >= cy)) continue
-        if (best === null || Number(el.dataset.sn) < Number(best.dataset.sn)) best = el
+      let hit: Element | null = null
+      let m: HTMLElement | null = null
+      for (const [px, py] of [
+        [0.5, 0.5],
+        [0.4, 0.45],
+        [0.6, 0.55],
+        [0.5, 0.42],
+      ]) {
+        hit = document.elementFromPoint(window.innerWidth * px, window.innerHeight * py)
+        const c = hit?.closest<HTMLElement>(sel) ?? null
+        if (c && c.dataset.sroot === undefined) {
+          m = c
+          break
+        }
       }
-      if (!best) return null
-      const o = Number(best.dataset.so)
-      const n = Number(best.dataset.sn)
-      const r = best.getBoundingClientRect()
-      const frac = r.height > 0 ? Math.min(1, Math.max(0, (cy - r.top) / r.height)) : 0
-      return Math.floor((o + frac * n) / ps) + 1
+      if (!m) return null
+      const o = Number(m.dataset.so)
+      const n = Number(m.dataset.sn)
+      if (m.dataset.sres !== undefined) {
+        const r = m.getBoundingClientRect()
+        const frac = r.height > 0 ? Math.min(1, Math.max(0, (cy - r.top) / r.height)) : 0
+        return Math.floor((o + frac * n) / ps) + 1
+      }
+      let cell: Element | null = hit as Element
+      while (cell && cell.parentElement !== m) cell = cell.parentElement
+      const within = cell ? Array.prototype.indexOf.call(m.children, cell) : 0
+      return Math.floor((o + Math.max(0, within)) / ps) + 1
     },
     { sel: marker, ps: PAGE_SIZE },
   )
@@ -69,6 +85,7 @@ async function fullLeafCount(page: Page) {
     ({ sel, cardSel, ps }) => {
       let n = 0
       for (const el of document.querySelectorAll<HTMLElement>(sel)) {
+        if (el.dataset.sres !== undefined || el.dataset.sroot !== undefined) continue
         if (Number(el.dataset.sn) > ps) continue
         for (const c of el.querySelectorAll<HTMLElement>(cardSel)) {
           if (c.offsetParent !== null) {
@@ -83,16 +100,12 @@ async function fullLeafCount(page: Page) {
   )
 }
 
-// Catalog size in items, read off the root interval marker (the one
-// spanning the whole collection).
+// Catalog size in items, read off the root wrapper marker.
 async function totalItems(page: Page) {
-  return page.evaluate((sel) => {
-    let max = 0
-    for (const el of document.querySelectorAll<HTMLElement>(sel)) {
-      max = Math.max(max, Number(el.dataset.sn))
-    }
-    return max
-  }, marker)
+  return page.evaluate(
+    (sel) => Number(document.querySelector<HTMLElement>(sel)?.dataset.sn ?? 0),
+    '[data-s="browse-grid"][data-sroot]',
+  )
 }
 
 test("scrolling down never jumps the viewport backward", async ({ page }) => {

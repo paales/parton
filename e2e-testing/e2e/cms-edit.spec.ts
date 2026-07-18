@@ -716,21 +716,19 @@ test.describe("CMS editor — smoke", () => {
       await waitForPageInteractive(page)
       await waitForRscIdle(page)
 
-      // Page 1 is the only one rendered initially. Pokemon links use
-      // `<a href="/pokemon/N">`. Count them, scroll, and assert the
-      // count grew — load-more's observer fires and ?pages= bumps.
-      const links = page.locator('a[href^="/pokemon/"]')
-      const before = await links.count()
-      expect(before).toBeGreaterThan(0)
+      // Only the anchor neighborhood is materialized initially (the
+      // scroller's cold seed — items 1..48). Scrolling must flip a
+      // beyond-the-seed leaf in via its IntersectionObserver: pokemon
+      // #60 lives in the third leaf, culled at load.
+      const seeded = page.locator('a[href="/pokemon/1"]')
+      await expect(seeded).toBeAttached()
+      const beyond = page.locator('a[href="/pokemon/60"]')
+      expect(await beyond.count()).toBe(0)
 
-      // Scroll to the bottom of the document — observer fires when
-      // load-more enters the viewport.
-      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-
-      await expect(async () => {
-        const after = await links.count()
-        expect(after).toBeGreaterThan(before)
-      }).toPass({ timeout: 10000 })
+      // Scroll into the third leaf's neighborhood — its observer
+      // fires and the flip-in lane materializes it.
+      await page.evaluate(() => window.scrollTo(0, 3000))
+      await expect(beyond).toBeAttached({ timeout: 10000 })
     })
   })
 

@@ -145,22 +145,27 @@ display. The `cell.input()` ↔ RHF `register()` comparison in
 to start from. Waits for a real form flow that exercises
 submit + validation + draft together.
 
-### Scroller: measure-and-pin, streaming sources, signed feeds
+### Scroller: streaming sources, signed feeds, variable heights
 
-`scroller()` shipped (`../reference/scroller.md`) with three known
-refinements, each waiting on a forcing caller:
+`scroller()` shipped as the window model (`../reference/scroller.md`
+— placed span + CSS-arithmetic reservations; the interval-tree
+predecessor lives in this arc's git history). Refinements, each
+waiting on a forcing caller:
 
-- **Measure-and-pin.** A culled region reserves `estimate(n)` px;
-  drift above the viewport shifts scroll by the error. The
-  visibility observer already produces rects — pin measured heights
-  client-side so shells re-open at their real size.
 - **Streaming / async-iterator sources.** `range` is offset/limit.
   A feed whose tail streams (chat, activity) wants a source adapter
   over a tail cell + `expires()`, not a new core.
-- **Signed intervals for prepend feeds.** The interval tree extends
-  append-ward today. Anchoring item 0 at first-load and letting the
-  tree grow in both directions (the world's signed chunk coords, in
-  1D) covers newest-first feeds without re-keying.
+- **Signed spans for prepend feeds.** The span extends append-ward
+  today. Anchoring item 0 at first-load and letting indexes go
+  signed (the world's chunk coords, in 1D) covers newest-first feeds
+  without re-keying.
+- **Variable row heights.** Deliberately NOT a mode of this
+  primitive — uniform rows are what make reservation exact and the
+  scrollbar jump computable. The eventual answer is scroll-anchoring
+  machinery (keep the visible items pinned while things above
+  resize), likely a separate primitive; browsers' native
+  `overflow-anchor` covers part of it once content, not reservation,
+  is what resizes.
 
 ### Scroller × broadcast eligibility
 
@@ -176,15 +181,14 @@ local. Delivery-plane change — design against the shared bench.
 ### Scroller: seed reads fold raw, not resolved
 
 A cull seed's tracked reads (the anchor's `searchParam("page")`)
-record raw dep keys, so every segment's fp moves when the mirrored
-anchor value moves — the next refetch re-sends the whole visible
-set even though every seed VERDICT (and every measured gate) is
-unchanged. The resolved-visibility term (`visible:<id>?seed=`)
-already folds the verdict; investigate suppressing the seed's raw
-keys when a measurement exists (measurement wins the gate), so the
-anchor mirror stops being a page-wide fp mover. Soundness argument
-sketched in the scroller commit; needs the fold's re-eval path to
-re-run seeds for unmeasured instances.
+record raw dep keys, so every span leaf's fp moves when the anchor
+value moves — a window move re-sends the whole span even where the
+seed VERDICT (and every measured gate) is unchanged. The
+resolved-visibility term (`visible:<id>?seed=`) already folds the
+verdict; investigate suppressing the seed's raw keys when a
+measurement exists (measurement wins the gate), so the anchor stops
+being a span-wide fp mover. Needs the fold's re-eval path to re-run
+seeds for unmeasured instances.
 
 ### A 2D `space` for scroller — wait for the second caller
 

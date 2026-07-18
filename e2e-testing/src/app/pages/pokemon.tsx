@@ -17,14 +17,12 @@ import {
   type RenderArgs,
   type ResolvedCell,
   type BoundCell,
-  type ScrollerSlice,
   type CellValue,
   type PartialCtx,
 } from "@parton/framework"
 import { Frame } from "@parton/framework"
 import { Badge } from "@parton/copies/components/ui/badge"
 import { cn } from "@parton/copies/lib/utils"
-import { PokedexShell } from "../components/pokedex-shell.tsx"
 import { PartialControls } from "../components/partial-controls.tsx"
 import { SearchToggle, SearchInput, SearchDialog } from "../components/search.tsx"
 import { pokemonCardCell, pokemonListCell, pokemonSearchCell } from "./pokemon-cells.ts"
@@ -324,33 +322,25 @@ export const SearchAreaFrame = makeSearchArea("frame")
 
 // ─── Pokedex list pages ─────────────────────────────────────────────────
 
-// The pokedex as a windowed collection: leaf partons cover 24 pokemon
-// and resolve their slice only in view; culled regions collapse to
-// shells; `?page=` is the anchor (cold seed + silent scroll mirror).
-// Each card stays its own parton (`PokemonCard`, fed the per-entity
-// fragment cell), so card content invalidates per pokemon wherever it
-// appears — order belongs to the slice, content to the entity.
-const PokedexList = scroller(
-  function PokedexListRender({
-    items,
-  }: ScrollerSlice<BoundCell<CellValue<typeof pokemonCardCell>>> & RenderArgs) {
-    return <PokemonCardGrid items={items} />
+// The pokedex as a windowed collection: one CSS grid
+// (`.pokedex-grid`), a placed span of cull-gated leaf partons around
+// the `?page=` anchor, reservation shells covering the rest. Each
+// card stays its own parton (`PokemonCard`, fed the per-entity
+// fragment cell), so card content invalidates per pokemon wherever
+// it appears — order belongs to the slice, content to the entity.
+const PokedexList = scroller({
+  name: "pokedex-list",
+  range: async ({ offset, limit }) => {
+    const res = await pokemonListCell.resolve({ limit, offset })
+    return {
+      items: res.value?.pokemon_v2_pokemon ?? [],
+      total: res.value?.pokemon_v2_pokemon_aggregate?.aggregate?.count ?? 0,
+    }
   },
-  {
-    range: async ({ offset, limit }) => {
-      const res = await pokemonListCell.resolve({ limit, offset })
-      return {
-        items: res.value?.pokemon_v2_pokemon ?? [],
-        total: res.value?.pokemon_v2_pokemon_aggregate?.aggregate?.count ?? 0,
-      }
-    },
-    shell: PokedexShell,
-    estimate: (n) => Math.ceil(n / 4) * 240,
-    leaf: 24,
-    fanout: 4,
-    anchor: { param: "page", pageSize: 24 },
-  },
-)
+  item: (cell) => <PokemonCard key={String(cell.args.id)} item={cell} />,
+  leaf: 24,
+  className: "pokedex-grid",
+})
 
 // ─── Outer wrapper — matches /, composes the overview ─────────────────
 

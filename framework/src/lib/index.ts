@@ -27,16 +27,14 @@ export {
 // CMS block constructor — composes around `parton`.
 export { block, type BlockOptions, type SchemaScope } from "../runtime/cms-block.ts"
 
-// Windowed-collection constructor — the interval tree over item
-// space, composed around `parton` + cull.
+// Windowed-collection constructor — a placed span of cullable leaf
+// partons + CSS-arithmetic reservations, composed around `parton` +
+// cull.
 export {
   scroller,
-  scrollerDepthFor,
   type ScrollerAnchor,
   type ScrollerOptions,
   type ScrollerRange,
-  type ScrollerShellProps,
-  type ScrollerSlice,
   type ScrollerWindow,
 } from "./scroller.tsx"
 

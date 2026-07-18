@@ -1,158 +1,154 @@
 # scroller() — windowed collections
 
-`scroller(Render, options)` renders a collection (catalog, listing,
-feed) as an **interval tree of cullable partons over item index
-space** — the 1D analogue of the demo world's quadtree. It is a
+`scroller(options)` renders a collection (catalog, listing, feed) as
+**one CSS grid with a placed span of leaf partons around the anchor,
+and two reservation shells covering everything else**. It is a
 constructor composed around `parton()` + the `cull` gate: everything
 it emits is ordinary partons, so fingerprints, fp-skip, refetch,
-keepalive, and the live channel all apply unchanged.
+keepalive, and the live channel apply unchanged.
 
-The division of labor:
-
-- **The tree owns placement**: which intervals of the collection
-  exist in the DOM, which resolve their data, which collapse to
-  shells. Existence is CULL-driven (viewport), never URL-driven.
-- **Items own content**: each item the Render places is expected to
-  be (or contain) its own parton bound to a per-entity cell — so item
-  content invalidates per entity, wherever it appears, and a
-  re-sorted slice moves placements without re-shipping item bytes.
-- **Pagination is a projection**: the `anchor` URL param seeds the
-  cold render and mirrors the scroll position. A page is never a
-  render unit; `?page=N` links (a pager, a sitemap) are plain links
-  over the same source.
+The model's premise: **uniform rows make structure arithmetic.** No
+recursive tree, no size estimation, no measurement loop — position
+anywhere in a million-item collection is one rect read plus row math,
+client-side, zero round trips. Pinned by `scroller-scale.spec.ts`
+against a synthetic 1,000,000-item source.
 
 ```tsx
-const BrowseGrid = scroller(
-  function BrowseGridRender({ items }: ScrollerSlice<BoundCell<CardItem>> & RenderArgs) {
-    return (
-      <div className={GRID}>
-        {items.map((item) => (
-          <BrowseCard key={String(item.args.uid)} item={item} />
-        ))}
-      </div>
-    )
+const BrowseGrid = scroller({
+  name: "browse-grid",
+  range: async ({ offset, limit }) => {
+    const res = await browseProductsCell.resolve({
+      pageSize: limit,
+      currentPage: offset / limit + 1,
+    })
+    return { items: itemsOf(res), total: totalOf(res) }
   },
-  {
-    range: async ({ offset, limit }) => {
-      const res = await browseProductsCell.resolve({
-        pageSize: limit,
-        currentPage: offset / limit + 1,
-      })
-      const items = (res.value?.products?.items ?? []).filter(isPresent)
-      return { items, total: res.value?.products?.total_count ?? 0 }
-    },
-    shell: BrowseShell, // "use client" — the culled reservation
-    estimate: (n) => Math.ceil(n / COLS) * CARD_ROW_PX,
-    leaf: 12,
-    fanout: 4,
-    anchor: { param: "page", pageSize: 12 },
-  },
-)
+  item: (cell) => <BrowseCard key={String(cell.args.uid)} item={cell} />,
+  leaf: 12,
+  className: "browse-grid",
+})
 // placement: <BrowseGrid />
 ```
 
-Worked demos: `e2e-testing/src/app/pages/magento/product-browse.tsx`
-(grid, per-item entity cells) and the pokedex list in
-`e2e-testing/src/app/pages/pokemon.tsx` (fragment-cell forwarding).
+```css
+/* The app's entire geometry contract — three variables: */
+.browse-grid {
+  --scroller-cols: 4; /* integer; responsive via media queries   */
+  --scroller-row: 252px; /* the row pitch — like `sizes` on an img */
+  --scroller-gap: 12px; /* column gap (row-gap is always 0)       */
+}
+@media (max-width: 640px) {
+  .browse-grid {
+    --scroller-cols: 2;
+  }
+}
+```
 
-## The source: `range`
+Worked demos: `/magento/browse` (per-item entity cells),
+the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
 
-One async function from a window request to `{ items, total }`. The
-scroller always asks in `leaf`-aligned slices (`offset % leaf === 0`,
-`limit === leaf`), so a page-shaped backend maps directly
-(`currentPage: offset / limit + 1`).
+## The division of labor
 
-Resolve data through tracked reads (cells) inside — the read IS the
-dependency: a leaf re-renders when its slice's cell invalidates. The
-tracking invariant applies as everywhere. `total` is restated by
-every slice; the ROOT's read of it (it resolves the head slice —
-shared with leaf 0's cell partition, so no extra fetch) is what
-re-shapes the tree when the collection grows.
+- **The span** — `2·ring + 1` leaf partons placed around the anchor
+  leaf. Each covers `leaf` consecutive items and is cull-gated: in
+  view it resolves its slice (`range({offset, limit})`) and renders
+  items as grid cells; out of view it emits generic skeleton cells
+  (`.parton-skel`, styled by app CSS) and its slice is **never
+  fetched**. Leaves keep interval identity (`{o, n}` props), so
+  scrolling back within the span parks/restores with zero fetch.
+- **The reservations** — two plain block spacers (deliberately not
+  grid items) holding the rest of the collection's space with pure
+  CSS arithmetic:
+  `round(up, count / var(--scroller-cols)) · var(--scroller-row)`.
+  Exact at every breakpoint, before hydration, zero JS.
+- **Items own content.** Make each cell its own parton bound to a
+  per-entity cell (compose a fragment cell into the slice query) —
+  order lives on the slice, content on the entity: a re-sorted slice
+  moves placements without re-shipping card bytes, and one product's
+  invalidation re-lanes one card wherever it appears.
+- **Pagination is a projection.** `?page=N` (the `anchor`) is the
+  cold seed a deep link paints at server-side in ONE pass, the
+  bookmarkable shadow scrolling silently mirrors into, and the
+  statement channel window movement rides. A page is never a render
+  unit.
 
-The idiomatic source is a slice query cell **composed with a
-per-item fragment cell** (`backend.query(str, [itemCell])`): the
-slice result's spread sites arrive as the item cell's BoundCells,
-and the Render forwards each straight into an item parton. Order
-then lives on the slice cell, content on the entity cell.
+## The scrollbar jump (why there is no tree)
 
-## The Render and the shell
+Landing anywhere — a scrollbar drag to 50% of a million items —
+resolves in three steps, none of which asks the server about
+structure:
 
-The author's Render is the **layout renderer** for one resolved
-slice — `{ items, offset, total }`. It owns all markup: the list
-container, item placement, empty states.
+1. **Position is arithmetic.** The client reads the reservation's
+   rect once; rows × columns give the exact item index under the
+   viewport. The URL mirror stays honest even in unrendered
+   territory.
+2. **Paint is local.** The reservation self-materializes: it renders
+   a viewport-sized band of skeleton cells inside itself (absolute,
+   column-aligned with the real grid via its resolved template) the
+   same frame the scroll lands. Scrubbing the scrollbar just moves
+   the band.
+3. **Data is one statement.** When the scroll settles (250ms), the
+   reservation states the landing through the anchor param — an
+   ordinary `history: "replace"` navigation. The root re-renders
+   with the span moved there; the seeded neighborhood's content
+   replaces the skeletons in place. Document height and scroll
+   position are untouched throughout (pinned).
 
-`shell` is its culled twin — a `"use client"` component receiving
-`{ o, n, h }` (offset, item count, server-computed px from
-`estimate(n)`). At leaf counts (`n <= leaf`) render per-item
-placeholders in the same layout, so a slice streams in over the
-shape it culls out to; for deeper regions render one `h`-px block.
-`estimate` is the one geometric number the author declares —
-everything else is CSS.
+A recursive interval tree (the demo world's quadtree, this design's
+predecessor) answers "what structure is here?" with one round trip
+per level. Uniform rows make the question client-computable, so the
+tree earns nothing for 1D collections. The world keeps its quadtree —
+its plane is 2D px space with procedural content, a different animal.
 
-## Geometry and identity
+## Options
 
-Leaves cover `leaf` items; levels group `fanout` children; the tree
-height derives from `total` (`scrollerDepthFor`). A node IS its
-interval: specs are minted per level (`<id>-l<k>`, leaf id from the
-Render name), placements carry `{o, n}` props, so instance identity
-derives from the interval and survives collection growth — a middle
-segment's props never change when `total` moves; only the clamped
-tail (and the root) re-render. Crossing a capacity boundary
-(`leaf · fanout^k`) re-parents the top of the tree and re-caches —
-rare by construction (each crossing is a `fanout`× growth).
+| Option       | Default    | Meaning                                                                                                                           |
+| ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `name`       | (required) | Identity: catalog ids (`<name>`, `<name>-leaf`), the DOM marker (`data-s`). Explicit — there is no Render name to derive it from. |
+| `range`      | (required) | `({offset, limit}) → {items, total}`. Called in `leaf`-aligned slices. Resolve cells inside — the read is the dependency.         |
+| `item`       | (required) | `(item, index) → ReactNode` — one grid cell. `Item` infers from `range`. Key each cell by entity.                                 |
+| `leaf`       | `24`       | Items per leaf parton = fetch slice = default anchor step. **Must be divisible by every `--scroller-cols` value** (row alignment). |
+| `ring`       | `6`        | Leaves placed each side of the anchor leaf. Placement ≠ materialization — the ring is the park/restore zone.                      |
+| `className`  | —          | The wrapper class carrying the three CSS variables.                                                                                |
+| `rootMargin` | `600`      | Leaf materialization runway, px.                                                                                                   |
+| `anchor`     | `page`     | `{param?, pageSize?}` — rename the param (two collections on one page) or change the step.                                        |
 
-Every placement is wrapped in an interval marker
-(`data-s=<id> data-so data-sn`, emitted by the PARENT so it exists
-in every cull state). The markers are the position surface: the
-anchor client navigates by them, and tests/tools can read tree
-shape off the DOM.
+## The CSS contract
 
-Cull runways stagger by height (`rootMargin + k · estimate(leaf)`),
-the demo world's staggered-runway rule in item units: an ancestor
-mounts its children's observers before their own flip line, so a
-steady scroll batches each crossing.
+The app declares three custom properties on the collection's class
+(the framework builds the grid template from them and never learns a
+pixel):
 
-## The anchor
+- `--scroller-cols` — integer column count. Responsive via
+  media/container queries. Every value must divide `leaf`.
+- `--scroller-row` — the row pitch. The `sizes`-like declaration:
+  state the truth once, responsively if needed.
+- `--scroller-gap` — column gap. Row-gap is always 0: the pitch IS
+  the vertical rhythm; vertical spacing lives inside cells
+  (margin/padding), so reservation arithmetic stays exact.
 
-`anchor: { param, pageSize? }` wires three things:
+`.parton-skel` is the generic skeleton cell (leaf shells and
+reservation bands both render it) — style it per collection.
 
-- **Cold seed.** Every segment's cull seed reads the param (a
-  tracked `searchParam()` read) and resolves in-view iff its
-  interval intersects the anchored window padded by one leaf — the
-  same intersection rule at every level, so the cold tree is exactly
-  the root-to-anchor spine, O(viewport + log collection).
-- **Deep-link landing.** A pre-hydration script (document loads) and
-  a layout-effect scroll (client navs) land the viewport on the
-  anchored interval — into a still-culled region, the shell's
-  reservation is the landing strip.
-- **The mirror.** As the user scrolls, the interval under the
-  viewport's center is written back silently
-  (`history: "replace", silent: true` — no refetch, no history
-  pile-up). The center is resolved by **hit test**
-  (`elementFromPoint`), which is occlusion-aware: while an overlay
-  (dialog, drawer) covers the collection, no marker is hit and the
-  mirror stands down.
-
-Without `anchor`, the collection seeds at its head and the URL is
-untouched.
+Cells must fit the row pitch. Uniform rows are the contract — they
+are what make reservation exact, scroll-up jump-free by
+construction, and the scrollbar jump computable. Variable-height
+items are a different primitive (scroll-anchoring machinery), not a
+mode of this one.
 
 ## Limits (current, deliberate)
 
-- **Estimate drift.** A culled region's reservation is `estimate`
-  px; materialization replaces it with real layout. Below-viewport
-  drift is invisible; above-viewport drift can shift scroll by the
-  error. Measure-and-pin (the observer already produces rects) is
-  the known refinement.
-- **Teleport cascade.** A deep link or long jump into unexplored
-  territory materializes level by level (one lane round-trip per
-  level of the spine). The anchored deep link avoids this (the seed
-  renders the spine server-side in one pass); an unanchored teleport
-  converges progressively.
-- **Append-shaped growth only.** Interval identity assumes an item's
+- **Browser height cap.** Native scroll tops out around ~33M px in
+  Chromium. At `--scroller-row: 40px` × 8 cols that's ~6.6M items;
+  denser grids reach further. The cap is the documented outer wall —
+  the design goal is that everything *below* it just works.
+- **Append-shaped growth.** Interval identity assumes an item's
   index is stable per (source, sort, filter) modulo appends. Sorted
-  catalogs re-slice cleanly (segments re-render, item partons
-  fp-skip by entity); prepend-shaped feeds want the signed extension
-  of the same tree — not built yet.
-- **`range` is offset/limit.** Cursor sources adapt by mapping
-  cursors to offsets; an async-iterator/streaming source adapter is
-  backlog.
+  catalogs re-slice cleanly (leaves re-render, item partons fp-skip
+  by entity). Prepend feeds want a signed extension — not built.
+- **`range` is offset/limit.** Cursor sources adapt by mapping;
+  streaming/async-iterator sources are a backlog adapter.
+- **No-JS lands on pages, not physics.** The anchored cold render
+  (and real `<a href="?page=N">` links) are the no-JS projection;
+  the reservation's self-materialization requires the client
+  runtime.

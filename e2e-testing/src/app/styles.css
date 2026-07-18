@@ -208,3 +208,62 @@
     animation-name: drawer-page-slide-in-from-left;
   }
 }
+
+/* ─── scroller collections — the CSS geometry contract ──────────────
+   The app declares three variables on the collection's class:
+   `--scroller-cols` (integer, responsive), `--scroller-row` (the row
+   pitch — like `sizes` on an image), `--scroller-gap` (column gap).
+   The framework builds the grid and the reservations from them.
+   `.parton-skel` is the generic skeleton cell. `leaf` must divide by
+   every cols value (row alignment). */
+
+.browse-grid {
+  --scroller-cols: 4;
+  --scroller-row: 252px;
+  --scroller-gap: 12px;
+}
+
+.pokedex-grid {
+  --scroller-cols: 4;
+  --scroller-row: 264px;
+  --scroller-gap: 16px;
+}
+
+.scale-grid {
+  --scroller-cols: 8;
+  --scroller-row: 40px;
+  --scroller-gap: 4px;
+  font-size: 12px;
+}
+
+@media (max-width: 1024px) {
+  .browse-grid,
+  .pokedex-grid {
+    --scroller-cols: 3;
+  }
+}
+@media (max-width: 640px) {
+  .browse-grid,
+  .pokedex-grid {
+    --scroller-cols: 2;
+  }
+  .scale-grid {
+    --scroller-cols: 4;
+  }
+}
+
+@keyframes parton-skel-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+.parton-skel {
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--muted) 60%, transparent);
+  animation: parton-skel-pulse 2s ease-in-out infinite;
+  margin-bottom: 12px;
+}
+.scale-grid .parton-skel {
+  border-radius: 0.25rem;
+  margin-bottom: 4px;
+}
