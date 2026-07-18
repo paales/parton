@@ -42,7 +42,7 @@ const PARTON_CTX = Symbol.for("parton.serverContext")
  * aborted, halted, stream-closed) decrements the same chain, and the scope
  * whose count crosses zero fires `onSettled` exactly once (`settled` latch).
  * See `scripts/patch-plugin-rsc-server-context.mjs` and
- * `docs/notes/task-settle.md`.
+ * `docs/archive/task-settle.md`.
  */
 export interface SettleScope {
   readonly parent: SettleScope | null

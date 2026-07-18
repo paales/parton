@@ -14,7 +14,7 @@ to a live server process — rendered partials exist only as segments
 and lanes on the held stream, never as shared-CDN artifacts.
 Broadcast semantics (one rendered payload fanned out to many
 clients) are a later investigation tied to the multi-instance bus
-question ([`../notes/channel-design.md`](../notes/channel-design.md)).
+question ([`../archive/channel-design.md`](../archive/channel-design.md)).
 
 ```tsx
 const ProductHero = parton(ProductHeroRender, {

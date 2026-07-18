@@ -1,6 +1,6 @@
 /**
  * ChannelClient — the client transport for the channel's upstream role
- * ([[channel-protocol]]; design: docs/notes/channel-design.md). One
+ * ([[channel-protocol]]; design: docs/archive/channel-design.md). One
  * module owning everything between a producer's statement and the
  * envelope on the wire:
  *

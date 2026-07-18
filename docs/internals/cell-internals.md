@@ -199,7 +199,7 @@ The client-side optimistic layer is untouched by updates:
 result reaches the client on the action's response render as ordinary
 server-authoritative state. Structural prediction around an
 update-based action is `useOptimistic`, per
-[`../notes/replicated-state.md`](../notes/replicated-state.md).
+[`../archive/replicated-state.md`](../archive/replicated-state.md).
 
 ## Fragment auto-hydration
 

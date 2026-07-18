@@ -1,5 +1,10 @@
 # Cell dimensionality
 
+> Superseded 2026-07-18 by [`docs/reference/cells.md`](../reference/cells.md)
+> — the shipped one-value-per-partition surface. The inheritance-walk axis
+> explored here never earned an in-tree caller; the open storage question is
+> tracked from [`../notes/IDEAS.md`](../notes/IDEAS.md) § i18n.
+
 > Live design doc. Captured 2026-05-22. Exploring axes along which
 > cells could be parameterised beyond today's single-value-per-
 > partition shape. Decision open; not currently shipping.
@@ -32,7 +37,7 @@ inheritance-shape declaration on a cell could look like.
   fingerprint on its next render. No cell-shape change needed.
 - **Cell persistence to browser storage.** Different concern —
   about durability of unsaved optimistic state, not about server-
-  side storage shape. Tracked in [`IDEAS.md`](./IDEAS.md) as
+  side storage shape. Tracked in [`IDEAS.md`](../notes/IDEAS.md) as
   "persist optimistic unsaved cell values."
 
 ## Cases that want inheritance

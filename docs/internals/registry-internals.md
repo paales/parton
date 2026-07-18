@@ -319,7 +319,7 @@ Content changes and record removal are separate mechanisms:
   shape was the website's world pulse in its retired ticker form
   (hundreds of partitions under one selector name, bumping every
   0.1–5s; the pulse is DERIVED now — anchor + `expires()` cadence,
-  no bumps — see `docs/notes/leases.md`); the bench's `pulse/*`
+  no bumps — see `docs/archive/leases.md`); the bench's `pulse/*`
   scenarios gate it. The bump counter (`_currentTs`)
   advances monotonically per bump, independent of what's stored.
 

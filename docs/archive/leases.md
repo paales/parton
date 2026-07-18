@@ -1,5 +1,15 @@
 # Leases — demand-driven production, pause/restore, and the road to multiplayer
 
+> Superseded 2026-07-18 by
+> [`../notes/delivery-plane.md`](../notes/delivery-plane.md) (the follow-on:
+> deadlines + broadcast as one delivery layer). L1 (pulse by derivation) and L2
+> (the invalidation ts rides the stored row —
+> [`docs/internals/registry-internals.md`](../internals/registry-internals.md)
+> § Persistence / eviction / restore,
+> [`docs/internals/cell-internals.md`](../internals/cell-internals.md)) landed;
+> the producer-lease primitive stays deferred until a real non-derivable
+> caller appears (YAGNI).
+
 The framework's founding move is _the read is the dependency_ (reads
 record what to invalidate). The inverted wake index
 ([`wake-index.md`](./wake-index.md)) added _the read is the
@@ -147,7 +157,7 @@ broadcast lanes — the W3 demo.
   (102%→57% on its first measurement) but the scan shape stands.
 
 - **L1 follow-up — a deadline index. Landed 2026-07-12 as
-  [`delivery-plane.md`](./delivery-plane.md) D1.** The expiry arm got
+  [`delivery-plane.md`](../notes/delivery-plane.md) D1.** The expiry arm got
   what bumps got: a per-connection deadline wheel maintained at
   snapshot commit (park-aware — a parked parton's past-due boundary
   fires once into the shared pending set and costs nothing until its

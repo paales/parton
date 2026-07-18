@@ -1,5 +1,11 @@
 # Replicated parton state
 
+> Superseded 2026-07-18 by [`docs/reference/cells.md`](../reference/cells.md) +
+> [`docs/internals/cell-internals.md`](../internals/cell-internals.md) — cells,
+> `useOptimistic`, and the composed write (`cell.update`) cover the authority
+> taxonomy this note translated from Unreal. Predecessor chain:
+> [`transient-client-state.md`](./transient-client-state.md).
+
 > Live design doc. Originally captured 2026-05-16 from a design
 > conversation exploring how Unreal Engine's actor replication
 > model maps onto parton primitives. 2026-05-22 pass narrowed scope
@@ -130,7 +136,7 @@ framework doesn't auto-scope because it doesn't know which of an
 action body's reads are partition axes vs incidental reads (render
 bodies get this attribution for free via tracked hooks; action
 bodies have no equivalent — see the "sharp edge" item in
-[`IDEAS.md`](./IDEAS.md)).
+[`IDEAS.md`](../notes/IDEAS.md)).
 
 The action's response render fires immediately after the body
 returns — every parton whose selector matches the bumped name AND
@@ -240,7 +246,7 @@ error, value }` is the natural envelope, but the migration cost
 3. **Cross-tab consistency.** Optimistic state lives in React
    memory and dies on reload. Cells' `latestSentByCell` map has
    the same property. Tracked separately in
-   [`IDEAS.md`](./IDEAS.md): "persist optimistic unsaved cell
+   [`IDEAS.md`](../notes/IDEAS.md): "persist optimistic unsaved cell
    values" (single-tab durability) and "Cross-tab sync via
    BroadcastChannel" (multi-tab coherence).
 4. **Cell dimensionality.** Cells today carry one value per
@@ -259,7 +265,7 @@ error, value }` is the natural envelope, but the migration cost
 - [`./cell-dimensionality.md`](./cell-dimensionality.md) —
   exploration of further axes for cell storage (time,
   translations, currency, domain).
-- [`./IDEAS.md`](./IDEAS.md) — broader backlog; optimistic-value
+- [`../notes/IDEAS.md`](../notes/IDEAS.md) — broader backlog; optimistic-value
   persistence and cross-tab sync live there.
 - [`../reference/partial.md`](../reference/partial.md) — the
   `parton` constructor surface.

@@ -392,7 +392,7 @@ The visible set is connection-session state, full stop — the attach
 statement seeds it and `visible` frames move it; no URL ever carries
 it. Worked demo:
 `e2e-testing/src/app/pages/magento/product-browse.tsx`; design
-rationale in [`../notes/view-culling.md`](../notes/view-culling.md);
+rationale in [`../archive/view-culling.md`](../archive/view-culling.md);
 wire mechanics in
 [`../internals/streaming.md`](../internals/streaming.md).
 

@@ -6,7 +6,7 @@ import { parseRow } from "../flight-rewrite.ts"
 /**
  * What the Flight CLIENT does when the same row id is written twice in
  * one response — the "can one slot be updated in place?" experiment
- * behind `docs/notes/flight-multi-update.md`.
+ * behind `docs/archive/flight-multi-update.md`.
  *
  * Ground truth in the vendored client
  * (`@vitejs/plugin-rsc/vendor/react-server-dom/cjs/

@@ -1,5 +1,11 @@
 # The channel — one protocol for everything after first paint
 
+> Superseded 2026-07-18 by [`docs/internals/channel.md`](../internals/channel.md)
+> (the protocol as-built: frames, envelopes, delivery seqs, the attach) +
+> [`docs/internals/streaming.md`](../internals/streaming.md) (the downstream
+> segment/lane driver). Every landing package shipped. This note keeps the
+> design rationale, the bet, and the landing sequence.
+
 Captured 2026-07-06. Status: design pinned in conversation, landing in
 staged work packages (see § Landing sequence — W1 is on its branch;
 the shipped surface is documented as current state in

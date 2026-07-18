@@ -1,7 +1,8 @@
 # The delivery plane — deadlines and broadcast as one layer
 
-Follow-on to [`wake-index.md`](./wake-index.md) (bumps are delivered,
-not derived) and [`leases.md`](./leases.md) (L1's finding: the expiry
+Follow-on to [`../archive/wake-index.md`](../archive/wake-index.md)
+(bumps are delivered, not derived) and
+[`../archive/leases.md`](../archive/leases.md) (L1's finding: the expiry
 arm is still a pull-model scan). The consolidation claim: a live
 connection's driver should drain **one pending set**, and everything
 that wakes it is a _delivery_ from an indexed source — never a scan.

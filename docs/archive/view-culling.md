@@ -1,5 +1,12 @@
 # View culling — per-parton, an existence gate
 
+> Superseded 2026-07-18 by
+> [`docs/reference/partial.md`](../reference/partial.md#view-culling--the-cull-gate)
+> (the shipped cull-gate contract) +
+> [`docs/internals/render-pipeline.md`](../internals/render-pipeline.md#cull-to-park)
+> (mechanics). This note keeps the original tracked-read design and the
+> framework-level findings — the substrate for a future `<Scroller>`.
+
 **Status:** shipped, including cull-to-park and the spec-level `cull`
 gate. The read-tracked `visible()` hook this note originally designed
 evolved into the gate: culling now gates EXISTENCE like `match` — a
@@ -40,7 +47,7 @@ paired with a conditionally-rendered skeleton, revalidated by the
 flip's dispatch under fp-skip semantics, budgeted by an LRU of the 64
 most-recently-culled subtrees.
 
-This is the shipped form of what [`IDEAS.md`](./IDEAS.md) filed as
+This is the shipped form of what [`IDEAS.md`](../notes/IDEAS.md) filed as
 "Activate ⇄ deactivate symmetry" (now collapsed there to a pointer here),
 and it supersedes the earlier windowed-anchor sketch (a client camera
 reloading a list partial with an `?visible=N` anchor): culling is a

@@ -16,7 +16,7 @@ import type { WorldGeometry } from "./constants.ts"
  * `expires(nextBeat(cx, cy, now))` and the segment driver's expiry arm
  * re-lanes the visible chunks on their boundaries, skipping parked
  * ones. Zero clients ⇒ zero timers ⇒ zero server work — the
- * lease-by-derivation shape (docs/notes/leases.md, L1).
+ * lease-by-derivation shape (docs/archive/leases.md, L1).
  *
  * The beat grid: each chunk draws a BASE period from its coordinates
  * (deterministic spatial variety — some neighborhoods are hot, some

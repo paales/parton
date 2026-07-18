@@ -9,8 +9,8 @@ to the session that stream opened. Visibility flips, delivery ACKS,
 viewport TELEMETRY, URL moves (window and frame scoped), CANCEL
 statements, WARM intents, and COOKIE deltas are the shipped frame
 kinds — the kind
-table is complete; the design rationale and roadmap live in
-[`../notes/channel-design.md`](../notes/channel-design.md). The only
+table is complete; the design rationale lives in
+[`../archive/channel-design.md`](../archive/channel-design.md). The only
 GETs are documents (SSR — the CDN-cacheable artifact) and
 embed-flagged page fetches (server-to-server — see
 [`page-embed.md`](./page-embed.md)); action POSTs stay the one discrete

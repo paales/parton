@@ -12,7 +12,7 @@ import {
 
 /**
  * Per-parton multiplexed payloads — the prototype behind
- * `docs/notes/flight-multi-update.md` §3.
+ * `docs/archive/flight-multi-update.md` §3.
  *
  * Each parton renders through its OWN `renderToReadableStream` call
  * (exactly what the partial-refetch path produces), the transports are

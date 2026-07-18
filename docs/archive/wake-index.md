@@ -1,5 +1,13 @@
 # The inverted wake index — bump → dependents
 
+> Superseded 2026-07-18 by
+> [`docs/internals/registry-internals.md`](../internals/registry-internals.md)
+> (the inverted wake index as-built) +
+> [`docs/internals/streaming.md`](../internals/streaming.md) (delivery into the
+> per-connection pending set). W1/W2 landed as designed; W3 shipped as the
+> delivery plane's broadcast lanes
+> ([`../notes/delivery-plane.md`](../notes/delivery-plane.md) §D2).
+
 Design note for replacing the pull-model wake filter with a
 subscription index: a bump names its selector, so the commit should
 deliver the wake to exactly the connections (and the exact parton ids)
@@ -151,6 +159,6 @@ processes; each process's index stays local.
   filter — extras park or dedup, never staleness; the armed world run
   is what surfaced this.
 - **W3 — broadcast.** ✅ Shipped as delivery-plane D2
-  ([`delivery-plane.md`](./delivery-plane.md) §D2): viewer-independent
+  ([`delivery-plane.md`](../notes/delivery-plane.md) §D2): viewer-independent
   lane bytes render once and fan across subscribers; the index's
   delivery is the fan-out, the slot only caches the encode.

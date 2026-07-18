@@ -1,5 +1,12 @@
 # One stream for everything — transport consolidation
 
+> Superseded 2026-07-18 by [`docs/internals/channel.md`](../internals/channel.md)
+> — every work package landed: bounded re-establishment (P0a), pre-establishment
+> navs riding the boot attach (P0b), the keepalive backstop (P0c), body-less
+> actions (P0d), cookies on the protocol (P0e), the transport seam + WebSocket +
+> auto-upgrade (P1/P1b), and the opt-in WebTransport tunnel (P2). This note
+> keeps the survey findings and per-package rationale.
+
 Status: **active design**, opened 2026-07-08. Supersedes the "attach +
 POST-envelope" split as the *conceptual* model; the fetch transport
 stays as the default implementation under a new transport seam.

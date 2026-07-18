@@ -1,6 +1,6 @@
 /**
  * Telemetry — the channel's LOSSY producer ([[channel-protocol]]'s
- * `telemetry` frame; design: docs/notes/channel-design.md § Wire
+ * `telemetry` frame; design: docs/archive/channel-design.md § Wire
  * shape). The app-facing surface is one function: `reportTelemetry`
  * states the client's current scroll context (viewport box, scroll
  * position, velocity), and the module owns everything between that

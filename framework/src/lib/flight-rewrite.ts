@@ -29,8 +29,8 @@
  * (when present), and JSON encodes literal newlines inside strings
  * as `\\n`. A 0x0a byte in the stream can only mean end-of-row.
  *
- * See `docs/notes/replicated-state.md` and the prior conversation
- * captured in `docs/notes/transient-client-state.md` for the
+ * See `docs/archive/replicated-state.md` and the prior conversation
+ * captured in `docs/archive/transient-client-state.md` for the
  * design context.
  */
 

@@ -920,10 +920,10 @@ What's NOT a cell:
 - [`../internals/cell-internals.md`](../internals/cell-internals.md)
   — storage backends, wire shape, batcher mechanics, prop-bag
   resolution path, partition-scoped selector encoding.
-- [`../notes/cells-as-resolvers.md`](../notes/cells-as-resolvers.md)
+- [`../archive/cells-as-resolvers.md`](../archive/cells-as-resolvers.md)
   — the design conversation behind this surface; resolved questions
   - open ones.
-- [`../notes/cell-dimensionality.md`](../notes/cell-dimensionality.md)
+- [`../archive/cell-dimensionality.md`](../archive/cell-dimensionality.md)
   — separate axis: inheritance walks within a single cell's storage
   (translations, draft/published, time/history). Deferred.
 - [`./partial.md`](./partial.md) — the `parton` constructor whose

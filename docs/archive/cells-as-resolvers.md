@@ -1,5 +1,11 @@
 # Cells as resolvers — what shipped, what's still open
 
+> Superseded 2026-07-18 by [`docs/reference/cells.md`](../reference/cells.md)
+> (the shipped surface) +
+> [`docs/internals/cell-internals.md`](../internals/cell-internals.md). The
+> still-open residues below (the declarative mutation-write layer, object/list
+> shapes, adapter eviction) are backlog-shaped with no active arc.
+
 > Captured 2026-05-26 during the design conversation that produced
 > bound cells (`.with(args)`), the prop-bag resolution path,
 > partition-scoped invalidation, and `gqlCell`. The user-facing
@@ -126,7 +132,7 @@ cart: a write in process A doesn't reach process B's clients.
 
 Solutions:
 - `BroadcastChannel` for same-origin tabs (filed in
-  [`./IDEAS.md`](./IDEAS.md)).
+  [`../notes/IDEAS.md`](../notes/IDEAS.md)).
 - Pluggable invalidation backend (Redis pub/sub) for cross-process.
 
 Independent of cells; affects the registry layer.
@@ -159,5 +165,5 @@ storage handles tens of thousands of entries fine.
   — wire shape, batcher, prop-bag resolution path.
 - [`./cell-dimensionality.md`](./cell-dimensionality.md) — the
   orthogonal axis (inheritance walks inside one cell's storage).
-- [`./IDEAS.md`](./IDEAS.md) — broader backlog; cross-tab sync,
+- [`../notes/IDEAS.md`](../notes/IDEAS.md) — broader backlog; cross-tab sync,
   persist optimistic state, pattern-based invalidation.

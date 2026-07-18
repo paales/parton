@@ -4,7 +4,7 @@
  * `_onPartonSettled(cb)` fires when the registering parton's subtree has no
  * unfinished Flight tasks left — the settle-scope refcount the vendored-server
  * patch maintains (see `scripts/patch-plugin-rsc-server-context.mjs` and
- * `docs/notes/task-settle.md`). Scenario bodies are shared with the prod tier
+ * `docs/archive/task-settle.md`). Scenario bodies are shared with the prod tier
  * (`task-settle.rsc-prod.test.tsx`) via `task-settle-scenarios.tsx`.
  */
 
