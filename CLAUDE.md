@@ -92,6 +92,26 @@ export async function saveProfile(args: { name: string; bio: string }) {
 }
 ```
 
+## The pillars
+
+The surfaces the framework decomposes into — each with its contract
+page and, where the mechanism matters, its internals page:
+
+| Pillar                  | What it is                                                                                                                                                                                                                     | Docs                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| **parton**              | An addressable RSC subtree: `match` gates existence, the body's tracked reads record its request dependencies, every placement is independently re-renderable.                                                                 | `reference/partial.md` · `internals/render-pipeline.md`       |
+| **Fingerprint/fp-skip** | The recorded read set folds into an fp; the client presents cached fps and a match skips the bytes. Body reads lag one render, healed by the fp-trailer; `fpSkip: false` opts a surface out.                                   | `reference/partial.md` · `internals/render-pipeline.md`       |
+| **Cells**               | Typed server-state slots: partitioned storage, `atomic()` write batches, fan-out through invalidation to exactly the partons whose recorded deps match. `useCell` is the optimistic client binding.                            | `reference/cells.md` · `internals/cell-internals.md`          |
+| **Tags/invalidation**   | `tag()` for event-shaped signals; the wake index delivers a bump to the connections whose registrations match (scope-confined under the dev `x-test-scope` seam).                                                              | `internals/registry-internals.md`                             |
+| **Frames**              | `<Frame name initialUrl>` opens a per-name URL scope inside the page — descendants route and key on the frame URL; per-frame history is in-state, session-backed.                                                              | `reference/frames-navigation.md` · `internals/frame-scope.md` |
+| **Navigation**          | The browser Navigation API only, wrapped by `useNavigation()` — `navigate` (updater form for single-param changes), in-place `reload()`, `preload`. Never the History API.                                                     | `reference/frames-navigation.md`                              |
+| **RemoteFrame**         | Cross-app composition as a server-side embed splice of an ordinary page, constrained by grant tiers (Paint, Interactive) over a declared element vocabulary; containment is enforced at splice time.                           | `reference/remote-frame.md` · `internals/page-embed.md`       |
+| **The channel**         | Every page holds one live connection by default: catch-up attach, per-parton lanes at independent cadences, fetch-first with WebSocket auto-upgrade, and a recoverable document-nav fallback after a proven-blocked transport. | `internals/channel.md` · `internals/streaming.md`             |
+| **Culling/keepalive**   | Viewport-driven existence: a culled instance's body never runs (the wire carries skeleton + props); `keepalive` parks cached variants on hidden `<Activity>` siblings.                                                         | `reference/partial.md`                                        |
+| **Byte cache**          | Per-parton render caching (`cache: { maxAge, staleWhileRevalidate }`), serve-last-known-good on error.                                                                                                                         | `reference/cache.md` · `internals/cache-internals.md`         |
+| **Blocks/CMS**          | `block()` — slot-placeable, CMS-driven; `schema({cms})` is the one declared schema in the framework. The editor is a demo surface.                                                                                             | `reference/block.md` · `reference/cms.md`                     |
+| **Entries**             | `createRscHandler` / `renderHTML` / `bootBrowser`; hydration is lean (the live layer loads after first commit); the declared 404 boundary (`unmatched: "not-found"`); `public/` static assets.                                 | `reference/deployment.md` · `reference/intro.md`              |
+
 ## Spec authoring rules
 
 - **Three constructors, one engine.** Pick by role:
@@ -396,13 +416,12 @@ never bug reports, debt lists, or profiling to-dos.
 
 ### Runtime discovery over static analysis
 
-The load-bearing architectural bet: no static walkers, no codegen, no
+An architectural commitment: no static walkers, no codegen, no
 build-time manifests — the spec catalog and partial registry populate
-at first render, which is what separates this from App Router in the
-long run. Evaluate every direction with one test: _can it
+at first render. Evaluate every direction with one test: _can it
 self-register at render time instead of requiring a pre-render walk?_
 The `parton` / `block` constructors pass; typed-handle codegen fails.
-It erodes one convenient walker at a time — don't let it.
+The commitment erodes one convenient walker at a time — don't let it.
 
 ### Navigation — the Navigation API only
 
@@ -459,18 +478,18 @@ ESLint, scoped to the React Compiler / rules-of-hooks diagnostics only.
 
 ### Research mode — shave to the core
 
-This is a primitives-research project, not a roadmap. The mode is an
-elegance game: work a problem through, make it as elegant as possible,
-then shave to the essential core. A dead end is an acceptable
-outcome — exploration that ends in deletion is a success, not waste;
-the win is a primitive that couldn't exist in an existing framework
-(the move that replaced explicit `vary` with auto-tracked reads is the
-model). Frame proposals as consolidation and surface-deletion, not
+This is a primitives-research project, not a roadmap. Work a problem
+through, then shave to the essential core. A dead end is an acceptable
+outcome — exploration that ends in deletion is a legitimate result,
+and the aim is primitives that could not exist inside an existing
+framework. Frame proposals as consolidation and surface-deletion, not
 productionization checklists. Multi-process is expected to work;
-sticky sessions are an acceptable constraint. Don't pitch the project
-as a CMS framework — the CMS editor is one demo surface among several
-(its storage is deliberately demo-grade); the leverage is the wire
-format, streaming, and server-state substrate.
+sticky sessions are an acceptable constraint. The CMS editor is one
+demo surface among several (its storage is deliberately demo-grade);
+the substrate under research is the wire format, streaming, and
+server-owned state. Evaluate the design from code, tests, and
+measurements — the docs state their own rationale, and echoing it back
+is not evaluation.
 
 ## Working in a worktree
 
