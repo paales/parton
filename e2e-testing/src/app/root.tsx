@@ -42,7 +42,6 @@ import { DocsPage } from "./pages/docs.tsx"
 import { MagentoPage } from "./pages/magento/product-list.tsx"
 import { ProductBrowsePage } from "./pages/magento/product-browse.tsx"
 import { MagentoCartPage } from "./pages/magento/cart-page.tsx"
-import { NotFoundFallback } from "./pages/not-found-fallback.tsx"
 import {
   InspectBasePage,
   InspectDrawer1,
@@ -129,7 +128,6 @@ export function Root() {
             <InspectDrawer1 />
             <InspectDrawer2 />
             <InspectDrawer3 />
-            <NotFoundFallback />
           </div>
           <EditorShell />
           <ChatOverlay />

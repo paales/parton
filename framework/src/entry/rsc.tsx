@@ -55,7 +55,8 @@ import {
   wrapStreamWithFpTrailer,
 } from "../lib/fp-trailer.ts"
 import { EMBED_CELLS_HEADER, embedDepthOf, embedNamespaceOf } from "../lib/page-embed.ts"
-import { computeRouteKey, partialFromSnapshot } from "../lib/partial.tsx"
+import { _declareNotFoundBoundary } from "../lib/not-found-boundary.ts"
+import { computeRouteKey, partialFromSnapshot, unmatchedDocument404 } from "../lib/partial.tsx"
 import {
   _readSnapshotsForRoute,
   enterRequestRegistry,
@@ -105,6 +106,18 @@ export interface RscHandlerConfig {
   /** Rendered (status 404) when a render signals `notFound()`. Without
    *  it, not-found requests get a plain-text 404 response. */
   notFound?: ComponentType
+  /** The app's declared 404 boundary. `"not-found"` states that the
+   *  registered `match` patterns are exhaustive — a URL no spec's
+   *  gate covers is a 404: the entry short-circuits an unmatched
+   *  plain document GET straight to the `notFound` document without
+   *  rendering the tree, and `PartialRoot` mounts the framework's
+   *  fallback so a soft navigation to an uncovered URL resolves
+   *  `notFound()` mid-render. Omit for apps whose bare, matchless
+   *  partons render real content at every pathname (the website's
+   *  tile world) — without the declaration the framework never
+   *  second-guesses a URL, because the registry alone cannot tell
+   *  "no page here" from "every URL is a page". */
+  unmatched?: "not-found"
   /** App-level first crack at every request (static assets, bespoke
    *  endpoints). A returned Response short-circuits the pipeline;
    *  `null` / `undefined` falls through to the RSC/SSR render. */
@@ -135,6 +148,11 @@ export function createRscHandler(config: RscHandlerConfig): {
   handleChannelSocket(socket: ChannelSocket, request: Request): Promise<void>
 } {
   const { Root, notFound: NotFound } = config
+
+  // The app's 404-boundary declaration lands at entry construction —
+  // module eval, atomic with the import graph that registered every
+  // match gate — so the first request already sees it.
+  if (config.unmatched === "not-found") _declareNotFoundBoundary()
 
   // The serving graph's birth version (dev HMR): captured at ENTRY
   // evaluation — atomic with the module import that built this
@@ -474,6 +492,35 @@ export function createRscHandler(config: RscHandlerConfig): {
     })
   }
 
+  /** The bare `<NotFound/>` document — no `<Root/>`, no page shell,
+   *  just the app's configured 404 component (or a plain-text body
+   *  when none is configured). Self-contained: captures its own
+   *  commit handle and loads the ssr module independently, so a
+   *  caller that knows ahead of render that the response is a 404
+   *  (the declared-boundary gate in `handleRequest`) never pays for
+   *  a `<Root/>` pass whose output it would discard. */
+  async function renderNotFoundDocument(url: URL): Promise<Response> {
+    if (!NotFound) {
+      return new Response("Not Found", { status: 404 })
+    }
+    const commit = _captureCommitHandle()
+    const ssrEntryModule = await import.meta.viteRsc.loadModule<typeof import("./ssr.tsx")>(
+      "ssr",
+      "index",
+    )
+    const notFoundStream = renderToReadableStream<RscPayload>(
+      { root: <NotFound /> },
+      { temporaryReferences: createTemporaryReferenceSet(), onError: onRscRenderError },
+    )
+    const notFoundSsr = await ssrEntryModule.renderHTML(notFoundStream, {
+      debugNojs: url.searchParams.has("__nojs"),
+    })
+    return new Response(wrapSsrStreamWithFpTrailer(notFoundSsr.stream, commit), {
+      status: 404,
+      headers: { "Content-type": "text/html" },
+    })
+  }
+
   async function handleRequest(
     renderRequest: ReturnType<typeof parseRenderRequest>,
   ): Promise<Response> {
@@ -481,6 +528,20 @@ export function createRscHandler(config: RscHandlerConfig): {
 
     if (renderRequest.isRsc && !renderRequest.isAction) {
       return handleEmbedRender(renderRequest)
+    }
+
+    // The declared 404 boundary's pre-render half. Rendering the tree
+    // for an unmatched document GET could only end in the mounted
+    // fallback's `notFound()` — the full `<Root/>` output discarded —
+    // so skip straight to the bare not-found document: a static-asset
+    // probe with no `public/` file behind it (a missing favicon,
+    // `/robots.txt`, a crawler's `/.well-known/*`) or a mistyped URL
+    // costs one narrow render instead of a page pass. The verdict is
+    // built on the same `urlCoveredByMatch` check the fallback
+    // evaluates, so the two halves can never disagree — and it is
+    // ALWAYS false unless the app declared `unmatched: "not-found"`.
+    if (unmatchedDocument404(renderRequest)) {
+      return renderNotFoundDocument(renderRequest.url)
     }
 
     let returnValue: RscPayload["returnValue"] | undefined

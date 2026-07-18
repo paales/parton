@@ -5,6 +5,23 @@ pass; isolated per-parton re-renders exist only as LANES on a held
 live connection, reconstructed from snapshots via
 `partialFromSnapshot`. There is no partial-refetch request mode.
 
+One exception, and only for an app that DECLARED it
+(`createRscHandler({ unmatched: "not-found" })` — the declared 404
+boundary, [`partial.md` § The declared 404
+boundary](../reference/partial.md#the-declared-404-boundary)): a plain
+document GET whose URL no registered `match` gate covers never opens
+`<PartialRoot>` at all. `handleRequest` (`framework/src/entry/rsc.tsx`)
+evaluates `unmatchedDocument404` up front and renders the bare
+`<NotFound>` document directly — the identical outcome the
+`PartialRoot`-mounted fallback reaches from inside a whole-tree pass,
+decided before paying for the pass. The verdict and the fallback share
+one check (`urlCoveredByMatch`), so they can never disagree; without
+the declaration the verdict is always false — an app of bare,
+matchless partons renders real content at every pathname, and the
+registry alone must never 404 a URL. Static hits need no framework
+code at all: Vite serves `public/` ahead of the RSC catch-all
+([`intro.md` § Static assets](../reference/intro.md#static-assets)).
+
 ## The whole-tree pass
 
 Every render `<PartialRoot>` runs — the SSR document, the attach's

@@ -16,11 +16,12 @@ test.describe("notFound + redirect", () => {
     await expect(page.locator('[data-testid="not-found"]')).toBeVisible()
   })
 
-  test("URL with no registered spec match: NotFoundFallback fires 404", async ({ page }) => {
+  test("URL with no registered spec match: the declared 404 boundary fires", async ({ page }) => {
     // /this/path/does/not/exist isn't covered by any spec's `match`.
-    // The framework's NotFoundFallback iterates the registered match
-    // set, finds nothing, and calls notFound() from its render —
-    // surfacing as HTTP 404 with the default NotFoundPage body.
+    // This app declares its 404 boundary (`unmatched: "not-found"` on
+    // `createRscHandler`), so the entry short-circuits the document
+    // GET ahead of the whole-tree render — HTTP 404 with the
+    // configured NotFoundPage body.
     const response = await page.goto("/this/path/does/not/exist")
     expect(response?.status()).toBe(404)
     await expect(page.locator('[data-testid="not-found"]')).toBeVisible()

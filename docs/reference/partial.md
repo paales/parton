@@ -947,48 +947,45 @@ const PokemonDetailPage = parton(
 Each wrapper self-gates: on a `match` miss it emits nothing. Inner
 specs don't need their own `match` — the wrapper already filtered.
 
-### 404 fallback
+### The declared 404 boundary
 
-`getRegisteredMatchPatterns()` returns the URL-pattern half of every
-`match` gate any spec was constructed with (predicate-only gates
-carry no URL structure and are excluded). A `NotFoundFallback` spec
-checks the URL against that set; if no pattern matches, it calls
-`notFound()`, which `Root` catches and turns into HTTP 404 +
-`<NotFoundPage>`.
+Whether a URL no spec's `match` covers is a 404 is an APP semantic
+the framework cannot infer: an app of bare, matchless partons (the
+website's tile world) renders real content at every pathname. An app
+whose pages ARE exhaustively match-gated declares that in its entry
+config — one statement, nothing placed in the tree:
 
 ```tsx
-import { parton, getRegisteredMatchPatterns, getCurrentParton, notFound } from "@parton/framework"
-
-export const NotFoundFallback = parton(function NotFoundFallbackRender() {
-  // A gate, not a varying surface: it reads no tracked dimension, so
-  // there's no dep to record — the check re-evaluates on every render
-  // pass (every page render runs it).
-  const url = getCurrentParton()?.request.url
-  if (url) {
-    for (const pattern of getRegisteredMatchPatterns()) {
-      if (pattern.test(url)) return null
-    }
-  }
-  notFound()
-  return null
+// src/entry.rsc.tsx
+export default createRscHandler({
+  Root,
+  notFound: NotFoundPage, // the 404 document body
+  unmatched: "not-found", // ← the declaration
 })
-
-// Place once alongside the other page wrappers.
-<NotFoundFallback />
 ```
 
-The set is populated as a side-effect of every `parton(…,
-{ match: … })` call; no explicit registration needed.
+The declaration switches on both halves of the boundary, keyed on one
+shared verdict (`urlCoveredByMatch` — does any registered gate's
+URL-pattern half cover this URL? predicate-only gates carry no URL
+structure and are excluded):
 
-`createRscHandler` (`framework/src/entry/rsc.tsx`) consults the same
-registry _before_ rendering: a plain document GET whose pathname
-matches no registered pattern skips the `<Root/>` pass entirely and
-renders only `<NotFoundPage>` — the identical outcome
-`<NotFoundFallback>` reaches mid-render, arrived at without paying for
-a full tree render whose output would be discarded. This is what makes
-a crawler probing `/favicon.ico` or `/robots.txt` with no matching
-`public/` file cheap rather than a wasted page render — see
-[`intro.md` § Static assets](./intro.md#static-assets).
+- **Pre-render short-circuit.** A plain document GET (never an action
+  POST or an embed Flight GET) at an uncovered URL skips the
+  `<Root/>` pass entirely — `createRscHandler` answers with the bare
+  `notFound` document, status 404, before any tree render starts.
+  This is what makes a crawler probing `/favicon.ico` or
+  `/robots.txt` with no matching `public/` file cheap rather than a
+  wasted page render — see
+  [`intro.md` § Static assets](./intro.md#static-assets).
+- **The mounted fallback.** `PartialRoot` mounts a framework-internal
+  fallback parton (page scope; never inside an embed) that resolves
+  `notFound()` when a render reaches an uncovered URL — covering the
+  paths the entry never sees, e.g. a soft navigation re-rendering the
+  tree on a held connection.
+
+Without the declaration neither half exists: every URL renders the
+tree, and 404 remains something a page render signals explicitly via
+`notFound()`.
 
 ## Sharp edges
 

@@ -114,7 +114,10 @@ bootBrowser()
 ```
 
 `createRscHandler` accepts the app's knobs: `Root` (the html shell,
-placing `<PartialRoot>`), `notFound` (404 page body), `fetch` (a
+placing `<PartialRoot>`), `notFound` (404 page body), `unmatched`
+(`"not-found"` declares the app's 404 boundary — see
+[`partial.md` § The declared 404
+boundary](./partial.md#the-declared-404-boundary)), `fetch` (a
 first-crack hook for app routes — return `undefined` to fall through),
 `remote` (opt-in remote-metadata endpoints — the manifest + types the
 `parton add` CLI reads; embedding itself needs no config — see
@@ -138,15 +141,18 @@ framework to configure. `e2e-testing/public/favicon.ico` is the
 worked example.
 
 A request for a path with **no** `public/` file (a stray crawler
-probe, a mistyped URL) still reaches the handler and renders the
-whole tree; whether that resolves to HTTP 404 is the APP's semantic —
-an app whose pages are match-gated declares it by placing a fallback
-that consults the match registry and throws `notFound()`
-([`partial.md` § 404 fallback](./partial.md#404-fallback)), while an
-app whose document is built of bare, matchless partons (the website's
-tile world) legitimately renders content at every pathname and has no
-404 boundary at all. The framework cannot tell those two apart from
-the registry alone, so it never short-circuits ahead of the render.
+probe, a mistyped URL) still reaches the handler; whether that
+resolves to HTTP 404 is the APP's semantic. An app whose pages are
+exhaustively match-gated declares it — `unmatched: "not-found"` on
+`createRscHandler` ([`partial.md` § The declared 404
+boundary](./partial.md#the-declared-404-boundary)) — and the entry
+then short-circuits an unmatched document GET straight to the narrow
+`notFound` document, never paying for a full `<Root/>` pass whose
+output would be discarded. An app whose document is built of bare,
+matchless partons (the website's tile world) legitimately renders
+content at every pathname and simply omits the declaration — the
+framework cannot tell those two apart from the registry alone, so
+without the declaration it never short-circuits ahead of the render.
 
 ## Reading order
 

@@ -1,9 +1,10 @@
 import { Card, CardContent } from "@parton/copies/components/ui/card"
 
 /**
- * Default 404 page. Rendered by `Root` when a page component throws
- * `notFound()`. Authors can replace this with their own component by
- * intercepting the render path in `Root`.
+ * The app's 404 document body — `createRscHandler({ notFound })`. The
+ * entry renders it whenever a request resolves `notFound()`: an
+ * explicit throw from a page render, or the declared 404 boundary
+ * (`unmatched: "not-found"`) catching a URL no match pattern covers.
  */
 export function NotFoundPage() {
   return (

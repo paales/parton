@@ -71,7 +71,7 @@ import {
   getRequest,
   parseCookies,
 } from "../runtime/context.ts"
-import { HEADER_RSC_RENDER, stripFrameworkParams } from "../runtime/request.tsx"
+import { HEADER_RSC_RENDER, stripFrameworkParams, type RenderRequest } from "../runtime/request.tsx"
 import { _getBoundCellProjection } from "../runtime/capability.ts"
 import {
   parseSelector as parseInvalidationSelector,
@@ -105,8 +105,10 @@ import { buildTimeScope, type TimeScope } from "./time.ts"
 import { _onPartonSettled, _openPartonSettleScope, getServerContext } from "./server-context.ts"
 import { _setCurrentParton, type CurrentParton, type WakeHints } from "./current-parton.ts"
 import { CullPair } from "./cull-pair.tsx"
-import { evalDepKeys, readVisible } from "./server-hooks.ts"
+import { evalDepKeys, readVisible, untrackedUrl } from "./server-hooks.ts"
 import { codeVersionKey, currentCodeVersion } from "./code-version.ts"
+import { notFound } from "../runtime/errors.ts"
+import { hasNotFoundBoundary } from "./not-found-boundary.ts"
 
 export { ROOT, type PartialCtx } from "./partial-context.ts"
 
@@ -894,7 +896,8 @@ function invalidationKeyFromSnap(snap: PartialSnapshot): string {
  * Every distinct match gate any spec was constructed with. Populated
  * as a side effect of `parton(..., { match: ... })` via
  * `registerMatch`. The URL-pattern halves feed
- * `getRegisteredMatchPatterns()` (the 404-fallback helper) and
+ * `urlCoveredByMatch` (the declared 404 boundary's verdict),
+ * `getRegisteredMatchPatterns()` (param extraction for cell writes) and
  * `computeRouteKey` (the matched-set hash input); predicate and
  * request-record fields gate specs but never split route buckets —
  * the same rule search patterns already follow.
@@ -925,13 +928,48 @@ function registerMatch(compiled: CompiledMatch): void {
 
 /** Snapshot of every registered gate's URL-pattern half. Predicate-only
  *  gates carry no URL structure and are excluded — they can't name a
- *  page for the 404 fallback nor extract params for actions. */
+ *  page for the 404 boundary nor extract params for actions. */
 export function getRegisteredMatchPatterns(): readonly URLPattern[] {
   const out: URLPattern[] = []
   for (const m of registeredMatches) {
     if (m.urlPattern) out.push(m.urlPattern)
   }
   return out
+}
+
+/**
+ * True when any registered gate's URL-pattern half covers `url`. The
+ * one predicate both halves of the declared 404 boundary evaluate —
+ * the entry's pre-render short-circuit (`createRscHandler`, on a plain
+ * document GET) and the `PartialRoot`-mounted `NotFoundFallback` (on
+ * every other render path) — so the two verdicts can never diverge.
+ */
+export function urlCoveredByMatch(url: string): boolean {
+  for (const m of registeredMatches) {
+    if (m.urlPattern?.test(url)) return true
+  }
+  return false
+}
+
+/**
+ * The pre-render short-circuit's whole verdict: a plain document GET
+ * (`!isRsc && !isAction` — never an action POST, never an embed Flight
+ * GET) for a URL no registered match gate covers, in an app that has
+ * DECLARED its 404 boundary (`createRscHandler({ unmatched:
+ * "not-found" })`). `createRscHandler` answers a true verdict with the
+ * bare not-found document before any tree render starts; false falls
+ * through to the ordinary pipeline. Without the declaration the
+ * verdict is ALWAYS false — bare-parton apps render real content at
+ * every URL, and the registry alone cannot tell "no page here" from
+ * "every URL is a page".
+ */
+export function unmatchedDocument404(renderRequest: RenderRequest): boolean {
+  return (
+    !renderRequest.isRsc &&
+    !renderRequest.isAction &&
+    hasNotFoundBoundary() &&
+    !urlCoveredByMatch(renderRequest.request.url)
+  )
 }
 
 /**
@@ -2541,9 +2579,18 @@ export async function PartialRoot({ children }: PartialRootProps): Promise<React
   // Navigation API yet) — making the hook isomorphic with zero
   // app-side wiring. Ignored after hydration, when the live browser
   // handle takes over. Frame scope gets the equivalent from `<Frame>`.
+  // The declared 404 boundary's in-tree half: mounted here — never
+  // app-placed — so every render path the entry's pre-render
+  // short-circuit doesn't see (a soft navigation on a held connection
+  // re-rendering the tree at the stated URL) still resolves an
+  // uncovered URL to `notFound()`. Page scope only: an embed render
+  // returns above — its 404-ness is the host document's semantic.
   return (
     <PageUrlProvider url={pageUrl}>
-      <PartialsClient>{children}</PartialsClient>
+      <PartialsClient>
+        {children}
+        {hasNotFoundBoundary() ? <NotFoundFallback /> : null}
+      </PartialsClient>
     </PageUrlProvider>
   )
 }
@@ -2560,3 +2607,29 @@ export function lookupSpecComponentByType(
   const spec = getSpecById(type)
   return spec?.Component as SpecComponent<Record<string, unknown>> | undefined
 }
+
+// ─── The declared 404 boundary's fallback ─────────────────────────────
+
+/**
+ * The framework's 404 fallback — a parton `PartialRoot` mounts (never
+ * app-placed) once the app declares its 404 boundary
+ * (`createRscHandler({ unmatched: "not-found" })`). It renders nothing
+ * on a covered URL; on an uncovered one it resolves `notFound()`, which
+ * the entry translates to HTTP 404 + the configured `notFound`
+ * document. A plain document GET never reaches it — the entry
+ * short-circuits on the same `urlCoveredByMatch` verdict before the
+ * tree renders — so this parton carries the boundary on the other
+ * render paths: soft navigations and reconciles on a held connection.
+ *
+ * `fpSkip: false` is load-bearing twice over: the verdict re-evaluates
+ * on every render (never served from a cached fp), and it is the
+ * declaration `untrackedUrl()` requires — the gate reads the WHOLE
+ * request URL, which no tracked dimension covers.
+ */
+const NotFoundFallback = parton(
+  function NotFoundFallbackRender() {
+    if (urlCoveredByMatch(untrackedUrl().href)) return null
+    notFound()
+  },
+  { fpSkip: false },
+)
