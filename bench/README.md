@@ -153,9 +153,9 @@ Two caveats on reading the prod numbers:
   +~1.5 µs/parton buys sound per-placement identity and universal
   fp-skip, concentrated at depth (long parent paths make longer ids;
   depth/D=16 wears it worst). Measured, profiled, and re-budgeted
-  deliberately — the committed ledgers at `ba4a1b3`+ reflect it.
-  Remaining micro-candidates: docs/notes/IDEAS.md § Warm-tick
-  micro-optimizations.
+  deliberately — the committed ledgers at `ba4a1b3`+ reflect it; the
+  full profile attribution lives in that recording's commit message
+  (`03389b1`).
 
 ## Scenarios
 

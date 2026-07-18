@@ -135,12 +135,12 @@ export async function saveProfile(args: { name: string; bio: string }) {
 
 ## Where to read what
 
-| Folder                                 | For                                                                                                                                                                                                                                               |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`docs/reference/`](./docs/reference/) | Framework contracts. `intro` · `partial` · `block` · `cells` · `frames-navigation` · `remote-frame` · `cache` · `cms` · `prior-art`. Read these to USE the framework.                                                                             |
-| [`docs/internals/`](./docs/internals/) | Mechanisms. `testing` · `render-pipeline` · `streaming` · `channel` · `cache-internals` · `cell-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `server-context` · `flight-gotchas`. Read these to MODIFY the framework. |
-| [`docs/notes/`](./docs/notes/)         | Active research: backlog (`IDEAS.md`), live design docs for unshipped work, framing notes.                                                                                                                                                        |
-| [`docs/archive/`](./docs/archive/)     | Superseded designs and debugging logs. Reference only.                                                                                                                                                                                            |
+| Folder                                 | For                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`docs/reference/`](./docs/reference/) | Framework contracts. `intro` · `partial` · `block` · `cells` · `frames-navigation` · `remote-frame` · `cache` · `cms` · `prior-art`. Read these to USE the framework.                                                                                                                                      |
+| [`docs/internals/`](./docs/internals/) | Mechanisms. `testing` · `render-pipeline` · `streaming` · `channel` · `cache-internals` · `cell-internals` · `registry-internals` · `frame-scope` · `server-isolation` · `server-context` · `flight-gotchas`. Read these to MODIFY the framework.                                                          |
+| [`docs/notes/`](./docs/notes/)         | IN-PROGRESS work only: the backlog (`IDEAS.md`) and design docs for arcs actively being built. Nothing parks here — the moment a design ships it moves to `reference/`/`internals/` (latest state) or `archive/` (superseded exploration). A note that is neither in progress nor the backlog is misfiled. |
+| [`docs/archive/`](./docs/archive/)     | Superseded designs and debugging logs. Reference only.                                                                                                                                                                                                                                                     |
 
 Fastest orientation path for a new task: this file → the
 `docs/reference/` page for the surface you're touching → the matching
@@ -385,6 +385,24 @@ signal you need doesn't exist, **add it** — an explicit marker the
 producer writes, a milestone, a state flag. Example: the live
 heartbeat learns a stream is safe to abort from a done-marker the
 stream itself writes, not by comparing URLs and hoping.
+
+### Bugs get tests, not notes
+
+A suspected bug is either fixed in the same sitting or gets a minimal
+reproducing test then and there. If it can't be reproduced, it doesn't
+exist yet — vague sightings ("sometimes 503s") are not written down
+anywhere. `docs/notes/IDEAS.md` holds design ideas that need thought,
+never bug reports, debt lists, or profiling to-dos.
+
+### Runtime discovery over static analysis
+
+The load-bearing architectural bet: no static walkers, no codegen, no
+build-time manifests — the spec catalog and partial registry populate
+at first render, which is what separates this from App Router in the
+long run. Evaluate every direction with one test: _can it
+self-register at render time instead of requiring a pre-render walk?_
+The `parton` / `block` constructors pass; typed-handle codegen fails.
+It erodes one convenient walker at a time — don't let it.
 
 ### Navigation — the Navigation API only
 
