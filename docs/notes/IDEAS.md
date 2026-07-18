@@ -13,14 +13,6 @@ keeping for context).
 
 Confirmed bugs and debt awaiting a lane — measured, not yet fixed.
 
-### Test-infra: `refreshSelector` bumps cross Playwright workers
-
-Invalidation-timestamp bumps are process-global, not partitioned by
-`x-test-scope` — a tag bump in one worker's spec wakes partons in
-another's. Two spec files run `mode: "serial"` as a workaround while
-the playwright config still claims workers>1 is safe. Needs real
-scoping or a documented ownership rule.
-
 ### Interactive-Chrome `/__parton/channel` POST 503s
 
 Real browser tabs occasionally wedge with 503s on the channel POST;

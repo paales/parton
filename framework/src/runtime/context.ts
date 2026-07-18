@@ -215,7 +215,11 @@ export interface UrlUpdateEntry {
 
 const requestContext = new AsyncLocalStorage<RequestStore>()
 
-const DEFAULT_SCOPE = "default"
+/** The scope every request outside the dev-mode `x-test-scope` seam
+ *  lands in — production's only scope. Consumers (the invalidation
+ *  registry's scope confinement) compare against this to distinguish
+ *  "a scope" from "no scope". */
+export const DEFAULT_SCOPE = "default"
 
 function deriveScope(request: Request): string {
   if (import.meta.env?.DEV) {

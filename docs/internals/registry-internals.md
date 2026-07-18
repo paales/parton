@@ -300,9 +300,14 @@ Content changes and record removal are separate mechanisms:
   holds the pair, while the bare name fans out to every reader.
 
   The invalidation registry is compacted latest-per-key: ONE entry
-  per (name, canonical-constraints) pair —
+  per (scope, name, canonical-constraints) tuple —
+  per-scope buckets of
   `Map<name, Map<stableStringify(constraints), {name, constraints, ts}>>`
-  — and a same-pair bump overwrites that entry's `ts` in place.
+  — and a same-tuple bump overwrites that entry's `ts` in place. The
+  scope dimension is the dev-mode `x-test-scope` seam: a scoped bump
+  is confined to its scope's bucket and wake registrations, a
+  scope-less bump (production's only shape) is global — see
+  `docs/internals/server-isolation.md` § Invalidation confinement.
   Lossless by construction: every consumer reads through
   `queryMatchingTs` (the MAX `ts` whose name matches and whose
   constraints are a subset of the fold's constraint surface), and two

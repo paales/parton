@@ -48,10 +48,36 @@
  * immediately — useful for external server-side tasks (LLM stream
  * handlers, schedulers) that should affect any live connection right
  * away.
+ *
+ * ── Scope confinement (the dev-mode `x-test-scope` seam) ────────────
+ *
+ * Entries, evicted floors, and wake-index registrations live in
+ * per-scope buckets, keyed by the ambient request scope
+ * (`getScope()`) — the same seam that already partitions snapshots,
+ * route buckets, and cell storage (see
+ * docs/internals/server-isolation.md). The rule:
+ *
+ *   - A bump committed under a scope is CONFINED to it: it matches
+ *     only that scope's wake registrations, and only that scope's
+ *     queries read its ts.
+ *   - A scope-less bump (ambient scope `"default"` — production
+ *     always, and any commit outside a request context, e.g. a
+ *     bench driver or the cross-process bridge's inbound apply) is
+ *     GLOBAL: it delivers into every scope's wake index, and every
+ *     scope's queries fold the default bucket alongside their own.
+ *
+ * So parallel test workers (one scope per worker) never read each
+ * other's bumps as fp movement or wake each other's connections,
+ * while the scope-less path — production's only path — is exactly
+ * the one-bucket process-global registry. The timestamp source
+ * (`nextTs`) and the epoch stay global: fp folds need monotonicity,
+ * not a per-scope clock, and a single timeline keeps every cursor
+ * comparable regardless of which bucket an entry lands in.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks"
 import { stableStringify } from "../lib/stable-stringify.ts"
+import { DEFAULT_SCOPE, getScope } from "./context.ts"
 
 export interface InvalidationEntry {
   name: string
@@ -88,15 +114,55 @@ const TYPE_TAG = "\x01"
 // ─── Module state ─────────────────────────────────────────────────────
 
 let nextTs = 1
-/** name → (canonical constraints key → entry). The constraints key is
- *  `stableStringify(constraints)` — key-sorted and type-preserving, so
- *  a string constraint `{uid: "123"}` and a number constraint
- *  `{uid: 123}` stay distinct entries (they match different surfaces,
- *  mirroring the partition-key identity). One entry per key: a newer
- *  same-key bump overwrites `ts` in place. */
-const byName = new Map<string, Map<string, InvalidationEntry>>()
-/** Live entry count across every name — the sweep trigger's input,
- *  maintained incrementally (insert / restore / evict / clear). */
+
+/** One scope's share of the registry — its entry store AND its wake
+ *  index. Scoped state and the subscriptions over it bucket together
+ *  so a commit resolves both sides with one scope lookup. */
+interface ScopeBucket {
+  /** name → (canonical constraints key → entry). The constraints key
+   *  is `stableStringify(constraints)` — key-sorted and
+   *  type-preserving, so a string constraint `{uid: "123"}` and a
+   *  number constraint `{uid: 123}` stay distinct entries (they match
+   *  different surfaces, mirroring the partition-key identity). One
+   *  entry per key: a newer same-key bump overwrites `ts` in place.
+   *  Compaction is per (scope, name, constraints) — two scopes
+   *  bumping the same selector hold separate entries, so confining
+   *  one scope's bump never overwrites another's. */
+  byName: Map<string, Map<string, InvalidationEntry>>
+  /** Max evicted ts per name — the un-enumerable-surface fallback for
+   *  queries whose probe set can't enumerate (`probes === null`), and
+   *  the cross-scope backstop for the default bucket (whose evicted
+   *  `cell:` entries a scoped reader can't restore — the ts bridge
+   *  reads the READER's storage rows). O(names with evictions);
+   *  cleared with the bucket's store. */
+  evictedFloorByName: Map<string, number>
+  /** name → constraintsKey → subscription → (parton id → entry). */
+  wakeIndex: Map<string, Map<string, Map<WakeSubscription, Map<string, WakeSubscriptionEntry>>>>
+  /** This scope's subscriptions holding at least one scan entry. */
+  scanSubscribers: Set<WakeSubscription>
+}
+
+/** scope → its bucket. Lazily populated; production only ever holds
+ *  the `"default"` bucket. */
+const scopeBuckets = new Map<string, ScopeBucket>()
+
+function bucketFor(scope: string): ScopeBucket {
+  let bucket = scopeBuckets.get(scope)
+  if (!bucket) {
+    bucket = {
+      byName: new Map(),
+      evictedFloorByName: new Map(),
+      wakeIndex: new Map(),
+      scanSubscribers: new Set(),
+    }
+    scopeBuckets.set(scope, bucket)
+  }
+  return bucket
+}
+
+/** Live entry count across every scope and name — the sweep trigger's
+ *  input, maintained incrementally (insert / restore / evict /
+ *  clear). */
 let entryCount = 0
 
 // ─── The cell-row ts bridge (persistence of cell-backed entries) ──────
@@ -154,17 +220,22 @@ export function _raiseInvalidationTsFloor(ts: number): void {
 /** Seed a restored entry from its persisted row ts. No bump delivery
  *  (nothing changed — the entry is re-materializing), no stamp (the
  *  row already carries the ts). */
-function seedRestoredEntry(name: string, constraintsKey: string, ts: number): void {
+function seedRestoredEntry(
+  bucket: ScopeBucket,
+  name: string,
+  constraintsKey: string,
+  ts: number,
+): void {
   let constraints: Record<string, unknown>
   try {
     constraints = JSON.parse(constraintsKey) as Record<string, unknown>
   } catch {
     return // Unparseable key — leave unrestored (fold treats as unbacked).
   }
-  let perName = byName.get(name)
+  let perName = bucket.byName.get(name)
   if (!perName) {
     perName = new Map()
-    byName.set(name, perName)
+    bucket.byName.set(name, perName)
   }
   if (perName.has(constraintsKey)) return
   perName.set(constraintsKey, { name, constraints, ts })
@@ -184,20 +255,21 @@ function seedRestoredEntry(name: string, constraintsKey: string, ts: number): vo
  * (`probes === null`, enumeration impossible) the per-name evicted
  * floor stands in: folding `max(result, floor)` can never fall below
  * a lost entry's ts — over-fetch, never stale.
+ *
+ * Runs against the READER's own bucket only: the ts bridge resolves
+ * storage rows through the ambient scope, so the rows behind another
+ * bucket's entries aren't reachable here (the default bucket's
+ * evicted floor is that bucket's cross-scope backstop instead).
  */
-function restoreCellEntries(name: string, probes: readonly string[]): void {
+function restoreCellEntries(bucket: ScopeBucket, name: string, probes: readonly string[]): void {
   if (!tsBridge!.hasAny(name)) return
-  const perName = byName.get(name)
+  const perName = bucket.byName.get(name)
   for (const key of probes) {
     if (perName?.has(key)) continue
     const ts = tsBridge!.readTs(name, key)
-    if (ts !== undefined) seedRestoredEntry(name, key, ts)
+    if (ts !== undefined) seedRestoredEntry(bucket, name, key, ts)
   }
 }
-
-/** Max evicted ts per name — the un-enumerable-surface fallback above.
- *  O(names with evictions); reset with the registry. */
-const evictedFloorByName = new Map<string, number>()
 
 interface InvalidationTransaction {
   pending: ParsedSelector[]
@@ -428,11 +500,17 @@ export function refreshSelector(spec: string | string[]): void {
 }
 
 function commitOne(parsed: ParsedSelector): void {
+  // The bump's scope is the ambient request scope — the writer's. The
+  // same ambient read the ts bridge's row access resolves through, so
+  // a bucket's entries and the storage rows behind them always share
+  // one scope by construction.
+  const scope = getScope()
   const ts = nextTs++
-  let perName = byName.get(parsed.name)
+  const bucket = bucketFor(scope)
+  let perName = bucket.byName.get(parsed.name)
   if (!perName) {
     perName = new Map()
-    byName.set(parsed.name, perName)
+    bucket.byName.set(parsed.name, perName)
   }
   const key = stableStringify(parsed.constraints)
   const existing = perName.get(key)
@@ -458,7 +536,7 @@ function commitOne(parsed: ParsedSelector): void {
   if ((bridgeTap !== null || committedBumpObservers.size > 0) && !applyingInbound) {
     outboundBatch.push(parsed)
   }
-  deliverBump(parsed.name, key, parsed.constraints)
+  deliverBump(scope, parsed.name, key, parsed.constraints)
   maybeSweepEntries()
 }
 
@@ -501,16 +579,18 @@ export function _setInvalidationEntryCap(cap: number | null): void {
  * this last change"). Returns whether the entry was evicted.
  */
 export function _evictInvalidationEntry(name: string, constraintsKey: string): boolean {
-  const perName = byName.get(name)
+  const bucket = scopeBuckets.get(getScope())
+  if (!bucket) return false
+  const perName = bucket.byName.get(name)
   const entry = perName?.get(constraintsKey)
   if (!entry) return false
   if (tsBridge === null || !name.startsWith(CELL_NAME_PREFIX)) return false
   if (tsBridge.readTs(name, constraintsKey) !== entry.ts) return false
   perName!.delete(constraintsKey)
-  if (perName!.size === 0) byName.delete(name)
+  if (perName!.size === 0) bucket.byName.delete(name)
   entryCount--
-  const floor = evictedFloorByName.get(name)
-  if (floor === undefined || entry.ts > floor) evictedFloorByName.set(name, entry.ts)
+  const floor = bucket.evictedFloorByName.get(name)
+  if (floor === undefined || entry.ts > floor) bucket.evictedFloorByName.set(name, entry.ts)
   return true
 }
 
@@ -532,17 +612,24 @@ function maybeSweepEntries(): void {
   if (entryCount <= entryCap || entryCount < sweepRetryAt) return
   if (tsBridge === null) return
   const target = entryCap - (entryCap >> 3)
-  outer: for (const [name, perName] of byName) {
+  // The restorability check reads the AMBIENT scope's storage rows
+  // (the bridge's scope resolution), so only the committing scope's
+  // own bucket can verify — and therefore evict — its entries.
+  // Foreign buckets refuse at the readTs mismatch, exactly the loss
+  // rule: never evict what this pass can't prove restorable.
+  const bucket = scopeBuckets.get(getScope())
+  if (!bucket) return
+  outer: for (const [name, perName] of bucket.byName) {
     if (!name.startsWith(CELL_NAME_PREFIX)) continue
     for (const [key, entry] of perName) {
       if (entryCount <= target) break outer
       if (tsBridge.readTs(name, key) !== entry.ts) continue
       perName.delete(key)
       entryCount--
-      const floor = evictedFloorByName.get(name)
-      if (floor === undefined || entry.ts > floor) evictedFloorByName.set(name, entry.ts)
+      const floor = bucket.evictedFloorByName.get(name)
+      if (floor === undefined || entry.ts > floor) bucket.evictedFloorByName.set(name, entry.ts)
     }
-    if (perName.size === 0) byName.delete(name)
+    if (perName.size === 0) bucket.byName.delete(name)
   }
   sweepRetryAt = entryCount > target ? entryCount + (entryCap >> 6) + 1 : 0
 }
@@ -607,6 +694,11 @@ interface WakeSubscriptionEntry extends WakeSubscriptionEntryInit {
 }
 
 export interface WakeSubscription {
+  /** The connection's scope, captured at open (the ambient request
+   *  scope of the attach). All index registrations land in this
+   *  scope's bucket — a scoped bump delivers here only when the
+   *  committer's scope matches; a scope-less bump always does. */
+  readonly scope: string
   /** Parton ids bumps have delivered since the last drain — deduped
    *  across bumps by construction (coalescing is intrinsic; each lane
    *  renders current state). */
@@ -622,18 +714,12 @@ export interface WakeSubscription {
   readonly scanEntries: Map<string, WakeSubscriptionEntry>
 }
 
-/** name → constraintsKey → subscription → (parton id → entry). */
-const wakeIndex = new Map<
-  string,
-  Map<string, Map<WakeSubscription, Map<string, WakeSubscriptionEntry>>>
->()
-/** Subscriptions holding at least one scan entry. */
-const scanSubscribers = new Set<WakeSubscription>()
 /** Every open subscription — the wake-arm probe's denominator. */
 const openSubscriptions = new Set<WakeSubscription>()
 
 export function _openWakeSubscription(context: WakeSubscriberContext): WakeSubscription {
   const sub: WakeSubscription = {
+    scope: getScope(),
     pending: new Set(),
     wakes: new Set(),
     context,
@@ -649,7 +735,7 @@ export function _openWakeSubscription(context: WakeSubscriberContext): WakeSubsc
 export function _closeWakeSubscription(sub: WakeSubscription): void {
   for (const id of [...sub.entries.keys()]) _removeWakeSubscriptionEntry(sub, id)
   openSubscriptions.delete(sub)
-  scanSubscribers.delete(sub)
+  scopeBuckets.get(sub.scope)?.scanSubscribers.delete(sub)
   sub.pending.clear()
   sub.wakes.clear()
 }
@@ -668,21 +754,22 @@ export function _setWakeSubscriptionEntry(
   init: WakeSubscriptionEntryInit,
 ): void {
   _removeWakeSubscriptionEntry(sub, id)
+  const bucket = bucketFor(sub.scope)
   const probes = init.query.probes
   if (probes === null) {
     sub.scanEntries.set(id, { ...init, keys: null })
     sub.entries.set(id, sub.scanEntries.get(id)!)
-    scanSubscribers.add(sub)
+    bucket.scanSubscribers.add(sub)
     return
   }
   const keys: Array<readonly [string, string]> = []
   const entry: WakeSubscriptionEntry = { ...init, keys }
   for (const label of init.labels) {
     for (const key of probes) {
-      let perName = wakeIndex.get(label)
+      let perName = bucket.wakeIndex.get(label)
       if (!perName) {
         perName = new Map()
-        wakeIndex.set(label, perName)
+        bucket.wakeIndex.set(label, perName)
       }
       let perKey = perName.get(key)
       if (!perKey) {
@@ -705,13 +792,15 @@ export function _removeWakeSubscriptionEntry(sub: WakeSubscription, id: string):
   const entry = sub.entries.get(id)
   if (!entry) return
   sub.entries.delete(id)
+  const bucket = scopeBuckets.get(sub.scope)
   if (entry.keys === null) {
     sub.scanEntries.delete(id)
-    if (sub.scanEntries.size === 0) scanSubscribers.delete(sub)
+    if (sub.scanEntries.size === 0) bucket?.scanSubscribers.delete(sub)
     return
   }
+  if (!bucket) return
   for (const [name, key] of entry.keys) {
-    const perName = wakeIndex.get(name)
+    const perName = bucket.wakeIndex.get(name)
     const perKey = perName?.get(key)
     const ids = perKey?.get(sub)
     if (!ids) continue
@@ -720,7 +809,7 @@ export function _removeWakeSubscriptionEntry(sub: WakeSubscription, id: string):
       perKey!.delete(sub)
       if (perKey!.size === 0) {
         perName!.delete(key)
-        if (perName!.size === 0) wakeIndex.delete(name)
+        if (perName!.size === 0) bucket.wakeIndex.delete(name)
       }
     }
   }
@@ -769,18 +858,22 @@ export function _wakeIndexStats(): {
   scanEntries: number
   subscriptions: number
 } {
+  let names = 0
   let keys = 0
   let registrations = 0
-  for (const perName of wakeIndex.values()) {
-    keys += perName.size
-    for (const perKey of perName.values()) {
-      for (const ids of perKey.values()) registrations += ids.size
-    }
-  }
   let scanEntries = 0
-  for (const sub of scanSubscribers) scanEntries += sub.scanEntries.size
+  for (const bucket of scopeBuckets.values()) {
+    names += bucket.wakeIndex.size
+    for (const perName of bucket.wakeIndex.values()) {
+      keys += perName.size
+      for (const perKey of perName.values()) {
+        for (const ids of perKey.values()) registrations += ids.size
+      }
+    }
+    for (const sub of bucket.scanSubscribers) scanEntries += sub.scanEntries.size
+  }
   return {
-    names: wakeIndex.size,
+    names,
     keys,
     registrations,
     scanEntries,
@@ -794,9 +887,35 @@ export function _wakeIndexStats(): {
  * delivery is actionable for. The keyed lookup is exact by the
  * probe-key equivalence (an entry key is hit iff `matchesConstraints`
  * would accept it); scan entries run the predicate itself.
+ *
+ * Scope confinement: a scoped bump delivers into its own scope's
+ * wake bucket only; a scope-less (default) bump delivers into every
+ * bucket — production, where the default bucket is the only one,
+ * walks exactly one.
  */
-function deliverBump(name: string, constraintsKey: string, constraints: Record<string, unknown>) {
-  const perKey = wakeIndex.get(name)?.get(constraintsKey)
+function deliverBump(
+  scope: string,
+  name: string,
+  constraintsKey: string,
+  constraints: Record<string, unknown>,
+) {
+  if (scope === DEFAULT_SCOPE) {
+    for (const bucket of scopeBuckets.values()) {
+      deliverBumpInto(bucket, name, constraintsKey, constraints)
+    }
+  } else {
+    const bucket = scopeBuckets.get(scope)
+    if (bucket !== undefined) deliverBumpInto(bucket, name, constraintsKey, constraints)
+  }
+}
+
+function deliverBumpInto(
+  bucket: ScopeBucket,
+  name: string,
+  constraintsKey: string,
+  constraints: Record<string, unknown>,
+) {
+  const perKey = bucket.wakeIndex.get(name)?.get(constraintsKey)
   if (perKey !== undefined) {
     for (const [sub, ids] of perKey) {
       let wake = false
@@ -807,7 +926,7 @@ function deliverBump(name: string, constraintsKey: string, constraints: Record<s
       if (wake) fireSubscriptionWakes(sub)
     }
   }
-  for (const sub of scanSubscribers) {
+  for (const sub of bucket.scanSubscribers) {
     let wake = false
     for (const [id, entry] of sub.scanEntries) {
       if (!entry.labels.includes(name)) continue
@@ -1068,11 +1187,18 @@ export function queryMatchingTs(
  * `matchesConstraints` would accept, and every accepting entry's key
  * is in the probe set — the same result by construction) or the linear
  * `matchesConstraints` scan.
+ *
+ * Scope confinement: the read folds the ambient scope's own bucket
+ * plus — for scoped readers — the default bucket (scope-less bumps
+ * are global). A default-scope reader (production's only shape)
+ * reads exactly its one bucket.
  */
 export function _queryCompiledMatchingTs(
   labels: readonly string[],
   query: CompiledSurfaceQuery,
 ): number {
+  const scope = getScope()
+  const shared = scope === DEFAULT_SCOPE ? undefined : scopeBuckets.get(DEFAULT_SCOPE)
   let max = 0
   for (const label of labels) {
     // Restore evicted/not-yet-restored `cell:` entries from their
@@ -1081,28 +1207,49 @@ export function _queryCompiledMatchingTs(
     // fold included, whose body never runs). Over-cap surfaces can't
     // enumerate candidate keys; their queries fold the per-name
     // evicted floor instead (≥ any lost ts — over-fetch, never stale).
+    // The restore runs against the reader's own bucket (the bridge
+    // reads the ambient scope's rows); the default bucket's evicted
+    // entries aren't restorable from here, so scoped readers fold its
+    // evicted floor unconditionally — the same safe direction.
     if (tsBridge !== null && label.startsWith(CELL_NAME_PREFIX)) {
       if (query.probes !== null) {
-        restoreCellEntries(label, query.probes)
+        restoreCellEntries(bucketFor(scope), label, query.probes)
       } else {
-        const floor = evictedFloorByName.get(label)
+        const floor = scopeBuckets.get(scope)?.evictedFloorByName.get(label)
+        if (floor !== undefined && floor > max) max = floor
+      }
+      if (shared !== undefined) {
+        const floor = shared.evictedFloorByName.get(label)
         if (floor !== undefined && floor > max) max = floor
       }
     }
-    const perName = byName.get(label)
-    if (!perName) continue
-    const probes = query.probes
-    if (probes !== null && probes.length <= perName.size) {
-      for (const key of probes) {
-        const entry = perName.get(key)
-        if (entry !== undefined && entry.ts > max) max = entry.ts
-      }
-    } else {
-      for (const entry of perName.values()) {
-        if (entry.ts <= max) continue
-        if (matchesConstraints(query.surface, entry.constraints)) {
-          max = entry.ts
-        }
+    max = readLabelTs(scopeBuckets.get(scope), label, query, max)
+    if (shared !== undefined) max = readLabelTs(shared, label, query, max)
+  }
+  return max
+}
+
+/** One bucket's contribution to a label's max-ts read — the probe/scan
+ *  strategy pick, folded over the running `max`. */
+function readLabelTs(
+  bucket: ScopeBucket | undefined,
+  label: string,
+  query: CompiledSurfaceQuery,
+  max: number,
+): number {
+  const perName = bucket?.byName.get(label)
+  if (!perName) return max
+  const probes = query.probes
+  if (probes !== null && probes.length <= perName.size) {
+    for (const key of probes) {
+      const entry = perName.get(key)
+      if (entry !== undefined && entry.ts > max) max = entry.ts
+    }
+  } else {
+    for (const entry of perName.values()) {
+      if (entry.ts <= max) continue
+      if (matchesConstraints(query.surface, entry.constraints)) {
+        max = entry.ts
       }
     }
   }
@@ -1136,24 +1283,38 @@ function matchesConstraints(
 // ─── Test / debug ─────────────────────────────────────────────────────
 
 /** Test/debug: snapshot of registry state. `entries` counts stored
- *  (compacted) entries — one per (name, constraints) pair, not one per
- *  bump. */
+ *  (compacted) entries — one per (scope, name, constraints) tuple,
+ *  not one per bump; `byName` counts (scope, name) pairs. */
 export function _registryStats(): { entries: number; nextTs: number; byName: number } {
   let entries = 0
-  for (const perName of byName.values()) entries += perName.size
-  return { entries, nextTs, byName: byName.size }
+  let names = 0
+  for (const bucket of scopeBuckets.values()) {
+    names += bucket.byName.size
+    for (const perName of bucket.byName.values()) entries += perName.size
+  }
+  return { entries, nextTs, byName: names }
 }
 
-/** Test-only: wipe all entries and reset `ts`. Storage-stamped rows
- *  survive (they belong to the storage layer) — a follow-up query
- *  restores them, which is exactly the process-restart simulation the
+/** Test-only: wipe all entries (every scope) and reset `ts`. Wake
+ *  subscriptions and their index registrations survive — they belong
+ *  to their connections, and future bumps must keep delivering to
+ *  held drives across a clear. Storage-stamped rows survive too (they
+ *  belong to the storage layer) — a follow-up query restores them,
+ *  which is exactly the process-restart simulation the
  *  restart-equivalence tests lean on. */
 export function _clearInvalidationRegistry(): void {
-  byName.clear()
+  for (const [scope, bucket] of scopeBuckets) {
+    bucket.byName.clear()
+    bucket.evictedFloorByName.clear()
+    // A bucket holding no registrations either is dead weight — drop
+    // it so long-lived processes don't accumulate one per test scope.
+    if (bucket.wakeIndex.size === 0 && bucket.scanSubscribers.size === 0) {
+      scopeBuckets.delete(scope)
+    }
+  }
   nextTs = 1
   entryCount = 0
   sweepRetryAt = 0
-  evictedFloorByName.clear()
   outboundBatch = []
   mintEpoch()
 }

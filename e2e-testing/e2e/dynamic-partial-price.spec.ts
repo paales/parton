@@ -24,11 +24,10 @@ import {
  * action, and the client states no refetch of its own.
  */
 
-// Tag names are a process-wide namespace — the bare `price` bump the
-// fanout test fires reaches every live-price card in the process,
-// including the page of a concurrently running test. Serial mode keeps
-// it from disturbing the isolation test's siblings.
-test.describe.configure({ mode: "serial" })
+// The bare `price` bump the fanout test fires is confined to the
+// request's `x-test-scope` (the invalidation registry buckets per
+// scope), so it never reaches a concurrently running worker's page —
+// no serial mode.
 
 // Clear server-side caches between tests so each one starts from a
 // deterministic state. Tests that preceded this one may have populated

@@ -20,12 +20,9 @@ import {
  * subscribed timestamps should change; non-readers stay pinned.
  */
 
-// A tag name is a process-wide address: a bump wakes its readers on
-// every page held open in the process, so two of these tests running
-// at once against their own /tag-demo pages would each see the other's
-// fanout. Serial mode gives each bump the page to itself — the demo
-// page's `tag-demo:` prefix keeps the rest of the suite out.
-test.describe.configure({ mode: "serial" })
+// A tag bump is confined to the request's `x-test-scope` (the
+// invalidation registry buckets per scope), so parallel workers'
+// /tag-demo pages never see each other's fanout — no serial mode.
 
 test.beforeEach(async ({ baseURL }) => {
   await clearCaches(baseURL)
