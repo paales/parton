@@ -5,7 +5,8 @@
 > (the shipped cull-gate contract) +
 > [`docs/internals/render-pipeline.md`](../internals/render-pipeline.md#cull-to-park)
 > (mechanics). This note keeps the original tracked-read design and the
-> framework-level findings — the substrate for a future `<Scroller>`.
+> framework-level findings — the substrate `scroller()` shipped on
+> 2026-07-18 ([`../reference/scroller.md`](../reference/scroller.md)).
 
 **Status:** shipped, including cull-to-park and the spec-level `cull`
 gate. The read-tracked `visible()` hook this note originally designed

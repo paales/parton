@@ -212,12 +212,13 @@ the gate IS the park trigger. Because the gate covers values, not
 just URL shape, value-conditional existence is a match gate too:
 
 ```tsx
-// Page N of a load-more list exists iff the URL admits it — a miss
-// parks the cached page (back/forward across a load-more boundary
-// restores it).
+// Step N of a wizard exists iff the URL admits it — a miss parks
+// the cached step (back/forward across the boundary restores it).
+// (Collection windowing is NOT this: a scroller()'s existence is
+// viewport-driven — see ./scroller.md.)
 match: {
   searchParams: {
-    pages: (v) => Math.max(1, Number(v) || 1) >= page
+    step: (v) => Math.max(1, Number(v) || 1) >= step
   }
 }
 ```
