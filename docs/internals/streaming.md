@@ -382,7 +382,7 @@ zero-byte confirm, never staleness. Segment 0's `lastTs` and the
 attach catch-up anchor follow the same discipline (both are pre-render
 points on the registry timeline). Covered by
 `covering-cursor.rsc.test.tsx` and the convergence fuzzer
-([`docs/notes/convergence-fuzzing.md`](../notes/convergence-fuzzing.md)
+([`docs/internals/convergence-fuzzing.md`](./convergence-fuzzing.md)
 finding F1).
 
 **A lane's heals and promote describe its OWN registrations (the

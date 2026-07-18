@@ -1,6 +1,6 @@
 - [ ] Reiterate: Redirects / status codes and rewrites as a router iterator. Ideally we should be able to handle URL rewrites where pretty URL's will be rewritten into internal routing URL's etc. The current route matcher should have an ergnomic to do an internal rewrite.
 
-- [ ] A <Frame /> is the encapsulated page with it's own URL, what if nothing matches, shoudl a frame automatically be a route matcher as well that can iterate, interally rewrite, redirect or be a 404?
+- [ ] A <Frame /> is the encapsulated page with it's own URL, what if nothing matches, shoudl a frame automatically be a route matcher as well that can iterate, interally rewrite, redirect or be a 404? Yes it should.
 
 - [ ] Migrate to a more classic monorepo setup with a packages and examples directory. Have a better usage guide for /client and /server exports so that they dont conflict. Should each package have both exports?
 
@@ -113,3 +113,17 @@ Choosing for a persistent connection between server and client:
 We've seen many products that are very chatty over the wire. Sending HTML down, communicating over API's. Sending all the communicated information to a third party analytics tool. Debugging tools like sentry send the information over the wire at a staggering rate.
 
 Persistent connections are cheap and allow us to communicate at a very quick rate. Parton uses a single down stream and a single upstreamm, using websockets or regular http fetch.
+
+---
+
+Framework:
+
+- A regular `<a href></a>` is fully supported by the framework, no special needs required. And with useNavigation().navigate() we can navigate programmatically. But it seems there is no easy way to mpdify a single query param, or maybe we need just a single example?
+
+- Use case: There however are a few special usecases that we want to be able to render a full URL, like a canonical URL. BUT we need to make clear that this isn't a watched value or somehting?
+
+- Parton extensibility for servers and clients:
+  - Client: I want to be able to inject 'debugging' tooling in partons that get the Fragment ref elements and bounding client rects etc.
+  - Client: I want events/callbacks that get send to the server for each parton. Like visibility rendering etc.
+  - Server: I want events/callbacks that are receieved on the server for each parton and cell updates etc.
+  - Server: I want to be able to inject 'debuggin' tooling that allows me to send internal information in the trailer so that the client can display specific information.

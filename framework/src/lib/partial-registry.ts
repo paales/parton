@@ -577,7 +577,7 @@ export function lookupPartial(id: string, culled?: boolean): PartialSnapshot | u
  * emitted) and its drain promote (the delivery's holdings must be what
  * its own emission established) read through this map so each lane
  * describes ITS render, never the rival's (fuzz class F7,
- * docs/notes/convergence-fuzzing.md).
+ * docs/internals/convergence-fuzzing.md).
  */
 export function _activeRenderRegistrations(): ReadonlyMap<string, PartialSnapshot> | null {
   return _renderRegistrationCapture() as ReadonlyMap<string, PartialSnapshot> | null

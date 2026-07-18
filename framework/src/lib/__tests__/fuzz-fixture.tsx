@@ -6,7 +6,7 @@
  * The partons and cells are exported individually so the v2 fixture
  * (`fuzz-fixture-v2.tsx`) composes the same shapes into its own page.
  * See `fuzz-convergence.rsc.test.tsx` and
- * `docs/notes/convergence-fuzzing.md`.
+ * `docs/internals/convergence-fuzzing.md`.
  */
 
 import { mkdtempSync } from "node:fs"

@@ -12,7 +12,7 @@ this lineage can hold the dynamic range a commerce stack needs end
 to end, instead of splitting into a server-rendered catalog and a
 separate client app at the checkout boundary (Liquid + Hydrogen,
 Luma/Hyvä + a React checkout). See
-[`../notes/perspectives.md`](../notes/perspectives.md) § The thesis.
+[`./perspectives.md`](./perspectives.md) § The thesis.
 
 ## Server-rendered composition platforms
 

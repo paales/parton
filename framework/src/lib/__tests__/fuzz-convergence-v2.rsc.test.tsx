@@ -6,7 +6,7 @@
  * real server renders and real Flight encode → decode round trips.
  * Harness: `framework/src/test/fuzz-harness-v2.ts`; fixture:
  * `fuzz-fixture-v2.tsx`; design note:
- * `docs/notes/convergence-fuzzing.md` (§v2 + findings ledger).
+ * `docs/internals/convergence-fuzzing.md` (§v2 + findings ledger).
  *
  * Two oracles per trial: convergence (client template render ≡ cold
  * render) and advertise honesty (every advertised fp restorable; a

@@ -1,7 +1,7 @@
 /**
  * Convergence fuzzer v2 — the seeded walk drives the REAL client merge
  * layer instead of a model of it. Design note:
- * `docs/notes/convergence-fuzzing.md` (§v2).
+ * `docs/internals/convergence-fuzzing.md` (§v2).
  *
  * Each step renders the fixture through the real server (a real
  * request scope: `x-parton-cached` manifest built from the client's own

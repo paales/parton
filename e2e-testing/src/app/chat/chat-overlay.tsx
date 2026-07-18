@@ -19,7 +19,7 @@ import {
 } from "./chat-controls.tsx"
 
 export const AVAILABLE_FILES = [
-  "AA_CHAT_STREAMING",
+  "chat-demo",
   "intro",
   "partial",
   "frames-navigation",
@@ -38,7 +38,7 @@ export const AVAILABLE_FILES = [
   "PARTIAL_ARCHITECTURE",
 ]
 
-const DEFAULT_MSG = "AA_CHAT_STREAMING"
+const DEFAULT_MSG = "chat-demo"
 
 function parseMsgs(param: string | null): string[] {
   if (param == null) return [DEFAULT_MSG]

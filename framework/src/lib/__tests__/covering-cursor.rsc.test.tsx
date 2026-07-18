@@ -1,6 +1,6 @@
 /**
  * The covering-segment coverage cursor — the fix for the fuzzer's F1
- * finding (docs/notes/convergence-fuzzing.md): `handleNavigation` (and
+ * finding (docs/internals/convergence-fuzzing.md): `handleNavigation` (and
  * the reconcile/frame-nav siblings) anchor the wake cursor and the
  * pending-set coverage BEFORE the covering render begins, because the
  * vendored Flight server renders lazily — a write committing while the

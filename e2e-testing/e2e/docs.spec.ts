@@ -53,7 +53,7 @@ test("relative in-doc links resolve against the document path", async ({ page })
   // resolves from the nested doc URL instead of the site root…
   await expect(content.locator('a[href="/docs/reference/block.md"]').first()).toBeAttached(MD)
   // …and `../`-relative links climb out of the directory correctly.
-  await expect(content.locator('a[href="/docs/notes/perspectives.md"]').first()).toBeAttached(MD)
+  await expect(content.locator('a[href="/docs/reference/perspectives.md"]').first()).toBeAttached(MD)
   // (in-app navigation on click is covered by the sidebar test, whose
   // links sit above the fold and aren't subject to code-highlight shift.)
 })

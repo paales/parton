@@ -7,7 +7,7 @@
 > as-built map.
 
 Landing note for research→PoC workstream 3
-([`research-to-poc.md`](../notes/research-to-poc.md) §3). The architecture is
+([`research-to-poc.md`](./research-to-poc.md) §3). The architecture is
 a held connection to a stateful process, so a deploy used to tear
 every live lane and drop the in-flight window. The drain makes SIGTERM
 deliberate: stop accepting attaches, settle in-flight work, signal

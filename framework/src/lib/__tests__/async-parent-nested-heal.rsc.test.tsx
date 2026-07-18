@@ -1,6 +1,6 @@
 /**
  * F8 — an addressable parton nested inside an ASYNC-body parent must
- * heal on live updates (docs/notes/convergence-fuzzing.md, findings
+ * heal on live updates (docs/internals/convergence-fuzzing.md, findings
  * ledger).
  *
  * An async Render body reaches its `<PartialErrorBoundary>` wrapper as

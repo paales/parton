@@ -34,9 +34,9 @@ test.skip("opened chat overlay survives navigation from / to /magento", async ({
     timeout: 10000,
   })
 
-  // Wait for the default AA_CHAT_STREAMING message to start streaming
+  // Wait for the default chat-demo message to start streaming
   // and accumulate some chunks.
-  const chunks = page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]')
+  const chunks = page.locator('[data-testid="chat-body-chat-demo"] [data-chunk]')
   await expect(chunks.first()).toBeAttached({ timeout: 10000 })
   await expect.poll(() => chunks.count(), { timeout: 10000 }).toBeGreaterThanOrEqual(3)
   const chunksBefore = await chunks.count()
@@ -54,13 +54,13 @@ test.skip("opened chat overlay survives navigation from / to /magento", async ({
   await expect(page.locator('[data-testid="chat-box"]')).toBeVisible({
     timeout: 15000,
   })
-  await expect(page.locator('[data-testid="chat-msg-AA_CHAT_STREAMING"]')).toBeAttached()
+  await expect(page.locator('[data-testid="chat-msg-chat-demo"]')).toBeAttached()
 
   // Chunk count must not regress. Whether we observe N or N+k chunks,
   // it must be ≥ what we saw pre-nav — a remount would drop to 0
   // before restreaming.
   const chunksAfter = await page
-    .locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]')
+    .locator('[data-testid="chat-body-chat-demo"] [data-chunk]')
     .count()
   expect(chunksAfter).toBeGreaterThanOrEqual(chunksBefore)
 })

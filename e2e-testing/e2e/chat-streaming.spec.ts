@@ -74,14 +74,14 @@ test("clicking the open pill streams chunks progressively into the chat", async 
   })
 
   // Message frame mounts.
-  await expect(page.locator('[data-testid="chat-msg-AA_CHAT_STREAMING"]')).toBeAttached({
+  await expect(page.locator('[data-testid="chat-msg-chat-demo"]')).toBeAttached({
     timeout: 10000,
   })
 
   // First chunk lands within the test-mode chunk delay budget (~5ms
   // per chunk + Flight roundtrip). Generous timeout for CI.
   await expect(
-    page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]').first(),
+    page.locator('[data-testid="chat-body-chat-demo"] [data-chunk]').first(),
   ).toBeAttached({ timeout: 5000 })
 
   // Sample chunk count over time. Each segment carries the full
@@ -92,9 +92,9 @@ test("clicking the open pill streams chunks progressively into the chat", async 
   const samples: number[] = []
   const deadline = Date.now() + 8000
   while (Date.now() < deadline) {
-    const n = await countChunks(page, "AA_CHAT_STREAMING")
+    const n = await countChunks(page, "chat-demo")
     samples.push(n)
-    if (n > 5 && (await page.locator('[data-testid="chat-done-AA_CHAT_STREAMING"]').count()) > 0) {
+    if (n > 5 && (await page.locator('[data-testid="chat-done-chat-demo"]').count()) > 0) {
       break
     }
     await page.waitForTimeout(50)
@@ -114,13 +114,13 @@ test("clicking the open pill streams chunks progressively into the chat", async 
   }
   // Producer drains the log under the test-mode budget (3s for
   // ~2.4KB at 25 char/chunk = ~95 chunks at 5ms each ≈ 475ms).
-  await expect(page.locator('[data-testid="chat-done-AA_CHAT_STREAMING"]')).toBeVisible({
+  await expect(page.locator('[data-testid="chat-done-chat-demo"]')).toBeVisible({
     timeout: 10000,
   })
   // Final chunk count matches the "✓ stream complete (N chunks)"
   // counter rendered by the done-branch.
-  const finalCount = await countChunks(page, "AA_CHAT_STREAMING")
-  const doneText = await page.locator('[data-testid="chat-done-AA_CHAT_STREAMING"]').textContent()
+  const finalCount = await countChunks(page, "chat-demo")
+  const doneText = await page.locator('[data-testid="chat-done-chat-demo"]').textContent()
   expect(doneText).toMatch(new RegExp(`${finalCount} chunks`))
 })
 
@@ -130,7 +130,7 @@ test("no client-side compaction sentinel — old Piece/ResumeTail pattern is gon
   // Sanity check that the legacy data-testids don't show up. If they
   // do, the chat code regressed to the old recursive shape.
   await page.goto("/pokemon/1?chat=open")
-  await expect(page.locator('[data-testid="chat-msg-AA_CHAT_STREAMING"]')).toBeAttached({
+  await expect(page.locator('[data-testid="chat-msg-chat-demo"]')).toBeAttached({
     timeout: 10000,
   })
   // Give the stream a moment to actually run.
@@ -158,7 +158,7 @@ test("closing the chat collapses the overlay back to the open pill mid-stream", 
   // Wait for at least one chunk so we know the segment loop is
   // actively streaming when we click close.
   await expect(
-    page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]').first(),
+    page.locator('[data-testid="chat-body-chat-demo"] [data-chunk]').first(),
   ).toBeAttached({ timeout: 5000 })
 
   await page.locator('[data-testid=\"chat-close-pill\"][data-hydrated]').click()

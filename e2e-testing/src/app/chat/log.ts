@@ -59,6 +59,9 @@ function resolveDocsRoot(): string {
 }
 const REPO_DOCS = resolveDocsRoot()
 const SEARCH_DIRS = [
+  // The docs root itself first — home of demo-content files that are
+  // not documentation (chat-demo.md, the overlay's seed message).
+  REPO_DOCS,
   resolve(REPO_DOCS, "notes"),
   resolve(REPO_DOCS, "reference"),
   resolve(REPO_DOCS, "internals"),

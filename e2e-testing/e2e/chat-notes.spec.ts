@@ -55,7 +55,7 @@ test.afterAll(async ({ baseURL }) => {
 })
 
 test.skip("empty state renders when ?msgs= is explicitly empty", async ({ page }) => {
-  // No ?msgs= defaults to streaming AA_CHAT_STREAMING; pass an empty
+  // No ?msgs= defaults to streaming chat-demo; pass an empty
   // value to force the empty state.
   await page.goto("/chat-notes?msgs=")
   await waitForPageInteractive(page)
@@ -211,24 +211,24 @@ test.skip("new message link appends a fileId to ?msgs= and a second stream start
 
   // Link is an <a href> so it works pre-hydration — server-computed
   // `nextHref` walks the available-files pool and picks the first one
-  // that isn't already in `?msgs=`. `AA_CHAT_STREAMING` is first in the
+  // that isn't already in `?msgs=`. `chat-demo` is first in the
   // pool. `chat=open` is preserved so the overlay stays expanded across
   // the navigation on non-chat-notes host pages.
   await expect(page.locator('[data-testid="new-message-btn"]')).toHaveAttribute(
     "href",
-    "?msgs=README%2CAA_CHAT_STREAMING&chat=open",
+    "?msgs=README%2Cchat-demo&chat=open",
   )
   await page.locator('[data-testid="new-message-btn"]').click()
 
   // The click updates the overlay frame's URL, not the window URL —
   // the frame keeps its state out of the window URL by design. The
-  // fact that AA_CHAT_STREAMING's message element appears (and its
+  // fact that chat-demo's message element appears (and its
   // body starts emitting chunks) is the observable proof that the
   // frame URL took effect.
-  await expect(page.locator('[data-testid="chat-msg-AA_CHAT_STREAMING"]')).toBeAttached({
+  await expect(page.locator('[data-testid="chat-msg-chat-demo"]')).toBeAttached({
     timeout: 5000,
   })
   await expect(
-    page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]').first(),
+    page.locator('[data-testid="chat-body-chat-demo"] [data-chunk]').first(),
   ).toBeAttached({ timeout: 5000 })
 })

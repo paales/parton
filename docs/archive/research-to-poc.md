@@ -1,9 +1,15 @@
 # Research → proof of concept
 
+> **Superseded 2026-07-18.** All five workstreams closed with the DX
+> floor (commit `8d88194`) — deployment story in
+> [`../reference/deployment.md`](../reference/deployment.md), the DX
+> surface in [`../reference/intro.md`](../reference/intro.md). Kept
+> for the exit-criteria framing.
+
 > Design note, 2026-07-13. What separates the current research state
 > from a proof of concept, as five gating workstreams with exit
 > criteria. Companion to
-> [`remote-frame-arc.md`](./remote-frame-arc.md) — the two share a
+> [`remote-frame-arc.md`](../notes/remote-frame-arc.md) — the two share a
 > spine (the storage adapter and the capability machinery serve
 > both).
 

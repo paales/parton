@@ -189,7 +189,7 @@ fan-out; they differ only in what crosses uninspected.
 The bus transport can stay trivially simple (at-least-once,
 after-visibility); the correctness burden lands on the per-key
 storage adapter — which is also the research→PoC gating item (see
-[`research-to-poc.md`](./research-to-poc.md)).
+[`research-to-poc.md`](../archive/research-to-poc.md)).
 
 ## Identity: placement-scoped prefixing
 

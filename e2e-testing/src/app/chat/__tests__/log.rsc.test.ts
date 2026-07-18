@@ -11,7 +11,7 @@
  *      from `dist/rsc/`. `import.meta.dirname` inside a bundled chunk
  *      points at the dist tree, so a source-relative walk lands well
  *      outside the repo — what the user observed as `/Users/.../Sites/
- *      docs/notes/AA_CHAT_STREAMING.md`.
+ *      docs/notes/chat-demo.md`.
  *
  * The runtime trusts `process.env.DOCS_DIR` (set by each app's
  * `vite.config.ts` at startup) for both flows, and falls back to a
@@ -43,7 +43,7 @@ describe("chat log — markdown path resolution", () => {
     else process.env.DOCS_DIR = priorDocsDir
   })
 
-  it("finds AA_CHAT_STREAMING.md from source-tree fallback when DOCS_DIR is unset", async () => {
+  it("finds chat-demo.md from source-tree fallback when DOCS_DIR is unset", async () => {
     // Mirror `yarn workspace @parton/e2e-testing dev` without the
     // vite.config-set env var — the source-tree fallback walks four
     // levels up from `log.ts` and lands on the repo `docs/`.
@@ -55,9 +55,9 @@ describe("chat log — markdown path resolution", () => {
         // Trigger the lazy producer via a state read, then wait for
         // the first chunk to land — enough proof that path resolution
         // worked.
-        readLogState("AA_CHAT_STREAMING")
-        await waitForNextChunk("AA_CHAT_STREAMING", 0)
-        const snap = readLogState("AA_CHAT_STREAMING")
+        readLogState("chat-demo")
+        await waitForNextChunk("chat-demo", 0)
+        const snap = readLogState("chat-demo")
         expect(snap.chunks.length).toBeGreaterThan(0)
       })
     } finally {
@@ -76,9 +76,9 @@ describe("chat log — markdown path resolution", () => {
     const { runWithRequestAsync } = await import("@parton/framework/runtime/context.ts")
     try {
       await runWithRequestAsync(new Request("http://t/"), async () => {
-        readLogState("AA_CHAT_STREAMING")
-        await waitForNextChunk("AA_CHAT_STREAMING", 0)
-        const snap = readLogState("AA_CHAT_STREAMING")
+        readLogState("chat-demo")
+        await waitForNextChunk("chat-demo", 0)
+        const snap = readLogState("chat-demo")
         expect(snap.chunks.length).toBeGreaterThan(0)
       })
     } finally {

@@ -1,6 +1,6 @@
 /**
  * F7 — rival same-drain renders must not strand a mis-tagged fp
- * (docs/notes/convergence-fuzzing.md, findings ledger). One drain can
+ * (docs/internals/convergence-fuzzing.md, findings ledger). One drain can
  * render one parton TWICE: a cullable wrapper's flip-in lane covers
  * its addressable child while the child's parked-era bump lanes it
  * directly. Each render commits a rival registration, and the

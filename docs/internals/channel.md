@@ -387,7 +387,7 @@ Four rules keep the layers truthful:
   and the defer gate yield, fresh bytes ship within one delivery, and
   the wrongly-confirmed copy never waits on an unrelated bump or the
   reconcile (fuzz finding F6 —
-  [`../notes/convergence-fuzzing.md`](../notes/convergence-fuzzing.md);
+  [`./convergence-fuzzing.md`](./convergence-fuzzing.md);
   regression `drop-report-heal.rsc.test.tsx`). Parked or
   route-departed ids skip the heal — their revoked credit makes the
   flip-in revalidation / return navigation re-render them anyway. Only

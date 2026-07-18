@@ -2896,7 +2896,7 @@ async function driveLaneStream(
     // descendant's change never shipped. The descendant's own lane is
     // the guaranteed carrier. The cost is the rival-registration
     // bookkeeping drift ledgered as F7
-    // (docs/notes/convergence-fuzzing.md) — fp-only, never content.
+    // (docs/internals/convergence-fuzzing.md) — fp-only, never content.
     for (const id of touched) startLane(id)
   }
   // Release demand-parked pumps before waiting the lanes out — the

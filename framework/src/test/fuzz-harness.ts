@@ -6,7 +6,7 @@
  * a fresh cold render of the same URL + scope + visibility set.
  * Incremental merge ≡ cold render is the framework's core claim; this
  * harness is its property test. Design note:
- * `docs/notes/convergence-fuzzing.md`.
+ * `docs/internals/convergence-fuzzing.md`.
  *
  * The harness drives the REAL segment driver through `withLiveDrive`
  * (statement bind, fp-trailer wrap, segment splitter, lane demux) and

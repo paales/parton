@@ -117,7 +117,7 @@ test("opening the chat overlay does not remount the page while notes stream", as
     await page.waitForTimeout(500)
 
     // Fresh producer: clear-caches now also wipes the chat logs, so the
-    // AA_CHAT_STREAMING stream starts cold and actually streams.
+    // chat-demo stream starts cold and actually streams.
     await page.goto("/__test/clear-caches")
 
     // The heartbeat opens a chat-closed live connection on load (the
@@ -155,7 +155,7 @@ test("opening the chat overlay does not remount the page while notes stream", as
     })
 
     // Let the overlap run and notes accumulate.
-    const chunks = page.locator('[data-testid="chat-body-AA_CHAT_STREAMING"] [data-chunk]')
+    const chunks = page.locator('[data-testid="chat-body-chat-demo"] [data-chunk]')
     await expect.poll(() => chunks.count(), { timeout: 15_000 }).toBeGreaterThan(8)
 
     // The stable page structure must have kept its exact DOM nodes through

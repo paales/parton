@@ -174,7 +174,7 @@ render). CI runs a pinned 25×20 budget; `FUZZ_BUDGET` / `FUZZ_LEN` /
 `FUZZ_SEED` drive long local runs, and failures auto-shrink to a
 minimal action sequence. Design, oracle coverage (and its honest
 gaps), and the findings ledger:
-[`docs/notes/convergence-fuzzing.md`](../notes/convergence-fuzzing.md).
+[`docs/internals/convergence-fuzzing.md`](./convergence-fuzzing.md).
 
 ## Spec test shape
 

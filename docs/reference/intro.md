@@ -11,7 +11,7 @@ everything, a few bytes on the wire) to a realtime streaming
 dashboard (segmented Flight, live server state), so a commerce stack
 never has to bifurcate the way Shopify (Liquid + a React checkout)
 or Magento (Luma/Hyvä + yet another React app) must today. See
-[`../notes/perspectives.md`](../notes/perspectives.md) § The thesis
+[`./perspectives.md`](./perspectives.md) § The thesis
 for the full framing.
 
 The public surface is five things:

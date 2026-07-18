@@ -309,7 +309,7 @@ export interface ConnectionSession {
    *  covering render's re-claims put back in the mirror — healing in
    *  one delivery instead of waiting on an unrelated bump or the
    *  whole-tree reconcile: the F6 fuzz class
-   *  (docs/notes/convergence-fuzzing.md). Parked or route-departed
+   *  (docs/internals/convergence-fuzzing.md). Parked or route-departed
    *  ids drop at the drain — their credit is revoked
    *  (`revokeDroppedDelivery`), so the flip-in revalidation / return
    *  navigation re-renders them anyway. */

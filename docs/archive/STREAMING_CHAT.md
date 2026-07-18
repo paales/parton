@@ -9,7 +9,7 @@
 **Added:** 2026-04-22
 **Updated:** 2026-04-22 (overlay extracted, wrapped in its own `"chat-overlay"` frame so the state doesn't pollute host-page URLs; mounted globally so the demo streams on every page).
 **Status:** implemented as a global overlay; documentation page at `/chat-notes`.
-**Files:** `src/app/chat/log.ts`, `src/app/chat/piece.tsx`, `src/app/chat/resume-tail.tsx`, `src/app/chat/chat-controls.tsx`, `src/app/chat/chat-overlay.tsx`, `src/app/pages/chat-notes.tsx`, `notes/AA_CHAT_STREAMING.md` (default intro message), `e2e/chat-notes.spec.ts`.
+**Files:** `src/app/chat/log.ts`, `src/app/chat/piece.tsx`, `src/app/chat/resume-tail.tsx`, `src/app/chat/chat-controls.tsx`, `src/app/chat/chat-overlay.tsx`, `src/app/pages/chat-notes.tsx`, `../chat-demo.md` (default intro message), `e2e/chat-notes.spec.ts`.
 **Origin:** `user-ideas.md:35` — "continuously streaming content, AI chat trickle, recursive `<Piece>`".
 
 ---
@@ -164,7 +164,7 @@ In production you'd replace the in-memory log with Redis + a TTL and drop the re
 
 The streaming UI lives in `<ChatOverlay>` and is rendered inside every host page's `<body>`. The overlay itself is a `<Partial selector="#chat-overlay" frame="chat-overlay">` — a frame Partial — so all of its state (`?chat=open|closed`, `?msgs=`, `?cursor-<fileId>=`) lives in the overlay's private frame URL, not on the window URL of the host page. That's load-bearing: without the frame, every `<ResumeTail>` compaction would write a cursor param onto the window URL, polluting `/pokemon`, `/magento`, and every other page the overlay appears on, and would change URL assertions in unrelated e2e tests.
 
-The overlay is collapsed by default. In the collapsed state the only thing rendered is a small "💬 notes stream" pill at bottom-right. Clicking the pill fires `nav.navigate({ selector: "#chat-overlay" })` with `?chat=open`, which refetches just the frame — the full aside slides in and the default `AA_CHAT_STREAMING.md` note starts streaming. Nothing on the host page re-renders.
+The overlay is collapsed by default. In the collapsed state the only thing rendered is a small "💬 notes stream" pill at bottom-right. Clicking the pill fires `nav.navigate({ selector: "#chat-overlay" })` with `?chat=open`, which refetches just the frame — the full aside slides in and the default `chat-demo.md` note starts streaming. Nothing on the host page re-renders.
 
 `/chat-notes` is the one page that starts with the overlay open (`<ChatOverlay defaultOpen />`) and projects its own window URL's `?msgs=` / `?chat=` onto the frame URL at first render — so `page.goto("/chat-notes?msgs=IDEAS")` still drives the overlay, and bookmarkable links to specific stream configurations still work for the demo page. On other host pages there's no projection: the overlay is collapsed until the user clicks the pill, and state is driven by frame-scoped navigation only.
 
@@ -174,7 +174,7 @@ Inside the open aside, the list is `<Partial selector="#chat-list">`; each messa
 
 `?chat=open|closed` — overlay visibility toggle on the frame URL.
 
-`?msgs=AA_CHAT_STREAMING,README,IDEAS` — comma-separated list of notes files currently streaming, in render order. When unset, the overlay seeds with `AA_CHAT_STREAMING` (the intro message at `notes/AA_CHAT_STREAMING.md` — prefixed `AA_` so it sorts first in the available-files pool).
+`?msgs=chat-demo,README,IDEAS` — comma-separated list of notes files currently streaming, in render order. When unset, the overlay seeds with `chat-demo` (the intro message at `../chat-demo.md` — prefixed `AA_` so it sorts first in the available-files pool).
 
 `?cursor-<fileId>=N` — per-message compaction cursor. Zero on initial load; bumped by `MAX_DEPTH` each time the Piece chain hits its bound.
 

@@ -1,6 +1,6 @@
 /**
  * F6 — the drop-report vs covering-render race
- * (docs/notes/convergence-fuzzing.md, findings ledger). Two members,
+ * (docs/internals/convergence-fuzzing.md, findings ledger). Two members,
  * one discipline: a delivery's evidence must describe what the CLIENT
  * actually holds, and the moment the render actually read.
  *

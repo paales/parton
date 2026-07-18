@@ -163,7 +163,7 @@ Key answers:
 
 How this relates to what's shipped: the chat demo does NOT use
 stream slots. It re-renders the whole message per chunk as a new
-*segment* (`docs/notes/AA_CHAT_STREAMING.md`,
+*segment* (`docs/chat-demo.md`,
 `e2e-testing/src/app/chat/`) — one Flight document per chunk, with
 `<ChunkSlot>` + `markConnectionLive()` keeping the segment loop
 alive. `multipart.ts` is the same shape one layer down (GraphQL

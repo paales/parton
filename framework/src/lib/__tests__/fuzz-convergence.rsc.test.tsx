@@ -5,7 +5,7 @@
  * tree must equal a fresh cold render of the final URL + scope +
  * visibility set. Harness: `framework/src/test/fuzz-harness.ts`;
  * fixture: `fuzz-fixture.tsx`; design note:
- * `docs/notes/convergence-fuzzing.md` (findings ledger).
+ * `docs/internals/convergence-fuzzing.md` (findings ledger).
  *
  * CI runs a fixed, deterministic budget: 25 sequences × 20 actions
  * from seed 1. EVERY sequence must converge — zero mismatches of any

@@ -419,7 +419,7 @@ export function _clearConnectionLive(): void {
  * between a row's render and the stream's flush retags the emitted fp
  * with a state the row does not carry (an out-flip has no covering
  * lane to supersede the aliased heal, so the client's holding stays
- * mis-tagged — fuzz class F6, docs/notes/convergence-fuzzing.md). The
+ * mis-tagged — fuzz class F6, docs/internals/convergence-fuzzing.md). The
  * handle keeps live references for everything else (cookies overlay,
  * acked layer): only visibility is replaced wholesale per statement,
  * so only visibility needs the pin.

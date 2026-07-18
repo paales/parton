@@ -16,7 +16,7 @@
  * Stamps stay pure functions of tracked reads, so a cold render at the
  * same request state reproduces every stamp byte-for-byte. See
  * `fuzz-convergence-v2.rsc.test.tsx` and
- * `docs/notes/convergence-fuzzing.md`.
+ * `docs/internals/convergence-fuzzing.md`.
  */
 
 import type { ReactNode } from "react"

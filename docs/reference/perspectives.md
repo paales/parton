@@ -9,7 +9,7 @@ cacheable subtrees as the unit. The bet is **dynamic range**. One
 primitive should stretch from the leanest, mobile-snappy storefront
 — mostly static, fingerprint-skip everything, a few bytes on the
 wire — to a realtime streaming dashboard with live server state,
-*without changing frameworks partway up the page*. Every commerce
+_without changing frameworks partway up the page_. Every commerce
 stack bifurcates today: Shopify runs Liquid for the catalog and a
 separate React stack (Hydrogen, a bespoke checkout) past the cart;
 Magento runs Luma or Hyvä+Alpine for the storefront and yet another
@@ -23,7 +23,7 @@ are pluggable tiers under the cell, not the point.
 
 ## One primitive, many lenses
 
-The unifying primitive is `parton(Render, options)`: a define-step constructor that returns a placeable React component for an addressable RSC subtree. Each partial has its own fingerprint, cache key, refetch path, and frame scope. `block` (slot-placeable, CMS-driven), `<Frame>` (URL scope opener), and `cell` (typed server-state slot) are specialisations on top of the same engine. See [`../reference/partial.md`](../reference/partial.md) and [`../reference/cells.md`](../reference/cells.md).
+The unifying primitive is `parton(Render, options)`: a define-step constructor that returns a placeable React component for an addressable RSC subtree. Each partial has its own fingerprint, cache key, refetch path, and frame scope. `block` (slot-placeable, CMS-driven), `<Frame>` (URL scope opener), and `cell` (typed server-state slot) are specialisations on top of the same engine. See [`../reference/partial.md`](./partial.md) and [`../reference/cells.md`](./cells.md).
 
 Polysemic by design: the framework is intentionally explainable through Varnish, iframes, Livewire, RSC, and commerce rendering because each lens reveals a different constraint. The "Like" items below are doors into the same room; the "Not" items keep the room's shape sharp. Each item carries a leading **label** so they can be referred to without quoting the whole line.
 
@@ -52,5 +52,5 @@ Polysemic by design: the framework is intentionally explainable through Varnish,
 3. **Client islands**: Not a client island system: the island is still server-rendered, server-invalidated, and part of the same RSC graph. Client components hydrate inside it but don't own its data.
 4. **State manager**: Not a state manager: it classifies where state belongs (page URL, frame URL, session, CMS, cache, Activity, server action), then uses each as a separate tool.
 5. **SPA data layer**: Not a generic SPA data-fetching layer: it does not move commerce state into client queries and ask the browser to rebuild server semantics.
-6. **Microfrontend framework**: Not a microfrontend framework: ownership boundaries can exist inside one app without independent deployment, separate bundles, or postMessage protocols. Distributed-runtime support is filed, not built.
-7. **Realtime push**: Not a websocket-first realtime system: the base model is request/response RSC. Live updates ride an opt-in long-poll (`?live=1` heartbeat) — the segment driver re-renders and pushes on any invalidation bump or `expires()` boundary, so cross-session push works within one process. Cross-process fan-out (pub/sub between instances) is filed, not built.
+6. **Microfrontend framework**: Not a microfrontend framework: ownership boundaries can exist inside one app without independent deployment, separate bundles, or postMessage protocols. Cross-app composition exists as `<RemoteFrame>` — a server-side embed splice under capability grants (see [`./remote-frame.md`](./remote-frame.md)) — not as bundle federation.
+7. **Realtime push**: Not a websocket-first realtime system: the base model is request/response RSC. Every page attaches a live connection by default (fetch-first, auto-upgrading to WebSocket where the server advertises it); the segment driver re-renders and pushes on any invalidation bump or `expires()` boundary, and the cross-process invalidation bridge fans bumps between instances. Realtime is a delivery property of the same wire, not a different programming model.
