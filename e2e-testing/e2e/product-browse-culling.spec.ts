@@ -166,15 +166,21 @@ test("deep-link ?page=50 lands on page 50 with its products", async ({ page }) =
   await expect.poll(() => centeredPage(page), { timeout: 10000 }).toBeGreaterThanOrEqual(48)
   expect(await centeredPage(page)).toBeLessThanOrEqual(52)
   // The anchored leaf's products are rendered — visible cards at the
-  // landing.
-  const anchoredVisible = await page.evaluate((cardSel) => {
-    for (const c of document.querySelectorAll<HTMLElement>(cardSel)) {
-      const r = c.getBoundingClientRect()
-      if (r.bottom > 0 && r.top < window.innerHeight && c.offsetParent !== null) return true
-    }
-    return false
-  }, card)
-  expect(anchoredVisible, "page 50's leaf shows products").toBe(true)
+  // landing (poll: under full-suite load the seeded content's commit
+  // can trail the landing scroll).
+  await expect
+    .poll(
+      () =>
+        page.evaluate((cardSel) => {
+          for (const c of document.querySelectorAll<HTMLElement>(cardSel)) {
+            const r = c.getBoundingClientRect()
+            if (r.bottom > 0 && r.top < window.innerHeight && c.offsetParent !== null) return true
+          }
+          return false
+        }, card),
+      { timeout: 10000 },
+    )
+    .toBe(true)
 })
 
 test("?page= mirrors scroll without resetting it", async ({ page }) => {
@@ -215,6 +221,82 @@ test("client-side nav from home swaps to browse, not a torn page", async ({ page
   // renders — home is swapped out (keepalive-hidden), not torn on top.
   await expect(page.locator("h1:visible").first()).toHaveText("Browse Products", { timeout: 20000 })
   await expect(page.locator(card).first()).toBeVisible({ timeout: 20000 })
+})
+
+test("?page= follows along DURING sustained scrolling, not only at the stop", async ({ page }) => {
+  // A sustained scroll (inertial wheel, scrollbar drag) never stops
+  // emitting events. The writer throttles instead of debouncing, so
+  // the param advances THROUGH the gesture (94 → 95 → 96…), and the
+  // window can move ahead of the user mid-scroll instead of waiting
+  // for a full stop (the "always scroll into skeletons" bug).
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+  await waitForPageInteractive(page)
+
+  await page.mouse.move(550, 400)
+  const midScrollPages: number[] = []
+  for (let i = 0; i < 26; i++) {
+    await page.mouse.wheel(0, 400)
+    // Gaps SHORTER than the settle interval — a trailing debounce
+    // would never fire inside this loop.
+    await page.waitForTimeout(120)
+    midScrollPages.push(Number(new URL(page.url()).searchParams.get("page") || "1"))
+  }
+  const distinct = [...new Set(midScrollPages.filter((p) => p > 1))]
+  expect(
+    distinct.length,
+    `pages sampled mid-scroll: ${midScrollPages.join(",")}`,
+  ).toBeGreaterThanOrEqual(3)
+  // Following along means consecutive values, not one catch-up jump:
+  // the largest step between successive samples stays small.
+  let maxStep = 0
+  for (let i = 1; i < midScrollPages.length; i++) {
+    maxStep = Math.max(maxStep, midScrollPages[i] - midScrollPages[i - 1])
+  }
+  expect(maxStep, `pages sampled mid-scroll: ${midScrollPages.join(",")}`).toBeLessThanOrEqual(3)
+})
+
+test("up-scroll from a deep link never cascades back to the top", async ({ page }) => {
+  // The staircase bug: scrolling up from ?page=100 into the
+  // before-reservation, a window move materializes content above at
+  // real heights ≠ estimate; with no reference to correct against
+  // (reservations carry no boundary ids) the viewport displaces
+  // upward, the writer reads a smaller page, states another move —
+  // and cascades to page 1. The backstop's below-the-top fallback ref
+  // breaks the chain. Inject height variance so real ≠ estimate.
+  await page.addInitScript(() => {
+    document.addEventListener("DOMContentLoaded", () => {
+      const s = document.createElement("style")
+      s.textContent = `
+        [data-testid^="browse-card-"]:nth-of-type(3n) { min-height: 340px !important; }
+        [data-testid^="browse-card-"]:nth-of-type(7n) { min-height: 300px !important; }
+      `
+      document.head.appendChild(s)
+    })
+  })
+  await page.goto("/magento/browse?page=100")
+  await page.waitForSelector(card, { timeout: 30000 })
+  await waitForPageInteractive(page, { timeout: 30000 })
+  await page.waitForTimeout(1200)
+
+  // Scroll up through the span edge into the reservation, with pauses
+  // so window moves + materialization land mid-journey.
+  await page.mouse.move(640, 400)
+  for (let round = 0; round < 7; round++) {
+    for (let i = 0; i < 5; i++) {
+      await page.mouse.wheel(0, -600)
+      await page.waitForTimeout(80)
+    }
+    await page.waitForTimeout(900)
+  }
+  await page.waitForTimeout(1500)
+
+  // ~21000px up ≈ a handful of pages — nowhere near the top. A
+  // cascade collapses to single digits.
+  const finalPage = await centeredPage(page)
+  expect(finalPage, "viewport stayed where the user scrolled").toBeGreaterThan(75)
+  const param = Number(new URL(page.url()).searchParams.get("page") || "1")
+  expect(param, "the param followed the viewport, not a cascade").toBeGreaterThan(75)
 })
 
 test("variable item heights: up-scroll through swaps and materialization never jumps", async ({

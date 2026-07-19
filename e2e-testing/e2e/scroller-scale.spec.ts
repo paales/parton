@@ -29,13 +29,23 @@ test("scrollbar jump to 50%: instant skeletons, one statement, content — geome
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight * 0.5))
   const yLanded = await page.evaluate(() => Math.round(window.scrollY))
 
-  // The local band: skeleton cells inside the reservation, painted
-  // without any server involvement. Generously 500ms — the assertion
-  // is "before any round trip could matter", not a frame race.
+  // Instant paint at the landing: skeleton cells VISIBLE in the
+  // viewport within 500ms — the reservation's self-materialized band,
+  // or already the moved span's shells (the writer's leading throttle
+  // can state the window move the same tick). Either way the paint is
+  // client-local; 500ms is "before any content round trip could
+  // matter", not a frame race.
   await expect
     .poll(
       () =>
-        page.evaluate(() => document.querySelectorAll(".parton-scroller-res .parton-skel").length),
+        page.evaluate(
+          () =>
+            [...document.querySelectorAll<HTMLElement>(".parton-skel")].filter((c) => {
+              if (c.offsetParent === null) return false
+              const r = c.getBoundingClientRect()
+              return r.bottom > 0 && r.top < window.innerHeight
+            }).length,
+        ),
       { timeout: 500 },
     )
     .toBeGreaterThan(20)
@@ -118,12 +128,12 @@ test("the DOM is O(viewport), independent of the million", async ({ page }) => {
 })
 
 test("span moves while scrolling up never teleport the viewport", async ({ page }) => {
-  // The regression this pins: a span move swaps reservation-space
-  // for leaves at identical height, but native scroll anchoring saw
-  // its anchor node destroyed and "compensated" — a spontaneous
-  // teleport by exactly the swapped height. The collection opts out
-  // of anchoring (`overflow-anchor: none`); geometry is exact by
-  // construction.
+  // The regression this pins: a span move keeps every ITEM at its
+  // document offset, but the grid container's own edge moves, and
+  // native scroll anchoring "compensated" that arithmetic no-op with
+  // a real teleport (page-exact multiples). The anchor sync
+  // suppresses anchoring for exactly the move commit's layout flush;
+  // item geometry is exact by construction.
   await page.addInitScript(() => {
     ;(window as unknown as { __spont: number[] }).__spont = []
     let lastY = 0

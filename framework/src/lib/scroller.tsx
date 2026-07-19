@@ -33,8 +33,10 @@
  *    When the viewport lands inside one it SELF-MATERIALIZES a local
  *    skeleton band the same frame — no server round trip to paint.
  *  - ONE writer moves the window: the anchor sync computes the item
- *    under the viewport center arithmetically on scroll settle and
- *    states it through the anchor param — silently when the landing
+ *    under the viewport center — throttled while scrolling (the
+ *    anchor FOLLOWS the gesture; the span moves ahead of a sustained
+ *    scroll) plus once at settle — and states it through the anchor
+ *    param — silently when the landing
  *    is inside the placed span (culling handles materialization), as
  *    an IN-PLACE navigation (`scroll: "manual"`) when it is inside a
  *    reservation (the span must move). Window movement IS
@@ -79,7 +81,7 @@
  * See `docs/reference/scroller.md`.
  */
 
-import React, { Fragment, type ReactNode } from "react"
+import React, { Fragment, Suspense, type ReactNode } from "react"
 import { _buildPartial, type PartialOptions, type RenderArgs } from "./partial.tsx"
 import { registerDepKind, searchParam } from "./server-hooks.ts"
 import { ScrollerAnchorSync, ScrollerLeafShell, ScrollerReservation } from "./scroller-client.tsx"
@@ -152,8 +154,12 @@ export interface ScrollerOptions<Item> {
    *  `--scroller-cols`, `--scroller-row`, `--scroller-gap` (see the
    *  module header for the contract). */
   className?: string
-  /** Observer runway in px for leaf materialization. Default 600. */
-  rootMargin?: number
+  /** Observer runway for leaf materialization — how far beyond the
+   *  viewport a leaf starts resolving. A number is px; a string is
+   *  any IntersectionObserver margin length, where `%` is relative to
+   *  the VIEWPORT height (so the runway scales with the screen).
+   *  Default `"100%"` — one viewport ahead and behind. */
+  rootMargin?: number | string
   /** Anchor wiring. Always on (window movement rides it); pass to
    *  rename the param or change the step. */
   anchor?: ScrollerAnchor
@@ -193,7 +199,7 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
   const name = opts.name
   const leaf = opts.leaf ?? 24
   const ring = opts.ring ?? 6
-  const rootMargin = opts.rootMargin ?? 600
+  const rootMargin = opts.rootMargin ?? "100%"
   const anchorParam = opts.anchor?.param ?? "page"
   const anchorStep = opts.anchor?.pageSize ?? leaf
 
@@ -227,7 +233,7 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
     ) as never,
     {
       cull: {
-        rootMargin: `${rootMargin}px 0px`,
+        rootMargin: `${typeof rootMargin === "number" ? `${rootMargin}px` : rootMargin} 0px`,
         seed: ({ o, n }: LeafProps) => seedFor(o, n),
         skeleton: ScrollerLeafShell,
       },
@@ -242,9 +248,26 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
    *  correct under any item heights or breakpoints. */
   function placeLeaf(o: number, n: number): ReactNode {
     const aid = o % anchorStep === 0 ? `${name}-p${o / anchorStep + 1}` : undefined
+    // GEOMETRY-ATOMIC commits. A window move's fresh payload streams:
+    // the root chunk commits (reservations resized, departing leaves
+    // gone) before the NEW leaves' rows arrive — without a local
+    // fallback each pending leaf commits as NOTHING, and an up-move's
+    // whole new top span vanishes for a frame. The browser anchors on
+    // the displaced kept content, the viewport teleports, the writer
+    // reads a smaller page and states another move — a cascade to the
+    // top (measured). The placement-level Suspense holds every pending
+    // leaf's exact cells (n, and the boundary aid so the landing
+    // script finds its target even mid-stream), so a torn commit never
+    // changes geometry.
+    // The Fragment carries the list key; the Suspense stays UNKEYED —
+    // the client merge layer detects partial wrappers as KEYED
+    // Suspense nodes, and a keyed placement Suspense would be adopted
+    // as one (measured: parked pairs stopped restoring).
     return (
       <Fragment key={o}>
-        <LeafSpec o={o} n={n} {...(aid !== undefined ? { aid } : {})} />
+        <Suspense fallback={<ScrollerLeafShell o={o} n={n} aid={aid} />}>
+          <LeafSpec o={o} n={n} {...(aid !== undefined ? { aid } : {})} />
+        </Suspense>
       </Fragment>
     )
   }

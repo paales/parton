@@ -15,10 +15,10 @@
  *    skeleton band the same frame — structure is arithmetic under
  *    uniform rows, so no server is consulted to paint. Display only:
  *    the window statement belongs to the anchor sync.
- *  - `ScrollerAnchorSync` — THE one writer. On scroll settle it
- *    computes the item under the viewport center ARITHMETICALLY
- *    (wrapper rect + the grid's resolved row pitch and column count —
- *    no DOM interval markers), and states it through the anchor
+ *  - `ScrollerAnchorSync` — THE one writer. Throttled while scrolling
+ *    (plus a trailing settle run) it computes the item under the
+ *    viewport center — from LAYOUT in-span, arithmetically inside
+ *    reservations — and states it through the anchor
  *    param: silently when the landing is inside the placed span
  *    (culling handles materialization), as an IN-PLACE navigation
  *    (`scroll: "manual"`) when it is inside a reservation (the span
@@ -178,6 +178,12 @@ export function ScrollerReservation({ count }: { count: number }) {
 
 // ─── Anchor sync — the one writer ──────────────────────────────────────
 
+/** The writer's cadence: `sync` runs at most once per interval WHILE
+ *  scrolling (the anchor follows along — silent in-span mirrors, and
+ *  the window moves ahead of a sustained scroll instead of waiting
+ *  for a stop), plus one trailing run at settle. */
+const SYNC_MS = 250
+
 export function ScrollerAnchorSync({
   name,
   param,
@@ -211,6 +217,39 @@ export function ScrollerAnchorSync({
     // Mount-only: the landing is for the entry this mount belongs to.
   }, [])
 
+  // WINDOW-MOVE ANCHORING SUPPRESSION. A window move never moves an
+  // ITEM: the reservation cedes exactly the rows the new leaves
+  // occupy, so every index keeps its document offset. What DOES move
+  // is the grid container's own top edge (and, with it, cells near
+  // the span boundary the browser may have anchored on) — and native
+  // anchoring "compensates" that arithmetic no-op with a real
+  // viewport teleport (measured: dy === the reservation delta,
+  // page-exact multiples). `overflow-anchor: none` on the grid is no
+  // fix — exclusion covers the whole subtree, which would also kill
+  // the designed materialization anchoring. Instead we suppress for
+  // exactly the move's own layout flush: this layout effect runs
+  // after the commit's DOM mutation but BEFORE layout, so the
+  // exclusion is in place when anchoring would run; the restore
+  // waits two frames (a same-frame rAF still precedes this frame's
+  // layout), token-guarded so back-to-back moves extend rather than
+  // truncate each other's suppression.
+  const spanRef = useRef<{ start: number; end: number } | null>(null)
+  const suppressToken = useRef(0)
+  useIsoLayoutEffect(() => {
+    const prev = spanRef.current
+    spanRef.current = { start, end }
+    if (!prev || (prev.start === start && prev.end === end)) return
+    const wrapper = document.getElementById(name)
+    if (!wrapper) return
+    const token = ++suppressToken.current
+    wrapper.style.overflowAnchor = "none"
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (suppressToken.current === token) wrapper.style.overflowAnchor = ""
+      })
+    })
+  }, [name, start, end])
+
   // RE-ANCHOR BACKSTOP. Native scroll anchoring owns the everyday
   // case (content above the viewport growing inside kept nodes), but
   // this collection also REPLACES nodes wholesale — a span swap, a
@@ -227,13 +266,28 @@ export function ScrollerAnchorSync({
     if (!wrapper) return
     let ref: { id: string; top: number } | null = null
     const record = () => {
+      // Nearest boundary id at-or-above the viewport top; when none
+      // exists — the viewport is inside a RESERVATION, which carries
+      // no ids — the nearest one BELOW. The fallback is what breaks
+      // the up-scroll cascade: without it a window move under a
+      // reservation-parked viewport has no reference at all, the
+      // materialization shift above goes uncorrected, the writer reads
+      // the displaced viewport as a smaller page and states another
+      // move — a staircase to the top. Pinning a below-the-top ref is
+      // an approximation (growth between the viewport top and the ref
+      // moves the eye by up to that span's estimate error), but the
+      // error is bounded by a few rows and the very next record()
+      // tightens the ref once in-span ids exist.
       let best: { id: string; top: number } | null = null
+      let below: { id: string; top: number } | null = null
       for (const el of wrapper.querySelectorAll<HTMLElement>(`[id^="${CSS.escape(name)}-p"]`)) {
         if (el.offsetParent === null) continue
         const t = el.getBoundingClientRect().top
-        if (t <= 1 && (best === null || t > best.top)) best = { id: el.id, top: t }
+        if (t <= 1) {
+          if (best === null || t > best.top) best = { id: el.id, top: t }
+        } else if (below === null || t < below.top) below = { id: el.id, top: t }
       }
-      ref = best
+      ref = best ?? below
     }
     const correct = () => {
       if (!ref) {
@@ -259,7 +313,8 @@ export function ScrollerAnchorSync({
     }
   }, [name])
 
-  // The writer: item-under-center → anchor param, on scroll settle.
+  // The writer: item-under-center → anchor param, throttled while
+  // scrolling + once at settle.
   useEffect(() => {
     const url0 = nav.currentEntry?.url
     let lastVal = url0 ? (new URL(url0).searchParams.get(param) ?? "") : ""
@@ -297,6 +352,26 @@ export function ScrollerAnchorSync({
       } else {
         let cell: Element | null = hit
         while (cell && cell.parentElement !== gridEl) cell = cell.parentElement
+        if (!cell) {
+          // The center point landed BETWEEN cells — a column gap or a
+          // cell's margin band hits the grid element itself, and that
+          // is the common case, not the exception (a 12px gap under
+          // every row puts the center there for whole scroll bands).
+          // Fall back to geometry: the laid-out grid child at center
+          // height, or the nearest one below it.
+          const cy = window.innerHeight / 2
+          let next: { el: Element; top: number } | null = null
+          for (const c of gridEl.children) {
+            if ((c as HTMLElement).offsetParent === null) continue
+            const r = c.getBoundingClientRect()
+            if (r.top <= cy && cy < r.bottom) {
+              cell = c
+              break
+            }
+            if (r.top > cy && (next === null || r.top < next.top)) next = { el: c, top: r.top }
+          }
+          if (!cell) cell = next?.el ?? null
+        }
         if (!cell) return
         const re = new RegExp(`^${CSS.escape(name)}-p(\\d+)$`)
         let steps = 0
@@ -337,9 +412,25 @@ export function ScrollerAnchorSync({
         inSpan ? { history: "replace", silent: true } : { history: "replace", scroll: "manual" },
       )
     }
+    // FOLLOW ALONG, then settle. A sustained scroll (inertial wheel,
+    // scrollbar drag) never stops emitting events, so a pure trailing
+    // debounce would starve the writer until the gesture fully ends —
+    // the param freezes and, worse, the window can never move ahead of
+    // the user (window movement lives in `sync`), so every sustained
+    // scroll outruns the ring into reservation skeletons. Instead the
+    // writer THROTTLES: it fires at most every SYNC_MS while scrolling
+    // (in-span writes are silent and free; a reservation landing
+    // states an in-place window move, so the span follows the scroll),
+    // plus one trailing run at settle for the final position.
+    let lastRun = 0
     const onScroll = () => {
+      const now = performance.now()
+      if (now - lastRun >= SYNC_MS) {
+        lastRun = now
+        sync()
+      }
       if (timer) clearTimeout(timer)
-      timer = setTimeout(sync, 250)
+      timer = setTimeout(sync, SYNC_MS)
     }
     window.addEventListener("scroll", onScroll, { passive: true, capture: true })
     return () => {
