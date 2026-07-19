@@ -43,7 +43,7 @@ import {
 } from "./frame-context.tsx"
 import { getFrameUrl, setFrameUrl } from "./partial-client-state.ts"
 import { enqueueRefetch, type RefetchMilestones } from "./refetch-dispatch.ts"
-import { makeSilentInfo } from "./silent-info.ts"
+import { makeInPlaceInfo, makeSilentInfo } from "./silent-info.ts"
 
 // ─── Frame refetch dispatch ───────────────────────────────────────
 
@@ -284,7 +284,9 @@ export function buildWindowNavigationHandle(ssrUrl?: string | null): ImperativeN
     const result = nav.navigate(url, {
       history: options?.history,
       state: options?.state,
-      info: options?.info,
+      // An in-place nav brands its info so the page-level intercept
+      // passes scroll/focus "manual" — the refetch itself is ordinary.
+      info: options?.scroll === "manual" ? makeInPlaceInfo() : options?.info,
     })
     void (async () => {
       try {

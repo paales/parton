@@ -157,6 +157,17 @@ export interface FrameworkNavigateOptions extends NavigationNavigateOptions {
    */
   silent?: boolean
   /**
+   * `"manual"` marks an IN-PLACE navigation: the refetch runs as
+   * usual, but the browser's default post-transition scroll (to top)
+   * is suppressed — for navigations that DESCRIBE the position the
+   * user already occupies (a scroller's window statement, any
+   * scroll-position projection). Without it, the deferred default
+   * scroll waits out a live scroll gesture and teleports the viewport
+   * the moment the gesture stops. Ignored on silent navs (already
+   * scroll-manual).
+   */
+  scroll?: "manual"
+  /**
    * Cookies to write client-side BEFORE the refetch fetch is issued.
    * Each key is set via `document.cookie = "name=value; path=/; …"`,
    * so the new value travels with the upcoming request and any

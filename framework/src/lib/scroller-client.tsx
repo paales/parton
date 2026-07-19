@@ -156,7 +156,11 @@ export function ScrollerReservation({
             url.searchParams.set(param, want)
             return url
           },
-          { history: "replace" },
+          // In-place: this nav DESCRIBES where the user already is —
+          // the browser's default post-transition scroll must never
+          // fire (deferred under a live gesture, it teleports to top
+          // the moment the gesture stops).
+          { history: "replace", scroll: "manual" },
         )
       }, 250)
     }

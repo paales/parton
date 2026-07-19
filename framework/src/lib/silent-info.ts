@@ -47,3 +47,30 @@ export function isFrameworkSilentInfo(info: unknown): info is FrameworkSilentInf
     (info as { __framework?: unknown }).__framework === "silent-navigate"
   )
 }
+
+/**
+ * In-place navigation brand — a REAL navigation (the page-level
+ * intercept runs the refetch as usual) whose URL move must not touch
+ * the viewport: the initiator is DESCRIBING a position the user
+ * already occupies, not requesting a new one (a scroller's window
+ * statement, any scroll-position projection). The intercept passes
+ * `scroll: "manual"` + `focusReset: "manual"` so the Navigation API's
+ * default after-transition scroll (deferred under a live scroll
+ * gesture, then applied the moment the gesture stops — a teleport to
+ * top) never fires.
+ */
+export interface FrameworkInPlaceInfo {
+  __framework: "in-place-navigate"
+}
+
+export function makeInPlaceInfo(): FrameworkInPlaceInfo {
+  return { __framework: "in-place-navigate" }
+}
+
+export function isFrameworkInPlaceInfo(info: unknown): info is FrameworkInPlaceInfo {
+  return (
+    info != null &&
+    typeof info === "object" &&
+    (info as { __framework?: unknown }).__framework === "in-place-navigate"
+  )
+}

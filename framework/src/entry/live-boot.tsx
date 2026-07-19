@@ -88,7 +88,7 @@ import {
 } from "../lib/partial-client.tsx"
 import { _collectFramePaths, _readFramesSnapshot } from "../lib/frame-context.tsx"
 import { _dispatchFrameRefetch } from "../lib/frame-client.tsx"
-import { isFrameworkSilentInfo } from "../lib/silent-info.ts"
+import { isFrameworkInPlaceInfo, isFrameworkSilentInfo } from "../lib/silent-info.ts"
 import {
   _documentCatchupAnchor,
   _getLiveConnectionId,
@@ -1199,6 +1199,15 @@ function listenNavigation(
             event.navigationType === "push" ? "push" : "replace",
           ),
         ),
+      // An in-place nav (a scroller's window statement) describes the
+      // position the user already occupies. The DEFAULT
+      // ("after-transition") owes the page a scroll-to-top that
+      // Chrome defers while a scroll gesture is live and pays the
+      // moment the gesture stops — a teleport out of exactly the
+      // position the nav described. Same for focus.
+      ...(isFrameworkInPlaceInfo(event.info)
+        ? { scroll: "manual" as const, focusReset: "manual" as const }
+        : {}),
     })
   }
 
