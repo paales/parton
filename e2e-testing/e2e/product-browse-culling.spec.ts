@@ -48,7 +48,8 @@ async function centeredPage(page: Page) {
     if (!wrapper || !grid) return null
     const cs = getComputedStyle(grid)
     const cols = cs.gridTemplateColumns.split(" ").length
-    const rowH = Number.parseFloat(cs.gridAutoRows)
+    const rowH =
+      Number.parseFloat(cs.getPropertyValue("--scroller-row")) || Number.parseFloat(cs.gridAutoRows)
     if (!(rowH > 0)) return null
     const centerRow = Math.floor(
       (window.innerHeight / 2 - wrapper.getBoundingClientRect().top) / rowH,
@@ -82,7 +83,8 @@ async function totalItems(page: Page) {
     if (!wrapper || !grid) return 0
     const cs = getComputedStyle(grid)
     const cols = cs.gridTemplateColumns.split(" ").length
-    const rowH = Number.parseFloat(cs.gridAutoRows)
+    const rowH =
+      Number.parseFloat(cs.getPropertyValue("--scroller-row")) || Number.parseFloat(cs.gridAutoRows)
     if (!(rowH > 0)) return 0
     return Math.round(wrapper.getBoundingClientRect().height / rowH) * cols
   })
@@ -213,4 +215,57 @@ test("client-side nav from home swaps to browse, not a torn page", async ({ page
   // renders — home is swapped out (keepalive-hidden), not torn on top.
   await expect(page.locator("h1:visible").first()).toHaveText("Browse Products", { timeout: 20000 })
   await expect(page.locator(card).first()).toBeVisible({ timeout: 20000 })
+})
+
+test("variable item heights: up-scroll through swaps and materialization never jumps", async ({
+  page,
+}) => {
+  // Items OWN their height (--scroller-row is the estimate/floor).
+  // Inject real variance, then run the settle-pause up-scroll
+  // gauntlet from a deep anchor: spans move, leaves materialize above
+  // the viewport at heights ≠ estimate. Native scroll anchoring
+  // covers kept-node growth; the id-referenced backstop covers node
+  // replacement (swaps, skeleton→content) — the viewport must never
+  // move except by the user's hand.
+  await page.addInitScript(() => {
+    document.addEventListener("DOMContentLoaded", () => {
+      const s = document.createElement("style")
+      s.textContent = `
+        [data-testid^="browse-card-"]:nth-of-type(3n) { min-height: 340px !important; }
+        [data-testid^="browse-card-"]:nth-of-type(7n) { min-height: 300px !important; }
+      `
+      document.head.appendChild(s)
+    })
+    ;(window as unknown as { __jumps: number[]; __armed: boolean }).__jumps = []
+    ;(window as unknown as { __armed: boolean }).__armed = false
+    let lastY = 0
+    window.addEventListener(
+      "scroll",
+      () => {
+        const d = window.scrollY - lastY
+        const w = window as unknown as { __jumps: number[]; __armed: boolean }
+        if (w.__armed && Math.abs(d) > 700) w.__jumps.push(Math.round(d))
+        lastY = window.scrollY
+      },
+      { passive: true, capture: true },
+    )
+  })
+  await page.goto("/magento/browse?page=60")
+  await page.waitForSelector(card, { timeout: 30000 })
+  await waitForPageInteractive(page, { timeout: 30000 })
+  await page.waitForTimeout(1200)
+  await page.evaluate(() => {
+    ;(window as unknown as { __armed: boolean }).__armed = true
+  })
+
+  await page.mouse.move(640, 400)
+  for (let round = 0; round < 8; round++) {
+    for (let i = 0; i < 5; i++) {
+      await page.mouse.wheel(0, -600)
+      await page.waitForTimeout(80)
+    }
+    await page.waitForTimeout(900)
+  }
+  const jumps = await page.evaluate(() => (window as unknown as { __jumps: number[] }).__jumps)
+  expect(jumps, `spontaneous scroll moves: ${jumps.join(",")}`).toEqual([])
 })

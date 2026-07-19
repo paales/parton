@@ -46,16 +46,20 @@
  *
  *     .browse-grid {
  *       --scroller-cols: 4;      /· responsive via media queries ·/
- *       --scroller-row: 252px;   /· the row pitch — like `sizes` ·/
- *       --scroller-gap: 12px;    /· column gap; row-gap is always 0 —
- *                                   the pitch IS the vertical rhythm,
- *                                   spacing lives inside cells ·/
+ *       --scroller-row: 252px;   /· the row ESTIMATE — like `sizes`:
+ *                                   ideally exact, at least
+ *                                   indication-grade ·/
+ *       --scroller-gap: 12px;    /· column gap; row-gap stays 0 ·/
  *     }
  *
- * The framework builds the grid template from these and never learns
- * a pixel number; all three may be media-/container-query responsive,
- * and the reservations stay exact at every breakpoint because they
- * compute from the same variables. Two alignment contracts: `leaf`
+ * Rows are `minmax(--scroller-row, auto)` — ITEMS OWN THEIR HEIGHT;
+ * the estimate is the floor and what reservations (and the scrollbar)
+ * are sized from. Real heights come from layout, and the anchor sync
+ * keeps the viewport pinned through every above-viewport change by
+ * RE-ANCHORING on the public anchor ids (which survive span swaps
+ * even when DOM nodes don't — same index, same id). The framework
+ * never learns a pixel number; all three variables may be
+ * media-/container-query responsive. Two alignment contracts: `leaf`
  * must be divisible by every `--scroller-cols` value (row-aligned
  * span edges), and `anchor.pageSize` must be a multiple of `leaf`
  * when overridden (page-aligned leaf boundaries).
@@ -286,13 +290,16 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
 
         return (
           <>
-            {/* overflow-anchor OFF for the whole collection: a span
-                move swaps reservation-space for leaves at IDENTICAL
-                height, but native scroll anchoring sees its anchor
-                node destroyed and "compensates" — teleporting the
-                viewport by the swapped height. Geometry here is exact
-                by construction; anchoring can only misfire. */}
-            <div id={name} className={opts.className} style={{ overflowAnchor: "none" }}>
+            {/* Native scroll anchoring stays ON for grid content —
+                scrolling up through materializing leaves is the
+                spec's designed case (content loading above pins the
+                viewport). Only the RESERVATIONS opt out (below):
+                anchoring onto a transient band skeleton was the
+                measured teleport bug. The one case no browser can
+                track — a span swap destroying and recreating the
+                visible cells — is re-anchored by the framework via
+                the index-derived ids. */}
+            <div id={name} className={opts.className}>
               {start > 0 ? <ScrollerReservation key="res-before" count={start} /> : null}
               {/* The span's grid — template derived from the app's
                   variables (declared on the wrapper's class, so the
@@ -302,7 +309,7 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
                 style={{
                   display: "grid",
                   gridTemplateColumns: "repeat(var(--scroller-cols, 4), minmax(0, 1fr))",
-                  gridAutoRows: "var(--scroller-row, 240px)",
+                  gridAutoRows: "minmax(var(--scroller-row, 240px), auto)",
                   columnGap: "var(--scroller-gap, 0px)",
                 }}
               >

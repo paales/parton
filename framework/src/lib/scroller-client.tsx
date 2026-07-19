@@ -51,15 +51,17 @@ export function ScrollerLeafShell({ n, aid }: { o: number; n: number; aid?: stri
 
 // ─── Shared geometry ───────────────────────────────────────────────────
 
-/** The grid's resolved geometry — the truth for all client-side row
- *  math. `gridTemplateColumns` computes to a resolved px list, so the
- *  column count is its length; `gridAutoRows` computes to the
- *  resolved row pitch. */
+/** The grid's resolved geometry. `gridTemplateColumns` computes to a
+ *  resolved px list, so the column count is its length; the row
+ *  ESTIMATE comes from the `--scroller-row` variable (rows are
+ *  `minmax(estimate, auto)` — real heights belong to layout, the
+ *  estimate to reservations and unmaterialized space). */
 function gridGeometry(gridEl: Element | null): { cols: number; rowH: number; gap: string } | null {
   if (!gridEl) return null
   const cs = getComputedStyle(gridEl)
   const cols = cs.gridTemplateColumns.split(" ").length
-  const rowH = Number.parseFloat(cs.gridAutoRows)
+  const rowH =
+    Number.parseFloat(cs.getPropertyValue("--scroller-row")) || Number.parseFloat(cs.gridAutoRows)
   if (!(cols >= 1) || !(rowH > 0) || !Number.isFinite(rowH)) return null
   return { cols, rowH, gap: cs.columnGap }
 }
@@ -140,6 +142,10 @@ export function ScrollerReservation({ count }: { count: number }) {
       style={{
         position: "relative",
         overflow: "hidden",
+        // Never an anchor candidate: the browser anchoring onto a
+        // transient band skeleton, then compensating as we rewrote
+        // its geometry, was the measured viewport-teleport bug.
+        overflowAnchor: "none",
         // A plain BLOCK spacer — deliberately not a grid item (a
         // fixed `grid-auto-rows` track would overflow; a row span
         // would cost tens of thousands of implicit tracks). Height is
@@ -204,6 +210,54 @@ export function ScrollerAnchorSync({
     }
     // Mount-only: the landing is for the entry this mount belongs to.
   }, [])
+
+  // RE-ANCHOR BACKSTOP. Native scroll anchoring owns the everyday
+  // case (content above the viewport growing inside kept nodes), but
+  // this collection also REPLACES nodes wholesale — a span swap, a
+  // leaf's skeleton cells giving way to content cells — and an anchor
+  // node that dies mid-flush leaves the browser nothing to track.
+  // Our ids are INDEX-derived, so they survive every replacement:
+  // record the nearest boundary id at-or-above the viewport top on
+  // every scroll; on any wrapper resize, re-locate the id and correct
+  // by its measured delta. The measurement is ABSOLUTE against the
+  // recorded baseline, so when native anchoring already compensated
+  // the delta is zero — the backstop only ever corrects the residual.
+  useEffect(() => {
+    const wrapper = document.getElementById(name)
+    if (!wrapper) return
+    let ref: { id: string; top: number } | null = null
+    const record = () => {
+      let best: { id: string; top: number } | null = null
+      for (const el of wrapper.querySelectorAll<HTMLElement>(`[id^="${CSS.escape(name)}-p"]`)) {
+        if (el.offsetParent === null) continue
+        const t = el.getBoundingClientRect().top
+        if (t <= 1 && (best === null || t > best.top)) best = { id: el.id, top: t }
+      }
+      ref = best
+    }
+    const correct = () => {
+      if (!ref) {
+        record()
+        return
+      }
+      const el = document.getElementById(ref.id)
+      if (!el || el.offsetParent === null) {
+        record()
+        return
+      }
+      const d = el.getBoundingClientRect().top - ref.top
+      if (Math.abs(d) > 0.5) window.scrollBy({ top: d, behavior: "instant" })
+      record()
+    }
+    const ro = new ResizeObserver(() => correct())
+    ro.observe(wrapper)
+    record()
+    window.addEventListener("scroll", record, { passive: true, capture: true })
+    return () => {
+      ro.disconnect()
+      window.removeEventListener("scroll", record, { capture: true })
+    }
+  }, [name])
 
   // The writer: item-under-center → anchor param, on scroll settle.
   useEffect(() => {

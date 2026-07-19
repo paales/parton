@@ -159,20 +159,14 @@ waiting on a forcing caller:
   today. Anchoring item 0 at first-load and letting indexes go
   signed (the world's chunk coords, in 1D) covers newest-first feeds
   without re-keying.
-- **Variable row heights.** Wanted; not designed yet. The uniform
-  pitch is currently load-bearing three ways: reservation height is
-  exact, the scrollbar jump's position is computable, and scroll-up
-  cannot shift. A variable-height mode must replace each: (1) rows
-  become `minmax(var(--scroller-row), auto)` — the pitch turns into
-  a MINIMUM/estimate, real rows may grow; (2) reservations and the
-  jump arithmetic become approximate, self-correcting at each
-  landing; (3) the framework compensates scroll itself — on every
-  commit that resizes content above the topmost visible item,
-  measure the delta and adjust scrollTop by exactly it (we own the
-  swap moments; native overflow-anchor stays off because it
-  misfires on them). Bounded work: only in-span rows ever resize.
-  Needs its own gate (a variable-height demo + the zero-jump
-  batteries) before it ships.
+- **Reservation estimate refinement.** Variable heights shipped
+  (rows are `minmax(estimate, auto)`; native anchoring + the
+  id-referenced backstop pin the viewport — see
+  `../reference/scroller.md`). The reservations still size purely
+  from the declared estimate; if real collections drift far from it,
+  a measured-average feedback (client-observed mean row height
+  refining the reservation calc) is the next lever. Wait for a
+  collection that actually drifts.
 
 ### Scroller × broadcast eligibility
 

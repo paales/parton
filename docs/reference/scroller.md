@@ -7,11 +7,13 @@ constructor composed around `parton()` + the `cull` gate: everything
 it emits is ordinary partons, so fingerprints, fp-skip, refetch,
 keepalive, and the live channel apply unchanged.
 
-The model's premise: **uniform rows make structure arithmetic.** No
-recursive tree, no size estimation, no measurement loop — position
-anywhere in a million-item collection is one rect read plus row math,
-client-side, zero round trips. Pinned by `scroller-scale.spec.ts`
-against a synthetic 1,000,000-item source.
+The model's premise: **a row ESTIMATE makes unmaterialized structure
+arithmetic** — position anywhere in a million-item collection is one
+rect read plus row math, client-side, zero round trips (pinned by
+`scroller-scale.spec.ts` against a synthetic 1,000,000-item source) —
+while MATERIALIZED content owns its real height, measured by layout,
+with the viewport pinned through every change (native scroll
+anchoring + the framework's id-referenced backstop).
 
 ```tsx
 const BrowseGrid = scroller({
@@ -145,20 +147,28 @@ pixel):
 
 - `--scroller-cols` — integer column count. Responsive via
   media/container queries. Every value must divide `leaf`.
-- `--scroller-row` — the row pitch. The `sizes`-like declaration:
-  state the truth once, responsively if needed.
-- `--scroller-gap` — column gap. Row-gap is always 0: the pitch IS
-  the vertical rhythm; vertical spacing lives inside cells
-  (margin/padding), so reservation arithmetic stays exact.
+- `--scroller-row` — the row ESTIMATE, and the floor
+  (`minmax(estimate, auto)`): the `sizes`-like declaration — ideally
+  exact, at least indication-grade. Reservations, the scrollbar, and
+  unmaterialized space are sized from it.
+- `--scroller-gap` — column gap. Row-gap is always 0: the estimate IS
+  the vertical rhythm baseline; vertical spacing lives inside cells.
+
+**Items own their height.** Real heights come from layout, and the
+viewport stays pinned through every above-viewport change by two
+mechanisms: native CSS scroll anchoring handles content growing
+inside kept nodes (reservations opt out — anchoring onto a transient
+band skeleton was a measured teleport bug), and the framework's
+id-referenced backstop handles NODE REPLACEMENT (span swaps,
+skeleton→content), which no browser can track: the boundary ids are
+index-derived, so they survive replacements; the backstop corrects by
+the recorded id's measured delta on any wrapper resize — an absolute
+measurement, zero whenever native anchoring already compensated.
+Pinned by the variable-heights gauntlet in
+`product-browse-culling.spec.ts`.
 
 `.parton-skel` is the generic skeleton cell (leaf shells and
 reservation bands both render it) — style it per collection.
-
-Cells must fit the row pitch. Uniform rows are the contract — they
-are what make reservation exact, scroll-up jump-free by
-construction, and the scrollbar jump computable. Variable-height
-items are a different primitive (scroll-anchoring machinery), not a
-mode of this one.
 
 ## Limits (current, deliberate)
 

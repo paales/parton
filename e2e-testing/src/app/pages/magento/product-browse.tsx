@@ -37,9 +37,9 @@ const LEAF = 12
 // One product card — the ENTITY parton. Its only dependency is the
 // card cell it's bound to, so it re-renders on that product's
 // invalidation and fp-skips through everything else (a re-sorted
-// slice moves placements, not card bytes). The card is one grid cell:
-// height comes from the grid's `--scroller-row`; the bottom margin is
-// the visual row spacing (row-gap stays 0 by the scroller contract).
+// slice moves placements, not card bytes). The card is one grid cell
+// and OWNS its height — `--scroller-row` is the floor/estimate; the
+// bottom margin is the visual row spacing (row-gap stays 0).
 const BrowseCard = parton(function BrowseCardRender({
   item,
   anchorId,
@@ -50,7 +50,7 @@ const BrowseCard = parton(function BrowseCardRender({
   return (
     <Card
       id={anchorId}
-      className="mb-3 h-[240px] overflow-hidden p-4"
+      className="mb-3 min-h-[240px] p-4"
       data-testid={`browse-card-${p.sku ?? p.uid}`}
     >
       <CardContent className="flex h-full flex-col gap-1 px-0">
