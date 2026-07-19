@@ -305,18 +305,18 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
               key="landing-estimate"
               dangerouslySetInnerHTML={{
                 __html:
-                  `(function(){try{var s=document.currentScript,w=s.parentElement;` +
-                  `var cs=getComputedStyle(w);` +
-                  `var c=parseInt(cs.getPropertyValue("--scroller-cols"))||4;` +
-                  `var h=parseFloat(cs.getPropertyValue("--scroller-row"))||240;` +
-                  `var r=s.previousElementSibling;` +
-                  `var res=r?r.getBoundingClientRect().height:0;` +
-                  `var t=w.getBoundingClientRect().top+(window.scrollY||0)+res+Math.round(${anchorIdx - start}/c)*h;` +
-                  `var n=0,stop=function(){n=1e9};` +
+                  `(()=>{try{const s=document.currentScript,w=s.parentElement,` +
+                  `cs=getComputedStyle(w),` +
+                  `c=parseInt(cs.getPropertyValue("--scroller-cols"))||4,` +
+                  `h=parseFloat(cs.getPropertyValue("--scroller-row"))||240,` +
+                  `res=s.previousElementSibling?.getBoundingClientRect().height??0,` +
+                  `t=w.getBoundingClientRect().top+scrollY+res+Math.round(${anchorIdx - start}/c)*h;` +
+                  `let n=0;` +
+                  `const stop=()=>{n=1e9};` +
                   `addEventListener("wheel",stop,{once:true});` +
                   `addEventListener("touchstart",stop,{once:true});` +
-                  `(function go(){if(n>=300)return;window.scrollTo(0,t);` +
-                  `if(Math.abs((window.scrollY||0)-t)>2){n++;requestAnimationFrame(go)}})()}catch(_){}})()`,
+                  `const go=()=>{if(n>=300)return;scrollTo(0,t);` +
+                  `if(Math.abs(scrollY-t)>2){n++;requestAnimationFrame(go)}};go()}catch{}})()`,
               }}
             />
           ) : null
@@ -333,9 +333,8 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
             key="landing"
             dangerouslySetInnerHTML={{
               __html:
-                `(function(){try{var p=+(new URLSearchParams(location.search).get(${JSON.stringify(anchorParam)})||1);` +
-                `if(p>1){var e=document.getElementById(${JSON.stringify(name)}+"-p"+p);` +
-                `if(e&&e.scrollIntoView)e.scrollIntoView({block:"start"})}}catch(_){}})()`,
+                `(()=>{try{const p=+(new URLSearchParams(location.search).get(${JSON.stringify(anchorParam)})??1);` +
+                `if(p>1)document.getElementById(${JSON.stringify(name)}+"-p"+p)?.scrollIntoView({block:"start"})}catch{}})()`,
             }}
           />
         )

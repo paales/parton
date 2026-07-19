@@ -227,15 +227,17 @@ export function ScrollerAnchorSync({
   // page-exact multiples). `overflow-anchor: none` on the grid is no
   // fix — exclusion covers the whole subtree, which would also kill
   // the designed materialization anchoring. Instead we suppress for
-  // exactly the move's own layout flush: this layout effect runs
-  // after the commit's DOM mutation but BEFORE layout, so the
-  // exclusion is in place when anchoring would run; the restore
-  // waits two frames (a same-frame rAF still precedes this frame's
-  // layout), token-guarded so back-to-back moves extend rather than
-  // truncate each other's suppression.
+  // exactly the move's own layout flush — from an INSERTION effect:
+  // it runs before the commit's DOM mutations and before every
+  // layout effect, so the exclusion is in place even when a child's
+  // layout effect forces a reflow (which would otherwise run the
+  // anchoring adjustment ahead of a layout-effect suppression). The
+  // restore waits two frames (a same-frame rAF still precedes this
+  // frame's layout), token-guarded so back-to-back moves extend
+  // rather than truncate each other's suppression.
   const spanRef = useRef<{ start: number; end: number } | null>(null)
   const suppressToken = useRef(0)
-  useIsoLayoutEffect(() => {
+  React.useInsertionEffect(() => {
     const prev = spanRef.current
     spanRef.current = { start, end }
     if (!prev || (prev.start === start && prev.end === end)) return
