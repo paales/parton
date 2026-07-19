@@ -9,27 +9,36 @@
  * keepalive, and the live channel apply unchanged.
  *
  * The model (uniform rows make structure ARITHMETIC, so no recursive
- * tree is needed — position anywhere in the collection is one rect
- * read plus row math, client-side, zero round trips):
+ * tree is needed — position anywhere in the collection is row math,
+ * client-side, zero round trips):
  *
  *  - LEAVES cover `leaf` consecutive items and are cull-gated: in
  *    view (within the observer runway) a leaf's body resolves its
- *    slice (`range({offset, limit})`) and renders items — each item
+ *    slice (`load({offset, limit})`) and renders items — each item
  *    a grid cell, ideally its own parton; out of view it's a shell
  *    of generic skeleton cells (`.parton-skel`, styled by app CSS)
  *    and its slice is never fetched. Leaves keep interval identity
  *    (`{o, n}` props), so scroll-back within the span restores
  *    parked content with zero fetch.
- *  - The RESERVATION shells are client components holding the rest
+ *  - A leaf's cull SEED folds as a VERDICT, not a raw read: the
+ *    anchor param is consumed through a re-evaluable reduced dep
+ *    (`scroller-seed:` — the anchor-window intersection re-run at
+ *    every fold, the same family as the `match:` dep kind), so an
+ *    anchor move re-renders ONLY the leaves whose verdict flipped;
+ *    every other leaf fp-skips and a scroll-back is a zero-byte
+ *    confirm.
+ *  - The RESERVATION shells are plain block spacers holding the rest
  *    of the collection's space with pure CSS arithmetic
  *    (`round(up, count / var(--scroller-cols)) * var(--scroller-row)`).
- *    When the viewport lands inside one (scrollbar jump, fast
- *    scroll past the span) it SELF-MATERIALIZES a local skeleton
- *    band the same frame — no server round trip to paint — and,
- *    once the scroll settles, states the landing through the anchor
- *    param (an ordinary replace navigation): the root re-renders
- *    with the span moved there. Window movement IS navigation, so
- *    the URL stays honest and back/forward replay it.
+ *    When the viewport lands inside one it SELF-MATERIALIZES a local
+ *    skeleton band the same frame — no server round trip to paint.
+ *  - ONE writer moves the window: the anchor sync computes the item
+ *    under the viewport center arithmetically on scroll settle and
+ *    states it through the anchor param — silently when the landing
+ *    is inside the placed span (culling handles materialization), as
+ *    an IN-PLACE navigation (`scroll: "manual"`) when it is inside a
+ *    reservation (the span must move). Window movement IS
+ *    navigation: the URL stays honest, back/forward replay it.
  *
  * GEOMETRY IS CSS. The app's stylesheet declares three variables on
  * the collection's class (the `className` option — applied to the
@@ -46,21 +55,26 @@
  * The framework builds the grid template from these and never learns
  * a pixel number; all three may be media-/container-query responsive,
  * and the reservations stay exact at every breakpoint because they
- * compute from the same variables. One alignment contract: `leaf`
- * must be divisible by every `--scroller-cols` value, so the span's
- * edges are row-aligned.
+ * compute from the same variables. Two alignment contracts: `leaf`
+ * must be divisible by every `--scroller-cols` value (row-aligned
+ * span edges), and `anchor.pageSize` must be a multiple of `leaf`
+ * when overridden (page-aligned leaf boundaries).
  *
  * Pagination is a PROJECTION: `?page=N` (the anchor) is the cold
- * seed a deep link paints at, the bookmarkable shadow scrolling
- * mirrors into, and the channel window movement rides. A page is
- * never a render unit.
+ * seed a deep link paints at, the shadow scrolling mirrors into, and
+ * the window statement rides. A page is never a render unit. The
+ * public anchor surface in the DOM: the wrapper carries `id=<name>`,
+ * and each anchor-step boundary leaf carries `id=<name>-p<N>` — the
+ * deep-link script (streamed right after the anchored leaf, so it
+ * runs the moment that markup parses) and any external tooling
+ * navigate by those ids; nothing else about the markup is contract.
  *
  * See `docs/reference/scroller.md`.
  */
 
-import React, { type ReactNode } from "react"
+import React, { Fragment, type ReactNode } from "react"
 import { _buildPartial, type PartialOptions, type RenderArgs } from "./partial.tsx"
-import { searchParam } from "./server-hooks.ts"
+import { registerDepKind, searchParam } from "./server-hooks.ts"
 import { ScrollerAnchorSync, ScrollerLeafShell, ScrollerReservation } from "./scroller-client.tsx"
 
 // ─── Source contract ───────────────────────────────────────────────────
@@ -75,17 +89,19 @@ export interface ScrollerWindow<Item> {
 }
 
 /**
- * The source: one async function from a window request to items +
- * total. The scroller always asks in `leaf`-aligned slices
- * (`offset % leaf === 0`, `limit === leaf`), so a page-shaped backend
- * maps cleanly (`currentPage: offset / limit + 1`).
+ * The loader: one async function from a window request to items +
+ * total — a collection's `load` the way a cell has `load`. Called in
+ * `leaf`-aligned slices (`offset % leaf === 0`, `limit === leaf`), so
+ * a page-shaped backend maps cleanly
+ * (`currentPage: offset / limit + 1`).
  *
- * Resolve your data through tracked reads (cells) inside — the read
- * IS the dependency: the leaf re-renders when its slice's cell
- * invalidates, the root when the collection's shape does. The
+ * It runs inside parton bodies (the root's shape read, each leaf's
+ * slice), so TRACKED READS WORK: resolve cells, read
+ * `searchParam("q")` for a filter — the read records as the calling
+ * parton's dep and the collection re-renders when it moves. The
  * tracking invariant applies: no untracked nondeterminism.
  */
-export type ScrollerRange<Item> = (window: {
+export type ScrollerLoad<Item> = (window: {
   offset: number
   limit: number
 }) => Promise<ScrollerWindow<Item>>
@@ -96,21 +112,22 @@ export interface ScrollerAnchor {
    *  page. */
   param?: string
   /** Items per anchor step (the derived page size). Defaults to
-   *  `leaf`. */
+   *  `leaf`; when overridden, must be a multiple of `leaf`. */
   pageSize?: number
 }
 
 export interface ScrollerOptions<Item> {
   /** The collection's identity — catalog id stem, wire ids
-   *  (`<name>`, `<name>-leaf`), the DOM marker (`data-s`). Explicit
-   *  because there is no Render function to derive it from. */
+   *  (`<name>`, `<name>-leaf`), the DOM anchor surface (`id=<name>`,
+   *  `id=<name>-p<N>`). Explicit because there is no Render function
+   *  to derive it from. */
   name: string
-  range: ScrollerRange<Item>
+  load: ScrollerLoad<Item>
   /** The item renderer — one grid cell per item. Give each cell a
    *  stable key (the entity key), and make the cell its own parton
    *  when its content should invalidate per entity. */
   item: (item: Item, index: number) => ReactNode
-  /** Items per leaf parton — also the `range` fetch size and the
+  /** Items per leaf parton — also the `load` slice size and the
    *  default anchor step. Default 24. */
   leaf?: number
   /** Leaves PLACED on each side of the anchor leaf. Placement ≠
@@ -119,9 +136,9 @@ export interface ScrollerOptions<Item> {
    *  parks/restores instead of refetching. Beyond the ring, the
    *  reservation shells take over. Default 6. */
   ring?: number
-  /** Class for the grid container — where the app's CSS declares
-   *  `display: grid`, `--scroller-cols`, `--scroller-row`, and the
-   *  column template (see the module header for the contract). */
+  /** Class for the wrapper — where the app's CSS declares
+   *  `--scroller-cols`, `--scroller-row`, `--scroller-gap` (see the
+   *  module header for the contract). */
   className?: string
   /** Observer runway in px for leaf materialization. Default 600. */
   rootMargin?: number
@@ -129,6 +146,24 @@ export interface ScrollerOptions<Item> {
    *  rename the param or change the step. */
   anchor?: ScrollerAnchor
 }
+
+// ─── The seed verdict dep ──────────────────────────────────────────────
+//
+// A leaf's cold-state seed is "does my interval intersect the anchor
+// window (padded one leaf)". Reading the anchor param RAW would make
+// every leaf's fp move on every anchor write (a scroll-back would
+// re-render instead of confirming); instead the seed consumes the
+// param through this REDUCED dep — the encoded intersection re-runs
+// against the current request at every fold, and only a flipped
+// verdict moves a leaf's fp. Same family as the `match:` dep kind:
+// the reduction rides the key, serializable and re-evaluable.
+const seedVerdict = registerDepKind("scroller-seed", (name, request) => {
+  const q = JSON.parse(name) as { p: string; s: number; pad: number; o: number; n: number }
+  const url = new URL(request.url)
+  const page = Math.max(1, Number(url.searchParams.get(q.p)) || 1)
+  const a = (page - 1) * q.s
+  return q.o < a + q.s + q.pad && q.o + q.n > Math.max(0, a - q.pad) ? "1" : "0"
+})
 
 // ─── The constructor ───────────────────────────────────────────────────
 
@@ -147,35 +182,20 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
 
   if (!name) throw new Error("scroller: `name` is required — it is the collection's identity")
   if (leaf < 1 || ring < 1) throw new Error(`scroller "${name}": leaf and ring must be ≥ 1`)
-
-  /** The anchored item index for the current request. Tracked read —
-   *  runs inside the reading parton's context (root body, leaf
-   *  seeds), recording the anchor as its dep. */
-  function anchorIndex(): number {
-    const page = Math.max(1, Number(searchParam(anchorParam)) || 1)
-    return (page - 1) * anchorStep
+  if (anchorStep % leaf !== 0) {
+    throw new Error(`scroller "${name}": anchor.pageSize must be a multiple of leaf`)
   }
 
-  /** Cold-seed verdict for a leaf [o, o+n): materialize before any
-   *  measurement iff it intersects the anchor window padded by one
-   *  leaf — the deep-link neighborhood paints server-side in one
-   *  pass; the rest of the placed span stays skeleton cells until
-   *  the client's observers flip it in. */
+  /** Seed verdict for a leaf [o, o+n) — the reduced dep above. */
   function seedFor(o: number, n: number): boolean {
-    const a = anchorIndex()
-    return o < a + anchorStep + leaf && o + n > Math.max(0, a - leaf)
+    return seedVerdict(JSON.stringify({ p: anchorParam, s: anchorStep, pad: leaf, o, n })) === "1"
   }
 
   // ── Leaf spec — resolves the slice, renders items as grid cells ──
-  //
-  // The `display: contents` wrapper carries the interval marker
-  // (`data-so`/`data-sn`) without participating in grid layout — the
-  // items land as cells of the ONE outer grid. Marker geometry is
-  // read off its children (a contents element has no box of its own).
   const LeafSpec = _buildPartial(
     Object.assign(
       async function LeafRender({ o, n }: LeafProps & RenderArgs) {
-        const { items } = await opts.range({ offset: o, limit: leaf })
+        const { items } = await opts.load({ offset: o, limit: leaf })
         return <>{items.slice(0, n).map((it, i) => opts.item(it, o + i))}</>
       } as (props: LeafProps & RenderArgs) => ReactNode,
       { displayName: `${name}-leaf` },
@@ -189,11 +209,22 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
     } as PartialOptions<object>,
   ) as unknown as React.ComponentType<LeafProps>
 
+  /** Place one leaf. An anchor-step boundary leaf gets the public
+   *  anchor id (`<name>-p<N>`) on a layout-free wrapper; others need
+   *  no wrapper at all. */
   function placeLeaf(o: number, n: number): ReactNode {
+    if (o % anchorStep === 0) {
+      const page = o / anchorStep + 1
+      return (
+        <div key={o} style={{ display: "contents" }} id={`${name}-p${page}`}>
+          <LeafSpec o={o} n={n} />
+        </div>
+      )
+    }
     return (
-      <div key={o} style={{ display: "contents" }} data-s={name} data-so={o} data-sn={n}>
+      <Fragment key={o}>
         <LeafSpec o={o} n={n} />
-      </div>
+      </Fragment>
     )
   }
 
@@ -201,25 +232,41 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
   const RootSpec = _buildPartial(
     Object.assign(
       async function RootRender(_: RenderArgs) {
-        const { total } = await opts.range({ offset: 0, limit: leaf })
-        const anchorLeaf = Math.floor(anchorIndex() / leaf) * leaf
+        const { total } = await opts.load({ offset: 0, limit: leaf })
+        // The root's OWN anchor read is deliberately raw: the span's
+        // placement depends on the exact value, so the root re-renders
+        // per anchor move — one parton, plus the verdict-flipped
+        // leaves; everything else fp-skips.
+        const page = Math.max(1, Number(searchParam(anchorParam)) || 1)
+        const anchorIdx = (page - 1) * anchorStep
+        const anchorLeaf = Math.floor(anchorIdx / leaf) * leaf
         const start = Math.max(0, anchorLeaf - ring * leaf)
         const end = Math.min(Math.max(total, 0), anchorLeaf + (ring + 1) * leaf)
 
-        const leaves: ReactNode[] = []
+        // Deep-link landing for document loads: streamed IMMEDIATELY
+        // AFTER the anchored leaf, so it runs the moment that markup
+        // parses — a slow CPU paints at the anchor, not at the head
+        // and then jumps. Inert on client navs (React never executes
+        // dangerouslySetInnerHTML scripts); the client path is the
+        // anchor sync's layout effect.
+        const landingScript = (
+          <script
+            key="landing"
+            dangerouslySetInnerHTML={{
+              __html:
+                `(function(){try{var p=+(new URLSearchParams(location.search).get(${JSON.stringify(anchorParam)})||1);` +
+                `if(p>1){var e=document.getElementById(${JSON.stringify(name)}+"-p"+p);` +
+                `var t=e&&(e.firstElementChild||e);if(t&&t.scrollIntoView)t.scrollIntoView({block:"start"})}}catch(_){}})()`,
+            }}
+          />
+        )
+
+        const cells: ReactNode[] = []
         for (let o = start; o < end; o += leaf) {
-          leaves.push(placeLeaf(o, Math.min(leaf, end - o)))
+          cells.push(placeLeaf(o, Math.min(leaf, end - o)))
+          if (o <= anchorIdx && anchorIdx < o + leaf) cells.push(landingScript)
         }
 
-        // Structure: block wrapper → [before spacer] → THE GRID
-        // (span cells only) → [after spacer]. The reservations are
-        // plain blocks OUTSIDE the grid — as grid items they'd sit
-        // in one fixed `grid-auto-rows` track and overflow it (or
-        // cost tens of thousands of implicit tracks as row spans).
-        // Block spacers keep geometry exact with two elements, at
-        // the price of one contract: `leaf % cols === 0`, so the
-        // span's edges are row-aligned and the spacer heights are
-        // exact.
         return (
           <>
             {/* overflow-anchor OFF for the whole collection: a span
@@ -228,29 +275,13 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
                 node destroyed and "compensates" — teleporting the
                 viewport by the swapped height. Geometry here is exact
                 by construction; anchoring can only misfire. */}
-            <div
-              className={opts.className}
-              data-s={name}
-              data-so={0}
-              data-sn={total}
-              data-sroot=""
-              style={{ overflowAnchor: "none" }}
-            >
-              {start > 0 ? (
-                <ScrollerReservation
-                  key="res-before"
-                  name={name}
-                  base={0}
-                  count={start}
-                  param={anchorParam}
-                  step={anchorStep}
-                />
-              ) : null}
+            <div id={name} className={opts.className} style={{ overflowAnchor: "none" }}>
+              {start > 0 ? <ScrollerReservation key="res-before" count={start} /> : null}
               {/* The span's grid — template derived from the app's
                   variables (declared on the wrapper's class, so the
-                  reservations inherit the same two numbers). */}
+                  reservations inherit the same numbers). */}
               <div
-                data-sgrid=""
+                className="parton-scroller-grid"
                 style={{
                   display: "grid",
                   gridTemplateColumns: "repeat(var(--scroller-cols, 4), minmax(0, 1fr))",
@@ -258,37 +289,17 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
                   columnGap: "var(--scroller-gap, 0px)",
                 }}
               >
-                {leaves}
+                {cells}
               </div>
-              {end < total ? (
-                <ScrollerReservation
-                  key="res-after"
-                  name={name}
-                  base={end}
-                  count={total - end}
-                  param={anchorParam}
-                  step={anchorStep}
-                />
-              ) : null}
+              {end < total ? <ScrollerReservation key="res-after" count={total - end} /> : null}
             </div>
-            <ScrollerAnchorSync name={name} param={anchorParam} step={anchorStep} />
-            {/* Pre-hydration deep link: a fresh document load of
-                ?page=N must paint AT the anchor, not at the head and
-                then jump. Runs during HTML parse (the markers render
-                above); inert on client navs (React never executes
-                dangerouslySetInnerHTML scripts). Leaf markers are
-                `display: contents`, so the scroll target is the
-                marker's first child. */}
-            <script
-              dangerouslySetInnerHTML={{
-                __html:
-                  `(function(){try{var p=+(new URLSearchParams(location.search).get(${JSON.stringify(anchorParam)})||1);` +
-                  `if(p>1){var t=(p-1)*${anchorStep},b=null;` +
-                  `document.querySelectorAll('[data-s=${JSON.stringify(name)}][data-so]').forEach(function(e){` +
-                  `var o=+e.dataset.so,n=+e.dataset.sn;` +
-                  `if(t>=o&&t<o+n&&(b===null||n<+b.dataset.sn))b=e});` +
-                  `var el=b&&(b.firstElementChild||b);if(el&&el.scrollIntoView)el.scrollIntoView({block:"start"})}}catch(_){}})()`,
-              }}
+            <ScrollerAnchorSync
+              name={name}
+              param={anchorParam}
+              step={anchorStep}
+              start={start}
+              end={end}
+              total={Math.max(total, 0)}
             />
           </>
         )

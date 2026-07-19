@@ -16,10 +16,12 @@ against a synthetic 1,000,000-item source.
 ```tsx
 const BrowseGrid = scroller({
   name: "browse-grid",
-  range: async ({ offset, limit }) => {
+  load: async ({ offset, limit }) => {
+    const q = searchParam("q") // a FILTER is a tracked read in the loader
     const res = await browseProductsCell.resolve({
       pageSize: limit,
       currentPage: offset / limit + 1,
+      ...(q ? { search: q } : {}),
     })
     return { items: itemsOf(res), total: totalOf(res) }
   },
@@ -51,7 +53,7 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
 
 - **The span** — `2·ring + 1` leaf partons placed around the anchor
   leaf. Each covers `leaf` consecutive items and is cull-gated: in
-  view it resolves its slice (`range({offset, limit})`) and renders
+  view it resolves its slice (`load({offset, limit})`) and renders
   items as grid cells; out of view it emits generic skeleton cells
   (`.parton-skel`, styled by app CSS) and its slice is **never
   fetched**. Leaves keep interval identity (`{o, n}` props), so
@@ -68,9 +70,21 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
   invalidation re-lanes one card wherever it appears.
 - **Pagination is a projection.** `?page=N` (the `anchor`) is the
   cold seed a deep link paints at server-side in ONE pass, the
-  bookmarkable shadow scrolling silently mirrors into, and the
-  statement channel window movement rides. A page is never a render
-  unit.
+  bookmarkable shadow scrolling mirrors into, and the statement
+  window movement rides. A page is never a render unit.
+- **The seed folds a VERDICT, not a raw read.** A leaf's cold-state
+  seed consumes the anchor through the `scroller-seed:` reduced dep —
+  the anchor-window intersection, serializable in the key and re-run
+  at every fold (the `match:` dep-kind family). An anchor move
+  re-renders the root and the verdict-flipped leaves ONLY; every
+  other leaf holds its fp, so scroll-back is a zero-byte confirm
+  (pinned by test).
+- **ONE writer.** The anchor sync computes item-under-center
+  arithmetically on scroll settle and states it: silently in-span
+  (bookmarkability only — culling follows the viewport on its own),
+  as an in-place navigation (`scroll: "manual"`) when the landing is
+  inside a reservation. Occlusion-guarded — an overlay covering the
+  collection silences it.
 
 ## The scrollbar jump (why there is no tree)
 
@@ -88,11 +102,13 @@ structure:
    same frame the scroll lands. Scrubbing the scrollbar just moves
    the band.
 3. **Data is one statement.** When the scroll settles (250ms), the
-   reservation states the landing through the anchor param — an
-   ordinary `history: "replace"` navigation. The root re-renders
-   with the span moved there; the seeded neighborhood's content
-   replaces the skeletons in place. Document height and scroll
-   position are untouched throughout (pinned).
+   anchor sync states the landing through the anchor param — an
+   in-place `history: "replace"` navigation (`scroll: "manual"`, so
+   the browser's deferred default scroll can never fire against a
+   live gesture). The root re-renders with the span moved there; the
+   seeded neighborhood's content replaces the skeletons in place.
+   Document height and scroll position are untouched throughout
+   (pinned).
 
 A recursive interval tree (the demo world's quadtree, this design's
 predecessor) answers "what structure is here?" with one round trip
@@ -104,14 +120,14 @@ its plane is 2D px space with procedural content, a different animal.
 
 | Option       | Default    | Meaning                                                                                                                           |
 | ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `name`       | (required) | Identity: catalog ids (`<name>`, `<name>-leaf`), the DOM marker (`data-s`). Explicit — there is no Render name to derive it from. |
-| `range`      | (required) | `({offset, limit}) → {items, total}`. Called in `leaf`-aligned slices. Resolve cells inside — the read is the dependency.         |
-| `item`       | (required) | `(item, index) → ReactNode` — one grid cell. `Item` infers from `range`. Key each cell by entity.                                 |
+| `name`       | (required) | Identity: catalog ids (`<name>`, `<name>-leaf`), the public DOM anchors (`id=<name>`, `id=<name>-p<N>`). Explicit — there is no Render name to derive it from. |
+| `load`       | (required) | `({offset, limit}) → {items, total}`. Called in `leaf`-aligned slices. Tracked reads (cells, `searchParam`) record as deps.       |
+| `item`       | (required) | `(item, index) → ReactNode` — one grid cell. `Item` infers from `load`. Key each cell by entity.                                 |
 | `leaf`       | `24`       | Items per leaf parton = fetch slice = default anchor step. **Must be divisible by every `--scroller-cols` value** (row alignment). |
 | `ring`       | `6`        | Leaves placed each side of the anchor leaf. Placement ≠ materialization — the ring is the park/restore zone.                      |
 | `className`  | —          | The wrapper class carrying the three CSS variables.                                                                                |
 | `rootMargin` | `600`      | Leaf materialization runway, px.                                                                                                   |
-| `anchor`     | `page`     | `{param?, pageSize?}` — rename the param (two collections on one page) or change the step.                                        |
+| `anchor`     | `page`     | `{param?, pageSize?}` — rename the param (two collections on one page) or change the step (a multiple of `leaf`).                 |
 
 ## The CSS contract
 

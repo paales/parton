@@ -159,13 +159,20 @@ waiting on a forcing caller:
   today. Anchoring item 0 at first-load and letting indexes go
   signed (the world's chunk coords, in 1D) covers newest-first feeds
   without re-keying.
-- **Variable row heights.** Deliberately NOT a mode of this
-  primitive — uniform rows are what make reservation exact and the
-  scrollbar jump computable. The eventual answer is scroll-anchoring
-  machinery (keep the visible items pinned while things above
-  resize), likely a separate primitive; browsers' native
-  `overflow-anchor` covers part of it once content, not reservation,
-  is what resizes.
+- **Variable row heights.** Wanted; not designed yet. The uniform
+  pitch is currently load-bearing three ways: reservation height is
+  exact, the scrollbar jump's position is computable, and scroll-up
+  cannot shift. A variable-height mode must replace each: (1) rows
+  become `minmax(var(--scroller-row), auto)` — the pitch turns into
+  a MINIMUM/estimate, real rows may grow; (2) reservations and the
+  jump arithmetic become approximate, self-correcting at each
+  landing; (3) the framework compensates scroll itself — on every
+  commit that resizes content above the topmost visible item,
+  measure the delta and adjust scrollTop by exactly it (we own the
+  swap moments; native overflow-anchor stays off because it
+  misfires on them). Bounded work: only in-span rows ever resize.
+  Needs its own gate (a variable-height demo + the zero-jump
+  batteries) before it ships.
 
 ### Scroller × broadcast eligibility
 

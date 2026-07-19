@@ -25,7 +25,7 @@ const LEAF = 64
 
 const ScaleGrid = scroller({
   name: "scale-grid",
-  range: async ({ offset, limit }) => ({
+  load: async ({ offset, limit }) => ({
     items: Array.from(
       { length: Math.max(0, Math.min(limit, TOTAL - offset)) },
       (_, i) => offset + i,

@@ -76,8 +76,8 @@ export const browseCardCell = magentoCatalog.fragment(
 // card partons.
 export const browseProductsCell = magentoCatalog.query(
   `#graphql
-  query BrowseProducts($pageSize: Int!, $currentPage: Int!) {
-    products(filter: {}, pageSize: $pageSize, currentPage: $currentPage) {
+  query BrowseProducts($pageSize: Int!, $currentPage: Int!, $search: String) {
+    products(filter: {}, search: $search, pageSize: $pageSize, currentPage: $currentPage) {
       total_count
       items {
         ...BrowseCardFields

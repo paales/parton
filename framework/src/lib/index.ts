@@ -34,7 +34,7 @@ export {
   scroller,
   type ScrollerAnchor,
   type ScrollerOptions,
-  type ScrollerRange,
+  type ScrollerLoad,
   type ScrollerWindow,
 } from "./scroller.tsx"
 

@@ -330,7 +330,7 @@ export const SearchAreaFrame = makeSearchArea("frame")
 // it appears — order belongs to the slice, content to the entity.
 const PokedexList = scroller({
   name: "pokedex-list",
-  range: async ({ offset, limit }) => {
+  load: async ({ offset, limit }) => {
     const res = await pokemonListCell.resolve({ limit, offset })
     return {
       items: res.value?.pokemon_v2_pokemon ?? [],

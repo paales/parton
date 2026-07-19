@@ -19,6 +19,7 @@ import { Card, CardContent } from "@parton/copies/components/ui/card"
 import {
   parton,
   scroller,
+  searchParam,
   type BoundCell,
   type CellValue,
   type RenderArgs,
@@ -70,10 +71,16 @@ const BrowseCard = parton(function BrowseCardRender({
 
 const BrowseGrid = scroller({
   name: "browse-grid",
-  range: async ({ offset, limit }) => {
+  load: async ({ offset, limit }) => {
+    // A FILTER is just a tracked read in the loader: `?q=` records as
+    // the calling parton's dep, so a filter change re-renders the
+    // collection — and the card partons fp-skip through it wherever
+    // their entities didn't change (the order/content split).
+    const q = searchParam("q")
     const res = await browseProductsCell.resolve({
       pageSize: limit,
       currentPage: offset / limit + 1,
+      ...(q ? { search: q } : {}),
     })
     const items = (res.value?.products?.items ?? []).filter(
       (it): it is BoundCell<CardItem> => it != null,
@@ -97,6 +104,19 @@ export const ProductBrowsePage = parton(
             its own parton, <code>?page=</code> is a projection over the same source.
           </p>
         </header>
+        {/* The filter projection: a plain GET form — submitting
+            navigates to ?q=…, the loader's tracked read re-renders
+            the collection. */}
+        <form method="get" action="/magento/browse" className="mb-4">
+          <input
+            type="search"
+            name="q"
+            defaultValue={searchParam("q") ?? ""}
+            placeholder="Filter products…"
+            data-testid="browse-filter"
+            className="w-64 rounded-md border px-3 py-1.5 text-sm"
+          />
+        </form>
         <div data-testid="browse-list">
           <BrowseGrid />
         </div>

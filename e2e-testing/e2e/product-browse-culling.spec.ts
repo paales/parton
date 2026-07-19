@@ -16,8 +16,10 @@ import { test, expect, waitForPageInteractive } from "./fixtures"
  *  - a deep-link `?page=N` lands on N with its products (anchor seed);
  *  - scroll silently mirrors into `?page=` without moving the viewport.
  *
- * Position is read from the tree's interval markers:
- * `[data-s="browse-grid"]` with `data-so` (offset) / `data-sn` (count).
+ * Position is ARITHMETIC (the writer's own rule): the wrapper's
+ * public `id=browse-grid` plus the grid's resolved row pitch and
+ * column count give item-under-center; nothing else about the markup
+ * is contract.
  */
 
 const card = '[data-testid^="browse-card-"]'
@@ -36,76 +38,54 @@ async function wheelDown(page: Page, notches: number, dy = 400) {
   return ys
 }
 
-// The anchor page under the viewport's center — the mirror's own
-// rule: hit test, then the containing interval. Leaf markers are
-// `display: contents`, so position comes from the hit cell; a hit
-// inside a reservation derives from its rect arithmetic.
+// The anchor page under the viewport's center — the writer's own
+// arithmetic: rows from the wrapper's top at the grid's resolved
+// pitch.
 async function centeredPage(page: Page) {
-  return page.evaluate(
-    ({ sel, ps }) => {
-      const cy = window.innerHeight / 2
-      let hit: Element | null = null
-      let m: HTMLElement | null = null
-      for (const [px, py] of [
-        [0.5, 0.5],
-        [0.4, 0.45],
-        [0.6, 0.55],
-        [0.5, 0.42],
-      ]) {
-        hit = document.elementFromPoint(window.innerWidth * px, window.innerHeight * py)
-        const c = hit?.closest<HTMLElement>(sel) ?? null
-        if (c && c.dataset.sroot === undefined) {
-          m = c
-          break
-        }
-      }
-      if (!m) return null
-      const o = Number(m.dataset.so)
-      const n = Number(m.dataset.sn)
-      if (m.dataset.sres !== undefined) {
-        const r = m.getBoundingClientRect()
-        const frac = r.height > 0 ? Math.min(1, Math.max(0, (cy - r.top) / r.height)) : 0
-        return Math.floor((o + frac * n) / ps) + 1
-      }
-      let cell: Element | null = hit as Element
-      while (cell && cell.parentElement !== m) cell = cell.parentElement
-      const within = cell ? Array.prototype.indexOf.call(m.children, cell) : 0
-      return Math.floor((o + Math.max(0, within)) / ps) + 1
-    },
-    { sel: marker, ps: PAGE_SIZE },
-  )
+  return page.evaluate((ps) => {
+    const wrapper = document.getElementById("browse-grid")
+    const grid = wrapper?.querySelector(":scope > .parton-scroller-grid")
+    if (!wrapper || !grid) return null
+    const cs = getComputedStyle(grid)
+    const cols = cs.gridTemplateColumns.split(" ").length
+    const rowH = Number.parseFloat(cs.gridAutoRows)
+    if (!(rowH > 0)) return null
+    const centerRow = Math.floor(
+      (window.innerHeight / 2 - wrapper.getBoundingClientRect().top) / rowH,
+    )
+    return Math.floor(Math.max(0, centerRow * cols) / ps) + 1
+  }, PAGE_SIZE)
 }
 
-// How many LEAF intervals currently SHOW products (are "full"). Culled
-// leaves park their product DOM under a hidden Activity (cull-to-park),
-// so presence alone doesn't mean full — a card counts only when it's
-// actually rendered (display:none ancestors give offsetParent === null).
+// How many leaves currently SHOW products. Culled leaves park their
+// DOM under a hidden Activity, so a card counts only when actually
+// rendered (display:none ancestors give offsetParent === null).
 async function fullLeafCount(page: Page) {
   return page.evaluate(
-    ({ sel, cardSel, ps }) => {
-      let n = 0
-      for (const el of document.querySelectorAll<HTMLElement>(sel)) {
-        if (el.dataset.sres !== undefined || el.dataset.sroot !== undefined) continue
-        if (Number(el.dataset.sn) > ps) continue
-        for (const c of el.querySelectorAll<HTMLElement>(cardSel)) {
-          if (c.offsetParent !== null) {
-            n++
-            break
-          }
-        }
+    ({ cardSel, ps }) => {
+      let shown = 0
+      for (const c of document.querySelectorAll<HTMLElement>(cardSel)) {
+        if (c.offsetParent !== null) shown++
       }
-      return n
+      return Math.ceil(shown / ps)
     },
-    { sel: marker, cardSel: card, ps: PAGE_SIZE },
+    { cardSel: card, ps: PAGE_SIZE },
   )
 }
 
-// Catalog size in items, read off the root wrapper marker.
+// Catalog size in items, derived from the wrapper's height at the
+// resolved geometry (rows are uniform by contract).
 async function totalItems(page: Page) {
-  return page.evaluate(
-    (sel) => Number(document.querySelector<HTMLElement>(sel)?.dataset.sn ?? 0),
-    '[data-s="browse-grid"][data-sroot]',
-  )
+  return page.evaluate(() => {
+    const wrapper = document.getElementById("browse-grid")
+    const grid = wrapper?.querySelector(":scope > .parton-scroller-grid")
+    if (!wrapper || !grid) return 0
+    const cs = getComputedStyle(grid)
+    const cols = cs.gridTemplateColumns.split(" ").length
+    const rowH = Number.parseFloat(cs.gridAutoRows)
+    if (!(rowH > 0)) return 0
+    return Math.round(wrapper.getBoundingClientRect().height / rowH) * cols
+  })
 }
 
 test("scrolling down never jumps the viewport backward", async ({ page }) => {
@@ -161,13 +141,11 @@ test("the tree windows the catalog — far regions are collapsed shells, not per
   const total = await totalItems(page)
   expect(total).toBeGreaterThan(40 * PAGE_SIZE)
 
-  // WINDOWING: the number of interval markers in the DOM is a tree
-  // spine — O(viewport + log catalog) — below one section per page
-  // (the shape this replaced).
-  const markers = await page.locator(marker).count()
-  expect(markers, `markers=${markers} for total=${total}`).toBeLessThan(
-    Math.ceil(total / PAGE_SIZE),
-  )
+  // WINDOWING: only the placed span's leaves exist as DOM — the
+  // attached card count is bounded by the span, far below the
+  // catalog.
+  const attached = await page.locator(card).count()
+  expect(attached, `attached=${attached} of total=${total}`).toBeLessThan(total / 4)
 
   // The whole catalog is still reachable: the document reserves
   // estimated space for every item.
@@ -185,21 +163,15 @@ test("deep-link ?page=50 lands on page 50 with its products", async ({ page }) =
   // don't race it).
   await expect.poll(() => centeredPage(page), { timeout: 10000 }).toBeGreaterThanOrEqual(48)
   expect(await centeredPage(page)).toBeLessThanOrEqual(52)
-  // The anchored leaf's products are rendered.
-  const anchoredVisible = await page.evaluate(
-    ({ sel, cardSel, t, ps }) => {
-      for (const el of document.querySelectorAll<HTMLElement>(sel)) {
-        const o = Number(el.dataset.so)
-        const n = Number(el.dataset.sn)
-        if (!(t >= o && t < o + n) || n > ps) continue
-        for (const c of el.querySelectorAll<HTMLElement>(cardSel)) {
-          if (c.offsetParent !== null) return true
-        }
-      }
-      return false
-    },
-    { sel: marker, cardSel: card, t: 49 * PAGE_SIZE, ps: PAGE_SIZE },
-  )
+  // The anchored leaf's products are rendered — visible cards at the
+  // landing.
+  const anchoredVisible = await page.evaluate((cardSel) => {
+    for (const c of document.querySelectorAll<HTMLElement>(cardSel)) {
+      const r = c.getBoundingClientRect()
+      if (r.bottom > 0 && r.top < window.innerHeight && c.offsetParent !== null) return true
+    }
+    return false
+  }, card)
   expect(anchoredVisible, "page 50's leaf shows products").toBe(true)
 })
 

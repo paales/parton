@@ -8,20 +8,23 @@
  *    skeleton cells (`.parton-skel`, styled by app CSS) in the one
  *    outer grid, so a slice streams in over exactly the cells it
  *    culls out to.
- *  - `ScrollerReservation` — the space of everything outside the
- *    placed span, held with pure CSS arithmetic
+ *  - `ScrollerReservation` — the space outside the placed span, held
+ *    with pure CSS arithmetic
  *    (`round(up, count / var(--scroller-cols)) * var(--scroller-row)`).
- *    When the viewport lands inside it (scrollbar jump, fast scroll)
- *    it SELF-MATERIALIZES a local skeleton band the same frame —
- *    structure is arithmetic under uniform rows, so no server is
- *    consulted to paint — and once the scroll settles it states the
- *    landing through the anchor param as an ordinary replace
- *    navigation: the window moves, the URL stays honest.
- *  - `ScrollerAnchorSync` — deep-link landing on client navs, and
- *    the silent scroll→param mirror. The mirror's position source is
- *    a HIT TEST (`elementFromPoint`): occlusion-aware (an overlay
- *    covering the collection silences it), and reservations are
- *    skipped — they own their own, non-silent, statements.
+ *    When the viewport lands inside it, it SELF-MATERIALIZES a local
+ *    skeleton band the same frame — structure is arithmetic under
+ *    uniform rows, so no server is consulted to paint. Display only:
+ *    the window statement belongs to the anchor sync.
+ *  - `ScrollerAnchorSync` — THE one writer. On scroll settle it
+ *    computes the item under the viewport center ARITHMETICALLY
+ *    (wrapper rect + the grid's resolved row pitch and column count —
+ *    no DOM interval markers), and states it through the anchor
+ *    param: silently when the landing is inside the placed span
+ *    (culling handles materialization), as an IN-PLACE navigation
+ *    (`scroll: "manual"`) when it is inside a reservation (the span
+ *    must move). The only DOM it consults is the wrapper (by its
+ *    public `id=<name>`) plus one occlusion hit-test — an overlay
+ *    covering the collection silences the writer entirely.
  */
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react"
@@ -32,9 +35,8 @@ const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : use
 // ─── Leaf shell ────────────────────────────────────────────────────────
 
 /** A culled leaf's skeleton cells. Receives the placement's cull
- *  props (`{o, n}`); the cells are grid items of the OUTER grid (the
- *  leaf marker is `display: contents`), sized by the grid's own
- *  `grid-auto-rows`, styled by the app via `.parton-skel`. */
+ *  props (`{o, n}`); the cells are grid items of the outer grid,
+ *  sized by its `grid-auto-rows`, styled via `.parton-skel`. */
 export function ScrollerLeafShell({ n }: { o: number; n: number }) {
   return (
     <>
@@ -45,76 +47,52 @@ export function ScrollerLeafShell({ n }: { o: number; n: number }) {
   )
 }
 
+// ─── Shared geometry ───────────────────────────────────────────────────
+
+/** The grid's resolved geometry — the truth for all client-side row
+ *  math. `gridTemplateColumns` computes to a resolved px list, so the
+ *  column count is its length; `gridAutoRows` computes to the
+ *  resolved row pitch. */
+function gridGeometry(gridEl: Element | null): { cols: number; rowH: number; gap: string } | null {
+  if (!gridEl) return null
+  const cs = getComputedStyle(gridEl)
+  const cols = cs.gridTemplateColumns.split(" ").length
+  const rowH = Number.parseFloat(cs.gridAutoRows)
+  if (!(cols >= 1) || !(rowH > 0) || !Number.isFinite(rowH)) return null
+  return { cols, rowH, gap: cs.columnGap }
+}
+
 // ─── Reservation ───────────────────────────────────────────────────────
 
 interface Band {
-  /** Rendered skeleton cell count. */
   cells: number
-  /** Px offset of the band inside the reservation. */
   topPx: number
-  /** Grid geometry replicated from the span's grid — the RESOLVED
-   *  template (px values), so the band's cells align column-for-
-   *  column with the real grid. */
   template: string
   columnGap: string
   rowPx: number
 }
 
-export function ScrollerReservation({
-  name,
-  base,
-  count,
-  param,
-  step,
-}: {
-  name: string
-  /** First item index this reservation covers. */
-  base: number
-  /** Item count it reserves space for. */
-  count: number
-  param: string
-  step: number
-}) {
+export function ScrollerReservation({ count }: { count: number }) {
   const ref = useRef<HTMLDivElement>(null)
   const [band, setBand] = useState<Band | null>(null)
-  const nav = useNavigation()
-  const [navigate] = nav.navigate()
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
     let intersecting = false
     let raf = 0
-    let settle: ReturnType<typeof setTimeout> | undefined
-    let lastStated = ""
-
-    /** The sibling grid — the span's container; its computed style is
-     *  the resolved truth for columns and gaps. */
-    const gridEl = (): HTMLElement | null =>
-      el.parentElement?.querySelector<HTMLElement>(":scope > [data-sgrid]") ?? null
-
-    const geometry = () => {
-      const g = gridEl()
-      if (!g) return null
-      const cs = getComputedStyle(g)
-      const template = cs.gridTemplateColumns
-      const cols = template.split(" ").length
-      const rect = el.getBoundingClientRect()
-      const totalRows = Math.max(1, Math.ceil(count / cols))
-      const rowH = rect.height / totalRows
-      if (!(rowH > 0) || !Number.isFinite(rowH)) return null
-      return { rect, cols, rowH, template, columnGap: cs.columnGap }
-    }
 
     const compute = () => {
       raf = 0
       if (!intersecting) return
-      const geo = geometry()
+      const gridEl = el.parentElement?.querySelector(":scope > .parton-scroller-grid") ?? null
+      const geo = gridGeometry(gridEl)
       if (!geo) return
-      const { rect, cols, rowH, template, columnGap } = geo
+      const rect = el.getBoundingClientRect()
+      const totalRows = Math.max(1, Math.ceil(count / geo.cols))
+      const rowH = rect.height / totalRows
+      if (!(rowH > 0)) return
       const vh = window.innerHeight
-      const totalRows = Math.max(1, Math.ceil(count / cols))
-      // The band: viewport ± half a viewport of runway, in rows.
       const firstRow = Math.max(0, Math.floor((-rect.top - vh / 2) / rowH))
       const lastRow = Math.min(totalRows, Math.ceil((-rect.top + vh * 1.5) / rowH))
       if (lastRow <= firstRow) {
@@ -122,47 +100,12 @@ export function ScrollerReservation({
         return
       }
       setBand({
-        cells: Math.max(0, Math.min((lastRow - firstRow) * cols, count - firstRow * cols)),
+        cells: Math.max(0, Math.min((lastRow - firstRow) * geo.cols, count - firstRow * geo.cols)),
         topPx: firstRow * rowH,
-        template,
-        columnGap,
+        template: getComputedStyle(gridEl as Element).gridTemplateColumns,
+        columnGap: geo.gap,
         rowPx: rowH,
       })
-      // Settled landing → state it through the anchor: an ordinary
-      // replace navigation. The root re-renders with the span moved
-      // here; this shell shrinks or unmounts under it. Geometry is
-      // RE-measured at fire time — the layout may have shifted since
-      // the band was computed.
-      if (settle) clearTimeout(settle)
-      settle = setTimeout(() => {
-        if (!intersecting) return
-        // Occlusion discipline (the mirror's rule): state only a
-        // landing the user actually SEES. An overlay covering the
-        // reservation (a search dialog, a drawer — or a stray
-        // focus-scroll behind one) hits the overlay, not us, and the
-        // statement stands down.
-        const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)
-        if (!hit || !el.contains(hit)) return
-        const now = geometry()
-        if (!now) return
-        const centerRow = (-now.rect.top + window.innerHeight / 2) / now.rowH
-        if (centerRow < 0 || now.rect.top > window.innerHeight) return
-        const idx = Math.min(count - 1, Math.max(0, Math.round(centerRow * now.cols))) + base
-        const want = String(Math.floor(idx / step) + 1)
-        if (want === lastStated) return
-        lastStated = want
-        navigate(
-          (url) => {
-            url.searchParams.set(param, want)
-            return url
-          },
-          // In-place: this nav DESCRIBES where the user already is —
-          // the browser's default post-transition scroll must never
-          // fire (deferred under a live gesture, it teleports to top
-          // the moment the gesture stops).
-          { history: "replace", scroll: "manual" },
-        )
-      }, 250)
     }
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(compute)
@@ -184,18 +127,13 @@ export function ScrollerReservation({
       window.removeEventListener("scroll", schedule, { capture: true })
       window.removeEventListener("resize", schedule)
       if (raf) cancelAnimationFrame(raf)
-      if (settle) clearTimeout(settle)
     }
-  }, [base, count, param, step, navigate])
+  }, [count])
 
   return (
     <div
       ref={ref}
       className="parton-scroller-res"
-      data-s={name}
-      data-so={base}
-      data-sn={count}
-      data-sres=""
       aria-hidden
       style={{
         position: "relative",
@@ -203,8 +141,8 @@ export function ScrollerReservation({
         // A plain BLOCK spacer — deliberately not a grid item (a
         // fixed `grid-auto-rows` track would overflow; a row span
         // would cost tens of thousands of implicit tracks). Height is
-        // pure CSS arithmetic on the app's two variables — exact at
-        // every breakpoint, before hydration, with zero JS.
+        // pure CSS arithmetic on the app's variables — exact at every
+        // breakpoint, before hydration, with zero JS.
         height: `calc(round(up, ${count} / var(--scroller-cols, 4)) * var(--scroller-row, 240px))`,
       }}
     >
@@ -230,109 +168,93 @@ export function ScrollerReservation({
   )
 }
 
-// ─── Anchor sync ───────────────────────────────────────────────────────
-
-/** The deepest interval marker of `name` containing item index `t`
- *  (deepest = smallest span). Excludes reservations. */
-function leafMarkerFor(name: string, t: number): HTMLElement | null {
-  let best: HTMLElement | null = null
-  for (const el of document.querySelectorAll<HTMLElement>(
-    `[data-s="${CSS.escape(name)}"][data-so]`,
-  )) {
-    if (el.dataset.sres !== undefined) continue
-    const o = Number(el.dataset.so)
-    const n = Number(el.dataset.sn)
-    if (!(t >= o && t < o + n)) continue
-    if (best === null || n < Number(best.dataset.sn)) best = el
-  }
-  return best
-}
+// ─── Anchor sync — the one writer ──────────────────────────────────────
 
 export function ScrollerAnchorSync({
   name,
   param,
   step,
+  start,
+  end,
+  total,
 }: {
   name: string
   param: string
   step: number
+  /** The placed span's item bounds — landings inside it write
+   *  silently; landings outside it move the window (a real,
+   *  in-place navigation). */
+  start: number
+  end: number
+  total: number
 }) {
   const nav = useNavigation()
   const [navigate] = nav.navigate()
 
-  // Deep-link / restore landing — before paint. Leaf markers are
-  // `display: contents`; the scroll target is their first child.
+  // Deep-link / restore landing on client navs — before paint, by the
+  // public anchor id. (Document loads use the streamed landing
+  // script; running this again on hydration is idempotent.)
   useIsoLayoutEffect(() => {
     const url = nav.currentEntry?.url
     const page = url ? Number(new URL(url).searchParams.get(param) || "1") : 1
     if (page > 1) {
-      const marker = leafMarkerFor(name, (page - 1) * step)
-      const target = marker?.firstElementChild ?? marker
+      const el = document.getElementById(`${name}-p${page}`)
+      const target = el?.firstElementChild ?? el
       target?.scrollIntoView({ block: "start" })
     }
     // Mount-only: the landing is for the entry this mount belongs to.
   }, [])
 
-  // Silent mirror: the item under the viewport's center → the param.
+  // The writer: item-under-center → anchor param, on scroll settle.
   useEffect(() => {
     const url0 = nav.currentEntry?.url
     let lastVal = url0 ? (new URL(url0).searchParams.get(param) ?? "") : ""
     let timer: ReturnType<typeof setTimeout> | undefined
     const sync = () => {
-      // Hit test — occlusion-aware: an overlay covering the
-      // collection hits nothing of ours and the mirror stands down.
-      // Sampled at several points around the center: a single point
-      // can land in a column gap or a cell margin (resolving to the
-      // container), which is layout background, not occlusion.
-      let hit: Element | null = null
-      let m: HTMLElement | null = null
-      const w = window.innerWidth
-      const h = window.innerHeight
-      for (const [px, py] of [
-        [0.5, 0.5],
-        [0.4, 0.45],
-        [0.6, 0.55],
-        [0.5, 0.42],
-      ]) {
-        hit = document.elementFromPoint(w * px, h * py)
-        const c = hit?.closest<HTMLElement>(`[data-s="${CSS.escape(name)}"][data-so]`) ?? null
-        if (c && c.dataset.sroot === undefined) {
-          m = c
-          break
-        }
-      }
-      // Reservations state their own (non-silent) landings.
-      if (m === null || m.dataset.sres !== undefined) return
-      const o = Number(m.dataset.so)
-      // Which cell of the leaf contains the hit — its child index is
-      // the item offset within the interval.
-      let cell: Element | null = hit as Element
-      while (cell && cell.parentElement !== m) cell = cell.parentElement
-      const within = cell ? Array.prototype.indexOf.call(m.children, cell) : 0
-      const idx = o + Math.max(0, within)
+      const wrapper = document.getElementById(name)
+      if (!wrapper) return
+      // Occlusion: state only what the user actually SEES. An overlay
+      // covering the collection (dialog, drawer) hits itself, not the
+      // wrapper's subtree, and the writer stands down.
+      const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)
+      if (!hit || !wrapper.contains(hit)) return
+      const geo = gridGeometry(wrapper.querySelector(":scope > .parton-scroller-grid"))
+      if (!geo) return
+      // Pure arithmetic: rows from the wrapper's top at the resolved
+      // pitch — reservations and grid share the geometry, so one
+      // linear map covers the whole collection.
+      const wTop = wrapper.getBoundingClientRect().top
+      const centerRow = Math.floor((window.innerHeight / 2 - wTop) / geo.rowH)
+      const idx = Math.min(Math.max(total, 1) - 1, Math.max(0, centerRow * geo.cols))
       const page = Math.floor(idx / step) + 1
       const want = page > 1 ? String(page) : ""
       if (want === lastVal) return
       lastVal = want
+      const inSpan = idx >= start && idx < end
       navigate(
         (url) => {
           if (want) url.searchParams.set(param, want)
           else url.searchParams.delete(param)
           return url
         },
-        { history: "replace", silent: true },
+        // In-span: a bookmarkability-only mirror — culling already
+        // follows the viewport. Outside the span: the window must
+        // move — a real refetch, IN-PLACE (this nav DESCRIBES where
+        // the user already is; the browser's deferred default scroll
+        // must never fire).
+        inSpan ? { history: "replace", silent: true } : { history: "replace", scroll: "manual" },
       )
     }
     const onScroll = () => {
       if (timer) clearTimeout(timer)
-      timer = setTimeout(sync, 150)
+      timer = setTimeout(sync, 250)
     }
     window.addEventListener("scroll", onScroll, { passive: true, capture: true })
     return () => {
       window.removeEventListener("scroll", onScroll, { capture: true })
       if (timer) clearTimeout(timer)
     }
-  }, [nav, navigate, name, param, step])
+  }, [nav, navigate, name, param, step, start, end, total])
 
   return null
 }
