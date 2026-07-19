@@ -74,9 +74,11 @@
  * through `render(...)`'s `id` prop — on the shell's first cell
  * while culled). The id sits on REAL content, so the browser resolves
  * its position from layout — correct under any heights — and the
- * deep-link script (streamed right after the anchored leaf, so it
- * runs the moment that markup parses) plus any external tooling
- * navigate by it; nothing else about the markup is contract.
+ * two-stage document landing (an ESTIMATE script right after the
+ * before-reservation, ahead of the seeded leaves' stream stall, then
+ * the EXACT script right after the anchored leaf) plus any external
+ * tooling navigate by it — a plain `#<name>-p<N>` fragment works
+ * natively, JS or not; nothing else about the markup is contract.
  *
  * See `docs/reference/scroller.md`.
  */
@@ -248,21 +250,11 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
    *  correct under any item heights or breakpoints. */
   function placeLeaf(o: number, n: number): ReactNode {
     const aid = o % anchorStep === 0 ? `${name}-p${o / anchorStep + 1}` : undefined
-    // GEOMETRY-ATOMIC commits. A window move's fresh payload streams:
-    // the root chunk commits (reservations resized, departing leaves
-    // gone) before the NEW leaves' rows arrive — without a local
-    // fallback each pending leaf commits as NOTHING, and an up-move's
-    // whole new top span vanishes for a frame. The browser anchors on
-    // the displaced kept content, the viewport teleports, the writer
-    // reads a smaller page and states another move — a cascade to the
-    // top (measured). The placement-level Suspense holds every pending
-    // leaf's exact cells (n, and the boundary aid so the landing
-    // script finds its target even mid-stream), so a torn commit never
-    // changes geometry.
-    // The Fragment carries the list key; the Suspense stays UNKEYED —
-    // the client merge layer detects partial wrappers as KEYED
-    // Suspense nodes, and a keyed placement Suspense would be adopted
-    // as one (measured: parked pairs stopped restoring).
+    // Bare placement — no per-leaf Suspense. Geometry atomicity across
+    // window moves comes from the commit mode: the in-place window
+    // statement lands as a TRANSITION (see the in-place branding in
+    // `entry/live-boot.tsx`), so React holds the current tree until
+    // the move's payload fully resolves and swaps once.
     return (
       <Fragment key={o}>
         <LeafSpec o={o} n={n} {...(aid !== undefined ? { aid } : {})} />
@@ -285,10 +277,55 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
         const start = Math.max(0, anchorLeaf - ring * leaf)
         const end = Math.min(Math.max(total, 0), anchorLeaf + (ring + 1) * leaf)
 
-        // Deep-link landing for document loads: streamed IMMEDIATELY
-        // AFTER the anchored leaf, so it runs the moment that markup
-        // parses — a slow CPU paints at the anchor, not at the head
-        // and then jumps. Inert on client navs (React never executes
+        // Deep-link landing for document loads — TWO STAGES, because
+        // the stream STALLS mid-span: the seeded leaves' slice loads
+        // run server-side in document order, so everything after them
+        // (including the exact landing below) can be seconds away on
+        // a slow backend or CPU, while the page has already painted
+        // at the top.
+        //
+        // STAGE 1 — the ESTIMATE, streamed inside the wrapper right
+        // after the before-reservation, BEFORE the stall: position is
+        // arithmetic on already-parsed structure (the reservation's
+        // CSS-resolved height + estimate rows to the anchor, columns
+        // and row pitch read from the app's variables client-side so
+        // breakpoints resolve correctly). Runs the moment the
+        // reservation's markup parses — first paint happens AT the
+        // anchor's estimated position, never at 0,0.
+        // The scroll RE-ASSERTS per frame until the target is
+        // reachable: at parse time the document can still be shorter
+        // than the target (only the reservation has height), so the
+        // first scrollTo clamps to max-scroll — the loop lands fully
+        // as soon as the span's skeleton rows parse (same network
+        // chunk, frames later), well before the seeded stall ends.
+        // A user gesture cancels it — their hand wins.
+        const estimateScript =
+          page > 1 ? (
+            <script
+              key="landing-estimate"
+              dangerouslySetInnerHTML={{
+                __html:
+                  `(function(){try{var s=document.currentScript,w=s.parentElement;` +
+                  `var cs=getComputedStyle(w);` +
+                  `var c=parseInt(cs.getPropertyValue("--scroller-cols"))||4;` +
+                  `var h=parseFloat(cs.getPropertyValue("--scroller-row"))||240;` +
+                  `var r=s.previousElementSibling;` +
+                  `var res=r?r.getBoundingClientRect().height:0;` +
+                  `var t=w.getBoundingClientRect().top+(window.scrollY||0)+res+Math.round(${anchorIdx - start}/c)*h;` +
+                  `var n=0,stop=function(){n=1e9};` +
+                  `addEventListener("wheel",stop,{once:true});` +
+                  `addEventListener("touchstart",stop,{once:true});` +
+                  `(function go(){if(n>=300)return;window.scrollTo(0,t);` +
+                  `if(Math.abs((window.scrollY||0)-t)>2){n++;requestAnimationFrame(go)}})()}catch(_){}})()`,
+              }}
+            />
+          ) : null
+
+        // STAGE 2 — the EXACT landing, streamed immediately after the
+        // anchored leaf: refines stage 1 to the boundary id's real
+        // layout once that markup exists (a delta only where seeded
+        // content above the anchor differs from the estimate). Both
+        // are inert on client navs (React never executes
         // dangerouslySetInnerHTML scripts); the client path is the
         // anchor sync's layout effect.
         const landingScript = (
@@ -322,6 +359,7 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
                 the index-derived ids. */}
             <div id={name} className={opts.className}>
               {start > 0 ? <ScrollerReservation key="res-before" count={start} /> : null}
+              {estimateScript}
               {/* The span's grid — template derived from the app's
                   variables (declared on the wrapper's class, so the
                   reservations inherit the same numbers). */}

@@ -90,3 +90,59 @@ test("browse scroll across page transitions: no card blinks, no layout shifts", 
   expect(blinks, `cards that blinked: ${blinks.join(",")}`).toEqual([])
   expect(shifts, `cards that shifted: ${shifts.join(",")}`).toEqual([])
 })
+
+test("deep link on a slow CPU never paints the top of the collection", async ({ page }) => {
+  // User report 2026-07-19: with a 15x CPU slowdown, ?page=44 showed
+  // the page at 0,0 and then flipped to the anchor. The seeded
+  // leaves' slice loads stall the SSR stream mid-span, so the exact
+  // (post-anchor) landing script can be seconds away — the STAGE-1
+  // estimate script (streamed right after the before-reservation,
+  // ahead of the stall) must land first paint at the anchor's
+  // estimated position, re-asserting per frame while the document is
+  // still shorter than the target.
+  await page.addInitScript(() => {
+    const w = window as unknown as {
+      __samples: { t: number; y: number; vis: number }[]
+    }
+    w.__samples = []
+    const t0 = performance.now()
+    const loop = () => {
+      let vis = 0
+      for (const c of document.querySelectorAll<HTMLElement>(".parton-scroller-grid > *")) {
+        if (c.offsetParent === null) continue
+        const r = c.getBoundingClientRect()
+        if (r.bottom > 0 && r.top < innerHeight && r.height > 0) vis++
+      }
+      w.__samples.push({ t: Math.round(performance.now() - t0), y: Math.round(scrollY), vis })
+      requestAnimationFrame(loop)
+    }
+    requestAnimationFrame(loop)
+  })
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 10 })
+  await page.goto("/magento/browse?page=44", { waitUntil: "domcontentloaded" })
+  await page.waitForTimeout(9000)
+  await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 })
+
+  const samples = await page.evaluate(
+    () => (window as unknown as { __samples: { t: number; y: number; vis: number }[] }).__samples,
+  )
+  // The 0,0 flash: any frame showing span content while the viewport
+  // sits far above the anchor (page 44 ≈ 32k px at the estimate).
+  const flash = samples.filter((s) => s.y < 20000 && s.vis > 0)
+  expect(
+    flash,
+    `frames showing content near the top: ${JSON.stringify(flash.slice(0, 5))}`,
+  ).toEqual([])
+  // The landing settles: no late jumps once the first second passed.
+  let maxLate = 0
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i].t < 1500) continue
+    maxLate = Math.max(maxLate, Math.abs(samples[i].y - samples[i - 1].y))
+  }
+  expect(maxLate, "position stable after landing").toBeLessThan(100)
+  // And it actually landed with content at the anchor.
+  const final = samples[samples.length - 1]
+  expect(final.y).toBeGreaterThan(25000)
+  expect(final.vis).toBeGreaterThan(0)
+})

@@ -124,7 +124,26 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
   receive `id` (`<name>-p<N>`) through `render(...)` — the app puts
   it on the cell; the culled shell carries it on its first cell, so
   the target exists in both states. Deep links resolve their
-  position from layout, never from computation.
+  position from layout, never from computation. Because the ids are
+  real, a plain URL fragment (`#<name>-p<N>`) lands natively — JS or
+  not — for shared links and external tooling; the anchor param stays
+  the canonical position (it seeds the server render; a fragment
+  alone lands on unmaterialized shells).
+- **Deep-link documents land in two stages.** The seeded leaves'
+  slice loads stall the SSR stream mid-span, so anything streamed
+  after the anchored leaf can be seconds away on a slow CPU or
+  backend — and the page would paint at 0,0, then flip (the measured
+  bug). STAGE 1, streamed right after the before-reservation (ahead
+  of the stall): an inline script computes the anchor's ESTIMATED
+  offset from already-parsed structure (reservation height + estimate
+  rows, columns/row pitch read from the CSS variables client-side)
+  and scrolls there, re-asserting per frame while the document is
+  still shorter than the target — first paint happens AT the anchor.
+  A user gesture cancels it. STAGE 2, streamed right after the
+  anchored leaf: the exact `scrollIntoView` on the boundary id,
+  refining by whatever the seeded content above the anchor differs
+  from the estimate. Pinned by the throttled deep-link test in
+  `e2e/preview/scroller-no-blink.spec.ts`.
 
 ## The scrollbar jump (why there is no tree)
 
