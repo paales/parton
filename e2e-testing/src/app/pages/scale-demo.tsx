@@ -32,9 +32,9 @@ const ScaleGrid = scroller({
     ),
     total: TOTAL,
   }),
+  key: (i) => i,
   render: ({ item: i, id }) => (
     <div
-      key={i}
       id={id}
       data-testid="scale-cell"
       data-i={i}
@@ -45,7 +45,6 @@ const ScaleGrid = scroller({
   ),
   leaf: LEAF,
   ring: 4,
-  className: "scale-grid",
 })
 
 export const ScaleDemoPage = parton(

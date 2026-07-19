@@ -204,6 +204,10 @@ export function ScrollerAnchorSync({
 }) {
   const nav = useNavigation()
   const [navigate] = nav.navigate()
+  /** The writer's own last statement — how the URL-watch below tells
+   *  a mirror of the user's scroll from an EXTERNAL anchor statement
+   *  (a pagination link, a traverse). */
+  const selfWrite = useRef<string | null>(null)
 
   // Deep-link / restore landing on client navs — before paint, by the
   // public anchor id. (Document loads use the streamed landing
@@ -216,6 +220,65 @@ export function ScrollerAnchorSync({
     }
     // Mount-only: the landing is for the entry this mount belongs to.
   }, [])
+
+  // EXTERNAL ANCHOR STATEMENTS. The writer mirrors scroll into the
+  // param — but the param is a public surface anyone can state: a
+  // pagination link, a traverse, an app's own navigate. When the
+  // anchor moves and it wasn't this writer's own mirror, the
+  // viewport must go THERE. Measure-first: if the viewport already
+  // centers the stated page (a traverse whose scroll restoration
+  // landed it, the writer's own statement echoing back), nothing
+  // moves — only a real mismatch scrolls. Target resolution follows
+  // the landing rule: the boundary id's LAYOUT when it exists (in
+  // span — correct under any heights), the estimate arithmetic where
+  // nothing exists to measure (a reservation — exact there).
+  useEffect(() => {
+    // `useNavigation` is a live proxy — URL changes don't re-render
+    // this component, so the watch subscribes to the Navigation API's
+    // own entry-change event.
+    const ambient = (
+      window as Window & { navigation?: EventTarget & { currentEntry?: { url?: string } } }
+    ).navigation
+    if (!ambient) return
+    let seen: string | null = null
+    const check = () => {
+      const url = ambient.currentEntry?.url
+      if (!url) return
+      const val = new URL(url).searchParams.get(param) ?? ""
+      if (seen === null) {
+        // The subscription starts at the landing entry — the stage
+        // scripts / the layout effect above own that one.
+        seen = val
+        return
+      }
+      if (val === seen) return
+      seen = val
+      if (selfWrite.current === val) {
+        selfWrite.current = null
+        return
+      }
+      const page = Math.max(1, Number(val) || 1)
+      const wrapper = document.getElementById(name)
+      const gridEl = wrapper?.querySelector(":scope > .parton-scroller-grid")
+      const geo = gridGeometry(gridEl ?? null)
+      if (!wrapper || !geo) return
+      const top = wrapper.getBoundingClientRect().top + window.scrollY
+      // Already there? (Estimate arithmetic — a ±1-page tolerance
+      // absorbs real-height drift.)
+      const centerRow = Math.floor((window.innerHeight / 2 + window.scrollY - top) / geo.rowH)
+      const curPage = Math.floor(Math.max(0, centerRow * geo.cols) / step) + 1
+      if (Math.abs(curPage - page) <= 1) return
+      const el = document.getElementById(`${name}-p${page}`)
+      if (el && el.offsetParent !== null) {
+        el.scrollIntoView({ block: "start" })
+        return
+      }
+      window.scrollTo(0, top + (((page - 1) * step) / geo.cols) * geo.rowH)
+    }
+    check()
+    ambient.addEventListener("currententrychange", check)
+    return () => ambient.removeEventListener("currententrychange", check)
+  }, [name, param, step])
 
   // WINDOW-MOVE ANCHORING SUPPRESSION. A window move never moves an
   // ITEM: the reservation cedes exactly the rows the new leaves
@@ -399,6 +462,7 @@ export function ScrollerAnchorSync({
       const want = page > 1 ? String(page) : ""
       if (want === lastVal) return
       lastVal = want
+      selfWrite.current = want
       const inSpan = idx >= start && idx < end
       navigate(
         (url) => {

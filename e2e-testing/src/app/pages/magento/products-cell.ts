@@ -70,15 +70,27 @@ export const browseCardCell = magentoCatalog.fragment(
   { key: (d) => ({ uid: d.uid }) },
 )
 
-// The slice cell the scroller's `range` resolves: ORDER + totals.
-// Composing `browseCardCell` rewrites each spread site to the card
-// cell's BoundCell, so the leaf Render forwards items straight into
-// card partons.
+// The slice cell the scroller's `load` resolves: ORDER + totals +
+// AGGREGATIONS. Composing `browseCardCell` rewrites each spread site
+// to the card cell's BoundCell, so the leaf Render forwards items
+// straight into card partons. The aggregations ride the same result —
+// any parton can join the query by resolving the same partition (the
+// FilterBar does exactly that), so the facets cost no extra fetch
+// where the partitions align and one cached query where they don't.
 export const browseProductsCell = magentoCatalog.query(
   `#graphql
   query BrowseProducts($pageSize: Int!, $currentPage: Int!, $search: String) {
     products(filter: {}, search: $search, pageSize: $pageSize, currentPage: $currentPage) {
       total_count
+      aggregations {
+        attribute_code
+        label
+        options {
+          label
+          value
+          count
+        }
+      }
       items {
         ...BrowseCardFields
       }

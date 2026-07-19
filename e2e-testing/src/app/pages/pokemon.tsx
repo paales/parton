@@ -329,7 +329,7 @@ export const SearchAreaFrame = makeSearchArea("frame")
 // ─── Pokedex list pages ─────────────────────────────────────────────────
 
 // The pokedex as a windowed collection: one CSS grid
-// (`.pokedex-grid`), a placed span of cull-gated leaf partons around
+// (`.pokedex-list` — the wrapper carries `name` as its class), a placed span of cull-gated leaf partons around
 // the `?page=` anchor, reservation shells covering the rest. Each
 // card stays its own parton (`PokemonCard`, fed the per-entity
 // fragment cell), so card content invalidates per pokemon wherever
@@ -343,9 +343,9 @@ const PokedexList = scroller({
       total: res.value?.pokemon_v2_pokemon_aggregate?.aggregate?.count ?? 0,
     }
   },
-  render: ({ item, id }) => <PokemonCard key={String(item.args.id)} item={item} anchorId={id} />,
+  key: (item) => String(item.args.id),
+  render: ({ item, id }) => <PokemonCard item={item} anchorId={id} />,
   leaf: 24,
-  className: "pokedex-grid",
 })
 
 // ─── Outer wrapper — matches /, composes the overview ─────────────────

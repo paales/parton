@@ -27,15 +27,16 @@ const BrowseGrid = scroller({
     })
     return { items: itemsOf(res), total: totalOf(res) }
   },
-  render: ({ item, id }) => <BrowseCard key={String(item.args.uid)} item={item} anchorId={id} />,
+  key: (item) => String(item.args.uid),
+  render: ({ item, id }) => <BrowseCard item={item} anchorId={id} />,
   leaf: 12,
-  className: "browse-grid",
 })
 // placement: <BrowseGrid />
 ```
 
 ```css
-/* The app's entire geometry contract — three variables: */
+/* The app's entire geometry contract — three variables, declared
+   under the collection's NAME (the wrapper carries it as a class): */
 .browse-grid {
   --scroller-cols: 4; /* integer; responsive via media queries   */
   --scroller-row: 252px; /* the row pitch — like `sizes` on an img */
@@ -54,7 +55,9 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
 ## The division of labor
 
 - **The span** — `2·ring + 1` leaf partons placed around the anchor
-  leaf. Each covers `leaf` consecutive items and is cull-gated: in
+  leaf. The root's shape read (`total`) rides the ANCHOR's own slice,
+  deduping with the seeded anchor leaf — a deep link never fetches
+  the head just for the count. Each covers `leaf` consecutive items and is cull-gated: in
   view it resolves its slice (`load({offset, limit})`) and renders
   items as grid cells; out of view it emits generic skeleton cells
   (`.parton-skel`, styled by app CSS) and its slice is **never
@@ -96,7 +99,12 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
   landing silently in-span (bookmarkability only — culling follows
   the viewport on its own), as an in-place navigation
   (`scroll: "manual"`) when the span must move. Occlusion-guarded —
-  an overlay covering the collection silences it.
+  an overlay covering the collection silences it. The param is a
+  PUBLIC surface: when it moves and the writer didn't state it (a
+  pagination link, a traverse, an app navigate), the sync jumps the
+  viewport there — measure-first (a viewport already centering the
+  stated page stays put, so a traverse's own scroll restoration
+  wins), id-resolved in-span, estimate arithmetic in a reservation.
 - **Window moves are geometry-atomic — they commit as transitions.**
   The in-place window statement carries the `FrameworkInPlaceInfo`
   brand, and the page-level intercept states it on the channel as an
@@ -145,6 +153,30 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
   from the estimate. Pinned by the throttled deep-link test in
   `e2e/preview/scroller-no-blink.spec.ts`.
 
+## Joining the query — facets, pagination, prices
+
+The scroller never owns the query; the CELL is the shared address of
+the result, and any parton can join it. `/magento/browse` shows all
+three projections over ONE `browseProductsCell`:
+
+- **Facets**: a `FilterBar` parton resolves the same partition the
+  slice path uses and reads `aggregations` off the result — on page 1
+  that is byte-for-byte the query leaf 0 already ran (deduped);
+  elsewhere it is one cached fetch.
+- **Pagination**: pages as real `<a href="?page=N">` links. A plain
+  parton reads `total` from the same cell and renders anchors; a
+  click is an ordinary client nav the sync answers as an external
+  anchor statement (above). Cold, the link is a seeded document
+  render — pagination works before any JS.
+- **Streaming prices**: each card composes its own async parton
+  (`LivePricePartial` behind Suspense) — the card shell commits with
+  the slice, prices stream per SKU, and a `refreshSelector("price")`
+  fans out to every visible card.
+
+There is deliberately no scroller API for any of this — `load` is
+only the windowing adapter (offset → slice); data lives at cell
+addresses that outrank any component boundary.
+
 ## The scrollbar jump (why there is no tree)
 
 Landing anywhere — a scrollbar drag to 50% of a million items —
@@ -178,16 +210,17 @@ its plane is 2D px space with procedural content, a different animal.
 
 ## Options
 
-| Option       | Default    | Meaning                                                                                                                                                                                 |
-| ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`       | (required) | Identity: catalog ids (`<name>`, `<name>-leaf`), the public DOM anchors (`id=<name>`, `id=<name>-p<N>`). Explicit — there is no Render name to derive it from.                          |
-| `load`       | (required) | `({offset, limit}) → {items, total}`. Called in `leaf`-aligned slices. Tracked reads (cells, `searchParam`) record as deps.                                                             |
-| `render`     | (required) | `({item, index, id}) → ReactNode` — one grid cell, props-bag style. Apply `id` to the cell (boundary anchor). `Item` infers from `load`.                                                |
-| `leaf`       | `24`       | Items per leaf parton = fetch slice = default anchor step. **Must be divisible by every `--scroller-cols` value** (row alignment).                                                      |
-| `ring`       | `6`        | Leaves placed each side of the anchor leaf. Placement ≠ materialization — the ring is the park/restore zone.                                                                            |
-| `className`  | —          | The wrapper class carrying the three CSS variables.                                                                                                                                     |
-| `rootMargin` | `"100%"`   | Leaf materialization runway. Number = px; string = any observer margin, `%` relative to VIEWPORT height — the default is one viewport ahead/behind, so prefetch scales with the screen. |
-| `anchor`     | `page`     | `{param?, pageSize?}` — rename the param (two collections on one page) or change the step (a multiple of `leaf`).                                                                       |
+| Option       | Default    | Meaning                                                                                                                                                                                                                                       |
+| ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`       | (required) | Identity: catalog ids (`<name>`, `<name>-leaf`), the public DOM anchors (`id=<name>`, `id=<name>-p<N>`) — and the wrapper's CLASS, where the app's CSS declares the geometry variables. Explicit — there is no Render name to derive it from. |
+| `load`       | (required) | `({offset, limit}) → {items, total}`. Called in `leaf`-aligned slices. Tracked reads (cells, `searchParam`) record as deps.                                                                                                                   |
+| `render`     | (required) | `({item, index, id}) → ReactNode` — one grid cell, props-bag style. Apply `id` to the cell (boundary anchor). `Item` infers from `load`.                                                                                                      |
+| `key`        | —          | `(item) → string \| number` — the ENTITY key; the framework keys each cell so `render` returns the bare element. Without it, `render` must key its element itself (never by index).                                                           |
+| `leaf`       | `24`       | Items per leaf parton = fetch slice = default anchor step. **Must be divisible by every `--scroller-cols` value** (row alignment).                                                                                                            |
+| `ring`       | `6`        | Leaves placed each side of the anchor leaf. Placement ≠ materialization — the ring is the park/restore zone.                                                                                                                                  |
+| `className`  | —          | EXTRA wrapper classes — `name` is always applied as a class already.                                                                                                                                                                          |
+| `rootMargin` | `"100%"`   | Leaf materialization runway. Number = px; string = any observer margin, `%` relative to VIEWPORT height — the default is one viewport ahead/behind, so prefetch scales with the screen.                                                       |
+| `anchor`     | `page`     | `{param?, pageSize?}` — rename the param (two collections on one page) or change the step (a multiple of `leaf`).                                                                                                                             |
 
 ## The CSS contract
 

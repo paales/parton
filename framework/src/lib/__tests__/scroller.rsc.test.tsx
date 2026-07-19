@@ -114,9 +114,10 @@ describe("scroller: the placed span and its reservations", () => {
     expect(flight).toContain('"count":552')
     expect(flight).toContain('"count":438')
 
-    // Seeded: the anchored leaf and its neighbors; the head is
-    // fetched only by the root's shape read.
-    expect(new Set(state.calls)).toEqual(new Set([0, 672, 696, 720]))
+    // Seeded: the anchored leaf and its neighbors — and NOTHING
+    // else: the root's shape read rides the ANCHOR's slice, so a deep
+    // link never fetches the head just for the count.
+    expect(new Set(state.calls)).toEqual(new Set([672, 696, 720]))
     expect(flight).toMatch(/"data-item":696[,}]/)
     expect(flight).not.toMatch(/"data-item":600[,}]/)
   })

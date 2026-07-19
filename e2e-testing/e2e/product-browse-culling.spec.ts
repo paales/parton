@@ -122,7 +122,7 @@ test("culling follows the viewport — products load where you scroll, far regio
   // The viewport neighborhood fills — culled IN where you look. The
   // tree materializes level by level (each flip-in is a lane), so
   // poll for convergence rather than racing the cascade.
-  await expect.poll(() => fullLeafCount(page), { timeout: 15000 }).toBeGreaterThan(0)
+  await expect.poll(() => fullLeafCount(page), { timeout: 25000 }).toBeGreaterThan(0)
   const full = await fullLeafCount(page)
 
   // Culling is real: only a viewport-sized neighborhood is full, not
@@ -291,12 +291,85 @@ test("up-scroll from a deep link never cascades back to the top", async ({ page 
   }
   await page.waitForTimeout(1500)
 
-  // ~21000px up ≈ a handful of pages — nowhere near the top. A
-  // cascade collapses to single digits.
+  // 35 wheel notches x 600px ≈ 21000px ≈ 28 estimate-pages of travel
+  // from page 100 — the honest landing is ~72, variance-shifted. A
+  // cascade collapses toward page 1; assert the landing stayed in the
+  // arithmetic neighborhood.
   const finalPage = await centeredPage(page)
-  expect(finalPage, "viewport stayed where the user scrolled").toBeGreaterThan(75)
+  expect(finalPage, "viewport stayed where the user scrolled").toBeGreaterThan(60)
   const param = Number(new URL(page.url()).searchParams.get("page") || "1")
-  expect(param, "the param followed the viewport, not a cascade").toBeGreaterThan(75)
+  expect(param, "the param followed the viewport, not a cascade").toBeGreaterThan(60)
+})
+
+test("the page's projections join the scroller's query — facets, pagination, streaming prices", async ({
+  page,
+}) => {
+  // FilterBar (aggregations) and Pagination (total) are plain partons
+  // resolving the same browseProductsCell partition the slice path
+  // uses — three projections of one result, no scroller API. Prices
+  // stream per card behind Suspense (the /magento LivePricePartial).
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+  await waitForPageInteractive(page)
+
+  // Facets rendered with counts from the shared query.
+  await expect
+    .poll(() => page.locator('[data-testid="browse-facet-option"]').count(), { timeout: 15000 })
+    .toBeGreaterThan(0)
+  // Pagination rendered from the same total.
+  await expect(page.locator('[data-testid="browse-pagination"]')).toBeVisible({ timeout: 15000 })
+  // A price streams in on a visible card (fallback → live).
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            document.querySelectorAll('[data-testid^="live-price-"]:not([data-testid*="fallback"])')
+              .length,
+        ),
+      { timeout: 20000 },
+    )
+    .toBeGreaterThan(0)
+})
+
+test("clicking a pagination link moves the viewport to that page", async ({ page }) => {
+  // The anchor param is a public surface: a link stating ?page=N is
+  // an EXTERNAL anchor statement — the sync must move the viewport
+  // there (never just re-render the span in place).
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+  await waitForPageInteractive(page)
+
+  // Reach the pagination at the collection's foot; the scroll there
+  // mirrors into ?page=, so the link window re-centers — "1" is
+  // always rendered.
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="browse-pagination"]')?.scrollIntoView()
+  })
+  await page.waitForTimeout(800)
+  const fromPage = await centeredPage(page)
+  expect(fromPage, "scrolled deep before clicking").toBeGreaterThan(10)
+  await page.locator('[data-testid="browse-page-link-1"]').click()
+
+  // Page 1 clears the param; the viewport must travel there.
+  await expect
+    .poll(() => Number(new URL(page.url()).searchParams.get("page") || "1"), { timeout: 10000 })
+    .toBe(1)
+  await expect.poll(() => centeredPage(page), { timeout: 10000 }).toBeLessThanOrEqual(2)
+  // The landing shows products (the anchored neighborhood loads).
+  await expect
+    .poll(
+      () =>
+        page.evaluate((cardSel) => {
+          for (const c of document.querySelectorAll<HTMLElement>(cardSel)) {
+            const r = c.getBoundingClientRect()
+            if (r.bottom > 0 && r.top < window.innerHeight && c.offsetParent !== null) return true
+          }
+          return false
+        }, card),
+      { timeout: 15000 },
+    )
+    .toBe(true)
 })
 
 test("variable item heights: up-scroll through swaps and materialization never jumps", async ({

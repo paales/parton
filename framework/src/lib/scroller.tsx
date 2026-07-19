@@ -42,9 +42,10 @@
  *    reservation (the span must move). Window movement IS
  *    navigation: the URL stays honest, back/forward replay it.
  *
- * GEOMETRY IS CSS. The app's stylesheet declares three variables on
- * the collection's class (the `className` option — applied to the
- * wrapper, inherited by the grid and the reservations alike):
+ * GEOMETRY IS CSS. The app's stylesheet declares three variables
+ * under the collection's NAME — the wrapper always carries it as a
+ * class (plus any `className` extras), inherited by the grid and the
+ * reservations alike:
  *
  *     .browse-grid {
  *       --scroller-cols: 4;      /· responsive via media queries ·/
@@ -143,6 +144,13 @@ export interface ScrollerOptions<Item> {
    *  content: the browser resolves the position from layout, correct
    *  under any heights or breakpoints. */
   render: (props: { item: Item; index: number; id?: string }) => ReactNode
+  /** The item's ENTITY key — what makes a re-sorted or filtered slice
+   *  MOVE cards instead of rewriting them (the order/content split).
+   *  With it, the framework keys each rendered cell itself and
+   *  `render` returns the bare element. Without it, `render` must put
+   *  a stable key on its element (never the index — an index key
+   *  destroys entity identity across re-slices). */
+  key?: (item: Item) => string | number
   /** Items per leaf parton — also the `load` slice size and the
    *  default anchor step. Default 24. */
   leaf?: number
@@ -152,9 +160,11 @@ export interface ScrollerOptions<Item> {
    *  parks/restores instead of refetching. Beyond the ring, the
    *  reservation shells take over. Default 6. */
   ring?: number
-  /** Class for the wrapper — where the app's CSS declares
-   *  `--scroller-cols`, `--scroller-row`, `--scroller-gap` (see the
-   *  module header for the contract). */
+  /** EXTRA classes for the wrapper. The wrapper always carries `name`
+   *  as a class (and `id={name}`), so the app's CSS declares
+   *  `--scroller-cols` / `--scroller-row` / `--scroller-gap` under
+   *  `.<name>` with no separate wiring — this option only adds to
+   *  that. */
   className?: string
   /** Observer runway for leaf materialization — how far beyond the
    *  viewport a leaf starts resolving. A number is px; a string is
@@ -223,11 +233,17 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
         const { items } = await opts.load({ offset: o, limit: leaf })
         return (
           <>
-            {items
-              .slice(0, n)
-              .map((it, i) =>
-                opts.render({ item: it, index: o + i, ...(i === 0 && aid ? { id: aid } : {}) }),
-              )}
+            {items.slice(0, n).map((it, i) => {
+              const node = opts.render({
+                item: it,
+                index: o + i,
+                ...(i === 0 && aid ? { id: aid } : {}),
+              })
+              // The `key` selector keys the cell here so `render`
+              // returns the bare element; without it the app's own
+              // element key carries entity identity.
+              return opts.key ? <Fragment key={opts.key(it)}>{node}</Fragment> : node
+            })}
           </>
         )
       } as (props: LeafProps & RenderArgs) => ReactNode,
@@ -266,7 +282,6 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
   const RootSpec = _buildPartial(
     Object.assign(
       async function RootRender(_: RenderArgs) {
-        const { total } = await opts.load({ offset: 0, limit: leaf })
         // The root's OWN anchor read is deliberately raw: the span's
         // placement depends on the exact value, so the root re-renders
         // per anchor move — one parton, plus the verdict-flipped
@@ -274,6 +289,14 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
         const page = Math.max(1, Number(searchParam(anchorParam)) || 1)
         const anchorIdx = (page - 1) * anchorStep
         const anchorLeaf = Math.floor(anchorIdx / leaf) * leaf
+        // The shape read (total) rides the ANCHOR's own slice — the
+        // same `{offset, limit}` the seeded anchor leaf resolves, so
+        // the two dedupe into ONE backend query (a deep link never
+        // pays a page-1 fetch just for the count). Every slice
+        // restates `total`, including one past the end (empty items,
+        // honest count), so an out-of-range anchor still shapes
+        // correctly.
+        const { total } = await opts.load({ offset: anchorLeaf, limit: leaf })
         const start = Math.max(0, anchorLeaf - ring * leaf)
         const end = Math.min(Math.max(total, 0), anchorLeaf + (ring + 1) * leaf)
 
@@ -356,7 +379,7 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
                 track — a span swap destroying and recreating the
                 visible cells — is re-anchored by the framework via
                 the index-derived ids. */}
-            <div id={name} className={opts.className}>
+            <div id={name} className={opts.className ? `${name} ${opts.className}` : name}>
               {start > 0 ? <ScrollerReservation key="res-before" count={start} /> : null}
               {estimateScript}
               {/* The span's grid — template derived from the app's

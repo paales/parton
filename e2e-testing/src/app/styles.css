@@ -223,7 +223,7 @@
   --scroller-gap: 12px;
 }
 
-.pokedex-grid {
+.pokedex-list {
   --scroller-cols: 4;
   --scroller-row: 264px;
   --scroller-gap: 16px;
@@ -238,13 +238,13 @@
 
 @media (max-width: 1024px) {
   .browse-grid,
-  .pokedex-grid {
+  .pokedex-list {
     --scroller-cols: 3;
   }
 }
 @media (max-width: 640px) {
   .browse-grid,
-  .pokedex-grid {
+  .pokedex-list {
     --scroller-cols: 2;
   }
   .scale-grid {
