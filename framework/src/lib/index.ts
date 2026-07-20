@@ -33,6 +33,7 @@ export { block, type BlockOptions, type SchemaScope } from "../runtime/cms-block
 export {
   scroller,
   type ScrollerAnchor,
+  type ScrollerItemProps,
   type ScrollerOptions,
   type ScrollerLoad,
   type ScrollerWindow,

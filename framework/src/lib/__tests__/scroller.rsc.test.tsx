@@ -63,7 +63,8 @@ describe("scroller: the placed span and its reservations", () => {
   const List = scroller({
     name: "probe-list",
     load: makeSource(state),
-    render: ({ item: i, id }) => <i key={i} id={id} data-item={i} />,
+    key: (i) => i,
+    render: ({ item: i, id }) => <i id={id} data-item={i} />,
     leaf: 24,
     ring: 6,
   })
@@ -149,7 +150,8 @@ describe("scroller: growth re-shapes only the tail", () => {
   const List = scroller({
     name: "grow-list",
     load: makeSource(state),
-    render: ({ item: i }) => <i key={i} data-item={i} />,
+    key: (i) => i,
+    render: ({ item: i }) => <i data-item={i} />,
     leaf: 24,
     ring: 6,
   })

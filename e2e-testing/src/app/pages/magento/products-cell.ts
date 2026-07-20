@@ -79,8 +79,8 @@ export const browseCardCell = magentoCatalog.fragment(
 // where the partitions align and one cached query where they don't.
 export const browseProductsCell = magentoCatalog.query(
   `#graphql
-  query BrowseProducts($pageSize: Int!, $currentPage: Int!, $search: String) {
-    products(filter: {}, search: $search, pageSize: $pageSize, currentPage: $currentPage) {
+  query BrowseProducts($pageSize: Int!, $currentPage: Int!, $filter: ProductAttributeFilterInput) {
+    products(filter: $filter, pageSize: $pageSize, currentPage: $currentPage) {
       total_count
       aggregations {
         attribute_code

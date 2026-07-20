@@ -19,20 +19,25 @@ anchoring + the framework's id-referenced backstop).
 const BrowseGrid = scroller({
   name: "browse-grid",
   load: async ({ offset, limit }) => {
-    const q = searchParam("q") // a FILTER is a tracked read in the loader
-    const res = await browseProductsCell.resolve({
-      pageSize: limit,
-      currentPage: offset / limit + 1,
-      ...(q ? { search: q } : {}),
-    })
+    // a FILTER is tracked reads in the loader (searchParam per facet)
+    const res = await browseProductsCell.resolve(sliceArgs(offset, limit))
     return { items: itemsOf(res), total: totalOf(res) }
   },
+  // `load` defines the item, `key` names it, `render` draws it.
   key: (item) => String(item.args.uid),
-  render: ({ item, id }) => <BrowseCard item={item} anchorId={id} />,
+  render: BrowseCard,
   leaf: 12,
 })
 // placement: <BrowseGrid />
 ```
+
+`render` is a **component** over `ScrollerItemProps<Item>`
+(`{item, index, id?}`): pass a parton component directly or an inline
+function — the framework creates each cell's element and keys it with
+the entity key, so `render` never wraps or keys anything. `Item` is
+defined by `load` alone (`key`/`render` never widen it); a component
+whose `item` prop accepts more than the loader returns still
+typechecks.
 
 ```css
 /* The app's entire geometry contract — three variables, declared
@@ -156,15 +161,29 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
 ## Joining the query — facets, pagination, prices
 
 The scroller never owns the query; the CELL is the shared address of
-the result, and any parton can join it. `/magento/browse` shows all
-three projections over ONE `browseProductsCell`:
+the result, and any parton can join it by resolving a partition.
+Joining is safe cold or warm: cell loads are **single-flight per
+partition** (see `reference/cells.md`), so the root's shape read,
+leaf 0's slice, and every page projection resolving the same args in
+one render share ONE backend fetch. `/magento/browse` shows the
+projections over ONE `browseProductsCell`:
 
-- **Facets**: a `FilterBar` parton resolves the same partition the
-  slice path uses and reads `aggregations` off the result — on page 1
-  that is byte-for-byte the query leaf 0 already ran (deduped);
-  elsewhere it is one cached fetch.
-- **Pagination**: pages as real `<a href="?page=N">` links. A plain
-  parton reads `total` from the same cell and renders anchors; a
+- **Facets that FILTER**: the filter state is the URL — one
+  `f_<code>=` param per active facet, so filters are tracked reads,
+  bookmarkable, and shared. The `FilterBar` parton resolves TWO
+  partitions of the cell: the **unfiltered** query supplies the
+  option UNIVERSE (the bar stays stable while filters toggle —
+  options never vanish because the current result dropped them), the
+  **active** query supplies every COUNT (the numbers reflect what the
+  grid shows). With no filter active the two args are identical and
+  collapse into one resolve. Options are plain `<a>` links stating
+  the toggled facet (and dropping `?page=` — a filter change reshapes
+  the collection); an active-filters row renders removable chips from
+  the same data. Every loader deriving its args through one shared
+  helper is what keeps the partitions aligned.
+- **Pagination**: pages as real `<a href="?page=N">` links over the
+  ACTIVE query (facet params preserved). A plain parton reads `total`
+  from the same partition the grid loads and renders anchors; a
   click is an ordinary client nav the sync answers as an external
   anchor statement (above). Cold, the link is a seeded document
   render — pagination works before any JS.
@@ -175,7 +194,8 @@ three projections over ONE `browseProductsCell`:
 
 There is deliberately no scroller API for any of this — `load` is
 only the windowing adapter (offset → slice); data lives at cell
-addresses that outrank any component boundary.
+addresses that outrank any component boundary. Pinned by the facet
+tests in `product-browse-culling.spec.ts`.
 
 ## The scrollbar jump (why there is no tree)
 
@@ -214,8 +234,8 @@ its plane is 2D px space with procedural content, a different animal.
 | ------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`       | (required) | Identity: catalog ids (`<name>`, `<name>-leaf`), the public DOM anchors (`id=<name>`, `id=<name>-p<N>`) — and the wrapper's CLASS, where the app's CSS declares the geometry variables. Explicit — there is no Render name to derive it from. |
 | `load`       | (required) | `({offset, limit}) → {items, total}`. Called in `leaf`-aligned slices. Tracked reads (cells, `searchParam`) record as deps.                                                                                                                   |
-| `render`     | (required) | `({item, index, id}) → ReactNode` — one grid cell, props-bag style. Apply `id` to the cell (boundary anchor). `Item` infers from `load`.                                                                                                      |
-| `key`        | —          | `(item) → string \| number` — the ENTITY key; the framework keys each cell so `render` returns the bare element. Without it, `render` must key its element itself (never by index).                                                           |
+| `render`     | (required) | A COMPONENT over `ScrollerItemProps<Item>` (`{item, index, id?}`) — a parton component directly or an inline function; the framework creates and keys the element. Apply `id` to the cell's element (boundary anchor). `Item` infers from `load` alone. |
+| `key`        | (required) | `(item) → string \| number` — the ENTITY key the framework keys each cell's element with. What makes a re-sliced collection MOVE cells instead of rewriting them. Never index-derived.                                                        |
 | `leaf`       | `24`       | Items per leaf parton = fetch slice = default anchor step. **Must be divisible by every `--scroller-cols` value** (row alignment).                                                                                                            |
 | `ring`       | `6`        | Leaves placed each side of the anchor leaf. Placement ≠ materialization — the ring is the park/restore zone.                                                                                                                                  |
 | `className`  | —          | EXTRA wrapper classes — `name` is always applied as a class already.                                                                                                                                                                          |

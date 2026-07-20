@@ -118,6 +118,20 @@ export type ScrollerLoad<Item> = (window: {
   limit: number
 }) => Promise<ScrollerWindow<Item>>
 
+/** The props one collection cell receives — `render`'s contract. */
+export interface ScrollerItemProps<Item> {
+  /** The item, exactly as `load` returned it. */
+  item: Item
+  /** Absolute index in the collection. */
+  index: number
+  /** The public anchor id on anchor-step boundary items
+   *  (`<name>-p<N>`, absent otherwise) — put it on the cell's element
+   *  (`id={id}`) so deep links target REAL content: the browser
+   *  resolves the position from layout, correct under any heights or
+   *  breakpoints. */
+  id?: string
+}
+
 export interface ScrollerAnchor {
   /** URL search param carrying the anchored position. Default
    *  `"page"` — configure when two anchored collections share a
@@ -135,22 +149,21 @@ export interface ScrollerOptions<Item> {
    *  to derive it from. */
   name: string
   load: ScrollerLoad<Item>
-  /** The item renderer — one grid cell per item, props-bag style
-   *  like a parton Render. Give each cell a stable key (the entity
-   *  key), and make the cell its own parton when its content should
-   *  invalidate per entity. `id` is the public anchor id on
-   *  anchor-step boundary items (`<name>-p<N>`, absent otherwise) —
-   *  put it on the cell (`id={id}`) so deep links target REAL
-   *  content: the browser resolves the position from layout, correct
-   *  under any heights or breakpoints. */
-  render: (props: { item: Item; index: number; id?: string }) => ReactNode
-  /** The item's ENTITY key — what makes a re-sorted or filtered slice
-   *  MOVE cards instead of rewriting them (the order/content split).
-   *  With it, the framework keys each rendered cell itself and
-   *  `render` returns the bare element. Without it, `render` must put
-   *  a stable key on its element (never the index — an index key
-   *  destroys entity identity across re-slices). */
-  key?: (item: Item) => string | number
+  /** The item renderer — a COMPONENT drawing one grid cell from
+   *  `ScrollerItemProps`. Pass a parton component directly
+   *  (`render: ProductCard`) or an inline function; the framework
+   *  creates the element and keys it with `key`, so `render` never
+   *  wraps or keys — it just draws `item`. Make the cell its own
+   *  parton when its content should invalidate per entity. */
+  render: (props: ScrollerItemProps<Item>) => ReactNode | Promise<ReactNode>
+  /** The item's ENTITY key. `load` defines the item, `key` names it,
+   *  `render` draws it — the framework keys each cell's element with
+   *  this, which is what makes a re-sorted or filtered slice MOVE
+   *  cells instead of rewriting them (the order/content split). Never
+   *  derive it from the index. (`NoInfer` keeps `load` the authority
+   *  on `Item`: without it, a `render` component whose `item` prop
+   *  accepts a wider type would widen what `key` receives.) */
+  key: (item: NoInfer<Item>) => string | number
   /** Items per leaf parton — also the `load` slice size and the
    *  default anchor step. Default 24. */
   leaf?: number
@@ -231,19 +244,22 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
     Object.assign(
       async function LeafRender({ o, n, aid }: LeafProps & RenderArgs) {
         const { items } = await opts.load({ offset: o, limit: leaf })
+        // `render` is a component: the framework creates the element
+        // and keys it with the entity key, so entity identity lives on
+        // the element the reconciler sees — a re-sorted slice moves
+        // cells; a component reference (`render: ProductCard`) and an
+        // inline function are the same thing here.
+        const Item = opts.render as React.ComponentType<ScrollerItemProps<Item>>
         return (
           <>
-            {items.slice(0, n).map((it, i) => {
-              const node = opts.render({
-                item: it,
-                index: o + i,
-                ...(i === 0 && aid ? { id: aid } : {}),
-              })
-              // The `key` selector keys the cell here so `render`
-              // returns the bare element; without it the app's own
-              // element key carries entity identity.
-              return opts.key ? <Fragment key={opts.key(it)}>{node}</Fragment> : node
-            })}
+            {items.slice(0, n).map((it, i) => (
+              <Item
+                key={opts.key(it)}
+                item={it}
+                index={o + i}
+                {...(i === 0 && aid ? { id: aid } : {})}
+              />
+            ))}
           </>
         )
       } as (props: LeafProps & RenderArgs) => ReactNode,

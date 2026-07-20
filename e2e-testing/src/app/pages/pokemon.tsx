@@ -65,11 +65,11 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const PokemonCard = parton(function PokemonCardRender({
   item,
   compact,
-  anchorId,
+  id,
 }: {
   item: ResolvedCell<CellValue<typeof pokemonCardCell>>
   compact?: boolean
-  anchorId?: string
+  id?: string
 } & RenderArgs) {
   const p = item.value
   if (!p) return null
@@ -77,7 +77,7 @@ const PokemonCard = parton(function PokemonCardRender({
   const spriteUrl = extractSprite(p.pokemon_v2_pokemonsprites[0]?.sprites)
   return (
     <a
-      id={anchorId}
+      id={id}
       href={`/pokemon/${p.id}`}
       className="block rounded-xl bg-card p-5 ring-1 ring-border/50 transition-colors hover:bg-muted"
     >
@@ -344,7 +344,7 @@ const PokedexList = scroller({
     }
   },
   key: (item) => String(item.args.id),
-  render: ({ item, id }) => <PokemonCard item={item} anchorId={id} />,
+  render: PokemonCard,
   leaf: 24,
 })
 

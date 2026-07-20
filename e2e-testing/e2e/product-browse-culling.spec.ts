@@ -332,6 +332,51 @@ test("the page's projections join the scroller's query — facets, pagination, s
     .toBeGreaterThan(0)
 })
 
+test("facets FILTER: a click states the filter, counts follow the active query, the option universe stays unfiltered", async ({
+  page,
+}) => {
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+  await waitForPageInteractive(page)
+
+  const option = '[data-testid="browse-facet-option"]'
+  await expect.poll(() => page.locator(option).count(), { timeout: 15000 }).toBeGreaterThan(0)
+  const universeBefore = await page.locator(option).count()
+  const lastLink = () =>
+    page
+      .locator('[data-testid="browse-pagination"] [data-testid^="browse-page-link-"]')
+      .last()
+      .textContent()
+  const pagesBefore = Number(await lastLink())
+  expect(pagesBefore).toBeGreaterThan(1)
+
+  // Click a CATEGORY facet — a strict subset of the catalog.
+  await page.locator(`${option}[href*="f_category_uid"]`).first().click()
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("f_category_uid"), { timeout: 10000 })
+    .not.toBeNull()
+
+  // The active-filters section appears, the option is marked active.
+  await expect(page.locator('[data-testid="browse-active-filters"]')).toBeVisible({
+    timeout: 15000,
+  })
+  await expect(page.locator(`${option}[data-active]`)).toHaveCount(1, { timeout: 15000 })
+
+  // The grid + pagination follow the ACTIVE query: fewer pages.
+  await expect
+    .poll(async () => Number(await lastLink()), { timeout: 15000 })
+    .toBeLessThan(pagesBefore)
+  // The option UNIVERSE stays the unfiltered one — nothing vanished.
+  expect(await page.locator(option).count()).toBe(universeBefore)
+
+  // Removing the active chip restores the unfiltered collection.
+  await page.locator('[data-testid^="browse-active-filter-"]').first().click()
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("f_category_uid"), { timeout: 10000 })
+    .toBeNull()
+  await expect.poll(async () => Number(await lastLink()), { timeout: 15000 }).toBe(pagesBefore)
+})
+
 test("clicking a pagination link moves the viewport to that page", async ({ page }) => {
   // The anchor param is a public surface: a link stating ?page=N is
   // an EXTERNAL anchor statement — the sync must move the viewport
