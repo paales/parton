@@ -548,3 +548,170 @@ test("variable item heights: up-scroll through swaps and materialization never j
   const jumps = await page.evaluate(() => (window as unknown as { __jumps: number[] }).__jumps)
   expect(jumps, `spontaneous scroll moves: ${jumps.join(",")}`).toEqual([])
 })
+
+test("rapid back/forward during load never corrupts the anchor entries", async ({ page }) => {
+  test.setTimeout(90000)
+  // A traverse's intercept handler applies the refetch AFTER the URL
+  // commits, and the browser's own scroll restoration lands only when
+  // that handler settles. The writer mirroring mid-transition geometry
+  // would replace-write garbage pages onto the traversed entries (each
+  // corrupted value becoming the next enforcement target — a
+  // compounding staircase), and every such navigate() would abort the
+  // in-flight traverse refetch. The writer stands down until the
+  // foreign transition settles and the enforcement has re-aligned.
+  // Height variance: real row heights ≠ the estimate, so restoration
+  // offsets and estimate arithmetic genuinely disagree — the
+  // displacement a mid-transition mirror would canonize.
+  await page.addInitScript(() => {
+    document.addEventListener("DOMContentLoaded", () => {
+      const s = document.createElement("style")
+      s.textContent = `
+        [data-testid^="browse-card-"]:nth-of-type(3n) { min-height: 340px !important; }
+        [data-testid^="browse-card-"]:nth-of-type(7n) { min-height: 300px !important; }
+      `
+      document.head.appendChild(s)
+    })
+  })
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+  await waitForPageInteractive(page)
+
+  // Scroll the UNFILTERED collection first: the initial entry gets a
+  // mirrored ?page= AND a saved scroll offset for the browser's
+  // deferred traverse restoration — the displacement ingredient.
+  await page.mouse.move(550, 400)
+  for (let i = 0; i < 60; i++) {
+    await page.mouse.wheel(0, 700)
+    await page.waitForTimeout(140)
+    if (Number(new URL(page.url()).searchParams.get("page") || "1") >= 8) break
+  }
+  const initialStated = Number(new URL(page.url()).searchParams.get("page"))
+  expect(initialStated, "initial entry carries a mirrored page").toBeGreaterThanOrEqual(8)
+
+  // A facet click pushes the second entry (drops ?page)…
+  await page.locator('[data-testid="browse-facet-option"]').first().click()
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("f"), { timeout: 10000 })
+    .not.toBeNull()
+
+  // …then scroll until the writer states page >= 5.
+  for (let i = 0; i < 60; i++) {
+    await page.mouse.wheel(0, 500)
+    await page.waitForTimeout(140)
+    if (Number(new URL(page.url()).searchParams.get("page") || "1") >= 5) break
+  }
+  const stated = Number(new URL(page.url()).searchParams.get("page"))
+  expect(stated, "reached a deep anchor before traversing").toBeGreaterThanOrEqual(5)
+  await page.waitForTimeout(1200)
+
+  // Leave a STALE offset on this entry: consume the writer's
+  // leading-edge tick in place, then burst two pages further and
+  // traverse before its trailing mirror can restate — the entry keeps
+  // ?page=5 while its saved scroll offset says ~7. The
+  // forward-traverse's deferred restoration will land on that stale
+  // offset AFTER the handler settles; a writer mirroring it would
+  // canonize the displacement into the entry (the measured staircase).
+  await page.evaluate(() => window.dispatchEvent(new Event("scroll")))
+  await page.waitForTimeout(60)
+  await page.evaluate(() => {
+    window.scrollBy({ top: 6 * 252, behavior: "instant" })
+    window.dispatchEvent(new Event("scroll"))
+  })
+  await page.waitForTimeout(40)
+  await page.evaluate(() => history.back())
+  await page.waitForTimeout(1500)
+
+  // Throttle the wire: the traverse handlers (and the browser's
+  // deferred restoration behind them) stay in flight long enough to
+  // be the "during loading" window, deterministically.
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send("Network.emulateNetworkConditions", {
+    offline: false,
+    latency: 500,
+    downloadThroughput: (1024 * 1024) / 8,
+    uploadThroughput: (1024 * 1024) / 8,
+  })
+
+  // ONE forward, allowed to settle: its deferred restoration lands on
+  // the stale offset (~2 pages past the stated anchor) well after the
+  // enforcement's commit-time align — the displacement a mirroring
+  // writer would canonize into the entry.
+  await page.evaluate(() => history.forward())
+  await page
+    .waitForFunction(() => (navigation as { transition?: unknown }).transition == null, {
+      timeout: 15000,
+    })
+    .catch(() => {})
+  await page.waitForTimeout(1200)
+
+  // Then the rapid dance — every press mid-application of the last.
+  await page.evaluate(async () => {
+    const dirs = ["back", "forward", "back", "forward"]
+    for (const dir of dirs as Array<"back" | "forward">) {
+      history[dir]()
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  })
+  await page.waitForTimeout(1500)
+  await cdp.send("Network.emulateNetworkConditions", {
+    offline: false,
+    latency: 0,
+    downloadThroughput: -1,
+    uploadThroughput: -1,
+  })
+
+  // Settle: the last traverse's transition must actually FINISH — a
+  // writer statement mid-handler would have aborted it (measured
+  // pre-fix: stuck for minutes).
+  await page.waitForFunction(() => (navigation as { transition?: unknown }).transition == null, {
+    timeout: 30000,
+  })
+  await page.waitForTimeout(2500)
+
+  // The entries kept their pages: each still states what the user's
+  // own scrolling stated — no mid-transition mirror rewrote them.
+  const entries = await page.evaluate(() =>
+    (navigation as unknown as { entries(): Array<{ url: string }> })
+      .entries()
+      .map((e) => new URL(e.url).searchParams.get("page")),
+  )
+  expect(Number(entries[0]), `entries: ${entries.join(" | ")}`).toBeGreaterThanOrEqual(
+    initialStated - 1,
+  )
+  expect(Number(entries[0]), `entries: ${entries.join(" | ")}`).toBeLessThanOrEqual(
+    initialStated + 1,
+  )
+  expect(Number(entries[1]), `entries: ${entries.join(" | ")}`).toBeGreaterThanOrEqual(stated - 1)
+  expect(Number(entries[1]), `entries: ${entries.join(" | ")}`).toBeLessThanOrEqual(stated + 1)
+
+  // No continuous jumping: the viewport is at rest.
+  const y1 = await page.evaluate(() => Math.round(window.scrollY))
+  await page.waitForTimeout(1800)
+  const y2 = await page.evaluate(() => Math.round(window.scrollY))
+  expect(Math.abs(y2 - y1), `viewport still moving: ${y1} -> ${y2}`).toBeLessThan(120)
+
+  // And it rests where the surviving entry says it should.
+  const finalPage = await centeredPage(page)
+  const finalParam = Number(new URL(page.url()).searchParams.get("page") || "1")
+  expect(
+    Math.abs((finalPage ?? 0) - finalParam),
+    `centered=${finalPage} param=${finalParam}`,
+  ).toBeLessThanOrEqual(2)
+
+  // CONVERGENCE: the resting viewport materializes — cards, not a
+  // skeleton band (measured pre-fix: flips lost, skeletons forever).
+  await expect
+    .poll(
+      () =>
+        page.evaluate((cardSel) => {
+          let n = 0
+          for (const c of document.querySelectorAll<HTMLElement>(cardSel)) {
+            const r = c.getBoundingClientRect()
+            if (r.bottom > 0 && r.top < window.innerHeight && c.offsetParent !== null) n++
+          }
+          return n
+        }, card),
+      { timeout: 20000 },
+    )
+    .toBeGreaterThan(0)
+})

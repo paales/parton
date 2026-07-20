@@ -208,6 +208,14 @@ export function ScrollerAnchorSync({
    *  a mirror of the user's scroll from an EXTERNAL anchor statement
    *  (a pagination link, a traverse). */
   const selfWrite = useRef<string | null>(null)
+  /** The param value the writer believes the URL carries — its skip
+   *  baseline. Shared with the URL-watch so a foreign statement
+   *  re-bases it (no redundant replace after a traverse). */
+  const lastVal = useRef<string | null>(null)
+  /** True from a foreign statement's arrival until the enforcement has
+   *  re-aligned against the SETTLED document — the writer's stand-down
+   *  window (see the URL-watch below). */
+  const foreignSettling = useRef(false)
 
   // Deep-link / restore landing on client navs — before paint, by the
   // public anchor id. (Document loads use the streamed landing
@@ -244,18 +252,15 @@ export function ScrollerAnchorSync({
     // own entry-change event. No mount call: the landing entry
     // belongs to the stage scripts / the layout effect above.
     const ambient = (
-      window as Window & { navigation?: EventTarget & { currentEntry?: { url?: string } } }
+      window as Window & {
+        navigation?: EventTarget & {
+          currentEntry?: { url?: string }
+          transition?: { navigationType: string; finished: Promise<void> } | null
+        }
+      }
     ).navigation
     if (!ambient) return
-    const check = () => {
-      const url = ambient.currentEntry?.url
-      if (!url) return
-      const val = new URL(url).searchParams.get(param) ?? ""
-      if (selfWrite.current === val) {
-        selfWrite.current = null
-        return
-      }
-      const page = Math.max(1, Number(val) || 1)
+    const alignTo = (page: number) => {
       const wrapper = document.getElementById(name)
       const gridEl = wrapper?.querySelector(":scope > .parton-scroller-grid")
       const geo = gridGeometry(gridEl ?? null)
@@ -273,8 +278,65 @@ export function ScrollerAnchorSync({
       }
       window.scrollTo(0, top + (((page - 1) * step) / geo.cols) * geo.rowH)
     }
+    // Token: only the LATEST foreign statement's deferred re-align may
+    // run — each new statement (or unmount) invalidates the pending one.
+    let alignToken = 0
+    const check = () => {
+      const url = ambient.currentEntry?.url
+      if (!url) return
+      const val = new URL(url).searchParams.get(param) ?? ""
+      if (selfWrite.current === val) {
+        selfWrite.current = null
+        return
+      }
+      // A FOREIGN statement. Re-base the writer's skip baseline (its
+      // next mirror is measured against THIS value, not its own last
+      // write) and align immediately — best-effort feedback against
+      // whatever is laid out right now.
+      lastVal.current = val
+      alignTo(Math.max(1, Number(val) || 1))
+      // A push/traverse commits its URL FIRST; the intercept handler
+      // applies the content after, and the browser's own deferred
+      // scroll restoration lands only when that handler settles —
+      // everything the immediate align did can be displaced by both.
+      // Hold the writer down (mirroring transitional geometry would
+      // bake a garbage page into the entry — and the navigate() would
+      // ABORT the in-flight handler), then re-align against the
+      // settled document. Two frames past `finished`: the restoration
+      // scroll lands as the transition resolves. `replace` transitions
+      // are the writer's own statements — never deferred.
+      const t = ambient.transition
+      if (t && t.navigationType !== "replace") {
+        foreignSettling.current = true
+        const token = ++alignToken
+        t.finished.then(
+          () => {
+            if (token !== alignToken) return
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                if (token !== alignToken) return
+                const u = ambient.currentEntry?.url
+                const v = u ? (new URL(u).searchParams.get(param) ?? "") : ""
+                lastVal.current = v
+                alignTo(Math.max(1, Number(v) || 1))
+                foreignSettling.current = false
+              }),
+            )
+          },
+          () => {
+            // Aborted: a newer navigation superseded this one — its own
+            // entry-change re-runs check. If none did, just re-arm.
+            if (token === alignToken) foreignSettling.current = false
+          },
+        )
+      }
+    }
     ambient.addEventListener("currententrychange", check)
-    return () => ambient.removeEventListener("currententrychange", check)
+    return () => {
+      alignToken++
+      foreignSettling.current = false
+      ambient.removeEventListener("currententrychange", check)
+    }
   }, [name, param, step])
 
   // WINDOW-MOVE ANCHORING SUPPRESSION. A window move never moves an
@@ -379,9 +441,20 @@ export function ScrollerAnchorSync({
   // scrolling + once at settle.
   useEffect(() => {
     const url0 = nav.currentEntry?.url
-    let lastVal = url0 ? (new URL(url0).searchParams.get(param) ?? "") : ""
+    lastVal.current ??= url0 ? (new URL(url0).searchParams.get(param) ?? "") : ""
     let timer: ReturnType<typeof setTimeout> | undefined
     const sync = () => {
+      // STAND DOWN while a foreign navigation applies. A push/traverse
+      // transition means the document is mid-swap (and the browser's
+      // deferred scroll restoration is still owed): a mirror measured
+      // now would bake transitional geometry into the entry, and the
+      // navigate() itself would abort the in-flight intercept handler.
+      // The writer's own statements are `replace`-typed — those never
+      // gate it. The URL-watch re-arms after its post-settle re-align.
+      const t = (
+        window as Window & { navigation?: { transition?: { navigationType: string } | null } }
+      ).navigation?.transition
+      if (foreignSettling.current || (t && t.navigationType !== "replace")) return
       const wrapper = document.getElementById(name)
       if (!wrapper) return
       // Occlusion: state only what the user actually SEES. An overlay
@@ -457,8 +530,8 @@ export function ScrollerAnchorSync({
       }
       const page = Math.floor(idx / step) + 1
       const want = page > 1 ? String(page) : ""
-      if (want === lastVal) return
-      lastVal = want
+      if (want === lastVal.current) return
+      lastVal.current = want
       selfWrite.current = want
       const inSpan = idx >= start && idx < end
       navigate(
