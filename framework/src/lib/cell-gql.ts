@@ -147,12 +147,36 @@ export function gqlCell<TResult, TVars extends Record<string, unknown>>(
  *       return aggregate(data)   // line cells already hydrated
  *     }
  */
+/** Dev observability: one line per ACTUAL backend query, at the
+ *  moment it goes out and again when it lands — the ground truth for
+ *  "what triggered a fetch" (cold resolves, seeded slices, joins).
+ *  Single-flight and storage hits never reach here, so absence of a
+ *  line IS the dedupe. Every gql request site funnels through this. */
+async function loggedRequest<TResult>(
+  client: GqlClient,
+  doc: TadaDocumentNode<TResult, any, any>,
+  vars: Record<string, unknown>,
+): Promise<TResult> {
+  if (!import.meta.env.DEV) return (await client.request(doc, vars as never)) as TResult
+  const op =
+    (doc as { definitions?: readonly { name?: { value?: string } }[] }).definitions?.find(
+      (d) => d.name?.value,
+    )?.name?.value ?? "(anonymous)"
+  const t0 = performance.now()
+  console.info(`[parton] gql → ${op} ${JSON.stringify(vars)}`)
+  try {
+    return (await client.request(doc, vars as never)) as TResult
+  } finally {
+    console.info(`[parton] gql ← ${op} ${Math.round(performance.now() - t0)}ms`)
+  }
+}
+
 export async function runQuery<TResult, TVars extends Record<string, unknown>>(
   client: GqlClient,
   doc: TadaDocumentNode<TResult, TVars, any>,
   vars: TVars,
 ): Promise<TResult> {
-  const result = await client.request(doc, vars)
+  const result = await loggedRequest(client, doc, vars)
   hydrateFragmentsFromResult(doc, result)
   return result
 }
@@ -243,7 +267,7 @@ export function gqlCellBuilder<Schema extends SchemaLike, Config extends ConfigL
       opts?.id,
     )
     const handle = buildEphemeralCell<unknown>(id, null, async (args: CellArgs) => {
-      const raw = await config.client.request(doc, args as never)
+      const raw = await loggedRequest(config.client, doc, args)
       return cells.length ? rewriteResultToCells(doc, cells, raw) : raw
     })
     return handle as unknown as GqlCell<
