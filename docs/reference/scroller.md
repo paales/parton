@@ -202,9 +202,15 @@ projections over ONE `browseProductsCell`:
   anchor statement (above). Cold, the link is a seeded document
   render — pagination works before any JS.
 - **Streaming prices**: each card composes its own async parton
-  (`LivePricePartial` behind Suspense) — the card shell commits with
-  the slice, prices stream per SKU, and a `refreshSelector("price")`
-  fans out to every visible card.
+  (`LivePricePartial` behind Suspense) — declared `defer: "stream"`,
+  so a materializing leaf's lane body closes at its SHELL (cards
+  commit instantly; measured: the scroll-up rematerialization wait
+  fell from ~1.35s to ~10ms) while each price arrives on its own
+  forced follow-up lane ~a second behind, and a
+  `refreshSelector("price")` fans out to every visible card. Any slow
+  streamed member of a collection cell should declare it — a leaf's
+  materialization must never wait for its slowest child (see
+  `../internals/channel.md` § Stream-defer stubs).
 
 There is deliberately no scroller API for any of this — `load` is
 only the windowing adapter (offset → slice); data lives at cell

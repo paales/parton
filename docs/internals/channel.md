@@ -847,6 +847,65 @@ pre-establishment open rides attach-with-intent: the attach's
 whole-tree render carries the overlay, and the chunks lane on the
 connection it opened.
 
+## Stream-defer stubs — the flush boundary
+
+A lane's `muxend` waits for its LAST Flight row, so a body whose
+nested descendant streams slowly (a per-card live price behind
+Suspense) holds its own shell hostage — the measured ~1s
+materialization wait the flush-boundary arc removed. The resolution
+is structural, not a commit-mode: **the body closes at its shell**
+because slow members never enter it.
+
+- **The stub emission.** A parton with `defer: "stream"` rendered
+  inside a DRIVER-OWNED body (a lane iteration, a covering
+  nav/reconcile segment — marked by the ambient `laneStubCapture`
+  the driver installs: on the lane probe store like the registration
+  capture, via `_runWithLaneStubCapture` around segment renders)
+  takes the defer branch with a distinct dormant: a
+  `<PendingSlot partonId matchKey>` client gate wrapping the inert
+  `<i data-partial data-partial-pending>` marker. The boundary
+  REGISTERS as on every emission path — `lookupPartial` resolves it
+  for the follow-up, the wake index covers it, the descendant fold
+  sees its prior record. The enclosing body reaches
+  `pendingChunks === 0` at its shell; trailer, delivery seq,
+  `muxend`, drain promote, and heals all keep their full-drain
+  semantics — every committed body stays COMPLETE, which is what
+  keeps covering renders' fp-skips honest and the no-blink invariant
+  intact. Renders with no driver (documents, SSR, discrete
+  refetches) render stream-deferred partons DEEP.
+- **The follow-up lane.** The render records each stubbed id into
+  the capture; the driver spawns them at drain (lane path) or on the
+  reopened region (segment paths) as FORCED lanes — fp-skip and the
+  defer gate yield, and a navigation tear re-lanes them as
+  unfulfilled forces instead of silently dropping promised content.
+  An already-open lane coalesces to dirty.
+- **The client gate.** `<PendingSlot>` suspends on
+  `slotFillPromise(id)` while the id's cache slot is EMPTY, and
+  renders its children once filled (by then the substitution has
+  replaced the marker with the cached content). The gate lives in
+  the WIRE FORM — not in the substitution — because a lane body's
+  rows can settle between the commit walk's classification and
+  React's reconcile (the raw-reveal TOCTOU): React then unwraps the
+  row natively, no substitution pass runs, and a bare marker would
+  commit the boundary REVEALED with visually-empty content that
+  React's transition semantics never un-reveal. The harvest walk
+  never stores a stub wrapper (`isStubWrapper`) — the slot stays
+  genuinely empty until the real body lands, and no fp registers for
+  content the client doesn't hold.
+- **fp timing.** The stubbed parton's own fp finalizes with ITS
+  body's trailer, on its own lane; the ancestor's fold reads the
+  prior-commit record as always. The known lag — a lane's flush heal
+  never heals ancestors — stands: the ancestor's advertised fp sits
+  one drift behind until a whole-tree segment (over-fetch, never
+  stale).
+
+The browse demo's `LivePricePartial` declares `defer: "stream"`;
+measured effect: scroll-up rematerialization went from ~1.35s
+skeleton hold (shell gated on the price sleep) to ~10ms, with prices
+streaming in on their own lanes ~1s behind. Broadcast slot bodies
+render DEEP (the publish path installs no capture) — a shared body
+must stay viewer-independent and replayable.
+
 ## Action consequence seqs
 
 Actions stay discrete POSTs (the pinned decision), but with a channel

@@ -120,6 +120,37 @@ export function isPlaceholder(child: ReactElement): boolean {
   return child.type === "i" && (child.props as any)["data-partial"] === true
 }
 
+/** A `defer: "stream"` stub's placeholder marker — its content is IN
+ *  FLIGHT on the parton's own follow-up lane. The suspend-while-empty
+ *  behavior lives in the `<PendingSlot>` client component the server
+ *  wraps AROUND this marker (see `pending-slot.tsx`) — the wire form
+ *  itself gates, so the raw-reveal TOCTOU (a settling row committed
+ *  natively, no substitution pass) can never reveal a boundary with
+ *  visually-empty content. The walks treat the marker like any other
+ *  placeholder: inert on a miss, substituted when the slot fills. */
+export function isPendingPlaceholder(child: ReactElement): boolean {
+  return (child.props as any)["data-partial-pending"] === true
+}
+
+/** A `defer: "stream"` STUB wrapper — a boundary whose content is the
+ *  `<PendingSlot>` gate around a pending-marked placeholder (the real
+ *  body is in flight on the parton's own follow-up lane). The chain
+ *  from the wrapper is shallow and fixed by the emission:
+ *  PEB > [Suspense(spec fallback)] > PendingSlot > `<i pending>`. The
+ *  harvest must leave a stub's slot EMPTY: storing the stub would
+ *  make the PendingSlot gate see an occupied slot and reveal the
+ *  empty marker; an empty slot keeps the gate suspended (the ambient
+ *  fallback holds) until the REAL body stores — which also keeps fp
+ *  advertisement honest (no fp without held content). */
+function isStubWrapper(node: ReactElement): boolean {
+  let el: unknown = (node.props as { children?: unknown }).children
+  for (let depth = 0; depth < 4 && isValidElement(el); depth++) {
+    if (isPendingPlaceholder(el as ReactElement)) return true
+    el = ((el as ReactElement).props as { children?: unknown }).children
+  }
+  return false
+}
+
 /**
  * Id for a placeholder `<i>`. Prefer the `data-partial-id` prop, which
  * is stable, over `node.key`, which Flight can composite with an outer
@@ -772,6 +803,11 @@ export function cacheFromStreamingChildren(
       const mk = getPartialMatchKey(node) ?? ""
       if (seen) addSeen(seen, id, mk)
       touchClientPartial(id)
+      // A stream-defer STUB never stores: the slot stays empty (the
+      // PendingSlot gate suspends on it) and no fp registers — the
+      // client holds no content for the id until the follow-up
+      // lane's real body lands.
+      if (isStubWrapper(node)) return
       const outcome = cacheStore(cache, id, mk, node)
       if (outcome === "first" && stats) stats.firstFill = true
       // A STALE store (the out-of-order guard dropped it — the slot

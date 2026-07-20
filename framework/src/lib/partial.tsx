@@ -100,11 +100,12 @@ import {
   type ScopedCellDescriptor,
 } from "./cell.ts"
 import { getCellStorage } from "../runtime/cell-storage.ts"
-import { _getSettleTrailerSink, getScope } from "../runtime/context.ts"
+import { _getSettleTrailerSink, _laneStubCapture, getScope } from "../runtime/context.ts"
 import { buildTimeScope, type TimeScope } from "./time.ts"
 import { _onPartonSettled, _openPartonSettleScope, getServerContext } from "./server-context.ts"
 import { _setCurrentParton, type CurrentParton, type WakeHints } from "./current-parton.ts"
 import { CullPair } from "./cull-pair.tsx"
+import { PendingSlot } from "./pending-slot.tsx"
 import { evalDepKeys, readVisible, untrackedUrl } from "./server-hooks.ts"
 import { codeVersionKey, currentCodeVersion } from "./code-version.ts"
 import { notFound } from "../runtime/errors.ts"
@@ -119,7 +120,15 @@ export interface ActivatorProps {
   children?: ReactNode
 }
 
-export type DeferSpec = true | ReactElement<ActivatorProps>
+/** `true` — dormant until a client activator fires (the spec's
+ *  `fallback` shows meanwhile). An activator element — same, with the
+ *  app's own trigger UI. `"stream"` — the parton's body always defers
+ *  OUT of enclosing driver-owned bodies: the enclosing lane/segment
+ *  ships a pending-marked placeholder (its body closes at the shell)
+ *  and the connection driver delivers this parton's full body on its
+ *  OWN forced lane immediately — no client trigger. Renders without a
+ *  driver (documents, SSR, discrete refetches) render it deep. */
+export type DeferSpec = true | "stream" | ReactElement<ActivatorProps>
 
 /** Build a plain `{key: value}` object from a URLSearchParams. */
 function searchParamsToRecord(sp: URLSearchParams): Record<string, string> {
@@ -1154,7 +1163,12 @@ export function deriveMatchKey(
  * pre-measurement state says nothing about the state a parked fiber
  * holds.
  */
-function placeholderFor(id: string, matchKey: string, confirm?: boolean): ReactElement {
+function placeholderFor(
+  id: string,
+  matchKey: string,
+  confirm?: boolean,
+  pending?: boolean,
+): ReactElement {
   return (
     <i
       key={`${id}|${matchKey}`}
@@ -1163,6 +1177,11 @@ function placeholderFor(id: string, matchKey: string, confirm?: boolean): ReactE
       data-partial-id={id}
       data-partial-match={matchKey}
       data-partial-confirm={confirm || undefined}
+      // A `defer: "stream"` stub: content is IN FLIGHT on the parton's
+      // own follow-up lane. The client's substitution SUSPENDS on a
+      // cache miss for a pending-marked placeholder (the ambient
+      // Suspense fallback holds) instead of rendering an empty region.
+      data-partial-pending={pending || undefined}
     />
   )
 }
@@ -2035,14 +2054,55 @@ function createSpecComponent<V>(
 
     // Defer activators are client components — a vocabulary-
     // constrained render falls through to the bare body instead.
-    if (opts.defer && !isExplicit && !vocabConstrained) {
+    // `defer: "stream"` engages ONLY under a driver-owned render (the
+    // ambient `laneStubCapture` the segment driver installs): the
+    // driver spawns the follow-up lane that delivers the body, so a
+    // render with no driver (document, SSR, discrete refetch) must
+    // render DEEP or the content would never arrive.
+    const streamDefer = opts.defer === "stream"
+    const stubCapture = streamDefer ? _laneStubCapture() : null
+    // A lane addressed TO this parton IS its delivery — the render
+    // root always renders DEEP (stubbing it would capture itself and
+    // loop the pump on its own dirty flag).
+    const streamStub = streamDefer && stubCapture !== null && stubCapture.rootId !== id
+    if (opts.defer && !isExplicit && !vocabConstrained && (!streamDefer || streamStub)) {
       const defer = opts.defer
+      if (streamStub) stubCapture.ids.add(id)
+      // The stub's wire form carries its own suspend gate: however the
+      // body reaches React (the substituted path, or the raw-reveal
+      // TOCTOU where a settling row commits natively with no
+      // substitution pass), `<PendingSlot>` suspends while the slot is
+      // empty — the ambient Suspense fallback holds, and the boundary
+      // can never reveal visually-empty content.
+      const pendingPlaceholder = streamStub ? (
+        <PendingSlot partonId={id} matchKey={matchKey}>
+          {placeholderFor(id, matchKey, undefined, true)}
+        </PendingSlot>
+      ) : null
       const dormant =
-        defer === true
-          ? fallback
-          : isValidElement(defer)
-            ? cloneElement(defer as ReactElement<ActivatorProps>, { partialId: id }, fallback)
-            : fallback
+        defer === true ? (
+          fallback
+        ) : streamStub ? (
+          opts.fallback != null ? (
+            // The stub carries the spec's own DECLARED fallback when
+            // it has one; the PendingSlot gate suspends beneath it
+            // until the follow-up lane fills the slot. The check is
+            // on the OPTION, not the defaulted variable — `fallback`
+            // is `?? null`-defaulted above, and a fallback-less spec
+            // wrapped in `<Suspense fallback={null}>` would swallow
+            // the gate's suspension into an inner null boundary,
+            // committing the region empty instead of letting the
+            // ambient app Suspense own it (the measured
+            // empty-price-area class).
+            <Suspense fallback={fallback}>{pendingPlaceholder}</Suspense>
+          ) : (
+            pendingPlaceholder
+          )
+        ) : isValidElement(defer) ? (
+          cloneElement(defer as ReactElement<ActivatorProps>, { partialId: id }, fallback)
+        ) : (
+          fallback
+        )
       let deferBody: ReactNode = (
         <PartialErrorBoundary key={id} partialId={id} {...fpProp} partialMatchKey={matchKey}>
           {dormant}

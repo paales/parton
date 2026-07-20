@@ -38,6 +38,7 @@ import {
   _createConnectionLiveProbe,
   _getAttachStatement,
   _getCachedOverride,
+  _runWithLaneStubCapture,
   _runWithPinnedVisible,
   _runWithWarmRenderScope,
   _runWithWarmRequestScope,
@@ -1266,6 +1267,14 @@ async function driveLaneStream(
     // parton skip and defer as usual.
     const forced = forcedLaneIds.delete(id)
     runtime.forced = forced
+    // The lane's stream-defer stub capture — a `defer: "stream"`
+    // DESCENDANT registers, ships a pending placeholder (this lane's
+    // body closes at its shell), and the drain below spawns its
+    // forced follow-up lane. `rootId` exempts the lane's own target:
+    // a lane addressed to a stream-deferred parton IS its delivery
+    // and renders deep. Installed on the iteration probe (the
+    // driver-owned marker).
+    const laneStubs = { rootId: id, ids: new Set<string>() }
     if (laneOverride || forced) {
       enterPartialState({
         requestedIds: null,
@@ -1339,10 +1348,11 @@ async function driveLaneStream(
         // (lane renders share one request store — the store-level flag
         // can't attribute across concurrent pumps). The probe also pins
         // the iteration's visibility moment (`pinnedVisible` above) and
-        // installs the registration capture.
+        // installs the registration + stream-defer stub captures.
         const probe = _createConnectionLiveProbe(
           pinnedVisible === undefined ? undefined : { visible: pinnedVisible },
           renderRegistrations,
+          laneStubs,
         )
         // The seq announced on the wire this iteration — a producer
         // lane announces EARLY (`muxlive`, the moment the render marks
@@ -1743,6 +1753,19 @@ async function driveLaneStream(
         if (session !== null && deliverySeq !== null) {
           _recordDelivery(session, deliverySeq, carried, session.consumedNavSeq)
         }
+        // Stream-deferred descendants this body stubbed (their
+        // pending placeholders shipped with the shell) get their
+        // forced follow-up lanes NOW — forced, so the fp-skip and
+        // defer gates yield (the stub registered a snapshot;
+        // `lookupPartial` resolves it via the eager publish), and a
+        // navigation tear re-lanes them as unfulfilled forces instead
+        // of silently dropping the promised content. An already-open
+        // lane coalesces to dirty.
+        for (const sid of laneStubs.ids) {
+          forcedLaneIds.add(sid)
+          startLane(sid)
+        }
+        laneStubs.ids.clear()
         // The force is satisfied — its content drained.
         runtime.forced = false
         if (!runtime.dirty) return
@@ -1965,6 +1988,24 @@ async function driveLaneStream(
   // first) and its reopen's first segment is whole-tree anyway.
   let lastFullSegmentAt = Date.now()
 
+  // Stream-defer stubs collected from COVERING segment renders (nav,
+  // reconcile) — drained into forced follow-up lanes at the next
+  // point the lanes region is open. The set is connection-scoped so a
+  // superseded segment's stubs still deliver: its successor either
+  // re-stubs the same ids (set dedupe) or renders them another way,
+  // and a spawned lane for an id whose snapshot vanished exits at
+  // `lookupPartial`.
+  const segmentStubs = new Set<string>()
+  const renderSegmentWithStubs = (): ReadableStream<Uint8Array> =>
+    _runWithLaneStubCapture({ rootId: null, ids: segmentStubs }, renderFullSegment)
+  const spawnStubLanes = (stubs: Set<string>): void => {
+    for (const sid of stubs) {
+      forcedLaneIds.add(sid)
+      startLane(sid)
+    }
+    stubs.clear()
+  }
+
   // Ship the cumulative upstream-applied watermark when it has moved —
   // the marker that prunes the client transport's retransmit buffer.
   // Every envelope apply fires the flip wakes, so the announcement
@@ -1999,7 +2040,7 @@ async function driveLaneStream(
         deliverySeq = ++session.deliverySeq
         if (!enqueue(segmentDeliverySeqEntry(deliverySeq, session.consumedNavSeq))) return false
       }
-      const reader = renderFullSegment().getReader()
+      const reader = renderSegmentWithStubs().getReader()
       try {
         while (true) {
           const { done, value } = await reader.read()
@@ -2032,7 +2073,14 @@ async function driveLaneStream(
         _recordDelivery(session, deliverySeq, tokens, session.consumedNavSeq)
       }
       if (!enqueue(nextMarker)) return false
-      return enqueue(lanesMarker)
+      if (!enqueue(lanesMarker)) return false
+      // The region is open again — the reconcile's stream-defer stubs
+      // get their forced follow-up lanes now.
+      if (segmentStubs.size > 0) {
+        enterRequestRegistry(routeKey, "cache")
+        spawnStubLanes(segmentStubs)
+      }
+      return true
     })
   }
 
@@ -2119,7 +2167,7 @@ async function driveLaneStream(
       if (emittedStreamingBytes) return false
       return true
     }
-    const reader = renderFullSegment().getReader()
+    const reader = renderSegmentWithStubs().getReader()
     let navArm: (() => void) | null = null
     const disposeArm = (): void => {
       if (session !== null && navArm !== null) session.flipWakes.delete(navArm)
@@ -2327,6 +2375,13 @@ async function driveLaneStream(
           startLane(id)
         }
       }
+    }
+    // The covering segment's stream-defer stubs — their pending
+    // placeholders shipped with the segment; the promised bodies lane
+    // forced on the reopened region.
+    if (segmentStubs.size > 0) {
+      enterRequestRegistry(routeKey, "cache")
+      spawnStubLanes(segmentStubs)
     }
     return true
   }

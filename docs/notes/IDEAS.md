@@ -168,52 +168,6 @@ waiting on a forcing caller:
   refining the reservation calc) is the next lever. Wait for a
   collection that actually drifts.
 
-### The flush boundary — a flip lane's shell waits for its slowest streamed child
-
-Measured (2026-07-20, browse demo): a materializing leaf's cards
-paint only when the leaf's WHOLE body has arrived — its own streamed
-Suspense content included (the demo's 1s price sleep; any real slow
-sub-parton) — so the shell that could show price fallbacks
-immediately waits ~1s. Zeroing the price delay collapses the wait to
-+3ms; the backend is never the gate.
-
-A first implementation round (2026-07-20, reverted) mapped the
-mechanism precisely — three entangled pieces must move together:
-
-1. **Intra-lane flush WORKS today.** Per-connection lane bodies
-   stream mux frames per chunk (`bufferUntilDrain` is false for
-   driver-spawned flips); the mux grammar was built for interleaved
-   pacing. The buffering is CLIENT-side: a normal lane's delivery
-   entry precedes its `muxend`, so `handleLane` cannot identify the
-   delivery at root-ready and waits for the trailer. The wire fix is
-   small and proven: announce the flip lane's seq at its FIRST body
-   byte (a ` flip` token on the delivery entry — the grammar accepts
-   trailing flags; announcing at first byte keeps fp-skipped flips
-   unannounced), and the client commits root-ready via the existing
-   streaming-preferred/producer path.
-2. **Re-commit identity across covering renders.** The progressive
-   commit makes cards VISIBLE early; the covering window-move then
-   re-renders the same leaf as a FULL body (it cannot fp-skip it —
-   see 3) and the fresh element identities REMOUNT the subtree: every
-   just-shown card blinks (caught by the prod no-blink gauntlet, ~50
-   cards; probe: cards REMOVED ~665ms after the progressive commit).
-   Client guards tried and insufficient: no-cached-content (culling
-   evicts the cache slot while fibers park — false negatives for
-   restores) plus `_isParkedSince`. The covering commit must either
-   substitute the already-committed wrapper identity or the walk must
-   preserve it.
-3. **Early fp advertisement.** The lane's fp trailer rides the END of
-   the body — after the slow Suspense content — so a covering render
-   racing the stream cannot skip the leaf even though the client
-   already holds its shell. Progressive commit needs the fp for the
-   shell advertised before the fills.
-
-The broadcast slot must keep buffering (it replays bytes to other
-connections), and the document path has the sibling problem (buffered
-Brotli; only `markConnectionLive` flushes). One boundary, one arc —
-wire vocabulary proven, the client re-commit identity and the fp
-timing are the real work.
-
 ### Scroller × broadcast eligibility
 
 D2's classifier marks every cull-gated parton broadcast-ineligible

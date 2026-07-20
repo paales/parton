@@ -389,6 +389,39 @@ test("facets FILTER: a click states the filter, visibility and counts follow the
   await expect.poll(() => page.locator(option).count(), { timeout: 15000 }).toBe(universeBefore)
 })
 
+test("a materializing leaf commits its shells before its streamed prices", async ({ page }) => {
+  // `defer: "stream"` keeps the per-card price OUT of the leaf's lane
+  // body: the shell commits with the price fallbacks showing while
+  // the driver delivers each price on its own follow-up lane. Without
+  // it the shell waited for its slowest streamed child (~1s, the
+  // measured scroll-up skeleton hold).
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+  await waitForPageInteractive(page)
+
+  // Scroll steadily through several unmaterialized pages, sampling
+  // the viewport as leaves materialize.
+  await page.mouse.move(550, 400)
+  let shellWithFallback = 0
+  for (let i = 0; i < 110; i++) {
+    await page.mouse.wheel(0, 80)
+    await page.waitForTimeout(90)
+    if (i % 2 === 0) {
+      shellWithFallback += await page.evaluate(() => {
+        let n = 0
+        for (const c of document.querySelectorAll<HTMLElement>('[data-testid^="browse-card-"]')) {
+          const r = c.getBoundingClientRect()
+          if (r.bottom <= 0 || r.top >= window.innerHeight || c.offsetParent === null) continue
+          if (c.querySelector('[data-testid*="fallback"]')) n++
+        }
+        return n
+      })
+      if (shellWithFallback > 0) break
+    }
+  }
+  expect(shellWithFallback, "card shells committed while their price streams").toBeGreaterThan(0)
+})
+
 test("a facet click from a scrolled position lands the reshaped collection at its top", async ({
   page,
 }) => {

@@ -112,6 +112,39 @@ export function getCurrentPagePartials(): PartialCache {
   return _currentPagePartials
 }
 
+// ─── Stream-defer slot-fill waiters ───────────────────────────────
+//
+// A `defer: "stream"` stub's pending placeholder SUSPENDS while its
+// (id) slot is empty — the promise thrown by the substitution's
+// suspender component. It resolves at the slot's first store (the
+// follow-up lane's commit); React's retry then re-renders through the
+// substitution, which now provides the content. Never rejected: a
+// lane that never arrives (torn and superseded) keeps the ambient
+// Suspense fallback — the covering render replaces the region,
+// unmounting the suspended node.
+
+const _slotFillWaiters = new Map<string, { promise: Promise<void>; resolve: () => void }>()
+
+/** The promise a pending placeholder's suspender throws — resolved
+ *  when ANY content stores for the id. */
+export function slotFillPromise(id: string): Promise<void> {
+  const existing = _slotFillWaiters.get(id)
+  if (existing) return existing.promise
+  let resolve!: () => void
+  const promise = new Promise<void>((r) => {
+    resolve = r
+  })
+  _slotFillWaiters.set(id, { promise, resolve })
+  return promise
+}
+
+function _resolveSlotFill(id: string): void {
+  const waiter = _slotFillWaiters.get(id)
+  if (!waiter) return
+  _slotFillWaiters.delete(id)
+  waiter.resolve()
+}
+
 export function cacheLookup(
   cache: PartialCache,
   id: string,
@@ -187,6 +220,10 @@ export function cacheStore(
       if (pendingAliases.size === 0) _pendingFpAliases.delete(id)
     }
   }
+  // A store settles any stream-defer suspender waiting on this id —
+  // the pending placeholder's retry renders through the substitution,
+  // which now finds the slot occupied.
+  _resolveSlotFill(id)
   return replacing ? "replaced" : "first"
 }
 

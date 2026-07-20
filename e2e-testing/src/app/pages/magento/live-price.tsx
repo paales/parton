@@ -28,28 +28,35 @@ export function LivePriceFallback({
  * across all cards while `refreshSelector("price?sku=<sku>")` hits
  * exactly one (see `price-actions.ts`).
  */
-export const LivePricePartial = parton(async function LivePriceRender({
-  sku,
-  basePrice,
-  currency,
-}: { sku: string; basePrice: number; currency: string } & RenderArgs) {
-  tag(`price?sku=${encodeURIComponent(sku)}`)
-  await new Promise((r) => setTimeout(r, 1000))
+export const LivePricePartial = parton(
+  async function LivePriceRender({
+    sku,
+    basePrice,
+    currency,
+  }: { sku: string; basePrice: number; currency: string } & RenderArgs) {
+    tag(`price?sku=${encodeURIComponent(sku)}`)
+    await new Promise((r) => setTimeout(r, 1000))
 
-  const tick = Date.now()
-  const swing = Math.random() - 0.5
-  const live = basePrice * (1 + swing)
+    const tick = Date.now()
+    const swing = Math.random() - 0.5
+    const live = basePrice * (1 + swing)
 
-  return (
-    <div
-      data-testid={`live-price-${sku}`}
-      data-price-tick={String(tick)}
-      className="mt-2 flex items-center gap-2"
-    >
-      <span className="font-semibold text-emerald-400 tabular-nums">
-        {currency} {live.toFixed(2)}
-      </span>
-      <RefreshPriceButton sku={sku} />
-    </div>
-  )
-})
+    return (
+      <div
+        data-testid={`live-price-${sku}`}
+        data-price-tick={String(tick)}
+        className="mt-2 flex items-center gap-2"
+      >
+        <span className="font-semibold text-emerald-400 tabular-nums">
+          {currency} {live.toFixed(2)}
+        </span>
+        <RefreshPriceButton sku={sku} />
+      </div>
+    )
+  },
+  // The slow streamed member of every card: `defer: "stream"` keeps
+  // it OUT of enclosing lane/segment bodies — a materializing leaf's
+  // shell commits immediately (price fallbacks showing) while the
+  // driver delivers each price on its own follow-up lane.
+  { defer: "stream" },
+)

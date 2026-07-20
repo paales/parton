@@ -141,6 +141,19 @@ interface RequestStore {
    *  that module. Absent on whole-tree renders (covering renders tear
    *  or trail open lanes, so no rival exists there). */
   renderRegistrations?: Map<string, unknown>
+  /** DRIVER-OWNED renders only (lane iterations, covering segments on
+   *  a live connection): the ids of `defer: "stream"` partons this
+   *  render STUBBED — boundary registered, body replaced by a
+   *  pending-marked placeholder so the enclosing body closes at its
+   *  shell. The driver reads `ids` back after the render and spawns
+   *  each as a forced follow-up lane. `rootId` names the lane's OWN
+   *  render root (null for whole-tree segments): a lane addressed TO
+   *  a stream-deferred parton IS its delivery, so the root renders
+   *  DEEP — stubbing it would capture itself and loop. Absent on
+   *  documents, SSR, and discrete refetches — no driver to deliver a
+   *  follow-up, so the wrapper pipeline renders stream-deferred
+   *  partons deep there too. */
+  laneStubCapture?: { rootId: string | null; ids: Set<string> }
 }
 
 /** The slice of a connection session the request context carries —
@@ -467,11 +480,17 @@ export function _createConnectionLiveProbe(
    *  `RequestStore.renderRegistrations`) — the caller owns the typed
    *  map and reads it back after the run (the drain promote). */
   registrations?: Map<string, unknown>,
+  /** Per-render stream-defer stub capture (see
+   *  `RequestStore.laneStubCapture`) — rides the probe store like the
+   *  registration capture, because a nested run-scoped store would
+   *  shadow the probe's own `connectionLive` write. */
+  laneStubs?: { rootId: string | null; ids: Set<string> },
 ): ConnectionLiveProbe {
   const parent = getStore()
   const probe: RequestStore = Object.create(parent) as RequestStore
   probe.connectionLive = false
   if (registrations !== undefined) probe.renderRegistrations = registrations
+  if (laneStubs !== undefined) probe.laneStubCapture = laneStubs
   if (pin !== undefined && parent.connectionSession != null) {
     probe.connectionSession = {
       visible: pin.visible,
@@ -493,6 +512,30 @@ export function _createConnectionLiveProbe(
  *  `_activeRenderRegistrations` in `../lib/partial-registry.ts`. */
 export function _renderRegistrationCapture(): Map<string, unknown> | null {
   return requestContext.getStore()?.renderRegistrations ?? null
+}
+
+/** Run `fn` with a `laneStubCapture` installed — the driver's marker
+ *  that THIS render is driver-owned and `defer: "stream"` partons may
+ *  stub (see `RequestStore.laneStubCapture`). The caller owns the set
+ *  and reads it back after the run to spawn the follow-up lanes.
+ *  Synchronous-shaped: a stream created inside `fn` binds this
+ *  context for its whole render (ALS propagates to the render's async
+ *  continuations). */
+export function _runWithLaneStubCapture<T>(
+  capture: { rootId: string | null; ids: Set<string> },
+  fn: () => T,
+): T {
+  const parent = getStore()
+  const scoped: RequestStore = Object.create(parent) as RequestStore
+  scoped.laneStubCapture = capture
+  return requestContext.run(scoped, fn)
+}
+
+/** The active render's stream-defer stub capture, if the driver
+ *  installed one. Read by the wrapper pipeline's `defer: "stream"`
+ *  branch; null means "no driver owns this render — render deep". */
+export function _laneStubCapture(): { rootId: string | null; ids: Set<string> } | null {
+  return requestContext.getStore()?.laneStubCapture ?? null
 }
 
 // ─── Deferred-commit accounting ─────────────────────────────────────
