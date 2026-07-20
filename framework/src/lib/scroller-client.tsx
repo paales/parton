@@ -216,6 +216,17 @@ export function ScrollerAnchorSync({
    *  re-aligned against the SETTLED document — the writer's stand-down
    *  window (see the URL-watch below). */
   const foreignSettling = useRef(false)
+  /** THE WRITER STATES ONLY USER-DRIVEN POSITIONS. Armed by a real
+   *  input gesture (wheel / touch / key / pointer — the signals no
+   *  programmatic scroll fires), cleared by every foreign statement.
+   *  Programmatic displacements after a foreign statement — the
+   *  browser's deferred traverse restoration, the re-anchor backstop
+   *  correcting a late materialization, a remount landing — are
+   *  either enforcement of an already-stated value or transient
+   *  churn; mirroring them rewrote the traversed entries one page per
+   *  flip (measured: rapid back/forward drifted 10 → 12 → 11 with no
+   *  user scroll at all). */
+  const userIntent = useRef(false)
 
   // Deep-link / restore landing on client navs — before paint, by the
   // public anchor id. (Document loads use the streamed landing
@@ -291,9 +302,11 @@ export function ScrollerAnchorSync({
       }
       // A FOREIGN statement. Re-base the writer's skip baseline (its
       // next mirror is measured against THIS value, not its own last
-      // write) and align immediately — best-effort feedback against
-      // whatever is laid out right now.
+      // write), disarm it until the user actually scrolls again, and
+      // align immediately — best-effort feedback against whatever is
+      // laid out right now.
       lastVal.current = val
+      userIntent.current = false
       alignTo(Math.max(1, Number(val) || 1))
       // A TRAVERSE commits its URL first, applies content through its
       // intercept handler after, and the browser's deferred scroll
@@ -449,6 +462,13 @@ export function ScrollerAnchorSync({
     lastVal.current ??= url0 ? (new URL(url0).searchParams.get(param) ?? "") : ""
     let timer: ReturnType<typeof setTimeout> | undefined
     const sync = () => {
+      // STATE ONLY USER-DRIVEN POSITIONS. Enforcement scrolls, the
+      // browser's deferred traverse restoration, backstop corrections
+      // and landing scrolls all emit scroll events too — but none of
+      // them arms the intent flag, and none of them may be restated
+      // into the URL (they are either enforcement of an
+      // already-stated value or transient churn).
+      if (!userIntent.current) return
       // STAND DOWN while a traverse applies. A traverse transition
       // means the document is mid-swap and the browser's deferred
       // scroll restoration is still owed: a mirror measured now would
@@ -575,9 +595,23 @@ export function ScrollerAnchorSync({
       if (timer) clearTimeout(timer)
       timer = setTimeout(sync, SYNC_MS)
     }
+    // The intent signals: every way a user initiates a scroll fires
+    // one of these BEFORE the scroll events land (wheel, touch drag,
+    // keyboard, scrollbar drag via pointerdown). Programmatic scrolls
+    // fire none.
+    const armIntent = () => {
+      userIntent.current = true
+    }
+    const INTENT_EVENTS = ["wheel", "touchstart", "keydown", "pointerdown"] as const
     window.addEventListener("scroll", onScroll, { passive: true, capture: true })
+    for (const ev of INTENT_EVENTS) {
+      window.addEventListener(ev, armIntent, { passive: true, capture: true })
+    }
     return () => {
       window.removeEventListener("scroll", onScroll, { capture: true })
+      for (const ev of INTENT_EVENTS) {
+        window.removeEventListener(ev, armIntent, { capture: true })
+      }
       if (timer) clearTimeout(timer)
     }
   }, [nav, navigate, name, param, step, start, end, total])

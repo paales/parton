@@ -466,7 +466,10 @@ test("clicking a pagination link moves the viewport to that page", async ({ page
 
   // Reach the pagination at the collection's foot; the scroll there
   // mirrors into ?page=, so the link window re-centers — "1" is
-  // always rendered.
+  // always rendered. The writer states only user-driven positions,
+  // so the jump simulation carries the gesture a real drag fires.
+  await page.mouse.move(550, 400)
+  await page.mouse.wheel(0, 1)
   await page.evaluate(() => {
     document.querySelector('[data-testid="browse-pagination"]')?.scrollIntoView()
   })
@@ -585,6 +588,8 @@ test("rapid back/forward during load never corrupts the anchor entries", async (
     await page.waitForTimeout(140)
     if (Number(new URL(page.url()).searchParams.get("page") || "1") >= 8) break
   }
+  // Let the trailing mirror settle so the captured value is final.
+  await page.waitForTimeout(600)
   const initialStated = Number(new URL(page.url()).searchParams.get("page"))
   expect(initialStated, "initial entry carries a mirrored page").toBeGreaterThanOrEqual(8)
 
@@ -600,9 +605,9 @@ test("rapid back/forward during load never corrupts the anchor entries", async (
     await page.waitForTimeout(140)
     if (Number(new URL(page.url()).searchParams.get("page") || "1") >= 5) break
   }
+  await page.waitForTimeout(1200)
   const stated = Number(new URL(page.url()).searchParams.get("page"))
   expect(stated, "reached a deep anchor before traversing").toBeGreaterThanOrEqual(5)
-  await page.waitForTimeout(1200)
 
   // Leave a STALE offset on this entry: consume the writer's
   // leading-edge tick in place, then burst two pages further and
@@ -668,21 +673,17 @@ test("rapid back/forward during load never corrupts the anchor entries", async (
   })
   await page.waitForTimeout(2500)
 
-  // The entries kept their pages: each still states what the user's
-  // own scrolling stated — no mid-transition mirror rewrote them.
+  // The entries kept their pages EXACTLY: the writer states only
+  // user-driven positions, and nothing after the dance was one — no
+  // restoration, backstop correction, or mid-transition displacement
+  // may be restated into an entry.
   const entries = await page.evaluate(() =>
     (navigation as unknown as { entries(): Array<{ url: string }> })
       .entries()
       .map((e) => new URL(e.url).searchParams.get("page")),
   )
-  expect(Number(entries[0]), `entries: ${entries.join(" | ")}`).toBeGreaterThanOrEqual(
-    initialStated - 1,
-  )
-  expect(Number(entries[0]), `entries: ${entries.join(" | ")}`).toBeLessThanOrEqual(
-    initialStated + 1,
-  )
-  expect(Number(entries[1]), `entries: ${entries.join(" | ")}`).toBeGreaterThanOrEqual(stated - 1)
-  expect(Number(entries[1]), `entries: ${entries.join(" | ")}`).toBeLessThanOrEqual(stated + 1)
+  expect(entries[0], `entries: ${entries.join(" | ")}`).toBe(String(initialStated))
+  expect(entries[1], `entries: ${entries.join(" | ")}`).toBe(String(stated))
 
   // No continuous jumping: the viewport is at rest.
   const y1 = await page.evaluate(() => Math.round(window.scrollY))

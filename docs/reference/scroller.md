@@ -89,7 +89,19 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
   re-renders the root and the verdict-flipped leaves ONLY; every
   other leaf holds its fp, so scroll-back is a zero-byte confirm
   (pinned by test).
-- **ONE writer, measure-first, following along.** The anchor sync
+- **ONE writer, measure-first, following along — and it states only
+  USER-DRIVEN positions.** The writer arms on a real input gesture
+  (wheel / touch / key / pointer — the signals no programmatic scroll
+  fires; a scrollbar drag arms via its pointerdown) and DISARMS on
+  every foreign statement. Programmatic displacements — an
+  enforcement scroll, the browser's deferred traverse restoration,
+  a backstop correction against late materialization, a remount
+  landing — are either enforcement of an already-stated value or
+  transient churn, and are never restated into the URL (measured:
+  mirroring them drifted traversed entries one page per
+  back/forward flip with the user's hands off the wheel; pinned by
+  test — a jump simulation via bare `scrollTo` must carry the
+  gesture a real drag fires). The anchor sync
   runs THROTTLED while scrolling (250ms) plus once at settle — a
   sustained scroll never stops emitting events, so a pure debounce
   would freeze the param mid-gesture and let the user outrun the ring

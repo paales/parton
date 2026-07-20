@@ -25,7 +25,11 @@ test("scrollbar jump to 50%: instant skeletons, one statement, content — geome
   // whole collection's space.
   expect(docH0).toBeGreaterThan(4_000_000)
 
-  // Jump.
+  // Jump. A real scrollbar drag starts with a pointer gesture — the
+  // writer states only user-driven positions, so the simulation must
+  // carry the same intent signal a real drag fires.
+  await page.mouse.move(600, 400)
+  await page.mouse.wheel(0, 1)
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight * 0.5))
   const yLanded = await page.evaluate(() => Math.round(window.scrollY))
 
