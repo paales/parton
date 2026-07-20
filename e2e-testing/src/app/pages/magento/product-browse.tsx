@@ -21,8 +21,9 @@
  * the FilterBar (facets + active filters) and the Pagination (total)
  * are plain partons that JOIN the same `browseProductsCell` — same
  * partitions, shared single-flight resolves, projections of one
- * result. Facets are LINKS: a click states the filter in the URL,
- * every loader's tracked `f_<code>` read re-renders the collection.
+ * result. Facets are DYNAMIC (every aggregation the base query
+ * returns) and facet options are LINKS: a click states the filter in
+ * the URL, the loaders' tracked read re-renders the collection.
  */
 
 import { Card, CardContent } from "@parton/copies/components/ui/card"
@@ -48,36 +49,45 @@ type BrowseFilter = NonNullable<BrowseArgs["filter"]>
  *  is NOT CSS (counts, not pixels). */
 const LEAF = 12
 
-/** The facet attributes the filter bar drives. Each active facet is
- *  one URL param (`f_<code>=<value>`) — the URL is the filter state,
- *  so filters survive reload/share and every read of them is a
- *  tracked dep. Single-select per facet; clicking the active option
- *  clears it. */
-const FACETS = ["price", "category_uid"] as const
-type FacetCode = (typeof FACETS)[number]
+/** The ONE URL param carrying the whole filter state:
+ *  `?f=<code>:<value>,<code>:<value>` — single-select per facet. One
+ *  param means ONE tracked read: the loaders read their filter dep
+ *  without needing to discover the facet universe first. Which facets
+ *  EXIST is the base query's business (the FilterBar reads its
+ *  aggregations); which are ACTIVE is the URL's. */
+const FILTER_PARAM = "f"
 
-/** The active facets, read from the URL — tracked reads, so every
- *  parton deriving its query args from them re-renders when a facet
+/** Facet attributes whose option values are RANGE buckets
+ *  (`"0_113"` → {from, to}) rather than eq values — mirrors the
+ *  schema (FilterRangeTypeInput vs FilterEqualTypeInput). */
+const RANGE_FACETS = new Set(["price", "special_price"])
+
+/** The active facets, parsed from the URL — a tracked read, so every
+ *  parton deriving its query args from it re-renders when a facet
  *  toggles. */
-function readFacets(): Partial<Record<FacetCode, string>> {
-  const active: Partial<Record<FacetCode, string>> = {}
-  for (const code of FACETS) {
-    const v = searchParam(`f_${code}`)
-    if (v) active[code] = v
+function readActive(): Map<string, string> {
+  const active = new Map<string, string>()
+  const raw = searchParam(FILTER_PARAM)
+  if (!raw) return active
+  for (const pair of raw.split(",")) {
+    const i = pair.indexOf(":")
+    if (i > 0) active.set(pair.slice(0, i), decodeURIComponent(pair.slice(i + 1)))
   }
   return active
 }
 
-/** Active facets → the Magento filter input. Price options are range
- *  buckets (`"0_113"` → from/to); everything else filters by eq. */
-function toFilter(active: Partial<Record<FacetCode, string>>): BrowseFilter {
-  const filter: BrowseFilter = {}
-  if (active.price) {
-    const [from = "0", to = ""] = active.price.split("_")
-    filter.price = { from, to }
+/** Active facets → the Magento filter input. */
+function toFilter(active: Map<string, string>): BrowseFilter {
+  const filter: Record<string, unknown> = {}
+  for (const [code, value] of active) {
+    if (RANGE_FACETS.has(code)) {
+      const [from = "0", to = ""] = value.split("_")
+      filter[code] = { from, to }
+    } else {
+      filter[code] = { eq: value }
+    }
   }
-  if (active.category_uid) filter.category_uid = { eq: active.category_uid }
-  return filter
+  return filter as BrowseFilter
 }
 
 /** One window of the ACTIVE query — the slice the scroller loads and
@@ -86,22 +96,18 @@ function toFilter(active: Partial<Record<FacetCode, string>>): BrowseFilter {
  *  root's shape read, the filter counts, and the pagination total all
  *  hash to the same partition and share one single-flight fetch. */
 function sliceArgs(offset: number, limit: number): BrowseArgs {
-  return { pageSize: limit, currentPage: offset / limit + 1, filter: toFilter(readFacets()) }
+  return { pageSize: limit, currentPage: offset / limit + 1, filter: toFilter(readActive()) }
 }
 
-/** An href stating a facet selection (and dropping `?page=` — a
- *  filter change reshapes the collection, so the anchor resets). */
-function facetHref(
-  active: Partial<Record<FacetCode, string>>,
-  patch: Partial<Record<FacetCode, string | null>>,
-) {
-  const sp = new URLSearchParams()
-  for (const code of FACETS) {
-    const v = code in patch ? patch[code] : active[code]
-    if (v) sp.set(`f_${code}`, v)
-  }
-  const s = sp.toString()
-  return `/magento/browse${s ? `?${s}` : ""}`
+/** An href stating a facet selection — `value: null` clears the code.
+ *  Drops `?page=`: a filter change reshapes the collection, so the
+ *  anchor resets. */
+function facetHref(active: Map<string, string>, code: string, value: string | null) {
+  const next = new Map(active)
+  if (value === null) next.delete(code)
+  else next.set(code, value)
+  const f = [...next].map(([c, v]) => `${c}:${encodeURIComponent(v)}`).join(",")
+  return `/magento/browse${f ? `?${new URLSearchParams({ [FILTER_PARAM]: f })}` : ""}`
 }
 
 // One product card — the ENTITY parton, the scroller's `render`
@@ -164,9 +170,11 @@ const BrowseCard = parton(function BrowseCardRender({
 
 // The FILTER BAR — a plain parton JOINING the scroller's query, both
 // sides of it:
-//   - the option UNIVERSE comes from the UNFILTERED query, so the bar
-//     stays stable while filters toggle (options never vanish because
-//     the current result no longer contains them);
+//   - the facet UNIVERSE is DYNAMIC: every aggregation the UNFILTERED
+//     query returns with at least one counted option renders — no
+//     app-side facet list, and the bar stays stable while filters
+//     toggle (options never vanish because the current result dropped
+//     them);
 //   - the COUNTS come from the ACTIVE query, so every number reflects
 //     what the grid is actually showing.
 // Same cell, two partitions — and with no filter active the two args
@@ -174,14 +182,14 @@ const BrowseCard = parton(function BrowseCardRender({
 // scroller API involved: the cell is the shared address of the query
 // result, and resolving a partition is the join.
 const BrowseFilterBar = parton(async function BrowseFilterBarRender(_: RenderArgs) {
-  const active = readFacets()
-  const hasFilter = Object.keys(active).length > 0
+  const active = readActive()
   const [base, current] = await Promise.all([
     browseProductsCell.resolve({ pageSize: LEAF, currentPage: 1, filter: {} }),
     browseProductsCell.resolve(sliceArgs(0, LEAF)),
   ])
   const universe = (base.value?.products?.aggregations ?? []).filter(
-    (a): a is NonNullable<typeof a> => a != null && FACETS.includes(a.attribute_code as FacetCode),
+    (a): a is NonNullable<typeof a> =>
+      a != null && (a.options ?? []).some((o) => o != null && (o.count ?? 0) > 0),
   )
   if (universe.length === 0) return null
 
@@ -203,17 +211,17 @@ const BrowseFilterBar = parton(async function BrowseFilterBarRender(_: RenderArg
 
   return (
     <div data-testid="browse-facets" className="mb-4 flex flex-col gap-2">
-      {hasFilter && (
+      {active.size > 0 && (
         <div data-testid="browse-active-filters" className="flex flex-wrap items-baseline gap-2">
           <span className="text-xs font-medium text-muted-foreground">Active</span>
-          {FACETS.filter((code) => active[code]).map((code) => (
+          {[...active].map(([code, value]) => (
             <a
               key={code}
-              href={facetHref(active, { [code]: null })}
+              href={facetHref(active, code, null)}
               data-testid={`browse-active-filter-${code}`}
               className="rounded-full bg-primary px-2 py-0.5 text-xs text-primary-foreground"
             >
-              {labelOf.get(`${code}:${active[code]}`) ?? active[code]} ✕
+              {labelOf.get(`${code}:${value}`) ?? value} ✕
             </a>
           ))}
           <a
@@ -232,14 +240,15 @@ const BrowseFilterBar = parton(async function BrowseFilterBarRender(_: RenderArg
             .filter((o): o is NonNullable<typeof o> => o != null)
             .slice(0, 8)
             .map((o) => {
-              const code = agg.attribute_code as FacetCode
-              const isActive = active[code] === o.value
+              const code = agg.attribute_code
+              const isActive = active.get(code) === o.value
               const count = countOf.get(`${code}:${o.value}`) ?? 0
               return (
                 <a
                   key={o.value}
-                  href={facetHref(active, { [code]: isActive ? null : o.value })}
+                  href={facetHref(active, code, isActive ? null : o.value)}
                   data-testid="browse-facet-option"
+                  data-facet={code}
                   data-active={isActive || undefined}
                   aria-pressed={isActive}
                   className={
@@ -274,7 +283,7 @@ const BrowseFilterBar = parton(async function BrowseFilterBarRender(_: RenderArg
 // when it isn't). `total` joins the same partition as the grid — the
 // filtered collection is what it paginates.
 const BrowsePagination = parton(async function BrowsePaginationRender(_: RenderArgs) {
-  const active = readFacets()
+  const rawFilter = searchParam(FILTER_PARAM)
   const res = await browseProductsCell.resolve(sliceArgs(0, LEAF))
   const total = res.value?.products?.total_count ?? 0
   const pages = Math.max(1, Math.ceil(total / LEAF))
@@ -282,9 +291,7 @@ const BrowsePagination = parton(async function BrowsePaginationRender(_: RenderA
 
   const href = (p: number) => {
     const sp = new URLSearchParams()
-    for (const code of FACETS) {
-      if (active[code]) sp.set(`f_${code}`, active[code])
-    }
+    if (rawFilter) sp.set(FILTER_PARAM, rawFilter)
     if (p > 1) sp.set("page", String(p))
     const s = sp.toString()
     return `/magento/browse${s ? `?${s}` : ""}`
@@ -326,9 +333,8 @@ const BrowsePagination = parton(async function BrowsePaginationRender(_: RenderA
 const BrowseGrid = scroller({
   name: "browse-grid",
   load: async ({ offset, limit }) => {
-    // The filter is just tracked reads in the loader: each `f_<code>`
-    // param records as the calling parton's dep, so a facet toggle
-    // re-renders the collection — and the card partons fp-skip
+    // The filter is ONE tracked read in the loader (`?f=`): a facet
+    // toggle re-renders the collection — and the card partons fp-skip
     // through it wherever their entities didn't change (the
     // order/content split).
     const res = await browseProductsCell.resolve(sliceArgs(offset, limit))

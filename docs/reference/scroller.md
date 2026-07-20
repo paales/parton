@@ -168,19 +168,22 @@ leaf 0's slice, and every page projection resolving the same args in
 one render share ONE backend fetch. `/magento/browse` shows the
 projections over ONE `browseProductsCell`:
 
-- **Facets that FILTER**: the filter state is the URL — one
-  `f_<code>=` param per active facet, so filters are tracked reads,
-  bookmarkable, and shared. The `FilterBar` parton resolves TWO
-  partitions of the cell: the **unfiltered** query supplies the
+- **Facets that FILTER**: the filter state is the URL — ONE param
+  (`?f=<code>:<value>,…`), so the whole filter is one tracked read
+  and the loaders never need to discover the facet universe before
+  reading their dep. The universe itself is DYNAMIC: every
+  aggregation the **unfiltered** query returns (with a counted
+  option) renders — no app-side facet list — and it supplies the
   option UNIVERSE (the bar stays stable while filters toggle —
-  options never vanish because the current result dropped them), the
-  **active** query supplies every COUNT (the numbers reflect what the
-  grid shows). With no filter active the two args are identical and
-  collapse into one resolve. Options are plain `<a>` links stating
-  the toggled facet (and dropping `?page=` — a filter change reshapes
-  the collection); an active-filters row renders removable chips from
-  the same data. Every loader deriving its args through one shared
-  helper is what keeps the partitions aligned.
+  options never vanish because the current result dropped them),
+  while the **active** query supplies every COUNT (the numbers
+  reflect what the grid shows). With no filter active the two args
+  are identical and collapse into one resolve. Options are plain
+  `<a>` links stating the toggled facet (and dropping `?page=` — a
+  filter change reshapes the collection); an active-filters row
+  renders removable chips from the same data. Every loader deriving
+  its args through one shared helper is what keeps the partitions
+  aligned.
 - **Pagination**: pages as real `<a href="?page=N">` links over the
   ACTIVE query (facet params preserved). A plain parton reads `total`
   from the same partition the grid loads and renders anchors; a

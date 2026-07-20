@@ -350,11 +350,12 @@ test("facets FILTER: a click states the filter, counts follow the active query, 
   const pagesBefore = Number(await lastLink())
   expect(pagesBefore).toBeGreaterThan(1)
 
-  // Click a CATEGORY facet — a strict subset of the catalog.
-  await page.locator(`${option}[href*="f_category_uid"]`).first().click()
+  // Click a CATEGORY facet — a strict subset of the catalog. The
+  // whole filter state rides ONE param: `?f=code:value,…`.
+  await page.locator(`${option}[data-facet="category_uid"]`).first().click()
   await expect
-    .poll(() => new URL(page.url()).searchParams.get("f_category_uid"), { timeout: 10000 })
-    .not.toBeNull()
+    .poll(() => new URL(page.url()).searchParams.get("f"), { timeout: 10000 })
+    .toContain("category_uid:")
 
   // The active-filters section appears, the option is marked active.
   await expect(page.locator('[data-testid="browse-active-filters"]')).toBeVisible({
@@ -371,9 +372,7 @@ test("facets FILTER: a click states the filter, counts follow the active query, 
 
   // Removing the active chip restores the unfiltered collection.
   await page.locator('[data-testid^="browse-active-filter-"]').first().click()
-  await expect
-    .poll(() => new URL(page.url()).searchParams.get("f_category_uid"), { timeout: 10000 })
-    .toBeNull()
+  await expect.poll(() => new URL(page.url()).searchParams.get("f"), { timeout: 10000 }).toBeNull()
   await expect.poll(async () => Number(await lastLink()), { timeout: 15000 }).toBe(pagesBefore)
 })
 
