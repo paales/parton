@@ -223,36 +223,34 @@ export function ScrollerAnchorSync({
 
   // EXTERNAL ANCHOR STATEMENTS. The writer mirrors scroll into the
   // param — but the param is a public surface anyone can state: a
-  // pagination link, a traverse, an app's own navigate. When the
-  // anchor moves and it wasn't this writer's own mirror, the
-  // viewport must go THERE. Measure-first: if the viewport already
-  // centers the stated page (a traverse whose scroll restoration
-  // landed it, the writer's own statement echoing back), nothing
-  // moves — only a real mismatch scrolls. Target resolution follows
-  // the landing rule: the boundary id's LAYOUT when it exists (in
-  // span — correct under any heights), the estimate arithmetic where
-  // nothing exists to measure (a reservation — exact there).
+  // pagination link, a traverse, an app's own navigate. EVERY foreign
+  // navigation is an anchor statement — including one that leaves the
+  // param untouched or absent (absent = page 1): a facet link that
+  // drops `?page=` states "the reshaped collection, from the top",
+  // and without enforcement the browser's scroll clamp against the
+  // shrunken document would strand the viewport mid-collection for
+  // the writer to mirror as a page the user never chose (measured:
+  // toggling facets teleported to page 3). Measure-first: if the
+  // viewport already centers the stated page (a traverse whose
+  // scroll restoration landed it, the writer's own mirror riding a
+  // stale selfWrite), nothing moves — only a real mismatch scrolls.
+  // Target resolution follows the landing rule: the boundary id's
+  // LAYOUT when it exists (in span — correct under any heights), the
+  // estimate arithmetic where nothing exists to measure (a
+  // reservation — exact there).
   useEffect(() => {
     // `useNavigation` is a live proxy — URL changes don't re-render
     // this component, so the watch subscribes to the Navigation API's
-    // own entry-change event.
+    // own entry-change event. No mount call: the landing entry
+    // belongs to the stage scripts / the layout effect above.
     const ambient = (
       window as Window & { navigation?: EventTarget & { currentEntry?: { url?: string } } }
     ).navigation
     if (!ambient) return
-    let seen: string | null = null
     const check = () => {
       const url = ambient.currentEntry?.url
       if (!url) return
       const val = new URL(url).searchParams.get(param) ?? ""
-      if (seen === null) {
-        // The subscription starts at the landing entry — the stage
-        // scripts / the layout effect above own that one.
-        seen = val
-        return
-      }
-      if (val === seen) return
-      seen = val
       if (selfWrite.current === val) {
         selfWrite.current = null
         return
@@ -275,7 +273,6 @@ export function ScrollerAnchorSync({
       }
       window.scrollTo(0, top + (((page - 1) * step) / geo.cols) * geo.rowH)
     }
-    check()
     ambient.addEventListener("currententrychange", check)
     return () => ambient.removeEventListener("currententrychange", check)
   }, [name, param, step])

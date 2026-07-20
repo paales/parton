@@ -332,7 +332,7 @@ test("the page's projections join the scroller's query — facets, pagination, s
     .toBeGreaterThan(0)
 })
 
-test("facets FILTER: a click states the filter, counts follow the active query, the option universe stays unfiltered", async ({
+test("facets FILTER: a click states the filter, visibility and counts follow the active query", async ({
   page,
 }) => {
   await page.goto("/magento/browse")
@@ -367,13 +367,60 @@ test("facets FILTER: a click states the filter, counts follow the active query, 
   await expect
     .poll(async () => Number(await lastLink()), { timeout: 15000 })
     .toBeLessThan(pagesBefore)
-  // The option UNIVERSE stays the unfiltered one — nothing vanished.
-  expect(await page.locator(option).count()).toBe(universeBefore)
+  // Visibility follows the active query too: facets the filtered
+  // result can't answer disappear instead of rendering "0" chips —
+  // every visible non-selected option has a nonzero count.
+  const zeroCounts = await page.evaluate(() => {
+    let zeros = 0
+    for (const el of document.querySelectorAll('[data-testid="browse-facet-option"]')) {
+      if (el.hasAttribute("data-active")) continue
+      const count = el.querySelector('[data-testid="browse-facet-count"]')?.textContent
+      if (count === "0") zeros++
+    }
+    return zeros
+  })
+  expect(zeroCounts, "no dead facet options render").toBe(0)
 
-  // Removing the active chip restores the unfiltered collection.
+  // Removing the active chip restores the unfiltered collection —
+  // including the full universe.
   await page.locator('[data-testid^="browse-active-filter-"]').first().click()
   await expect.poll(() => new URL(page.url()).searchParams.get("f"), { timeout: 10000 }).toBeNull()
   await expect.poll(async () => Number(await lastLink()), { timeout: 15000 }).toBe(pagesBefore)
+  await expect.poll(() => page.locator(option).count(), { timeout: 15000 }).toBe(universeBefore)
+})
+
+test("a facet click from a scrolled position lands the reshaped collection at its top", async ({
+  page,
+}) => {
+  // A facet href drops `?page=` — it STATES "the new collection, from
+  // page 1". Every foreign navigation is an anchor statement the sync
+  // enforces; without that, the browser's scroll clamp against the
+  // shrunken document strands the viewport mid-collection and the
+  // writer mirrors a page the user never chose (the measured
+  // Gray/Purple/Black → page 3 teleport).
+  await page.goto("/magento/browse")
+  await page.waitForSelector(card, { timeout: 20000 })
+  await waitForPageInteractive(page)
+  const option = '[data-testid="browse-facet-option"]'
+  await expect.poll(() => page.locator(option).count(), { timeout: 15000 }).toBeGreaterThan(0)
+
+  // Scroll several pages deep, let the writer mirror it.
+  await wheelDown(page, 18)
+  await page.waitForTimeout(600)
+  expect(await centeredPage(page)).toBeGreaterThan(3)
+
+  // State a filter from down there.
+  await page.locator(`${option}[data-facet="category_uid"]`).first().click()
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("f"), { timeout: 10000 })
+    .toContain("category_uid:")
+
+  // The viewport lands at the top of the reshaped collection, and the
+  // page param stays honest (absent or 1 — never a clamp artifact).
+  await expect.poll(() => centeredPage(page), { timeout: 10000 }).toBeLessThanOrEqual(2)
+  await page.waitForTimeout(800)
+  const mirrored = new URL(page.url()).searchParams.get("page")
+  expect(Number(mirrored ?? "1"), "no clamp-mirrored page").toBeLessThanOrEqual(2)
 })
 
 test("clicking a pagination link moves the viewport to that page", async ({ page }) => {

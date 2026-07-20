@@ -105,11 +105,19 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
   the viewport on its own), as an in-place navigation
   (`scroll: "manual"`) when the span must move. Occlusion-guarded —
   an overlay covering the collection silences it. The param is a
-  PUBLIC surface: when it moves and the writer didn't state it (a
-  pagination link, a traverse, an app navigate), the sync jumps the
-  viewport there — measure-first (a viewport already centering the
-  stated page stays put, so a traverse's own scroll restoration
-  wins), id-resolved in-span, estimate arithmetic in a reservation.
+  PUBLIC surface: EVERY foreign navigation is an anchor statement —
+  including one that leaves the param absent (absent = page 1): a
+  pagination link, a traverse, an app navigate, a facet link that
+  drops `?page=` to state "the reshaped collection, from the top".
+  The sync enforces the stated anchor on each one — measure-first (a
+  viewport already centering the stated page stays put, so a
+  traverse's own scroll restoration wins; the writer's own mirrors
+  are recognized and skipped), id-resolved in-span, estimate
+  arithmetic in a reservation. Without absent-means-1 enforcement, a
+  filter click from a scrolled position would let the browser's
+  scroll clamp against the shrunken document strand the viewport
+  mid-collection for the writer to mirror as a page the user never
+  chose (measured).
 - **Window moves are geometry-atomic — they commit as transitions.**
   The in-place window statement carries the `FrameworkInPlaceInfo`
   brand, and the page-level intercept states it on the channel as an
@@ -171,19 +179,22 @@ projections over ONE `browseProductsCell`:
 - **Facets that FILTER**: the filter state is the URL — ONE param
   (`?f=<code>:<value>,…`), so the whole filter is one tracked read
   and the loaders never need to discover the facet universe before
-  reading their dep. The universe itself is DYNAMIC: every
-  aggregation the **unfiltered** query returns (with a counted
-  option) renders — no app-side facet list — and it supplies the
-  option UNIVERSE (the bar stays stable while filters toggle —
-  options never vanish because the current result dropped them),
-  while the **active** query supplies every COUNT (the numbers
-  reflect what the grid shows). With no filter active the two args
-  are identical and collapse into one resolve. Options are plain
-  `<a>` links stating the toggled facet (and dropping `?page=` — a
-  filter change reshapes the collection); an active-filters row
-  renders removable chips from the same data. Every loader deriving
-  its args through one shared helper is what keeps the partitions
-  aligned.
+  reading their dep. The param is PUBLIC INPUT: codes validate
+  against a closed vocabulary mirroring the schema's filter input —
+  an unknown code would fail GraphQL validation and break the slice,
+  and an open vocabulary would let arbitrary URLs mint unbounded
+  cell partitions, each a backend query. The universe is DYNAMIC —
+  bounded by the **unfiltered** query's aggregations (no app-side
+  facet list); VISIBILITY and COUNTS follow the **active** query: an
+  option renders only while the current result has matches for it
+  (or it is the selected one), so a facet with nothing to offer
+  disappears instead of rendering dead "0" chips. With no filter
+  active the two args are identical and collapse into one resolve.
+  Options are plain `<a>` links stating the toggled facet (and
+  dropping `?page=` — a filter change reshapes the collection, and
+  the sync enforces the reset, above); an active-filters row renders
+  removable chips from the same data. Every loader deriving its args
+  through one shared helper is what keeps the partitions aligned.
 - **Pagination**: pages as real `<a href="?page=N">` links over the
   ACTIVE query (facet params preserved). A plain parton reads `total`
   from the same partition the grid loads and renders anchors; a
