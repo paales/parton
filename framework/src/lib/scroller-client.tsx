@@ -295,18 +295,23 @@ export function ScrollerAnchorSync({
       // whatever is laid out right now.
       lastVal.current = val
       alignTo(Math.max(1, Number(val) || 1))
-      // A push/traverse commits its URL FIRST; the intercept handler
-      // applies the content after, and the browser's own deferred
-      // scroll restoration lands only when that handler settles —
-      // everything the immediate align did can be displaced by both.
-      // Hold the writer down (mirroring transitional geometry would
-      // bake a garbage page into the entry — and the navigate() would
-      // ABORT the in-flight handler), then re-align against the
-      // settled document. Two frames past `finished`: the restoration
-      // scroll lands as the transition resolves. `replace` transitions
-      // are the writer's own statements — never deferred.
+      // A TRAVERSE commits its URL first, applies content through its
+      // intercept handler after, and the browser's deferred scroll
+      // restoration lands only when that handler settles — everything
+      // the immediate align did can be displaced by both, and the
+      // entry's stated page is authoritative (the user's own past
+      // scrolling wrote it). Hold the writer down (mirroring
+      // transitional geometry would bake a garbage page into the
+      // traversed entry — and the navigate() would ABORT the in-flight
+      // handler), then re-align against the settled document. Two
+      // frames past `finished`: the restoration scroll lands as the
+      // transition resolves. Only traverses: a push owes no
+      // restoration and its entry carries no prior statement, so a
+      // user scrolling while a slow push applies keeps the writer
+      // (mirrors stay live); `replace` transitions are the writer's
+      // own statements.
       const t = ambient.transition
-      if (t && t.navigationType !== "replace") {
+      if (t && t.navigationType === "traverse") {
         foreignSettling.current = true
         const token = ++alignToken
         t.finished.then(
@@ -444,17 +449,19 @@ export function ScrollerAnchorSync({
     lastVal.current ??= url0 ? (new URL(url0).searchParams.get(param) ?? "") : ""
     let timer: ReturnType<typeof setTimeout> | undefined
     const sync = () => {
-      // STAND DOWN while a foreign navigation applies. A push/traverse
-      // transition means the document is mid-swap (and the browser's
-      // deferred scroll restoration is still owed): a mirror measured
-      // now would bake transitional geometry into the entry, and the
-      // navigate() itself would abort the in-flight intercept handler.
-      // The writer's own statements are `replace`-typed — those never
-      // gate it. The URL-watch re-arms after its post-settle re-align.
+      // STAND DOWN while a traverse applies. A traverse transition
+      // means the document is mid-swap and the browser's deferred
+      // scroll restoration is still owed: a mirror measured now would
+      // bake transitional geometry into the traversed entry (whose
+      // stated page is authoritative), and the navigate() itself would
+      // abort the in-flight intercept handler. Pushes and the writer's
+      // own `replace` statements never gate it — a user scrolling
+      // while a slow push applies keeps mirroring. The URL-watch
+      // re-arms after its post-settle re-align.
       const t = (
         window as Window & { navigation?: { transition?: { navigationType: string } | null } }
       ).navigation?.transition
-      if (foreignSettling.current || (t && t.navigationType !== "replace")) return
+      if (foreignSettling.current || (t && t.navigationType === "traverse")) return
       const wrapper = document.getElementById(name)
       if (!wrapper) return
       // Occlusion: state only what the user actually SEES. An overlay

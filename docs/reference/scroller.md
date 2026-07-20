@@ -116,22 +116,25 @@ the pokedex on `/` (fragment-cell forwarding), `/scale` (the million).
   enforcement, a filter click from a scrolled position would let the
   browser's scroll clamp against the shrunken document strand the
   viewport mid-collection for the writer to mirror as a page the user
-  never chose (measured). Foreign statements are TRANSITION-AWARE: a
-  push/traverse commits its URL first, applies content through its
-  intercept handler after, and owes a deferred browser scroll
-  restoration that lands only when the handler settles — so the sync
-  aligns once immediately (best-effort feedback) and re-aligns
-  measure-first two frames after `navigation.transition.finished`,
-  and the WRITER stands down for that whole window (its skip baseline
-  re-based to the stated value). A mirror measured mid-swap would
-  bake transitional geometry into the traversed entry — each
-  corrupted value becoming the next enforcement target, a compounding
-  staircase — and the `navigate()` itself would abort the in-flight
-  handler (measured: rapid back/forward during load re-wrote entry
-  pages and left the traverse transition stuck; pinned by test).
-  `replace` transitions are the writer's own statements and never
-  gate it, so follow-along mirroring keeps flowing through sustained
-  scrolls.
+  never chose (measured). TRAVERSES are TRANSITION-AWARE: a traverse
+  commits its URL first, applies content through its intercept
+  handler after, and owes a deferred browser scroll restoration that
+  lands only when the handler settles — and the traversed entry's
+  stated page is authoritative (the user's own past scrolling wrote
+  it). So the sync aligns once immediately (best-effort feedback) and
+  re-aligns measure-first two frames after
+  `navigation.transition.finished`, and the WRITER stands down for
+  that whole window (its skip baseline re-based to the stated value).
+  A mirror measured mid-swap would bake transitional geometry into
+  the traversed entry — each corrupted value becoming the next
+  enforcement target, a compounding staircase — and the `navigate()`
+  itself would abort the in-flight handler (measured: rapid
+  back/forward during load re-wrote entry pages and left the traverse
+  transition stuck; pinned by test). Pushes never gate the writer — a
+  push owes no restoration and its entry carries no prior statement,
+  so a user scrolling while a slow facet push applies keeps
+  mirroring; `replace` transitions are the writer's own statements,
+  so follow-along mirroring flows through sustained scrolls.
 - **Window moves are geometry-atomic — they commit as transitions.**
   The in-place window statement carries the `FrameworkInPlaceInfo`
   brand, and the page-level intercept states it on the channel as an
