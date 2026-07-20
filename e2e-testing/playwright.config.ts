@@ -89,6 +89,10 @@ export default defineConfig({
       url: `http://localhost:${PORT}`,
       reuseExistingServer: true,
       timeout: 60000,
+      // Playwright only surfaces webServer STDERR by default; the
+      // server-side query log (`[parton] gql →`) rides stdout, and
+      // wire-level debugging is blind without it.
+      stdout: "pipe",
     },
     {
       // The e2e-magento companion app — hosts the embeddable pages the

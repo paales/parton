@@ -253,7 +253,7 @@ its plane is 2D px space with procedural content, a different animal.
 | `leaf`       | `24`       | Items per leaf parton = fetch slice = default anchor step. **Must be divisible by every `--scroller-cols` value** (row alignment).                                                                                                            |
 | `ring`       | `6`        | Leaves placed each side of the anchor leaf. Placement ≠ materialization — the ring is the park/restore zone.                                                                                                                                  |
 | `className`  | —          | EXTRA wrapper classes — `name` is always applied as a class already.                                                                                                                                                                          |
-| `rootMargin` | `"100%"`   | Leaf materialization runway. Number = px; string = any observer margin, `%` relative to VIEWPORT height — the default is one viewport ahead/behind, so prefetch scales with the screen.                                                       |
+| `rootMargin` | `"50%"`    | Leaf materialization runway. Number = px; string = any observer margin, `%` relative to VIEWPORT height — the default is half a viewport ahead/behind: enough to hide a fetch behind ordinary scroll speed without speculatively querying pages the user never approaches. |
 | `anchor`     | `page`     | `{param?, pageSize?}` — rename the param (two collections on one page) or change the step (a multiple of `leaf`).                                                                                                                             |
 
 ## The CSS contract

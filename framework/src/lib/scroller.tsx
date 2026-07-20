@@ -183,7 +183,11 @@ export interface ScrollerOptions<Item> {
    *  viewport a leaf starts resolving. A number is px; a string is
    *  any IntersectionObserver margin length, where `%` is relative to
    *  the VIEWPORT height (so the runway scales with the screen).
-   *  Default `"100%"` — one viewport ahead and behind. */
+   *  Default `"50%"` — half a viewport ahead and behind: enough to
+   *  hide a fetch (~300ms) behind ordinary scroll speed without
+   *  speculatively querying pages the user never approaches (a full
+   *  viewport materialized the third page at boot, before any
+   *  intent). */
   rootMargin?: number | string
   /** Anchor wiring. Always on (window movement rides it); pass to
    *  rename the param or change the step. */
@@ -224,7 +228,7 @@ export function scroller<Item>(opts: ScrollerOptions<Item>): React.ComponentType
   const name = opts.name
   const leaf = opts.leaf ?? 24
   const ring = opts.ring ?? 6
-  const rootMargin = opts.rootMargin ?? "100%"
+  const rootMargin = opts.rootMargin ?? "50%"
   const anchorParam = opts.anchor?.param ?? "page"
   const anchorStep = opts.anchor?.pageSize ?? leaf
 
